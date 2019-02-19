@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
-mod rows;
+mod lazy_column;
+mod lazy_column_vec;
+mod vector;
 
-pub use self::column::BatchColumn;
-pub use self::rows::BatchRows;
+pub use self::lazy_column::LazyBatchColumn;
+pub use self::lazy_column_vec::LazyBatchColumnVec;
+pub use self::vector::VectorValue;

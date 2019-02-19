@@ -130,7 +130,7 @@ mod imp {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
+    #[allow(clippy::cast_ptr_alignment)]
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
             // This cast from *c_void to *Vec<u8> looks like a bad

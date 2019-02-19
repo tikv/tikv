@@ -121,8 +121,10 @@ impl Monitor {
                     let after = now();
                     if let Err(e) = after.duration_since(before) {
                         error!(
-                            "system time jumped back, {:?} -> {:?}, err {:?}",
-                            before, after, e
+                            "system time jumped back";
+                            "before" => ?before,
+                            "after" => ?after,
+                            "err" => ?e,
                         );
                         on_jumped()
                     }
@@ -151,12 +153,12 @@ impl Drop for Monitor {
         }
 
         if let Err(e) = self.tx.send(true) {
-            error!("send quit message for time monitor worker failed {:?}", e);
+            error!("send quit message for time monitor worker failed"; "err" => ?e);
             return;
         }
 
         if let Err(e) = h.unwrap().join() {
-            error!("join time monitor worker failed {:?}", e);
+            error!("join time monitor worker failed"; "err" => ?e);
             return;
         }
     }
@@ -467,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(eq_op))]
+    #[allow(clippy::eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();

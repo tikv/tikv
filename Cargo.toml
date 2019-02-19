@@ -1,6 +1,7 @@
 [package]
 name = "tikv"
 version = "3.0.0-beta"
+edition = "2018"
 keywords = ["KV", "distributed-systems", "raft"]
 publish = false
 
@@ -58,6 +59,7 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-async = "2.3"
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 slog-term = "2.4"
+slog_derive = "0.1"
 byteorder = "1.2"
 rand = "0.3"
 quick-error = "1.2.2"
@@ -102,28 +104,25 @@ num = "0.2"
 num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
-panic_hook = { path = "components/panic_hook" }
 base64 = "0.10"
 safemem = "0.3"
-cop_datatype = { path = "components/cop_datatype" }
 smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = "0.12"
 tokio-threadpool = "0.1"
 vlog = "0.1.4"
+cop_datatype = { path = "components/cop_datatype" }
+panic_hook = { path = "components/panic_hook" }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+log_wrappers = { path = "components/log_wrappers" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-
-[dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
-
-[dependencies.tipb]
-git = "https://github.com/pingcap/tipb.git"
 
 [dependencies.prometheus]
 version = "0.4.2"
@@ -139,11 +138,15 @@ test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
 # See https://japaric.github.io/criterion.rs/book/user_guide/known_limitations.html
-criterion = { version = "0.2", features=['real_blackbox'] }
+# critcmp is known to support 0.2.5
+criterion = { version = "=0.2.5", features=['real_blackbox'] }
 arrow = "0.10.0"
 
 [target.'cfg(unix)'.dependencies]
 signal = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [workspace]
 members = [
@@ -159,6 +162,7 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/log_wrappers",
 ]
 
 [profile.dev]

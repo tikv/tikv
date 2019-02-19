@@ -54,7 +54,7 @@ impl MemComparableByteCodec {
 
             // Let's first write these zero padding groups.
             for _ in 0..zero_padding_groups {
-                ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
+                std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
                 src_ptr = src_ptr.add(MEMCMP_GROUP_SIZE);
                 dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
 
@@ -66,8 +66,8 @@ impl MemComparableByteCodec {
             let remaining_size = src_ptr_end.offset_from(src_ptr) as usize;
             let padding_size = MEMCMP_GROUP_SIZE - remaining_size;
             let padding_marker = !(padding_size as u8);
-            ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
-            ::std::ptr::write_bytes(dest_ptr.add(remaining_size), MEMCMP_PAD_BYTE, padding_size);
+            std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
+            std::ptr::write_bytes(dest_ptr.add(remaining_size), MEMCMP_PAD_BYTE, padding_size);
             dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
             dest_ptr.write(padding_marker);
             (dest_ptr.offset_from(dest.as_mut_ptr()) + 1) as usize
@@ -266,22 +266,22 @@ impl MemComparableByteCodec {
 
             loop {
                 let src_ptr_next = src_ptr.add(MEMCMP_GROUP_SIZE + 1);
-                if ::std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
+                if std::intrinsics::unlikely(src_ptr_next > src_ptr_end) {
                     return Err(Error::UnexpectedEOF);
                 }
 
                 // Copy `MEMCMP_GROUP_SIZE` bytes any way. However we will truncate the returned
                 // length according to padding size if it is the last block.
-                ::std::ptr::copy(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
+                std::ptr::copy(src_ptr, dest_ptr, MEMCMP_GROUP_SIZE);
 
                 let padding_size = T::parse_padding_size(*src_ptr.add(MEMCMP_GROUP_SIZE));
                 src_ptr = src_ptr_next;
                 dest_ptr = dest_ptr.add(MEMCMP_GROUP_SIZE);
 
                 // If there is a padding, check whether or not it is correct.
-                if ::std::intrinsics::unlikely(padding_size > 0) {
+                if std::intrinsics::unlikely(padding_size > 0) {
                     // First check padding size.
-                    if ::std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
+                    if std::intrinsics::unlikely(padding_size > MEMCMP_GROUP_SIZE) {
                         return Err(Error::BadPadding);
                     }
 
@@ -290,12 +290,12 @@ impl MemComparableByteCodec {
                     // bytes at once.
                     let base_padding_ptr = dest_ptr.sub(padding_size);
                     let expected_padding_ptr = T::get_raw_padding_ptr();
-                    let cmp_result = ::libc::memcmp(
-                        base_padding_ptr as *const ::libc::c_void,
-                        expected_padding_ptr as *const ::libc::c_void,
+                    let cmp_result = libc::memcmp(
+                        base_padding_ptr as *const libc::c_void,
+                        expected_padding_ptr as *const libc::c_void,
                         padding_size,
                     );
-                    if ::std::intrinsics::unlikely(cmp_result != 0) {
+                    if std::intrinsics::unlikely(cmp_result != 0) {
                         return Err(Error::BadPadding);
                     }
 
@@ -531,7 +531,7 @@ mod tests {
         for (src_len, dest_len) in cases {
             let src = vec![0; src_len];
             let mut dest = vec![0; dest_len];
-            let result = ::panic_hook::recover_safe(move || {
+            let result = panic_hook::recover_safe(move || {
                 let _ = MemComparableByteCodec::encode_all(src.as_slice(), dest.as_mut_slice());
             });
             assert!(result.is_err());
@@ -561,7 +561,7 @@ mod tests {
             let encoded_len = MemComparableByteCodec::encoded_len(payload_len);
             let mut payload_encoded: Vec<u8> =
                 vec![0; encoded_prefix_len + encoded_len + encoded_suffix_len];
-            #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
+            #[allow(clippy::needless_range_loop)]
             for i in 0..encoded_prefix_len {
                 payload_encoded[i] = rand::random();
             }
@@ -574,7 +574,7 @@ mod tests {
                     MemComparableByteCodec::encode_all(src, dest);
                 }
             }
-            #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
+            #[allow(clippy::needless_range_loop)]
             for i in encoded_prefix_len + encoded_len..encoded_suffix_len {
                 payload_encoded[i] = rand::random();
             }
@@ -615,8 +615,8 @@ mod tests {
             let output_len = unsafe {
                 let src_ptr = buffer.as_mut_ptr().add(encoded_prefix_len);
                 let slice_len = buffer.len() - encoded_prefix_len;
-                let src = ::std::slice::from_raw_parts(src_ptr, slice_len);
-                let dest = ::std::slice::from_raw_parts_mut(src_ptr, slice_len);
+                let src = std::slice::from_raw_parts(src_ptr, slice_len);
+                let dest = std::slice::from_raw_parts_mut(src_ptr, slice_len);
                 if is_desc {
                     MemComparableByteCodec::try_decode_first_desc(src, dest).unwrap()
                 } else {
@@ -716,7 +716,7 @@ mod tests {
             {
                 let src = src.clone();
                 let mut dest = vec![0; src.len() - 1];
-                let result = ::panic_hook::recover_safe(move || {
+                let result = panic_hook::recover_safe(move || {
                     let _ = MemComparableByteCodec::try_decode_first(
                         src.as_slice(),
                         dest.as_mut_slice(),
@@ -795,7 +795,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     /// A naive implementation of encoding in mem-comparable format.
     /// It does not process non zero-padding groups separately.
@@ -816,11 +816,11 @@ mod benches {
                 let padding_size;
                 if remaining_size > super::MEMCMP_GROUP_SIZE {
                     padding_size = 0;
-                    ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, super::MEMCMP_GROUP_SIZE);
+                    std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, super::MEMCMP_GROUP_SIZE);
                 } else {
                     padding_size = super::MEMCMP_GROUP_SIZE - remaining_size;
-                    ::std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
-                    ::std::ptr::write_bytes(
+                    std::ptr::copy_nonoverlapping(src_ptr, dest_ptr, remaining_size);
+                    std::ptr::write_bytes(
                         dest_ptr.add(remaining_size),
                         super::MEMCMP_PAD_BYTE,
                         padding_size,
@@ -844,7 +844,7 @@ mod benches {
     const ENC_DESC_PADDING: [u8; ENC_GROUP_SIZE] = [!0; ENC_GROUP_SIZE];
 
     /// The original implementation of `encode_bytes` in TiKV.
-    trait OldBytesEncoder: ::std::io::Write {
+    trait OldBytesEncoder: std::io::Write {
         fn encode_bytes(&mut self, key: &[u8], desc: bool) -> super::Result<()> {
             let len = key.len();
             let mut index = 0;
@@ -857,7 +857,8 @@ mod benches {
                         &key[index..index + ENC_GROUP_SIZE],
                         desc,
                         &mut buf,
-                    )).map_err(|_| super::Error::BufferTooSmall)?;
+                    ))
+                    .map_err(|_| super::Error::BufferTooSmall)?;
                 } else {
                     pad = ENC_GROUP_SIZE - remain;
                     self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))
@@ -874,7 +875,8 @@ mod benches {
                     &[ENC_MARKER - (pad as u8)],
                     desc,
                     &mut buf,
-                )).map_err(|_| super::Error::BufferTooSmall)?;
+                ))
+                .map_err(|_| super::Error::BufferTooSmall)?;
                 index += ENC_GROUP_SIZE;
             }
             Ok(())
@@ -894,7 +896,7 @@ mod benches {
         }
     }
 
-    impl<T: ::std::io::Write> OldBytesEncoder for T {}
+    impl<T: std::io::Write> OldBytesEncoder for T {}
 
     /// The original implementation of `decode_bytes` in TiKV.
     fn original_decode_bytes(data: &mut &[u8], desc: bool) -> super::Result<Vec<u8>> {
@@ -961,7 +963,7 @@ mod benches {
                 // it is semantically equivalent to C's memmove()
                 // and the src and dest may overlap
                 // if src == dest do nothing
-                ::std::ptr::copy(
+                std::ptr::copy(
                     data.as_ptr().add(read_offset),
                     data.as_mut_ptr().add(write_offset),
                     ENC_GROUP_SIZE,

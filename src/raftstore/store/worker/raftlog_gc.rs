@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::engine::Iterable;
-use raftstore::store::keys;
-use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use util::worker::Runnable;
+use crate::raftstore::store::engine::Iterable;
+use crate::raftstore::store::keys;
+use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use crate::util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
@@ -81,7 +81,7 @@ impl Runner {
             }
         }
         if first_idx >= end_idx {
-            info!("[region {}] no need to gc", region_id);
+            info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
         let mut raft_wb = WriteBatch::new();
@@ -116,8 +116,9 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!(
-            "[region {}] execute gc log to {}",
-            task.region_id, task.end_idx
+            "execute gc log";
+            "region_id" => task.region_id,
+            "end_index" => task.end_idx,
         );
         match self.gc_raft_log(
             task.raft_engine,
@@ -126,11 +127,11 @@ impl Runnable<Task> for Runner {
             task.end_idx,
         ) {
             Err(e) => {
-                error!("[region {}] failed to gc: {:?}", task.region_id, e);
+                error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
                 self.report_collected(0);
             }
             Ok(n) => {
-                debug!("[region {}] collected {} log entries", task.region_id, n);
+                debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
                 self.report_collected(n);
             }
         }
@@ -140,11 +141,11 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb_util::new_engine;
     use std::sync::mpsc;
     use std::time::Duration;
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {

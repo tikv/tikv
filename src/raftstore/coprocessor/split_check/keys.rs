@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::raftstore::store::{keys, util, Msg, PeerMsg};
+use crate::util::transport::{RetryableSendCh, Sender};
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::{keys, util, Msg, PeerMsg};
 use rocksdb::DB;
 use std::mem;
 use std::sync::Mutex;
-use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -189,15 +189,16 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
-    use storage::mvcc::{Write, WriteType};
-    use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use util::properties::RangePropertiesCollectorFactory;
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
+    };
+    use crate::util::transport::RetryableSendCh;
+    use crate::util::worker::Runnable;
 
-    use raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
 
     use super::super::size::tests::must_split_at;
 
@@ -208,7 +209,8 @@ mod tests {
             Write::new(WriteType::Put, 0, Some(b"shortvalue".to_vec()))
         } else {
             Write::new(WriteType::Put, 0, None)
-        }.to_bytes();
+        }
+        .to_bytes();
 
         while start_idx < end_idx {
             let batch_idx = cmp::min(start_idx + 20, end_idx);

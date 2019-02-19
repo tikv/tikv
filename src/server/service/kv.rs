@@ -14,11 +14,11 @@ use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{future, Future, Sink, Stream};
-use grpc::{
+use crate::grpc::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use futures::{future, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -30,21 +30,21 @@ use protobuf::RepeatedField;
 use tokio::runtime::{Runtime, TaskExecutor};
 use tokio::timer::Delay;
 
-use coprocessor::Endpoint;
-use raftstore::store::{Callback, Msg as StoreMessage, PeerMsg};
-use server::load_statistics::ThreadLoad;
-use server::metrics::*;
-use server::snap::Task as SnapTask;
-use server::transport::RaftStoreRouter;
-use server::Error;
-use storage::engine::Error as EngineError;
-use storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
-use storage::txn::Error as TxnError;
-use storage::{self, Engine, Key, Mutation, Options, Storage, Value};
-use util::collections::HashMap;
-use util::future::{paired_future_callback, AndThenWith};
-use util::mpsc::batch::{unbounded, BatchReceiver, Sender};
-use util::worker::Scheduler;
+use crate::coprocessor::Endpoint;
+use crate::raftstore::store::{Callback, Msg as StoreMessage, PeerMsg};
+use crate::server::load_statistics::ThreadLoad;
+use crate::server::metrics::*;
+use crate::server::snap::Task as SnapTask;
+use crate::server::transport::RaftStoreRouter;
+use crate::server::Error;
+use crate::storage::engine::Error as EngineError;
+use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
+use crate::storage::txn::Error as TxnError;
+use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
+use crate::util::collections::HashMap;
+use crate::util::future::{paired_future_callback, AndThenWith};
+use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use crate::util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -1201,11 +1201,7 @@ fn future_batch_get<E: Engine>(
     storage: &Storage<E>,
     mut req: BatchGetRequest,
 ) -> impl Future<Item = BatchGetResponse, Error = Error> {
-    let keys = req
-        .get_keys()
-        .into_iter()
-        .map(|x| Key::from_raw(x))
-        .collect();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
     storage
         .async_batch_get(req.take_context(), keys, req.get_version())
         .then(|v| {
@@ -1223,11 +1219,7 @@ fn future_batch_rollback<E: Engine>(
     storage: &Storage<E>,
     mut req: BatchRollbackRequest,
 ) -> impl Future<Item = BatchRollbackResponse, Error = Error> {
-    let keys = req
-        .get_keys()
-        .into_iter()
-        .map(|x| Key::from_raw(x))
-        .collect();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);
@@ -1556,7 +1548,7 @@ fn future_cop<E: Engine>(
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
-    use storage::Error;
+    use crate::storage::Error;
     match *res {
         // TODO: use `Error::cause` instead.
         Err(Error::Engine(EngineError::Request(ref e)))
@@ -1625,10 +1617,6 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts: {:?}", err);
-            key_error.set_retryable(format!("{:?}", err));
-        }
-        storage::Error::Closed => {
-            warn!("tikv server is closing");
             key_error.set_retryable(format!("{:?}", err));
         }
         _ => {
@@ -1733,9 +1721,9 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage;
-    use storage::mvcc::Error as MvccError;
-    use storage::txn::Error as TxnError;
+    use crate::storage;
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::txn::Error as TxnError;
 
     #[test]
     fn test_extract_key_error_write_conflict() {

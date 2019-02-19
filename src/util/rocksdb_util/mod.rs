@@ -26,6 +26,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
+use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::util::file::{calc_crc32, copy_and_sync};
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
@@ -33,14 +39,7 @@ use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
-use util::file::{calc_crc32, copy_and_sync};
-use util::rocksdb;
-use util::rocksdb::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
 
 pub use rocksdb::CFHandle;
 
@@ -56,7 +55,7 @@ const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
 pub fn get_fastest_supported_compression_type() -> DBCompressionType {
     let all_supported_compression = supported_compression();
     *COMPRESSION_PRIORITY
-        .into_iter()
+        .iter()
         .find(|c| all_supported_compression.contains(c))
         .unwrap_or(&DBCompressionType::No)
 }
@@ -117,11 +116,9 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
                 .get_level_compaction_dynamic_level_bytes()
         {
             warn!(
-                "change dynamic_level_bytes for existing column family is danger, old: {}, new: {}",
-                existed_dynamic_level_bytes,
-                cf_options
-                    .options
-                    .get_level_compaction_dynamic_level_bytes()
+                "change dynamic_level_bytes for existing column family is danger";
+                "old_value" => existed_dynamic_level_bytes,
+                "new_value" => cf_options.options.get_level_compaction_dynamic_level_bytes(),
             );
         }
         cf_options
@@ -252,7 +249,7 @@ pub fn db_exist(path: &str) -> bool {
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
-        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let handle = get_cf_handle(&engine, cf).unwrap();
         let cf_used_size = engine
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
@@ -564,7 +561,8 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     // RocksDB may have modified the global seqno.
     let cf_handle = get_cf_handle(db, cf)?;
     set_external_sst_file_global_seq_no(db, cf_handle, path, 0)?;
-    f.sync_all().map_err(|e| format!("sync {}: {:?}", path, e))?;
+    f.sync_all()
+        .map_err(|e| format!("sync {}: {:?}", path, e))?;
 
     let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
     if checksum != expected_checksum {
@@ -580,11 +578,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
     use rocksdb::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]
@@ -637,7 +635,7 @@ mod tests {
         let cfs_list = DB::list_column_families(&opts, path).unwrap();
 
         let mut cfs_existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
-        let mut cfs_excepted: Vec<&str> = excepted.iter().map(|v| *v).collect();
+        let mut cfs_excepted: Vec<&str> = excepted.clone();
         cfs_existed.sort();
         cfs_excepted.sort();
         assert_eq!(cfs_existed, cfs_excepted);
@@ -758,7 +756,8 @@ mod tests {
             temp_dir.path().to_str().unwrap(),
             &["default", "test"],
             Some(cfs_opts),
-        ).unwrap();
+        )
+        .unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();

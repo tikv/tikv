@@ -16,7 +16,7 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv::util::config::*;
 
-// TODO add stale epoch test cases.
+// TODO add epoch not match test cases.
 
 fn test_put<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -97,14 +97,12 @@ fn test_wrong_store_id<T: Simulator>(cluster: &mut Cluster<T>) {
     leader.set_store_id(store_id + 1);
     req.mut_header().set_peer(leader);
     let result = cluster.call_command_on_node(store_id, req, Duration::from_secs(5));
-    assert!(
-        !result
-            .unwrap()
-            .get_header()
-            .get_error()
-            .get_message()
-            .is_empty()
-    );
+    assert!(!result
+        .unwrap()
+        .get_header()
+        .get_error()
+        .get_message()
+        .is_empty());
 }
 
 fn test_put_large_entry<T: Simulator>(cluster: &mut Cluster<T>) {

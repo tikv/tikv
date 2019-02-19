@@ -14,7 +14,7 @@
 use std::error::Error as StdError;
 use std::result::Result as StdResult;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
         Other(err: Box<StdError + Sync + Send>) {

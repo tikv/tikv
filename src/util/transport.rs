@@ -24,7 +24,8 @@ lazy_static! {
         "tikv_channel_full_total",
         "Total number of channel full errors.",
         &["type"]
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 const MAX_SEND_RETRY_CNT: usize = 5;
@@ -129,7 +130,7 @@ impl<T: Debug, C: Sender<T>> RetryableSendCh<T, C> {
             };
 
             // ALERT!! make cause sensitive data leak.
-            warn!("notify queue is full, sleep and retry sending {:?}", t);
+            warn!("notify queue is full, sleep and retry sending"; "task" => ?t);
             thread::sleep(Duration::from_millis(100));
         }
     }

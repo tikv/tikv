@@ -36,7 +36,7 @@ use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::util::config::*;
 use tikv::util::escape;
-use tikv::util::rocksdb::{self, CompactionListener};
+use tikv::util::rocksdb_util::{self, CompactionListener};
 
 use super::*;
 
@@ -144,6 +144,7 @@ pub fn new_store_cfg() -> Config {
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
+        merge_check_tick_interval: ReadableDuration::millis(100),
         ..Config::default()
     }
 }
@@ -504,15 +505,16 @@ pub fn create_test_engine(
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(
+                rocksdb_util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
-                ).unwrap(),
+                )
+                .unwrap(),
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
             );
             Engines::new(engine, raft_engine)
         }
