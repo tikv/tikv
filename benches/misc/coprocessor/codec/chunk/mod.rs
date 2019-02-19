@@ -18,7 +18,7 @@ use test::Bencher;
 use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use tipb::expression::FieldType;
 
-use tikv::coprocessor::codec::chunk::{Chunk, ChunkEncoder};
+use tikv::coprocessor::codec::chunk::{Chunk, ChunkEncoder, Column};
 use tikv::coprocessor::codec::datum::Datum;
 use tikv::coprocessor::codec::mysql::*;
 
@@ -163,5 +163,107 @@ fn bench_chunk_iter_offical(b: &mut Bencher) {
         }
         assert_eq!(col1, 262144);
         assert!(!(523776.0 - col2).is_normal());
+    });
+}
+
+#[bench]
+fn bench_column_agg_long(b: &mut Bencher) {
+    let rows = 1024;
+    let mut long_col = Column::new(&field_type(FieldTypeTp::LongLong), rows);
+    for row_id in 0..rows {
+        if row_id & 1 == 0 {
+            long_col.append_datum(&Datum::Null).unwrap();
+            continue;
+        }
+        long_col.append_datum(&Datum::I64(row_id as i64)).unwrap();
+    }
+    b.iter(|| {
+        let mut long_sum = 0;
+        for row_id in 0..long_col.len() {
+            if long_col.is_null(row_id) {
+                continue;
+            }
+            long_sum += long_col.get_i64(row_id).unwrap();
+        }
+        assert_eq!(262144, long_sum);
+    });
+}
+
+#[bench]
+fn bench_column_agg_str(b: &mut Bencher) {
+    let rows = 1024;
+    let mut str_col = Column::new(&field_type(FieldTypeTp::VarString), rows);
+    let mut total_size = 0;
+    for row_id in 0..rows {
+        if row_id & 1 == 0 {
+            str_col.append_datum(&Datum::Null).unwrap();
+            continue;
+        }
+        let dec = Decimal::from(row_id);
+        let s = dec.to_string().into_bytes();
+        total_size = total_size + s.len();
+        str_col.append_datum(&Datum::Bytes(s)).unwrap();
+    }
+
+    b.iter(|| {
+        let mut get_size = 0;
+        for row_id in 0..str_col.len() {
+            if str_col.is_null(row_id) {
+                continue;
+            }
+            get_size = get_size + str_col.get_bytes(row_id).len();
+        }
+        assert_eq!(get_size, total_size);
+    });
+}
+
+#[bench]
+fn bench_column_agg_dec(b: &mut Bencher) {
+    let rows = 1024;
+    let mut dec_col = Column::new(&field_type(FieldTypeTp::NewDecimal), rows);
+
+    for row_id in 0..rows {
+        if row_id & 1 == 0 {
+            dec_col.append_datum(&Datum::Null).unwrap();
+            continue;
+        }
+        dec_col
+            .append_datum(&Datum::Dec(Decimal::from(row_id)))
+            .unwrap();
+    }
+    b.iter(|| {
+        let mut dec_sum = Decimal::from(0);
+        for row_id in 0..dec_col.len() {
+            if dec_col.is_null(row_id) {
+                continue;
+            }
+            dec_sum = (&dec_sum + &dec_col.get_decimal(row_id).unwrap()).unwrap();
+        }
+        assert_eq!(Decimal::from(262144), dec_sum);
+    });
+}
+
+#[bench]
+fn bench_column_agg_dec_null(b: &mut Bencher) {
+    let rows = 1024;
+    let mut dec_col = Column::new(&field_type(FieldTypeTp::NewDecimal), rows);
+
+    for row_id in 0..rows {
+        if row_id & 1 == 0 {
+            dec_col.append_datum(&Datum::Null).unwrap();
+            continue;
+        }
+        dec_col
+            .append_datum(&Datum::Dec(Decimal::from(row_id)))
+            .unwrap();
+    }
+    b.iter(|| {
+        let mut null_cnt = 0;
+        for row_id in 0..dec_col.len() {
+            if dec_col.is_null(row_id) {
+                null_cnt += 1;
+            }
+        }
+        assert_eq!(null_cnt, 512);
     });
 }

@@ -17,6 +17,7 @@ mod column;
 pub use crate::coprocessor::codec::{Error, Result};
 
 pub use self::chunk::{Chunk, ChunkEncoder};
+pub use self::column::Column;
 
 #[cfg(test)]
 mod tests {
