@@ -427,6 +427,7 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res.to_string().into_bytes())))
     }
 
+    #[inline]
     pub fn sub_duration_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
