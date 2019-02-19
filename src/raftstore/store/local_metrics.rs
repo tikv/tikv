@@ -375,7 +375,6 @@ pub struct RaftMetrics {
     pub message: RaftMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
-    pub process_tick: LocalHistogram,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
@@ -389,9 +388,6 @@ impl Default for RaftMetrics {
             message: Default::default(),
             message_dropped: Default::default(),
             propose: Default::default(),
-            process_tick: PEER_RAFT_PROCESS_DURATION
-                .with_label_values(&["tick"])
-                .local(),
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
@@ -408,7 +404,6 @@ impl RaftMetrics {
         self.ready.flush();
         self.message.flush();
         self.propose.flush();
-        self.process_tick.flush();
         self.process_ready.flush();
         self.append_log.flush();
         self.message_dropped.flush();

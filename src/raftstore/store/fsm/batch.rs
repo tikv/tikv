@@ -20,7 +20,6 @@ use super::router::{BasicMailbox, Router};
 use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
-use std::cmp;
 use std::thread::{self, JoinHandle};
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
@@ -291,20 +290,30 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
-        let mut pushed = match self.fsm_receiver.recv() {
-            Ok(fsm) => batch.push(fsm),
-            Err(_) => return,
+        let curr_batch_len = batch.len();
+        if batch.control.is_some() || curr_batch_len >= max_size {
+            // Do nothing if there's a pending control fsm or the batch is already full.
+            return;
+        }
+
+        let mut pushed = if curr_batch_len == 0 {
+            // Block if the batch is empty.
+            match self.fsm_receiver.recv() {
+                Ok(fsm) => batch.push(fsm),
+                Err(_) => return,
+            }
+        } else {
+            true
         };
-        let mut tried = 1;
+
         while pushed {
-            if tried < max_size {
+            if batch.len() < max_size {
                 let fsm = match self.fsm_receiver.try_recv() {
                     Ok(fsm) => fsm,
                     Err(TryRecvError::Empty) => return,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-                tried += 1;
             } else {
                 return;
             }
@@ -314,10 +323,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
-        let mut batch_size = self.max_batch_size;
-        let mut batch = Batch::with_capacity(batch_size);
-        let mut exhausted_fsms = Vec::with_capacity(batch_size);
-        self.fetch_batch(&mut batch, batch_size);
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+        let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
+
+        self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
             self.handler.begin(batch.len());
             if batch.control.is_some() {
@@ -348,12 +357,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
-            if batch.is_empty() {
-                batch_size = cmp::min(batch_size + 1, self.max_batch_size);
-                self.fetch_batch(&mut batch, batch_size);
-            } else {
-                batch_size = cmp::max(batch_size - 1, 1);
-            }
+            // Fetch batch after every round is finished. It's helpful to protect regions
+            // from becoming hungry if some regions are hot points.
+            self.fetch_batch(&mut batch, self.max_batch_size);
         }
     }
 }
@@ -404,9 +410,7 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || {
-                    poller.poll();
-                })
+                .spawn(move || poller.poll())
                 .unwrap();
             self.workers.push(t);
         }
