@@ -28,6 +28,7 @@ use super::executor::{
 };
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::RpnFunction;
+use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
@@ -146,6 +147,9 @@ impl DAGBuilder {
 
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
+                // TODO: Use static metrics.
+                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+
                 let mut descriptor = first_ed.take_tbl_scan();
                 executor_context =
                     BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
@@ -157,6 +161,8 @@ impl DAGBuilder {
                 )?;
             }
             ExecType::TypeIndexScan => {
+                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+
                 let mut descriptor = first_ed.take_idx_scan();
                 executor_context =
                     BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
@@ -185,7 +191,8 @@ impl DAGBuilder {
                     )));
                 }
                 ExecType::TypeSelection => {
-                    // println!("Selection {:?}", ed.get_selection());
+                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+
                     Box::new(BatchSelectionExecutor::new(
                         executor_context.clone(),
                         executor,

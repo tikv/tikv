@@ -137,6 +137,6 @@ impl RequestHandler for BatchDAGHandler {
         // FIXME: This interface will be broken in streaming mode.
         target_metrics.merge(&mut self.metrics);
 
-        // TODO: exec count is not collected.
+        // Notice: Exec count is collected during building the batch handler.
     }
 }
