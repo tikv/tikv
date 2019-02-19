@@ -12,9 +12,9 @@
 // limitations under the License.
 
 mod lazy_column;
-mod rows;
+mod lazy_column_vec;
 mod vector;
 
 pub use self::lazy_column::LazyBatchColumn;
-pub use self::rows::BatchRows;
+pub use self::lazy_column_vec::LazyBatchColumnVec;
 pub use self::vector::VectorValue;
