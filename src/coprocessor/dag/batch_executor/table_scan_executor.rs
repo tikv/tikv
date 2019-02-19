@@ -24,7 +24,11 @@ use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
 pub struct BatchTableScanExecutor<S: Store>(
-    super::scan_executor::ScanExecutor<S, TableScanExecutorImpl>,
+    super::scan_executor::ScanExecutor<
+        S,
+        TableScanExecutorImpl,
+        super::ranges_iter::PointRangeEnable,
+    >,
 );
 
 impl<S: Store> BatchTableScanExecutor<S> {
@@ -55,7 +59,13 @@ impl<S: Store> BatchTableScanExecutor<S> {
             column_id_index,
             is_column_filled,
         };
-        let wrapper = super::scan_executor::ScanExecutor::new(imp, store, desc, key_ranges, true)?;
+        let wrapper = super::scan_executor::ScanExecutor::new(
+            imp,
+            store,
+            desc,
+            key_ranges,
+            super::ranges_iter::PointRangeEnable,
+        )?;
         Ok(Self(wrapper))
     }
 }

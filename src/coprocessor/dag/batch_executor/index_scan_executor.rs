@@ -22,7 +22,11 @@ use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
 pub struct BatchIndexScanExecutor<S: Store>(
-    super::scan_executor::ScanExecutor<S, IndexScanExecutorImpl>,
+    super::scan_executor::ScanExecutor<
+        S,
+        IndexScanExecutorImpl,
+        super::ranges_iter::PointRangeConditional,
+    >,
 );
 
 impl<S: Store> BatchIndexScanExecutor<S> {
@@ -49,8 +53,13 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper =
-            super::scan_executor::ScanExecutor::new(imp, store, desc, key_ranges, unique)?;
+        let wrapper = super::scan_executor::ScanExecutor::new(
+            imp,
+            store,
+            desc,
+            key_ranges,
+            super::ranges_iter::PointRangeConditional::new(unique),
+        )?;
         Ok(Self(wrapper))
     }
 }

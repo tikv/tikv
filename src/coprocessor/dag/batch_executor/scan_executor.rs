@@ -16,7 +16,7 @@ use kvproto::coprocessor::KeyRange;
 use crate::storage::{Key, Store};
 
 use super::interface::*;
-use super::ranges_consumer::{ConsumerResult, RangesConsumer};
+use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
@@ -35,14 +35,14 @@ pub trait ScanExecutorImpl: Send {
     ) -> Result<()>;
 }
 
-pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
+pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     imp: I,
 
     store: S,
     desc: bool,
 
     /// Consume and produce ranges.
-    ranges: RangesConsumer,
+    ranges: RangesIterator<P>,
 
     /// Row scanner.
     ///
@@ -56,13 +56,13 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl> {
     is_ended: bool,
 }
 
-impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     pub fn new(
         imp: I,
         store: S,
         desc: bool,
         mut key_ranges: Vec<KeyRange>,
-        emit_point_range: bool,
+        point_range_policy: P,
     ) -> Result<Self> {
         crate::coprocessor::codec::table::check_table_ranges(&key_ranges)?;
         if desc {
@@ -72,7 +72,7 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
             imp,
             store,
             desc,
-            ranges: RangesConsumer::new(key_ranges, emit_point_range),
+            ranges: RangesIterator::new(key_ranges, point_range_policy),
             scanner: None,
             is_ended: false,
         })
@@ -119,13 +119,13 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
         loop {
             let range = self.ranges.next();
             let some_row = match range {
-                ConsumerResult::NewPointRange(r) => self.point_get(r)?,
-                ConsumerResult::NewNonPointRange(r) => {
+                super::ranges_iter::IterStatus::NewPointRange(r) => self.point_get(r)?,
+                super::ranges_iter::IterStatus::NewNonPointRange(r) => {
                     self.reset_range(r)?;
                     self.scan_next()?
                 }
-                ConsumerResult::Continue => self.scan_next()?,
-                ConsumerResult::Drained => {
+                super::ranges_iter::IterStatus::Continue => self.scan_next()?,
+                super::ranges_iter::IterStatus::Drained => {
                     is_drained = true;
                     break;
                 }
@@ -139,7 +139,7 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
                     break;
                 }
             } else {
-                self.ranges.consume();
+                self.ranges.notify_drained();
             }
         }
 
@@ -147,7 +147,7 @@ impl<S: Store, I: ScanExecutorImpl> ScanExecutor<S, I> {
     }
 }
 
-impl<S: Store, I: ScanExecutorImpl> BatchExecutor for ScanExecutor<S, I> {
+impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
