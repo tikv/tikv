@@ -99,4 +99,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
         result
     }
+
+    #[inline]
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.src.collect_statistics(destination);
+    }
 }

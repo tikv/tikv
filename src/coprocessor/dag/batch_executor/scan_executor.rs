@@ -41,7 +41,11 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     store: S,
     desc: bool,
 
-    /// Consume and produce ranges.
+    /// Number of rows scanned from each range. Notice that this vector does not contain ranges
+    /// that have not been scanned.
+    scanned_rows_per_range: Vec<usize>,
+
+    /// Iterates ranges.
     ranges: RangesIterator<P>,
 
     /// Row scanner.
@@ -72,6 +76,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
             imp,
             store,
             desc,
+            scanned_rows_per_range: Vec::with_capacity(key_ranges.len()),
             ranges: RangesIterator::new(key_ranges, point_range_policy),
             scanner: None,
             is_ended: false,
@@ -119,8 +124,12 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
         loop {
             let range = self.ranges.next();
             let some_row = match range {
-                super::ranges_iter::IterStatus::NewPointRange(r) => self.point_get(r)?,
+                super::ranges_iter::IterStatus::NewPointRange(r) => {
+                    self.scanned_rows_per_range.push(0);
+                    self.point_get(r)?
+                }
                 super::ranges_iter::IterStatus::NewNonPointRange(r) => {
+                    self.scanned_rows_per_range.push(0);
                     self.reset_range(r)?;
                     self.scan_next()?
                 }
@@ -131,14 +140,19 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
                 }
             };
             if let Some((key, value)) = some_row {
-                self.imp.process_kv_pair(&key, &value, columns)?;
+                // Retrieved one row from point range or non-point range.
+                self.scanned_rows_per_range
+                    .last_mut()
+                    .map_or((), |val| *val += 1);
 
+                self.imp.process_kv_pair(&key, &value, columns)?;
                 columns.debug_assert_columns_equal_length();
 
                 if columns.rows_len() >= expect_rows {
                     break;
                 }
             } else {
+                // No more row in the range.
                 self.ranges.notify_drained();
             }
         }
@@ -173,5 +187,15 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         };
 
         BatchExecuteResult { data, is_drained }
+    }
+
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        for (index, num) in self.scanned_rows_per_range.iter_mut().enumerate() {
+            destination.scanned_rows_per_range[index] += *num;
+            *num = 0;
+        }
+        if let Some(scanner) = &mut self.scanner {
+            scanner.collect_statistics_into(&mut destination.cf_stats);
+        }
     }
 }

@@ -16,7 +16,7 @@ use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{BatchExecutor, ExecutorContext};
+use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor, ExecutorContext};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::*;
 
@@ -29,6 +29,12 @@ pub struct BatchDAGHandler {
     out_most_executor: Box<BatchExecutor>,
     output_offsets: Vec<u32>,
     executor_context: ExecutorContext,
+
+    statistics: BatchExecuteStatistics,
+
+    /// Traditional metric interface.
+    /// TODO: Deprecate it in Coprocessor DAG v2.
+    metrics: ExecutorMetrics,
 }
 
 impl BatchDAGHandler {
@@ -36,11 +42,14 @@ impl BatchDAGHandler {
         out_most_executor: Box<BatchExecutor>,
         output_offsets: Vec<u32>,
         executor_context: ExecutorContext,
+        ranges_len: usize,
     ) -> Self {
         Self {
             out_most_executor,
             output_offsets,
             executor_context,
+            statistics: BatchExecuteStatistics::new(ranges_len),
+            metrics: ExecutorMetrics::default(),
         }
     }
 }
@@ -85,12 +94,27 @@ impl RequestHandler for BatchDAGHandler {
             }
 
             if is_drained {
+                self.out_most_executor
+                    .collect_statistics(&mut self.statistics);
+                self.metrics.cf_stats.add(&self.statistics.cf_stats);
+
                 let mut resp = Response::new();
                 let mut sel_resp = SelectResponse::new();
                 sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                // FIXME: output_counts should not be i64.
+                sel_resp.set_output_counts(
+                    self.statistics
+                        .scanned_rows_per_range
+                        .iter()
+                        .map(|v| *v as i64)
+                        .collect(),
+                );
+
+                // Not really useful here, because we only collect it once. But when we change it
+                // in future, hope we will not forget it.
+                self.statistics.clear();
 
                 // TODO: Warning
-                // TODO: Output counts
 
                 let data = box_try!(sel_resp.write_to_bytes());
                 resp.set_data(data);
@@ -107,7 +131,10 @@ impl RequestHandler for BatchDAGHandler {
         }
     }
 
-    fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
-        // TODO
+    fn collect_metrics_into(&mut self, target_metrics: &mut ExecutorMetrics) {
+        // FIXME: This interface will be broken in streaming mode.
+        target_metrics.merge(&mut self.metrics);
+
+        // TODO: exec count is not collected.
     }
 }

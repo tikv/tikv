@@ -61,6 +61,8 @@ impl DAGRequestHandler {
         ranges: Vec<KeyRange>,
         store: S,
     ) -> Result<super::batch_handler::BatchDAGHandler> {
+        let ranges_len = ranges.len();
+
         let (out_most_executor, executor_context) = super::builder::DAGBuilder::build_batch(
             req.take_executors().into_vec(),
             store,
@@ -71,6 +73,7 @@ impl DAGRequestHandler {
             out_most_executor,
             req.take_output_offsets(),
             executor_context,
+            ranges_len,
         ))
     }
 

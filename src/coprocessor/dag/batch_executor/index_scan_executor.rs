@@ -65,8 +65,14 @@ impl<S: Store> BatchIndexScanExecutor<S> {
 }
 
 impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+    #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(expect_rows)
+    }
+
+    #[inline]
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.0.collect_statistics(destination);
     }
 }
 
