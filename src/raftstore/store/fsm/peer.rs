@@ -22,7 +22,7 @@ use mio::EventLoop;
 use rocksdb::rocksdb_options::WriteOptions;
 
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb;
+use kvproto::metapb::{self,RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
@@ -463,29 +463,38 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let merge_target = msg.get_merge_target();
         let target_region_id = merge_target.get_id();
 
-        // When receiving message that has a merge target, it indicates that the source peer
-        // on this store is stale, the peers on other stores are already merged. The epoch
-        // in merge target is the state of target peer at the time when source peer is merged.
-        // So here we need to check the target peer on this store to decide whether the source
-        // to destory or wait target peer to catch up logs.
-        if let Some(epoch) = self.pending_cross_snap.get(&target_region_id).or_else(|| {
-            self.region_peers
-                .get(&target_region_id)
-                .map(|p| p.region().get_region_epoch())
-        }) {
-            info!(
-                "[region {}] checking target {} epoch: {:?}, msg target epoch: {:?}",
-                msg.get_region_id(),
-                target_region_id,
-                epoch,
-                merge_target.get_region_epoch(),
-            );
-            // The target peer will move on, namely, it will apply a snapshot generated after merge,
-            // so destroy source peer.
+        debug!("{} receive merge targets {:?}", self.tag, merge_target);
+        // When receiving message that has a merge target, it indicates that the source peer on this store is stale,
+        // the peers on other stores are already merged. The epoch in merge target is the state of target peer at the
+        // time when source peer is merged. So here we record the merge target epoch version to let the target peer on
+        // this store to decide whether to destroy the source peer.
+        self.targets_map
+            .insert(msg.get_region_id(), target_region_id);
+        {
+            let v = self
+                .pending_merge_targets
+                .entry(target_region_id)
+                .or_default();
+            if let Some(epoch) =
+                (*v).insert(msg.get_region_id(), merge_target.get_region_epoch().clone())
+            {
+                if epoch.get_version() != merge_target.get_region_epoch().get_version() {
+                    panic!(
+                        "conflict epoch version {:?} {:?}",
+                        epoch,
+                        merge_target.get_region_epoch()
+                    );
+                }
+            }
+        }
+        if let Some(epoch) = self
+            .region_peers
+            .get(&target_region_id)
+            .map(|r| r.region().get_region_epoch())
+        {
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
-            // Wait till the target peer has catched up logs and source peer will be destroyed at that time.
             return Ok(false);
         }
 
@@ -599,28 +608,6 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             return Ok(Some(key));
         }
 
-        let r = self
-            .region_ranges
-            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Key>))
-            .map(|(_, &region_id)| self.region_peers[&region_id].region())
-            .take_while(|r| enc_start_key(r) < enc_end_key(&snap_region))
-            .skip_while(|r| r.get_id() == region_id)
-            .next()
-            .map(|r| r.to_owned());
-        if let Some(exist_region) = r {
-            info!("region overlapped {:?}, {:?}", exist_region, snap_region);
-            let peer = &self.region_peers[&region_id];
-            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
-            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
-            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
-            // `pending_cross_snap` here if peer is applying snapshot.
-            if !peer.is_applying_snapshot() && !peer.has_pending_snapshot() {
-                self.pending_cross_snap
-                    .insert(region_id, snap_region.get_region_epoch().to_owned());
-            }
-            self.raft_metrics.message_dropped.region_overlap += 1;
-            return Ok(Some(key));
-        }
         for region in &self.pending_snapshot_regions {
             if enc_start_key(region) < enc_end_key(&snap_region) &&
                enc_end_key(region) > enc_start_key(&snap_region) &&
@@ -632,26 +619,76 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 return Ok(Some(key));
             }
         }
-        if let Some(r) = self.pending_cross_snap.get(&region_id) {
-            // Check it to avoid epoch moves backward.
-            if util::is_epoch_stale(snap_region.get_region_epoch(), r) {
-                info!(
-                    "[region {}] snapshot epoch is stale, drop: {:?} < {:?}",
-                    snap_region.get_id(),
-                    snap_region.get_region_epoch(),
-                    r
-                );
-                self.raft_metrics.message_dropped.stale_msg += 1;
-                return Ok(Some(key));
+        let mut regions_to_destroy = vec![];
+            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
+            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
+            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
+            // `pending_cross_snap` here if peer is applying snapshot.
+        let ready = {
+            let peer = &self.region_peers[&region_id];
+            !peer.is_applying_snapshot() && !peer.has_pending_snapshot() && peer.ready_to_handle_pending_snap()
+        };
+        for (_, &region_id) in self
+            .region_ranges
+            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Vec<u8>>))
+        {
+            let exist_region = self.region_peers[&region_id].region();
+            if enc_start_key(exist_region) < enc_end_key(&snap_region) {
+                break;
             }
+            if exist_region.get_id() == region_id {
+                continue;
+            }
+            info!(
+                "{} region overlapped {:?}, {:?}",
+                self.tag, exist_region, snap_region
+            );
+            if ready && self.maybe_destroy_source(
+                region_id,
+                exist_region.get_id(),
+                snap_region.get_region_epoch().to_owned(),
+            ) {
+                regions_to_destroy.push(exist_region.get_id());
+                continue;
+            }
+            self.raft_metrics.message_dropped.region_overlap += 1;
+            return Ok(Some(key));
         }
+
         // check if snapshot file exists.
         self.snap_mgr.get_snapshot_for_applying(&key)?;
 
         self.pending_snapshot_regions.push(snap_region);
-        self.pending_cross_snap.remove(&region_id);
+        for region_id in regions_to_destroy {
+            self.on_merge_fail(region_id);
+        }
 
         Ok(None)
+    }
+
+    /// Checks merge target, returns whether the source peer should be destroyed.
+    pub fn maybe_destroy_source(
+        &self,
+        target_region_id: u64,
+        source_region_id: u64,
+        region_epoch: RegionEpoch,
+    ) -> bool {
+        if let Some(merge_targets) = self.pending_merge_targets.get(&target_region_id) {
+            if let Some(target_epoch) = merge_targets.get(&source_region_id) {
+                info!(
+                    "{} checking source {} epoch: {:?}, merge target epoch: {:?}",
+                    self.tag, source_region_id, region_epoch, target_epoch,
+                );
+                // The target peer will move on, namely, it will apply a snapshot generated after merge,
+                // so destroy source peer.
+                if region_epoch.get_version() > target_epoch.get_version() {
+                    return true;
+                }
+                // Wait till the target peer has caught up logs and source peer will be destroyed at that time.
+                return false;
+            }
+        }
+        false
     }
 
     pub fn on_raft_ready(&mut self) {
@@ -668,11 +705,17 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let (kv_wb, raft_wb, append_res, sync_log) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
-                if let Some(peer) = self.region_peers.get_mut(&region_id) {
+                if let Some(mut peer) = self.region_peers.remove(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
                         region_proposals.push(region_proposal);
                     }
-                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker);
+                    peer.handle_raft_ready_append(
+                        &mut ctx,
+                        &self.pd_worker,
+                        &self.region_ranges,
+                        &self.region_peers,
+                    );
+                    self.region_peers.insert(region_id, peer);
                 }
             }
             (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
@@ -837,7 +880,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         info!("[region {}] destroy peer {:?}", region_id, peer);
         // We can't destroy a peer which is applying snapshot.
         assert!(!p.is_applying_snapshot());
-        self.pending_cross_snap.remove(&region_id);
+        self.pending_merge_targets.remove(&region_id);
+        if let Some(target) = self.targets_map.remove(&region_id) {
+            if self.pending_merge_targets.contains_key(&target) {
+                self.pending_merge_targets
+                    .get_mut(&target)
+                    .unwrap()
+                    .remove(&region_id);
+                // When the target doesn't exist(add peer but the store is isolated), source peer decide to destroy by itself.
+                // Without target, the `pending_merge_targets` for target won't be removed, so here source peer help target to clear.
+                if self.region_peers.get(&target).is_none()
+                    && self.pending_merge_targets.get(&target).unwrap().is_empty()
+                {
+                    self.pending_merge_targets.remove(&target);
+                }
+            }
+        }
         // Destroy read delegates.
         self.local_reader
             .schedule(ReadTask::destroy(region_id))

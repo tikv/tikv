@@ -70,11 +70,10 @@ pub struct Store<T, C: 'static> {
     region_ranges: BTreeMap<Key, u64>,
     // the regions with pending snapshots between two mio ticks.
     pending_snapshot_regions: Vec<metapb::Region>,
-    // A marker used to indicate if the peer of a region is going to apply a snapshot
-    // with different range.
-    // It assumes that when a peer is going to accept snapshot, it can never
-    // captch up by normal log replication.
-    pending_cross_snap: HashMap<u64, metapb::RegionEpoch>,
+    // target_region_id -> (source_region_id -> merge_target_epoch)
+    pending_merge_targets: HashMap<u64, HashMap<u64, metapb::RegionEpoch>>,
+    // source_region_id -> target_region_id
+    targets_map: HashMap<u64, u64>,
 
     split_check_worker: Worker<SplitCheckTask>,
     raftlog_gc_worker: Worker<RaftlogGcTask>,
