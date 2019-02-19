@@ -25,17 +25,16 @@ use raft::eraftpb::Snapshot as RaftSnapshot;
 use rocksdb::{Writable, WriteBatch};
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
-use crate::raftstore::store::fsm::RaftRouter;
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
 use crate::raftstore::store::util::Engines;
-use crate::raftstore::store::PeerMsg;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use crate::raftstore::store::{Msg, PeerMsg};
 use crate::storage::CF_RAFT;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
@@ -215,7 +214,7 @@ impl PendingDeleteRanges {
 }
 
 #[derive(Clone)]
-struct SnapContext {
+struct SnapContext<T> {
     engines: Engines,
     batch_size: usize,
     mgr: SnapManager,
@@ -223,54 +222,10 @@ struct SnapContext {
     clean_stale_peer_delay: Duration,
     pending_delete_ranges: PendingDeleteRanges,
     // sends snap res if the router is not None
-    raft_router: Option<RaftRouter>,
+    raft_router: T,
 }
 
-impl SnapContext {
-    /// Generates the snapshot of the Region.
-    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
-        // do we need to check leader here?
-        let raft_engine = Arc::clone(&self.engines.raft);
-        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
-
-        let snap = box_try!(store::do_snapshot(
-            self.mgr.clone(),
-            &raft_engine,
-            &raw_snap,
-            region_id
-        ));
-        // Only enable the fail point when the region id is equal to 1, which is
-        // the id of bootstrapped region in tests.
-        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
-        if let Err(e) = notifier.try_send(snap) {
-            info!(
-                "failed to notify snap result, leadership may have changed, ignore error";
-                "region_id" => region_id,
-                "err" => %e,
-            );
-        }
-        Ok(())
-    }
-
-    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
-    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "all"])
-            .inc();
-        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
-        let timer = gen_histogram.start_coarse_timer();
-
-        if let Err(e) = self.generate_snap(region_id, notifier) {
-            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
-            return;
-        }
-
-        SNAP_COUNTER_VEC
-            .with_label_values(&["generate", "success"])
-            .inc();
-        timer.observe_duration();
-    }
-
+impl<T: crate::util::transport::Sender<Msg>> SnapContext<T> {
     /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id);
@@ -347,19 +302,14 @@ impl SnapContext {
             "region_id" => region_id,
             "time_takes" => ?timer.elapsed(),
         );
-
-        if self.raft_router.is_some() {
-            if let Err(e) = self
-                .raft_router
-                .as_ref()
-                .unwrap()
-                .send_peer_msg(PeerMsg::SnapRes { region_id, term })
-            {
-                error!(
-                    "[region {}: unaable to send snap res to the peer {:?}]",
-                    region_id, e
-                );
-            }
+        if let Err(e) = self
+            .raft_router
+            .send(Msg::PeerMsg(PeerMsg::SnapRes { region_id, term }))
+        {
+            error!(
+                "[region {}: unable to send snap res to the peer {:?}]",
+                region_id, e
+            );
         }
 
         Ok(())
@@ -396,6 +346,51 @@ impl SnapContext {
             }
         }
 
+        timer.observe_duration();
+    }
+}
+impl<T> SnapContext<T> {
+    /// Generates the snapshot of the Region.
+    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
+        // do we need to check leader here?
+        let raft_engine = Arc::clone(&self.engines.raft);
+        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
+
+        let snap = box_try!(store::do_snapshot(
+            self.mgr.clone(),
+            &raft_engine,
+            &raw_snap,
+            region_id
+        ));
+        // Only enable the fail point when the region id is equal to 1, which is
+        // the id of bootstrapped region in tests.
+        fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
+        if let Err(e) = notifier.try_send(snap) {
+            info!(
+                "failed to notify snap result, leadership may have changed, ignore error";
+                "region_id" => region_id,
+                "err" => %e,
+            );
+        }
+        Ok(())
+    }
+
+    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
+    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
+        SNAP_COUNTER_VEC
+            .with_label_values(&["generate", "all"])
+            .inc();
+        let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
+        let timer = gen_histogram.start_coarse_timer();
+
+        if let Err(e) = self.generate_snap(region_id, notifier) {
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
+            return;
+        }
+
+        SNAP_COUNTER_VEC
+            .with_label_values(&["generate", "success"])
+            .inc();
         timer.observe_duration();
     }
 
@@ -530,24 +525,24 @@ impl SnapContext {
     }
 }
 
-pub struct Runner {
+pub struct Runner<T> {
     pool: ThreadPool<DefaultContext>,
-    ctx: SnapContext,
+    ctx: SnapContext<T>,
 
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
     pending_applies: VecDeque<Task>,
 }
 
-impl Runner {
+impl<T: crate::util::transport::Sender<Msg>> Runner<T> {
     pub fn new(
         engines: Engines,
         mgr: SnapManager,
         batch_size: usize,
         use_delete_range: bool,
         clean_stale_peer_delay: Duration,
-        raft_router: Option<RaftRouter>,
-    ) -> Runner {
+        raft_router: T,
+    ) -> Runner<T> {
         Runner {
             pool: ThreadPoolBuilder::with_default_factory(thd_name!("snap-generator"))
                 .thread_count(GENERATE_POOL_SIZE)
@@ -565,19 +560,6 @@ impl Runner {
         }
     }
 
-    pub fn new_timer() -> Timer<Event> {
-        let mut timer = Timer::new(2);
-        timer.add_task(
-            Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
-            Event::CheckApply,
-        );
-        timer.add_task(
-            Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
-            Event::CheckStalePeer,
-        );
-        timer
-    }
-
     /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         while !self.pending_applies.is_empty() {
@@ -593,7 +575,20 @@ impl Runner {
     }
 }
 
-impl Runnable<Task> for Runner {
+pub fn new_timer() -> Timer<Event> {
+    let mut timer = Timer::new(2);
+    timer.add_task(
+        Duration::from_millis(PENDING_APPLY_CHECK_INTERVAL),
+        Event::CheckApply,
+    );
+    timer.add_task(
+        Duration::from_millis(STALE_PEER_CHECK_INTERVAL),
+        Event::CheckStalePeer,
+    );
+    timer
+}
+
+impl<T: crate::util::transport::Sender<Msg> + Send + 'static> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         match task {
             Task::Gen {
@@ -649,7 +644,9 @@ pub enum Event {
     CheckApply,
 }
 
-impl RunnableWithTimer<Task, Event> for Runner {
+impl<T: 'static + crate::util::transport::Sender<Msg> + Send> RunnableWithTimer<Task, Event>
+    for Runner<T>
+{
     fn on_timeout(&mut self, timer: &mut Timer<Event>, event: Event) {
         match event {
             Event::CheckApply => {
@@ -671,7 +668,7 @@ impl RunnableWithTimer<Task, Event> for Runner {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::io;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{mpsc, Arc};
@@ -683,11 +680,13 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::raftstore::store::{Msg, PeerMsg};
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
+    use crossbeam::TrySendError;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use tempdir::TempDir;
@@ -704,6 +703,24 @@ mod tests {
         timeout: time::Instant,
     ) {
         pending_delete_ranges.insert(id, s.as_bytes(), e.as_bytes(), timeout);
+    }
+
+    #[derive(Clone)]
+    pub struct RegionResSender {
+        sender: mpsc::Sender<Msg>,
+    }
+
+    impl RegionResSender {
+        pub fn new(sender: mpsc::Sender<Msg>) -> RegionResSender {
+            RegionResSender { sender }
+        }
+    }
+
+    impl crate::util::transport::Sender<Msg> for RegionResSender {
+        fn send(&self, msg: Msg) -> Result<(), TrySendError<Msg>> {
+            self.sender.send(msg);
+            Ok(())
+        }
     }
 
     #[test]
@@ -802,13 +819,15 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
+        let (sender, reciver) = mpsc::channel();
+        let region_res_sender = RegionResSender { sender: sender };
         let runner = RegionRunner::new(
             Engines::new(Arc::clone(&db), Arc::clone(&db)),
             mgr,
             0,
             true,
             Duration::from_secs(0),
-            None,
+            region_res_sender,
         );
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
@@ -866,6 +885,16 @@ mod tests {
                 {
                     break;
                 }
+            }
+            let msg = reciver.recv().unwrap();
+            match msg {
+                Msg::PeerMsg(msg) => match msg {
+                    PeerMsg::SnapRes { region_id, .. } => {
+                        assert_eq!(region_id, id);
+                    }
+                    _ => panic!("expected snap res peer msg"),
+                },
+                Msg::StoreMsg(_) => panic!("expected peer msg but got store msg"),
             }
         };
         let cf = db.cf_handle(CF_DEFAULT).unwrap();

@@ -1461,13 +1461,17 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::raftstore::store::bootstrap;
     use crate::raftstore::store::util::Engines;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
+    use crate::raftstore::store::Msg;
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
+    use crate::util::transport::Sender;
     use crate::util::worker::{Scheduler, Worker};
+    use crossbeam::TrySendError;
     use kvproto::raft_serverpb::RaftSnapshotData;
     use protobuf;
     use raft::eraftpb::HardState;
@@ -1482,7 +1486,23 @@ mod tests {
     use std::time::Duration;
     use tempdir::*;
 
-    use super::*;
+    #[derive(Clone)]
+    pub struct RegionResSender {
+        sender: mpsc::Sender<Msg>,
+    }
+
+    impl RegionResSender {
+        pub fn new(sender: mpsc::Sender<Msg>) -> RegionResSender {
+            RegionResSender { sender }
+        }
+    }
+
+    impl<Msg> Sender<Msg> for RegionResSender {
+        fn send(&self, msg: Msg) -> Result<(), TrySendError<Msg>> {
+            self.sender.send(msg);
+            Ok(())
+        }
+    }
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
         let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
@@ -1784,13 +1804,15 @@ mod tests {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let mut s = new_storage_from_ents(sched, &td, &ents);
+        let (sender, _) = mpsc::channel();
+        let region_res_sender = RegionResSender { sender: sender };
         let runner = RegionRunner::new(
             s.engines.clone(),
             mgr,
             0,
             true,
             Duration::from_secs(0),
-            None,
+            region_res_sender,
         );
         worker.start(runner).unwrap();
         let snap = s.snapshot();
@@ -2080,13 +2102,15 @@ mod tests {
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
         let s1 = new_storage_from_ents(sched.clone(), &td1, &ents);
+        let (sender, _) = mpsc::channel();
+        let region_res_sender = RegionResSender { sender: sender };
         let runner = RegionRunner::new(
             s1.engines.clone(),
             mgr.clone(),
             0,
             true,
             Duration::from_secs(0),
-            None,
+            region_res_sender,
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());

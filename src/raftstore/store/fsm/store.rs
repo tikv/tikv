@@ -62,9 +62,9 @@ use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::worker::{
-    CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
-    RegionTask, SplitCheckRunner, SplitCheckTask,
+    region_timer, CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask,
+    ConsistencyCheckRunner, ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask,
+    ReadTask, RegionRunner, RegionTask, SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
     util, Callback, Engines, Msg, PeerMsg, SignificantMsg, SnapManager, SnapshotDeleter, StoreMsg,
@@ -1041,9 +1041,9 @@ impl RaftBatchSystem {
             builder.cfg.snap_apply_batch_size.0 as usize,
             builder.cfg.use_delete_range,
             builder.cfg.clean_stale_peer_delay.0,
-            Some(self.router()),
+            self.router(),
         );
-        let timer = RegionRunner::new_timer();
+        let timer = region_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
