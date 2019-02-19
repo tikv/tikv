@@ -1023,7 +1023,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 return Ok(Some(key));
             }
         }
+
         let mut regions_to_destroy = vec![];
+        // In some extreme cases, it may cause source peer destroyed improperly so that a later
+        // CommitMerge may panic because source is already destroyed, so just drop the message:
+        // 1. A new snapshot is received whereas a snapshot is still in applying, and the snapshot
+        // under applying is generated before merge and the new snapshot is generated after merge.
+        // After the applying snapshot is finished, the log may able to catch up and so a
+        // CommitMerge will be applied.
+        // 2. There is a CommitMerge pending in apply thread.
+        let ready = !self.fsm.peer.is_applying_snapshot()
+            && !self.fsm.peer.has_pending_snapshot()
+            && self.fsm.peer.ready_to_handle_pending_snap();
         for exist_region in meta
             .region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Vec<u8>>))
@@ -1035,19 +1046,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 "{} region overlapped {:?}, {:?}",
                 self.fsm.peer.tag, exist_region, snap_region
             );
-            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
-            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
-            // here may cause source peer destroyed improperly. So just drop message here if peer is applying snapshot.
-            if !self.fsm.peer.is_applying_snapshot() && !self.fsm.peer.has_pending_snapshot() {
-                if maybe_destroy_source(
+            if ready
+                && maybe_destroy_source(
                     &meta,
                     self.region_id(),
                     exist_region.get_id(),
                     snap_region.get_region_epoch().to_owned(),
-                ) {
-                    regions_to_destroy.push(exist_region.get_id());
-                    continue;
-                }
+                )
+            {
+                regions_to_destroy.push(exist_region.get_id());
+                continue;
             }
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
