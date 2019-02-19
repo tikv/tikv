@@ -367,7 +367,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         let value_size = match entry_type {
             DBEntryType::Put => value.len() as u64,
-            DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
+            DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
                 Ok(index) => index.blob_size + value.len() as u64,
                 Err(_) => return,
             },
@@ -624,7 +624,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         let value_size = match entry_type {
             DBEntryType::Put => value.len() as u64,
-            DBEntryType::BlobIndex => match TitanBlobIndex::decode_from(value) {
+            DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
                 Ok(index) => index.blob_size + value.len() as u64,
                 Err(_) => return,
             },
@@ -990,7 +990,7 @@ mod tests {
                 let mut blob_index = TitanBlobIndex::default();
                 for _ in 0..count {
                     blob_index.blob_size = vlen - extra_value_size;
-                    let v = TitanBlobIndex::encode_to(&blob_index);
+                    let v = blob_index.encode();
                     collector.add(k.as_bytes(), &v, DBEntryType::BlobIndex, 0, 0);
                     extra_value_size = v.len() as u64;
                 }
