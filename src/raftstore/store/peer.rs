@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::collections::{VecDeque, BTreeMap};
+use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};

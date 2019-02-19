@@ -22,7 +22,7 @@ use mio::EventLoop;
 use rocksdb::rocksdb_options::WriteOptions;
 
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb::{self,RegionEpoch};
+use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
@@ -620,13 +620,15 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         let mut regions_to_destroy = vec![];
-            // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
-            // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
-            // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
-            // `pending_cross_snap` here if peer is applying snapshot.
+        // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
+        // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
+        // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
+        // `pending_cross_snap` here if peer is applying snapshot.
         let ready = {
             let peer = &self.region_peers[&region_id];
-            !peer.is_applying_snapshot() && !peer.has_pending_snapshot() && peer.ready_to_handle_pending_snap()
+            !peer.is_applying_snapshot()
+                && !peer.has_pending_snapshot()
+                && peer.ready_to_handle_pending_snap()
         };
         for (_, &region_id) in self
             .region_ranges
@@ -643,11 +645,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 "{} region overlapped {:?}, {:?}",
                 self.tag, exist_region, snap_region
             );
-            if ready && self.maybe_destroy_source(
-                region_id,
-                exist_region.get_id(),
-                snap_region.get_region_epoch().to_owned(),
-            ) {
+            if ready
+                && self.maybe_destroy_source(
+                    region_id,
+                    exist_region.get_id(),
+                    snap_region.get_region_epoch().to_owned(),
+                ) {
                 regions_to_destroy.push(exist_region.get_id());
                 continue;
             }
