@@ -302,10 +302,11 @@ impl<T: crate::util::transport::Sender<Msg>> SnapContext<T> {
             "region_id" => region_id,
             "time_takes" => ?timer.elapsed(),
         );
-        if let Err(e) = self
-            .raft_router
-            .send(Msg::PeerMsg(PeerMsg::SnapRes { region_id, term }))
-        {
+        if let Err(e) = self.raft_router.send(Msg::PeerMsg(PeerMsg::SnapRes {
+            region_id,
+            term,
+            apply_state,
+        })) {
             error!(
                 "[region {}: unable to send snap res to the peer {:?}]",
                 region_id, e
@@ -710,15 +711,9 @@ pub mod tests {
         sender: mpsc::Sender<Msg>,
     }
 
-    impl RegionResSender {
-        pub fn new(sender: mpsc::Sender<Msg>) -> RegionResSender {
-            RegionResSender { sender }
-        }
-    }
-
     impl crate::util::transport::Sender<Msg> for RegionResSender {
         fn send(&self, msg: Msg) -> Result<(), TrySendError<Msg>> {
-            self.sender.send(msg);
+            self.sender.send(msg).unwrap();
             Ok(())
         }
     }
@@ -956,6 +951,7 @@ pub mod tests {
         );
 
         // make sure have checked pending applies
+        wait_apply_finish(3);
         wait_apply_finish(4);
 
         // before two pending apply tasks should be finished and snapshots are ingested

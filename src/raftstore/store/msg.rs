@@ -20,6 +20,7 @@ use kvproto::metapb;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_serverpb::RaftApplyState;
 use kvproto::raft_serverpb::RaftMessage;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
@@ -234,6 +235,7 @@ pub enum PeerMsg {
     SnapRes {
         term: u64,
         region_id: u64,
+        apply_state: RaftApplyState,
     },
 }
 
@@ -315,11 +317,16 @@ impl fmt::Debug for PeerMsg {
             }
             PeerMsg::Start(region_id) => write!(fmt, "[region {}] Startup", region_id),
             PeerMsg::Noop(region_id) => write!(fmt, "[region {}] Noop", region_id),
-            PeerMsg::SnapRes { region_id, term } => write! {
-                fmt,
-                "[region {}] snaphot applied term {}",
+            PeerMsg::SnapRes {
                 region_id,
                 term,
+                apply_state,
+            } => write! {
+                fmt,
+                "[region {}] snaphot applied term {} apply state {:?}",
+                region_id,
+                term,
+                apply_state,
             },
         }
     }

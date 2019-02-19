@@ -29,7 +29,8 @@ use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
+    MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData, RaftTruncatedState,
+    RegionLocalState,
 };
 use raft::eraftpb::ConfChangeType;
 use raft::Ready;
@@ -319,8 +320,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 PeerMsg::Start(_) => self.start(),
                 PeerMsg::Noop(_) => {}
-                PeerMsg::SnapRes {term, ..} => {
-                    self.on_snap_res(term);
+                PeerMsg::SnapRes {
+                    term, apply_state, ..
+                } => {
+                    self.on_snap_res(term, apply_state);
                 }
             }
         }
@@ -481,11 +484,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_snap_res(&mut self, term: u64) {
-        // apply_state will be applied on applying next raft log.
-        // on the leader change, there is a possibilty to read old value.
-        // so, updating the applied term will ask for ReadIndex
+    fn on_snap_res(&mut self, term: u64, apply_state: RaftApplyState) {
         self.fsm.peer.mut_store().set_applied_term(term);
+        self.fsm.peer.mut_store().set_applied_state(apply_state);
     }
 
     fn on_clear_region_size(&mut self) {

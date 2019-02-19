@@ -1480,9 +1480,8 @@ mod tests {
     use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
-    use std::sync::atomic::*;
+    use std::result;
     use std::sync::mpsc::*;
-    use std::sync::*;
     use std::time::Duration;
     use tempdir::*;
 
@@ -1491,15 +1490,9 @@ mod tests {
         sender: mpsc::Sender<Msg>,
     }
 
-    impl RegionResSender {
-        pub fn new(sender: mpsc::Sender<Msg>) -> RegionResSender {
-            RegionResSender { sender }
-        }
-    }
-
-    impl<Msg> Sender<Msg> for RegionResSender {
-        fn send(&self, msg: Msg) -> Result<(), TrySendError<Msg>> {
-            self.sender.send(msg);
+    impl Sender<Msg> for RegionResSender {
+        fn send(&self, msg: Msg) -> result::Result<(), TrySendError<Msg>> {
+            self.sender.send(msg).unwrap();
             Ok(())
         }
     }
