@@ -13,6 +13,7 @@
 
 //! Batch executor common structures.
 
+use std::ops::Deref;
 use std::sync::Arc;
 
 use tipb::schema::ColumnInfo;
@@ -73,11 +74,11 @@ impl BatchExecutorContext {
     }
 }
 
-impl std::ops::Deref for BatchExecutorContext {
+impl Deref for BatchExecutorContext {
     type Target = BatchExecutorContextInner;
 
     fn deref(&self) -> &BatchExecutorContextInner {
-        self.0.deref()
+        &self.0
     }
 }
 

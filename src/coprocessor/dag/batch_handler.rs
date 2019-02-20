@@ -20,6 +20,7 @@ use super::batch_executor::interface::{
     BatchExecuteStatistics, BatchExecutor, BatchExecutorContext,
 };
 use super::executor::ExecutorMetrics;
+use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::*;
 
 const BATCH_INITIAL_SIZE: usize = 32;
@@ -60,10 +61,11 @@ impl RequestHandler for BatchDAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
+        let mut warnings = EvalWarnings::new(self.executor_context.config.max_warning_cnt);
 
         loop {
             // self.deadline.check_if_exceeded()?;
-            let result = self.out_most_executor.next_batch(batch_size);
+            let mut result = self.out_most_executor.next_batch(batch_size);
 
             let is_drained;
 
@@ -80,6 +82,8 @@ impl RequestHandler for BatchDAGHandler {
                 Err(e) => return Err(e),
                 Ok(f) => is_drained = f,
             }
+
+            warnings.merge(&mut result.warnings);
 
             if result.data.rows_len() > 0 {
                 let mut chunk = Chunk::new();
@@ -112,14 +116,16 @@ impl RequestHandler for BatchDAGHandler {
                         .collect(),
                 );
 
+                sel_resp.set_warnings(RepeatedField::from_vec(warnings.warnings));
+                sel_resp.set_warning_count(warnings.warning_cnt as i64);
+
+                let data = box_try!(sel_resp.write_to_bytes());
+                resp.set_data(data);
+
                 // Not really useful here, because we only collect it once. But when we change it
                 // in future, hope we will not forget it.
                 self.statistics.clear();
 
-                // TODO: Warning
-
-                let data = box_try!(sel_resp.write_to_bytes());
-                resp.set_data(data);
                 return Ok(resp);
             }
 
