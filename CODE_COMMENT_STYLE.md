@@ -45,14 +45,14 @@ A comment is generally used for:
 - Non-doc comment
 
     - Used to document implementation details.
-    - Use // for a line comment
-    > **Note**: Block comments are not recommended unless for personal reasons or temporary purposes prior to being converted to line comments.
+    - Use `//` for a line comment
+    > **Note**: Block comments (`/* ... */`) are not recommended unless for personal reasons or temporary purposes prior to being converted to line comments.
     
 - Doc comment
 
     - Used to document the interface of code (structures, fields, macros, etc.).
-    - Use /// for item documentation (functions, attributes, structures, etc.).
-    - Use //! for module level documentation.
+    - Use `///` for item documentation (functions, attributes, structures, etc.).
+    - Use `//!` for module level documentation.
     > For more detailed guidelines on Rust doc comments, see [Making Useful Documentation Comments](https://doc.rust-lang.org/book/ch14-02-publishing-to-crates-io.html#making-useful-documentation-comments).
 
 - Place the single-line and block comment above the code it’s annotating.
