@@ -32,6 +32,21 @@ pub enum LazyBatchColumn {
     Decoded(VectorValue),
 }
 
+impl std::fmt::Debug for LazyBatchColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let vec_display: Vec<_> = v
+                    .iter()
+                    .map(|item| crate::util::escape(item.as_slice()))
+                    .collect();
+                f.debug_tuple("Raw").field(&vec_display).finish()
+            }
+            LazyBatchColumn::Decoded(ref v) => f.debug_tuple("Decoded").field(v).finish(),
+        }
+    }
+}
+
 impl Clone for LazyBatchColumn {
     #[inline]
     fn clone(&self) -> Self {
@@ -73,7 +88,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn get_decoded(&self) -> &VectorValue {
+    pub fn decoded(&self) -> &VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
             LazyBatchColumn::Decoded(ref v) => v,
@@ -81,7 +96,7 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn get_raw(&self) -> &Vec<SmallVec<[u8; 9]>> {
+    pub fn raw(&self) -> &Vec<SmallVec<[u8; 9]>> {
         match self {
             LazyBatchColumn::Raw(ref v) => v,
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
@@ -153,7 +168,7 @@ impl LazyBatchColumn {
 
         let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
-            let raw_values = self.get_raw();
+            let raw_values = self.raw();
             for raw_value in raw_values {
                 let raw_datum = if raw_value.is_empty() {
                     if column_info.has_default_val() {
@@ -232,14 +247,14 @@ mod tests {
         assert!(col.is_raw());
         assert_eq!(col.len(), 0);
         assert_eq!(col.capacity(), 5);
-        assert_eq!(col.get_raw().len(), 0);
+        assert_eq!(col.raw().len(), 0);
         {
             // Clone empty raw LazyBatchColumn.
             let col = col.clone();
             assert!(col.is_raw());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
-            assert_eq!(col.get_raw().len(), 0);
+            assert_eq!(col.raw().len(), 0);
         }
         {
             // Empty raw to empty decoded.
@@ -248,14 +263,14 @@ mod tests {
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
-            assert_eq!(col.get_decoded().as_int_slice(), &[]);
+            assert_eq!(col.decoded().as_int_slice(), &[]);
             {
                 // Clone empty decoded LazyBatchColumn.
                 let col = col.clone();
                 assert!(col.is_decoded());
                 assert_eq!(col.len(), 0);
                 assert_eq!(col.capacity(), 5);
-                assert_eq!(col.get_decoded().as_int_slice(), &[]);
+                assert_eq!(col.decoded().as_int_slice(), &[]);
             }
         }
 
@@ -270,32 +285,32 @@ mod tests {
         assert!(col.is_raw());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
-        assert_eq!(col.get_raw().len(), 2);
-        assert_eq!(col.get_raw()[0].as_slice(), datum_raw_1.as_slice());
-        assert_eq!(col.get_raw()[1].as_slice(), datum_raw_2.as_slice());
+        assert_eq!(col.raw().len(), 2);
+        assert_eq!(col.raw()[0].as_slice(), datum_raw_1.as_slice());
+        assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         {
             // Clone non-empty raw LazyBatchColumn.
             let col = col.clone();
             assert!(col.is_raw());
             assert_eq!(col.len(), 2);
             assert_eq!(col.capacity(), 5);
-            assert_eq!(col.get_raw().len(), 2);
-            assert_eq!(col.get_raw()[0].as_slice(), datum_raw_1.as_slice());
-            assert_eq!(col.get_raw()[1].as_slice(), datum_raw_2.as_slice());
+            assert_eq!(col.raw().len(), 2);
+            assert_eq!(col.raw()[0].as_slice(), datum_raw_1.as_slice());
+            assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         }
         // Non-empty raw to non-empty decoded.
         col.decode(Tz::utc(), &col_info).unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
-        assert_eq!(col.get_decoded().as_int_slice(), &[Some(32), Some(7)]);
+        assert_eq!(col.decoded().as_int_slice(), &[Some(32), Some(7)]);
         {
             // Clone non-empty decoded LazyBatchColumn.
             let col = col.clone();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 2);
             assert_eq!(col.capacity(), 5);
-            assert_eq!(col.get_decoded().as_int_slice(), &[Some(32), Some(7)]);
+            assert_eq!(col.decoded().as_int_slice(), &[Some(32), Some(7)]);
         }
     }
 }
