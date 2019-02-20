@@ -492,6 +492,22 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             .get(&target_region_id)
             .map(|r| r.region().get_region_epoch())
         {
+            // In the case that the source peer's range isn't overlapped with target's anymore:
+            //     | region 1 | region 2 | region 3 |
+            //                   || merge 2 into 1
+            //                   \/
+            //     |       region 1      | region 3 |
+            //                   || merge 3 into 1
+            //                   \/
+            //     |            region 1            |
+            //                   || split 1 into 4
+            //                   \/
+            //     |        region 4       |region 1|
+            // so the new target peer can't find the source peer.
+            // e.g. new region 1 is overlapped with region 2
+            //
+            // If that, source peer still need to decide whether to destroy itself. When the target
+            // peer has already moved on, source peer can destroy itself.
             if epoch.get_version() > merge_target.get_region_epoch().get_version() {
                 return Ok(true);
             }
@@ -630,12 +646,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 && !peer.has_pending_snapshot()
                 && peer.ready_to_handle_pending_snap()
         };
-        for (_, &region_id) in self
+        for (_, &id) in self
             .region_ranges
             .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Vec<u8>>))
         {
-            let exist_region = self.region_peers[&region_id].region();
-            if enc_start_key(exist_region) < enc_end_key(&snap_region) {
+            let exist_region = self.region_peers[&id].region();
+            if enc_start_key(exist_region) >= enc_end_key(&snap_region) {
                 break;
             }
             if exist_region.get_id() == region_id {

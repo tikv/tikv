@@ -580,15 +580,14 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 |id: u64| &self.region_peers[&id].region(),
                 data_key(msg.get_start_key()),
                 data_end_key(msg.get_end_key()),
-            ) {
-                if self.maybe_destroy_source(
+            )
+                && self.maybe_destroy_source(
                     region_id,
                     exist_region.get_id(),
                     msg.get_region_epoch().to_owned(),
                 ) {
-                    regions_to_destroy.push(exist_region.get_id());
-                    continue;
-                }
+                regions_to_destroy.push(exist_region.get_id());
+                continue;
             }
             self.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(false);

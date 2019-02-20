@@ -566,7 +566,7 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
 
 /// Filter leading duplicated Snap.
 ///
-/// It will pause the first snapshot and fiter out all the snapshot that
+/// It will pause the first snapshot and filter out all the snapshot that
 /// are same as first snapshot msg until the first different snapshot shows up.
 pub struct LeadingDuplicatedSnapshotFilter {
     dropped: AtomicBool,
@@ -593,6 +593,7 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
+                // To make sure the messages will not handled in one raftstore batch.
                 thread::sleep(Duration::from_millis(100));
                 msgs.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
             }
