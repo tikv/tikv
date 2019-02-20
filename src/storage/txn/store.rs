@@ -215,11 +215,11 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
 
 /// A Store that reads on fixtures.
 pub struct FixtureStore {
-    data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+    data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
 }
 
 impl FixtureStore {
-    pub fn new(data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+    pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
@@ -300,7 +300,7 @@ impl Store for FixtureStore {
 
 /// A Scanner that scans on fixtures.
 pub struct FixtureStoreScanner {
-    data: ::std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
 }
 
 impl Scanner for FixtureStoreScanner {
