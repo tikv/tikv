@@ -472,12 +472,10 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = backtrace::Backtrace::new();
-            error!(
-                "thread '{}' panicked '{}' at {:?}\n{:?}",
-                name,
-                msg,
-                loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                bt
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
             );
         } else {
             orig_hook(info);
@@ -507,6 +505,16 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             process::exit(1);
         }
     })
+}
+
+#[inline]
+pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
+    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
+    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
+    // here.
+    let mut new_vec = Vec::with_capacity(vec.capacity());
+    new_vec.extend_from_slice(vec);
+    new_vec
 }
 
 /// Checks environment variables that affect TiKV.
