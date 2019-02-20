@@ -452,7 +452,7 @@ macro_rules! impl_as_slice {
             ///
             /// # Panics
             ///
-            /// Panics if current column is does not match the type.
+            /// Panics if the current column does not match the type.
             #[inline]
             pub fn $name(&self) -> &[Option<$ty>] {
                 match self {
@@ -492,7 +492,7 @@ macro_rules! impl_push {
             ///
             /// # Panics
             ///
-            /// Panics if current column is does not match the type.
+            /// Panics if the current column does not match the type.
             #[inline]
             pub fn $name(&mut self, v: Option<$ty>) {
                 match self {

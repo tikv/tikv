@@ -74,7 +74,7 @@ impl LazyBatchColumnVec {
         self.debug_assert_columns_equal_length();
     }
 
-    /// Move all elements of `other` into `Self`, leaving `other` empty.
+    /// Moves all elements of `other` into `Self`, leaving `other` empty.
     ///
     /// # Panics
     ///

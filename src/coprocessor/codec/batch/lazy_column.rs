@@ -237,7 +237,7 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Move all elements of `other` into `Self`, leaving `other` empty.
+    /// Moves all elements of `other` into `Self`, leaving `other` empty.
     ///
     /// # Panics
     ///
