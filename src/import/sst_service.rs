@@ -218,14 +218,14 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             match res {
                 Ok(_) => info!(
                     "compact files in range";
-                    "start" => %::hex::encode_upper(start.unwrap_or_else(|| "".as_bytes())),
-                    "end" => %::hex::encode_upper(end.unwrap_or_else(|| "".as_bytes())),
+                    "start" => %::hex::encode_upper(start.unwrap_or_else(|| b"")),
+                    "end" => %::hex::encode_upper(end.unwrap_or_else(|| b"")),
                     "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
                     "compact files in range failed";
-                    "start" => %::hex::encode_upper(start.unwrap_or_else(|| "".as_bytes())),
-                    "end" => %::hex::encode_upper(end.unwrap_or_else(|| "".as_bytes())),
+                    "start" => %::hex::encode_upper(start.unwrap_or_else(|| b"")),
+                    "end" => %::hex::encode_upper(end.unwrap_or_else(|| b"")),
                     "output_level" => ?output_level, "err" => %e
                 ),
             }
