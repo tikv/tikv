@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod scalar;
 mod vector;
 
 // Concrete eval types without a nullable wrapper.
@@ -20,4 +21,5 @@ pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
+pub use self::scalar::ScalarValue;
 pub use self::vector::VectorValue;
