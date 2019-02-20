@@ -1963,7 +1963,7 @@ pub trait RequestInspector {
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
                     return Err(box_err!(
-                        "invalid cmd type {:?}, message maybe currupted",
+                        "invalid cmd type {:?}, message maybe corrupted",
                         r.get_cmd_type()
                     ));
                 }
