@@ -14,28 +14,27 @@
 use std::boxed::FnBox;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::fmt::{Debug, Display};
 use std::time::Duration;
 use std::{error, result};
 
+use crate::raftstore::store::engine::IterOption;
+use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use raftstore::store::engine::IterOption;
-use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 mod btree_engine;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
-mod rocksdb;
+mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
 pub const SEEK_BOUND: u64 = 8;
 
@@ -70,9 +69,8 @@ pub enum Modify {
     DeleteRange(CfName, Key, Key),
 }
 
-pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
-    type Iter: Iterator;
-    type Snap: Snapshot<Iter = Self::Iter>;
+pub trait Engine: Send + Clone + 'static {
+    type Snap: Snapshot;
 
     fn async_write(&self, ctx: &Context, batch: Vec<Modify>, callback: Callback<()>) -> Result<()>;
     fn async_snapshot(&self, ctx: &Context, callback: Callback<Self::Snap>) -> Result<()>;
@@ -110,7 +108,7 @@ pub trait Engine: Send + Display + Debug + Clone + Sized + 'static {
     }
 }
 
-pub trait Snapshot: Send + Debug + Clone + Sized {
+pub trait Snapshot: Send + Clone {
     type Iter: Iterator;
 
     fn get(&self, key: &Key) -> Result<Option<Value>>;
@@ -128,9 +126,19 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
+    // The minimum key this snapshot can retrieve.
+    #[inline]
+    fn lower_bound(&self) -> Option<&[u8]> {
+        None
+    }
+    // The maximum key can be fetched from the snapshot should less than the upper bound.
+    #[inline]
+    fn upper_bound(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
-pub trait Iterator: Send + Sized {
+pub trait Iterator: Send {
     fn next(&mut self) -> bool;
     fn prev(&mut self) -> bool;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -147,7 +155,7 @@ pub trait Iterator: Send + Sized {
     fn value(&self) -> &[u8];
 }
 
-pub trait RegionInfoProvider: Send + Sized + Clone + 'static {
+pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(
@@ -673,10 +681,10 @@ pub mod tests {
     use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
     use super::*;
+    use crate::storage::{CfName, Key, CF_DEFAULT};
+    use crate::util::codec::bytes;
+    use crate::util::escape;
     use kvproto::kvrpcpb::Context;
-    use storage::{CfName, Key, CF_DEFAULT};
-    use util::codec::bytes;
-    use util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
@@ -835,16 +843,12 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !iter
-                .seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!iter
+            .seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
+        assert!(!iter
+            .reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
         must_delete(engine, b"x");
         must_delete(engine, b"z");
     }
@@ -863,11 +867,9 @@ pub mod tests {
         assert_near_seek(&mut cursor, b"y", (b"z", b"2"));
         assert_near_seek(&mut cursor, b"x\x00", (b"z", b"2"));
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z\x00"), &mut statistics)
+            .unwrap());
         // Insert many key-values between 'x' and 'z' then near_seek will fallback to seek.
         for i in 0..super::SEEK_BOUND {
             let key = format!("y{}", i);
@@ -894,36 +896,24 @@ pub mod tests {
             .iter(IterOption::default(), ScanMode::Mixed)
             .unwrap();
         let mut statistics = CFStatistics::default();
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"x"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"z"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            !cursor
-                .near_seek(&Key::from_raw(b"w"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_reverse_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"x"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"z"), &mut statistics)
+            .unwrap());
+        assert!(!cursor
+            .near_seek(&Key::from_raw(b"w"), &mut statistics)
+            .unwrap());
     }
 
     macro_rules! assert_seek {

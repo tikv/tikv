@@ -23,11 +23,11 @@ use tipb::schema::ColumnInfo;
 //use super::datum::DatumDecoder;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
-use coprocessor::dag::expr::EvalContext;
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
-use util::collections::{HashMap, HashSet};
-use util::escape;
+use crate::coprocessor::dag::expr::EvalContext;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -120,7 +120,7 @@ pub fn encode_row(row: Vec<Datum>, col_ids: &[i64]) -> Result<Vec<u8>> {
         ));
     }
     let mut values = Vec::with_capacity(cmp::max(row.len() * 2, 1));
-    for (&id, col) in col_ids.into_iter().zip(row) {
+    for (&id, col) in col_ids.iter().zip(row) {
         values.push(Datum::I64(id));
         let fc = flatten(col)?;
         values.push(fc);
@@ -244,7 +244,8 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) ->
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
                     FieldTypeTp::JSON
-                ].contains(&t),
+                ]
+                .contains(&t),
                 "unknown type {} {:?}",
                 t,
                 datum
@@ -424,8 +425,8 @@ mod tests {
 
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use util::collections::{HashMap, HashSet};
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::util::collections::{HashMap, HashSet};
 
     use super::*;
 
@@ -541,11 +542,9 @@ mod tests {
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(
-            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+            .unwrap()
+            .is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }

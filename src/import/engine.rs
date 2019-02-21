@@ -28,14 +28,17 @@ use rocksdb::{
     ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
 };
 
-use config::DbConfig;
-use raftstore::store::keys;
-use storage::mvcc::{Write, WriteType};
-use storage::types::Key;
-use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
-use util::config::MB;
-use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
-use util::rocksdb::{new_engine_opt, CFOptions};
+use crate::config::DbConfig;
+use crate::raftstore::store::keys;
+use crate::storage::mvcc::{Write, WriteType};
+use crate::storage::types::Key;
+use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
+use crate::util::config::MB;
+use crate::util::rocksdb_util::{
+    new_engine_opt,
+    properties::{SizeProperties, SizePropertiesCollectorFactory},
+    CFOptions,
+};
 
 use super::common::*;
 use super::Result;
@@ -162,6 +165,7 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(cfg: &DbConfig) -> Result<SSTWriter> {
+        // Using a memory environment to generate SST in memory
         let env = if cfg.security.cipher_file.is_empty() {
             Arc::new(Env::new_mem())
         } else {
@@ -179,11 +183,16 @@ impl SSTWriter {
             }
         };
 
+        // Creates a writer for default CF
+        // Here is where we set table_properties_collector_factory, so that we can collect
+        // some properties about SST
         let mut default_opts = cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
+
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(CF_DEFAULT)?;
 
+        // Creates a writer for write CF
         let mut write_opts = cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
@@ -229,6 +238,9 @@ impl SSTWriter {
     }
 }
 
+/// Gets a set of approximately equal size ranges from `props`.
+/// The maximum number of ranges cannot exceed `max_ranges`,
+/// and the minimum number of ranges cannot be smaller than `min_range_size`
 pub fn get_approximate_ranges(
     props: &SizeProperties,
     max_ranges: usize,
@@ -305,9 +317,9 @@ mod tests {
     use std::io::Write;
     use tempdir::TempDir;
 
-    use raftstore::store::RegionSnapshot;
-    use storage::mvcc::MvccReader;
-    use util::rocksdb::new_engine_opt;
+    use crate::raftstore::store::RegionSnapshot;
+    use crate::storage::mvcc::MvccReader;
+    use crate::util::rocksdb_util::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();

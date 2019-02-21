@@ -22,7 +22,7 @@ use rand;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::store::{Msg as StoreMsg, SignificantMsg, Transport};
+use tikv::raftstore::store::{Msg as StoreMsg, PeerMsg, SignificantMsg, Transport};
 use tikv::raftstore::{Error, Result};
 use tikv::server::transport::*;
 use tikv::server::StoreAddrResolver;
@@ -31,7 +31,7 @@ use tikv::util::{transport, Either, HandyRwLock};
 
 pub trait Channel<M>: Send + Clone {
     fn send(&self, m: M) -> Result<()>;
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _region_id: u64, _: SignificantMsg) -> Result<()> {
         unimplemented!()
     }
     fn flush(&mut self) {}
@@ -56,8 +56,8 @@ impl Channel<StoreMsg> for ServerRaftStoreRouter {
         RaftStoreRouter::try_send(self, m)
     }
 
-    fn significant_send(&self, msg: SignificantMsg) -> Result<()> {
-        RaftStoreRouter::significant_send(self, msg)
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
+        RaftStoreRouter::significant_send(self, region_id, msg)
     }
 }
 
@@ -247,8 +247,8 @@ impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
         Channel::send(self, m)
     }
 
-    fn significant_send(&self, m: SignificantMsg) -> Result<()> {
-        self.ch.lock().unwrap().significant_send(m)
+    fn significant_send(&self, region_id: u64, m: SignificantMsg) -> Result<()> {
+        self.ch.lock().unwrap().significant_send(region_id, m)
     }
 }
 
@@ -482,7 +482,7 @@ impl Filter<StoreMsg> for CollectSnapshotFilter {
         let mut pending_msg = self.pending_msg.lock().unwrap();
         for m in msgs.drain(..) {
             let (is_pending, from_peer_id) = match m {
-                StoreMsg::RaftMessage(ref msg) => {
+                StoreMsg::PeerMsg(PeerMsg::RaftMessage(ref msg)) => {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
                         let from_peer_id = msg.get_from_peer().get_id();
                         if pending_msg.contains_key(&from_peer_id) {
@@ -546,7 +546,7 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
     fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
         let notifier = self.notifier.lock().unwrap();
         msgs.retain(|m| match *m {
-            StoreMsg::RaftMessage(ref msg) => {
+            StoreMsg::PeerMsg(PeerMsg::RaftMessage(ref msg)) => {
                 if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
                     true
                 } else {
@@ -592,19 +592,23 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
-                msgs.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
+                msgs.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(
+                    last_msg.take().unwrap(),
+                )));
             }
             return check_messages(msgs);
         }
         let mut to_send = vec![];
         for m in msgs.drain(..) {
             match m {
-                StoreMsg::RaftMessage(msg) => {
+                StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)) => {
                     if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
                         if last_msg.as_ref().map_or(false, |l| l != &msg) {
-                            to_send.push(StoreMsg::RaftMessage(last_msg.take().unwrap()));
+                            to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(
+                                last_msg.take().unwrap(),
+                            )));
                             if self.together {
-                                to_send.push(StoreMsg::RaftMessage(msg));
+                                to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)));
                             } else {
                                 *last_msg = Some(msg);
                             }
@@ -614,7 +618,7 @@ impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
                             *last_msg = Some(msg);
                         }
                     } else {
-                        to_send.push(StoreMsg::RaftMessage(msg));
+                        to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)));
                     }
                 }
                 _ => {

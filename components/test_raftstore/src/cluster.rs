@@ -28,12 +28,12 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
+use tikv::raftstore::store::fsm::SendCh;
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::transport::SendCh;
-use tikv::util::{escape, rocksdb, HandyRwLock};
+use tikv::util::{escape, rocksdb_util, HandyRwLock};
 
 use super::*;
 
@@ -52,7 +52,7 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        Option<Engines>,
+        _: Option<Engines>,
     ) -> (u64, Engines, Option<TempDir>);
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
@@ -64,7 +64,7 @@ pub trait Simulator {
     ) -> Result<()>;
     fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()>;
     fn get_snap_dir(&self, node_id: u64) -> String;
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh<Msg>>;
+    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh>;
     fn add_send_filter(&mut self, node_id: u64, filter: SendFilter);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter);
@@ -132,12 +132,13 @@ impl<T: Simulator> Cluster<T> {
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
             let raft_path = path.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
@@ -165,8 +166,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocksdb::get_cf_handle(&engine.kv, "default").unwrap();
-            rocksdb::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocksdb_util::get_cf_handle(&engine.kv, "default").unwrap();
+            rocksdb_util::compact_range(&engine.kv, handle, None, None, false, 1);
         }
     }
 
@@ -212,6 +213,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
         Arc::clone(&self.engines[&node_id].raft)
+    }
+
+    pub fn get_all_engines(&self, node_id: u64) -> Engines {
+        self.engines[&node_id].clone()
     }
 
     pub fn send_raft_msg(&mut self, msg: RaftMessage) -> Result<()> {
@@ -297,7 +302,7 @@ impl<T: Simulator> Cluster<T> {
             .map(|region| {
                 region
                     .get_peers()
-                    .into_iter()
+                    .iter()
                     .map(|p| p.get_store_id())
                     .collect()
             })
@@ -563,7 +568,7 @@ impl<T: Simulator> Cluster<T> {
             }
 
             let resp = result.unwrap();
-            if resp.get_header().get_error().has_stale_epoch() {
+            if resp.get_header().get_error().has_epoch_not_match() {
                 warn!("seems split, let's retry");
                 sleep_ms(100);
                 continue;
@@ -807,12 +812,13 @@ impl<T: Simulator> Cluster<T> {
             .get_store_sendch(leader.get_store_id())
             .unwrap();
         let split_key = split_key.to_vec();
-        ch.try_send(Msg::SplitRegion {
+        ch.try_send(Msg::PeerMsg(PeerMsg::SplitRegion {
             region_id: region.get_id(),
             region_epoch: region.get_region_epoch().clone(),
             split_keys: vec![split_key.clone()],
             callback: cb,
-        }).unwrap();
+        }))
+        .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
@@ -827,7 +833,7 @@ impl<T: Simulator> Cluster<T> {
                     let mut resp = write_resp.response;
                     if resp.get_header().has_error() {
                         let error = resp.get_header().get_error();
-                        if error.has_stale_epoch()
+                        if error.has_epoch_not_match()
                             || error.has_not_leader()
                             || error.has_stale_command()
                         {

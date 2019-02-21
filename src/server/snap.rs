@@ -17,20 +17,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{future, Async, Future, Poll, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
-use grpc::{
+use crate::grpc::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
+use futures::{future, Async, Future, Poll, Stream};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use util::security::SecurityManager;
-use util::worker::Runnable;
-use util::DeferContext;
+use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use crate::util::security::SecurityManager;
+use crate::util::worker::Runnable;
+use crate::util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -40,6 +40,7 @@ pub type Callback = Box<FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 
+/// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
     Recv {
         stream: RequestStream<SnapshotChunk>,
@@ -295,7 +296,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
             sink.fail(status)
         }
-    }).map_err(Error::from)
+    })
+    .map_err(Error::from)
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {

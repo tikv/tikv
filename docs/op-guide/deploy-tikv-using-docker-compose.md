@@ -142,8 +142,8 @@ All the following example docker compose config file will contain this base conf
 
     ```bash
     rm -rf data logs 
-    docker-compose -f ycsb-docker-compose.yml pull 
-    docker-compose -f ycsb-docker-compose.yml up -d
+    docker-compose -f titan-docker-compose.yml pull
+    docker-compose -f titan-docker-compose.yml up -d
     ```
 
 3. Use `redis-cli` to communicate with Titan:

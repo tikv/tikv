@@ -51,41 +51,43 @@ fn order_decode_f64(u: u64) -> f64 {
 }
 
 pub trait NumberEncoder: Write {
-    /// `encode_i64` writes the encoded value to buf.
-    /// `encode_i64` guarantees that the encoded value is in ascending order for comparison.
+    /// Writes the encoded value to buf.
+    /// It guarantees that the encoded value is in ascending order for comparison.
     fn encode_i64(&mut self, v: i64) -> Result<()> {
         let u = order_encode_i64(v);
         self.encode_u64(u)
     }
 
-    /// `encode_i64_desc` writes the encoded value to buf.
-    /// `encode_i64_desc` guarantees that the encoded value is in descending order for comparison.
+    /// Writes the encoded value to buf.
+    /// It guarantees that the encoded value is in descending order for comparison.
     fn encode_i64_desc(&mut self, v: i64) -> Result<()> {
         let u = order_encode_i64(v);
         self.encode_u64_desc(u)
     }
 
-    /// `encode_u64` writes the encoded value to slice buf.
-    /// `encode_u64` guarantees that the encoded value is in ascending order for comparison.
+    /// Writes the encoded value to slice buf.
+    /// It guarantees that the encoded value is in ascending order for comparison.
     fn encode_u64(&mut self, v: u64) -> Result<()> {
         self.write_u64::<BigEndian>(v).map_err(From::from)
     }
 
-    /// `encode_u64_desc` writes the encoded value to slice buf.
-    /// `encode_u64_desc` guarantees that the encoded value is in descending order for comparison.
+    /// Writes the encoded value to slice buf.
+    /// It guarantees that the encoded value is in descending order for comparison.
     fn encode_u64_desc(&mut self, v: u64) -> Result<()> {
         self.write_u64::<BigEndian>(!v).map_err(From::from)
     }
 
+    /// Writes the encoded value to slice buf in big endian order.
     fn encode_u32(&mut self, v: u32) -> Result<()> {
         self.write_u32::<BigEndian>(v).map_err(From::from)
     }
 
+    /// Writes the encoded value to slice buf in big endian order.
     fn encode_u16(&mut self, v: u16) -> Result<()> {
         self.write_u16::<BigEndian>(v).map_err(From::from)
     }
 
-    /// `encode_var_i64` writes the encoded value to slice buf.
+    /// Writes the encoded value to slice buf.
     /// Note that the encoded result is not memcomparable.
     fn encode_var_i64(&mut self, v: i64) -> Result<()> {
         let mut vx = (v as u64) << 1;
@@ -95,7 +97,7 @@ pub trait NumberEncoder: Write {
         self.encode_var_u64(vx)
     }
 
-    /// `encode_var_u64` writes the encoded value to slice buf.
+    /// Writes the encoded value to slice buf.
     /// Note that the encoded result is not memcomparable.
     fn encode_var_u64(&mut self, mut v: u64) -> Result<()> {
         while v >= 0x80 {
@@ -105,40 +107,46 @@ pub trait NumberEncoder: Write {
         self.write_u8(v as u8).map_err(From::from)
     }
 
-    /// `encode_f64` writes the encoded value to slice buf.
-    /// `encode_f64` guarantees that the encoded value is in ascending order for comparison.
+    /// Writes the encoded value to slice buf.
+    /// It guarantees that the encoded value is in ascending order for comparison.
     fn encode_f64(&mut self, f: f64) -> Result<()> {
         let u = order_encode_f64(f);
         self.encode_u64(u)
     }
 
-    /// `encode_f64_desc` writes the encoded value to slice buf.
-    /// `encode_f64_desc` guarantees that the encoded value is in descending order for comparison.
+    /// Writes the encoded value to slice buf.
+    /// It guarantees that the encoded value is in descending order for comparison.
     fn encode_f64_desc(&mut self, f: f64) -> Result<()> {
         let u = order_encode_f64(f);
         self.encode_u64_desc(u)
     }
 
+    /// Writes `u16` numbers in little endian order.
     fn encode_u16_le(&mut self, v: u16) -> Result<()> {
         self.write_u16::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `u32` numbers in little endian order.
     fn encode_u32_le(&mut self, v: u32) -> Result<()> {
         self.write_u32::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `i32` numbers in little endian order.
     fn encode_i32_le(&mut self, v: i32) -> Result<()> {
         self.write_i32::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `f64` numbers in little endian order.
     fn encode_f64_le(&mut self, v: f64) -> Result<()> {
         self.write_f64::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `i64` numbers in little endian order.
     fn encode_i64_le(&mut self, v: i64) -> Result<()> {
         self.write_i64::<LittleEndian>(v).map_err(From::from)
     }
 
+    /// Writes `u64` numbers in little endian order.
     fn encode_u64_le(&mut self, v: u64) -> Result<()> {
         self.write_u64::<LittleEndian>(v).map_err(From::from)
     }
@@ -159,44 +167,44 @@ where
     Err(Error::unexpected_eof())
 }
 
-/// `decode_i64` decodes value encoded by `encode_i64` before.
+/// Decodes value encoded by `encode_i64` before.
 #[inline]
 pub fn decode_i64(data: &mut BytesSlice) -> Result<i64> {
     decode_u64(data).map(order_decode_i64)
 }
 
-/// `decode_i64_desc` decodes value encoded by `encode_i64_desc` before.
+/// Decodes value encoded by `encode_i64_desc` before.
 #[inline]
 pub fn decode_i64_desc(data: &mut BytesSlice) -> Result<i64> {
     decode_u64_desc(data).map(order_decode_i64)
 }
 
-/// `decode_u64` decodes value encoded by `encode_u64` before.
+/// Decodes value encoded by `encode_u64` before.
 #[inline]
 pub fn decode_u64(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, BigEndian::read_u64)
 }
 
-/// `decode_u32` decodes value encoded by `encode_u32` before.
+/// Decodes value encoded by `encode_u32` before.
 #[inline]
 pub fn decode_u32(data: &mut BytesSlice) -> Result<u32> {
     read_num_bytes(mem::size_of::<u32>(), data, BigEndian::read_u32)
 }
 
-/// `decode_u16` decodes value encoded by `encode_u16` before.
+/// Decodes value encoded by `encode_u16` before.
 #[inline]
 pub fn decode_u16(data: &mut BytesSlice) -> Result<u16> {
     read_num_bytes(mem::size_of::<u16>(), data, BigEndian::read_u16)
 }
 
-/// `decode_u64_desc` decodes value encoded by `encode_u64_desc` before.
+/// Decodes value encoded by `encode_u64_desc` before.
 #[inline]
 pub fn decode_u64_desc(data: &mut BytesSlice) -> Result<u64> {
     let v = decode_u64(data)?;
     Ok(!v)
 }
 
-/// `decode_var_i64` decodes value encoded by `encode_var_i64` before.
+/// Decodes value encoded by `encode_var_i64` before.
 #[inline]
 pub fn decode_var_i64(data: &mut BytesSlice) -> Result<i64> {
     let v = decode_var_u64(data)?;
@@ -208,7 +216,7 @@ pub fn decode_var_i64(data: &mut BytesSlice) -> Result<i64> {
     }
 }
 
-/// `decode_var_u64` decodes value encoded by `encode_var_u64` before.
+/// Decodes value encoded by `encode_var_u64` before.
 #[inline]
 pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
     if !data.is_empty() {
@@ -257,50 +265,50 @@ pub fn decode_var_u64(data: &mut BytesSlice) -> Result<u64> {
     Err(Error::unexpected_eof())
 }
 
-/// `decode_f64` decodes value encoded by `encode_f64` before.
+/// Decodes value encoded by `encode_f64` before.
 #[inline]
 pub fn decode_f64(data: &mut BytesSlice) -> Result<f64> {
     decode_u64(data).map(order_decode_f64)
 }
 
-/// `decode_f64_desc` decodes value encoded by `encode_f64_desc` before.
+/// Decodes value encoded by `encode_f64_desc` before.
 #[inline]
 pub fn decode_f64_desc(data: &mut BytesSlice) -> Result<f64> {
     decode_u64_desc(data).map(order_decode_f64)
 }
 
-/// `decode_u16_le` decodes value encoded by `encode_u16_le` before.
+/// Decodes value encoded by `encode_u16_le` before.
 #[inline]
 pub fn decode_u16_le(data: &mut BytesSlice) -> Result<u16> {
     read_num_bytes(mem::size_of::<u16>(), data, LittleEndian::read_u16)
 }
 
-/// `decode_u32_le` decodes value encoded by `encode_u32_le` before.
+/// Decodes value encoded by `encode_u32_le` before.
 #[inline]
 pub fn decode_u32_le(data: &mut BytesSlice) -> Result<u32> {
     read_num_bytes(mem::size_of::<u32>(), data, LittleEndian::read_u32)
 }
 
-/// `decode_i32_le` decodes value encoded by `encode_i32_le` before.
+/// Decodes value encoded by `encode_i32_le` before.
 #[inline]
 pub fn decode_i32_le(data: &mut BytesSlice) -> Result<i32> {
     read_num_bytes(mem::size_of::<i32>(), data, LittleEndian::read_i32)
 }
 
-/// `decode_f64_le` decodes value encoded by `encode_f64_le` before.
+/// Decodes value encoded by `encode_f64_le` before.
 #[inline]
 pub fn decode_f64_le(data: &mut BytesSlice) -> Result<f64> {
     read_num_bytes(mem::size_of::<f64>(), data, LittleEndian::read_f64)
 }
 
-/// `decode_i64_le` decodes value encoded by `encode_i64_le` before.
+/// Decodes value encoded by `encode_i64_le` before.
 #[inline]
 pub fn decode_i64_le(data: &mut BytesSlice) -> Result<i64> {
     let v = decode_u64_le(data)?;
     Ok(v as i64)
 }
 
-/// `decode_u64_le` decodes value encoded by `encode_u64_le` before.
+/// Decodes value encoded by `encode_u64_le` before.
 #[inline]
 pub fn decode_u64_le(data: &mut BytesSlice) -> Result<u64> {
     read_num_bytes(mem::size_of::<u64>(), data, LittleEndian::read_u64)
@@ -320,7 +328,7 @@ pub fn read_u8(data: &mut BytesSlice) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::codec::Error;
+    use crate::util::codec::Error;
 
     use protobuf::CodedOutputStream;
     use std::io::ErrorKind;
@@ -488,10 +496,10 @@ mod tests {
     macro_rules! test_codec {
         ($enc:ident, $dec:ident, $compare:expr, $cases:expr) => {
             #[allow(unused_imports)]
-            #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+            #[allow(clippy::float_cmp)]
             mod $enc {
                 use super::{F64_TESTS, I64_TESTS, U16_TESTS, U32_TESTS, U64_TESTS};
-                use util::codec::number::*;
+                use crate::util::codec::number::*;
 
                 test_serialize!(serialize, $enc, $dec, $cases);
 
@@ -551,7 +559,7 @@ mod tests {
     test_serialize!(var_i64_codec, encode_var_i64, decode_var_i64, I64_TESTS);
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(float_cmp))]
+    #[allow(clippy::float_cmp)]
     fn test_var_f64_le() {
         for &v in F64_TESTS {
             let mut buf = vec![];

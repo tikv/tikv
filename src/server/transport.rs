@@ -11,25 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crossbeam::SendError;
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
+use crate::raftstore::store::fsm::{RaftRouter, SendCh};
+use crate::raftstore::store::{
+    Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport,
+};
+use crate::raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
+use crate::server::raft_client::RaftClient;
+use crate::server::Result;
+use crate::util::collections::HashSet;
+use crate::util::worker::Scheduler;
+use crate::util::HandyRwLock;
 use raft::SnapshotStatus;
-use raftstore::store::{Callback, Msg as StoreMsg, ReadTask, SignificantMsg, Transport};
-use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
-use server::raft_client::RaftClient;
-use server::Result;
-use util::collections::HashSet;
-use util::transport::SendCh;
-use util::worker::Scheduler;
-use util::HandyRwLock;
 
+/// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg, retry if failed. Try times may vary from implementation.
     fn send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
@@ -37,58 +40,66 @@ pub trait RaftStoreRouter: Send + Clone {
     /// Send StoreMsg.
     fn try_send(&self, msg: StoreMsg) -> RaftStoreResult<()>;
 
-    // Send RaftMessage to local store.
+    /// Sends RaftMessage to local store.
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
+        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
     }
 
-    // Send RaftCmdRequest to local store.
+    /// Sends RaftCmdRequest to local store.
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    // Send significant message. We should guarantee that the message can't be dropped.
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()>;
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()>;
 
-    // Report the peer of the region is unreachable.
+    /// Reports the peer being unreachable to the Region.
     fn report_unreachable(&self, region_id: u64, to_peer_id: u64) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::Unreachable {
+        self.significant_send(
             region_id,
-            to_peer_id,
-        })
+            SignificantMsg::Unreachable {
+                region_id,
+                to_peer_id,
+            },
+        )
     }
 
-    // Report the sending snapshot status to the peer of the region.
+    /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
         &self,
         region_id: u64,
         to_peer_id: u64,
         status: SnapshotStatus,
     ) -> RaftStoreResult<()> {
-        self.significant_send(SignificantMsg::SnapshotStatus {
+        self.significant_send(
             region_id,
-            to_peer_id,
-            status,
-        })
+            SignificantMsg::SnapshotStatus {
+                region_id,
+                to_peer_id,
+                status,
+            },
+        )
     }
 }
 
+/// A router that routes messages to the raftstore
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
-    pub ch: SendCh<StoreMsg>,
-    pub significant_msg_sender: Sender<SignificantMsg>,
+    pub ch: SendCh,
+    router: RaftRouter,
     local_reader_ch: Scheduler<ReadTask>,
 }
 
 impl ServerRaftStoreRouter {
+    /// Creates a new router.
     pub fn new(
-        raftstore_ch: SendCh<StoreMsg>,
-        significant_msg_sender: Sender<SignificantMsg>,
+        raftstore_ch: SendCh,
+        router: RaftRouter,
         local_reader_ch: Scheduler<ReadTask>,
     ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             ch: raftstore_ch,
-            significant_msg_sender,
+            router,
             local_reader_ch,
         }
     }
@@ -116,16 +127,20 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-        self.try_send(StoreMsg::RaftMessage(msg))
+        self.try_send(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)))
     }
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         self.try_send(StoreMsg::new_raft_cmd(req, cb))
     }
 
-    fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
-        if let Err(e) = self.significant_msg_sender.send(msg) {
-            return Err(box_err!("failed to sendsignificant msg {:?}", e));
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
+        if let Err(SendError(msg)) = self
+            .router
+            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+        {
+            // TODO: panic here once we can detect system is shutting down reliably.
+            error!("failed to send significant msg {:?}", msg);
         }
 
         Ok(())

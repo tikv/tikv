@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use crate::grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
-use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -43,6 +43,24 @@ fn new_client(eps: Vec<(String, u16)>, mgr: Option<Arc<SecurityManager>>) -> Rpc
     let mgr =
         mgr.unwrap_or_else(|| Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap()));
     RpcClient::new(&cfg, mgr).unwrap()
+}
+
+#[test]
+fn test_retry_rpc_client() {
+    let eps_count = 1;
+    let mut server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let m_eps = eps.clone();
+    let mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+    let m_mgr = mgr.clone();
+    server.stop();
+    let child = thread::spawn(move || {
+        let cfg = new_config(m_eps);
+        assert_eq!(RpcClient::new(&cfg, m_mgr).is_ok(), true);
+    });
+    thread::sleep(Duration::from_millis(500));
+    server.start(&mgr, eps);
+    assert_eq!(child.join().is_ok(), true);
 }
 
 #[test]
@@ -185,11 +203,11 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap();
     };
-    test_retry(async);
+    test_retry(r#async);
 }
 
 #[test]
@@ -214,11 +232,11 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_not_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap_err();
     };
-    test_not_retry(async);
+    test_not_retry(r#async);
 }
 
 #[test]

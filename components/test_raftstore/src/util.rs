@@ -12,9 +12,9 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
-use std::thread;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+use std::{thread, u64};
 
 use protobuf;
 use rand::Rng;
@@ -25,18 +25,18 @@ use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
 use kvproto::raft_cmdpb::{AdminCmdType, CmdType, StatusCmdType};
 use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request, StatusRequest};
+use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::store::Msg as StoreMsg;
+use tikv::raftstore::store::fsm::SendCh;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{Config as StorageConfig, CF_DEFAULT};
+use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::util::config::*;
 use tikv::util::escape;
-use tikv::util::rocksdb::{self, CompactionListener};
-use tikv::util::transport::SendCh;
+use tikv::util::rocksdb_util::{self, CompactionListener};
 
 use super::*;
 
@@ -84,6 +84,42 @@ pub fn must_get_cf_none(engine: &Arc<DB>, cf: &str, key: &[u8]) {
     must_get(engine, cf, key, None);
 }
 
+pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
+    let id = region.get_id();
+    let state_key = keys::region_state_key(id);
+    let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
+    let start_key = keys::data_key(region.get_start_key());
+    let end_key = keys::data_key(region.get_end_key());
+    for cf in ALL_CFS {
+        engine
+            .kv
+            .scan_cf(cf, &start_key, &end_key, false, |k, v| {
+                panic!(
+                    "[region {}] unexpected ({:?}, {:?}) in cf {:?}",
+                    id, k, v, cf
+                );
+            })
+            .unwrap();
+    }
+    let log_min_key = keys::raft_log_key(id, 0);
+    let log_max_key = keys::raft_log_key(id, u64::MAX);
+    engine
+        .raft
+        .scan(&log_min_key, &log_max_key, false, |k, v| {
+            panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
+        })
+        .unwrap();
+    let state_key = keys::raft_state_key(id);
+    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+    assert!(
+        state.is_none(),
+        "[region {}] raft state key should be removed: {:?}",
+        id,
+        state
+    );
+}
+
 pub fn new_store_cfg() -> Config {
     Config {
         sync_log: false,
@@ -108,6 +144,7 @@ pub fn new_store_cfg() -> Config {
         raft_reject_transfer_leader_duration: ReadableDuration::secs(0),
         clean_stale_peer_delay: ReadableDuration::secs(0),
         allow_remove_leader: true,
+        merge_check_tick_interval: ReadableDuration::millis(100),
         ..Config::default()
     }
 }
@@ -445,7 +482,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: SendCh<StoreMsg>,
+    tx: SendCh,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -455,8 +492,12 @@ pub fn create_test_engine(
         None => {
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
+            let tx = Mutex::new(tx);
             let cmpacted_handler = box move |event| {
-                tx.send(StoreMsg::CompactedEvent(event)).unwrap();
+                tx.lock()
+                    .unwrap()
+                    .send(Msg::StoreMsg(StoreMsg::CompactedEvent(event)))
+                    .unwrap();
             };
             kv_db_opt.add_event_listener(CompactionListener::new(
                 cmpacted_handler,
@@ -464,15 +505,17 @@ pub fn create_test_engine(
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(
+                rocksdb_util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
-                ).unwrap(),
+                )
+                .unwrap(),
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             );
             Engines::new(engine, raft_engine)
         }

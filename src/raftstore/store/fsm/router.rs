@@ -11,23 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This is the core implementation of a batch system. Generally there will be two
-//! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
-//! represents a peer, the other is control FSM, which usually represents something
-//! that controls how the former is created or metrics are collected.
-
-// TODO: remove this
-#![allow(dead_code)]
-
+use super::batch::{Fsm, FsmScheduler};
+use crate::util::collections::HashMap;
+use crate::util::mpsc;
+use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use util::collections::HashMap;
-use util::mpsc;
-use util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -50,36 +43,6 @@ impl<N> Drop for State<N> {
     }
 }
 
-/// `FsmScheduler` schedules `Fsm` for later handles.
-pub trait FsmScheduler {
-    type Fsm: Fsm;
-
-    /// Schedule a Fsm for later handles.
-    fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
-    /// background thread pool should be released.
-    fn shutdown(&self);
-}
-
-/// A Fsm is a finite state machine. It should be able to be notified for
-/// updating internal state according to incomming messages.
-pub trait Fsm {
-    type Message;
-
-    /// Notify the Fsm for readiness.
-    fn notify(&self);
-
-    /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
-    where
-        Self: Sized;
-    /// Take the mailbox from Fsm. Implementation should ensure there will be
-    /// no reference to mailbox after calling this method.
-    fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
-    where
-        Self: Sized;
-}
-
 /// A basic mailbox.
 ///
 /// Every mailbox should have one and only one owner, who will receive all
@@ -95,7 +58,7 @@ pub struct BasicMailbox<Owner: Fsm> {
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
     #[inline]
-    fn new(
+    pub fn new(
         sender: mpsc::LooseBoundedSender<Owner::Message>,
         fsm: Box<Owner>,
     ) -> BasicMailbox<Owner> {
@@ -109,7 +72,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     }
 
     /// Take the owner if it's IDLE.
-    fn take_fsm(&self) -> Option<Box<Owner>> {
+    pub(super) fn take_fsm(&self) -> Option<Box<Owner>> {
         let previous_state = self.state.status.compare_and_swap(
             NOTIFYSTATE_IDLE,
             NOTIFYSTATE_NOTIFIED,
@@ -125,6 +88,16 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         } else {
             panic!("inconsistent status and data, something should be wrong.");
         }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sender.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.sender.is_empty()
     }
 
     /// Notify owner via a `FsmScheduler`.
@@ -145,7 +118,7 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// releasing a fsm. However, a fsm is guaranteed to be notified only
     /// when new messages arrives after it's released.
     #[inline]
-    fn release(&self, fsm: Box<Owner>) {
+    pub(super) fn release(&self, fsm: Box<Owner>) {
         let previous = self.state.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
         if previous.is_null() {
@@ -241,6 +214,12 @@ impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler>
     }
 }
 
+enum CheckDoResult<T> {
+    NotExist,
+    Invalid,
+    Valid(T),
+}
+
 /// Router route messages to its target mailbox.
 ///
 /// Every fsm has a mailbox, hence it's necessary to have an address book
@@ -255,7 +234,7 @@ impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler>
 pub struct Router<N: Fsm, C: Fsm, Ns, Cs> {
     normals: Arc<Mutex<HashMap<u64, BasicMailbox<N>>>>,
     caches: Cell<HashMap<u64, BasicMailbox<N>>>,
-    control_box: BasicMailbox<C>,
+    pub(super) control_box: BasicMailbox<C>,
     // TODO: These two schedulers should be unified as single one. However
     // it's not possible to write FsmScheduler<Fsm=C> + FsmScheduler<Fsm=N>
     // for now.
@@ -270,7 +249,7 @@ where
     Ns: FsmScheduler<Fsm = N> + Clone,
     Cs: FsmScheduler<Fsm = C> + Clone,
 {
-    fn new(
+    pub(super) fn new(
         control_box: BasicMailbox<C>,
         normal_scheduler: Ns,
         control_scheduler: Cs,
@@ -289,8 +268,13 @@ where
     ///
     /// Generally, when sending a message to a mailbox, cache should be
     /// check first, if not found, lock should be acquired.
+    ///
+    /// Returns None means there is no mailbox inside the normal registry.
+    /// Some(None) means there is expected mailbox inside the normal registry
+    /// but it returns None after apply the given function. Some(Some) means
+    /// the given function returns Some and cache is updated if it's invalid.
     #[inline]
-    fn check_do<F, R>(&self, addr: u64, mut f: F) -> Option<R>
+    fn check_do<F, R>(&self, addr: u64, mut f: F) -> CheckDoResult<R>
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
     {
@@ -298,7 +282,7 @@ where
         let mut connected = true;
         if let Some(mailbox) = caches.get(&addr) {
             match f(mailbox) {
-                Some(r) => return Some(r),
+                Some(r) => return CheckDoResult::Valid(r),
                 None => {
                     connected = false;
                 }
@@ -314,16 +298,22 @@ where
             if !connected {
                 caches.remove(&addr);
             }
-            return None;
+            return CheckDoResult::NotExist;
         };
 
         let res = f(&mailbox);
-        if res.is_some() {
-            caches.insert(addr, mailbox);
-        } else if !connected {
-            caches.remove(&addr);
+        match res {
+            Some(r) => {
+                caches.insert(addr, mailbox);
+                CheckDoResult::Valid(r)
+            }
+            None => {
+                if !connected {
+                    caches.remove(&addr);
+                }
+                CheckDoResult::Invalid
+            }
         }
-        res
     }
 
     /// Register a mailbox with given address.
@@ -334,9 +324,19 @@ where
         }
     }
 
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<N>)>) {
+        let mut normals = self.normals.lock().unwrap();
+        normals.reserve(mailboxes.len());
+        for (addr, mailbox) in mailboxes {
+            if let Some(m) = normals.insert(addr, mailbox) {
+                m.close();
+            }
+        }
+    }
+
     /// Get the mailbox of specified address.
     pub fn mailbox(&self, addr: u64) -> Option<Mailbox<N, Ns>> {
-        self.check_do(addr, |mailbox| {
+        let res = self.check_do(addr, |mailbox| {
             if mailbox.sender.is_sender_connected() {
                 Some(Mailbox {
                     mailbox: mailbox.clone(),
@@ -345,7 +345,11 @@ where
             } else {
                 None
             }
-        })
+        });
+        match res {
+            CheckDoResult::Valid(r) => Some(r),
+            _ => None,
+        }
     }
 
     /// Get the mailbox of control fsm.
@@ -367,9 +371,7 @@ where
         msg: N::Message,
     ) -> Either<Result<(), TrySendError<N::Message>>, N::Message> {
         let mut msg = Some(msg);
-        let mut check_times = 0;
         let res = self.check_do(addr, |mailbox| {
-            check_times += 1;
             let m = msg.take().unwrap();
             match mailbox.try_send(m, &self.normal_scheduler) {
                 Ok(()) => Some(Ok(())),
@@ -384,14 +386,9 @@ where
             }
         });
         match res {
-            Some(r) => Either::Left(r),
-            None => {
-                if check_times == 1 {
-                    Either::Right(msg.unwrap())
-                } else {
-                    Either::Left(Err(TrySendError::Disconnected(msg.unwrap())))
-                }
-            }
+            CheckDoResult::Valid(r) => Either::Left(r),
+            CheckDoResult::Invalid => Either::Left(Err(TrySendError::Disconnected(msg.unwrap()))),
+            CheckDoResult::NotExist => Either::Right(msg.unwrap()),
         }
     }
 
@@ -474,162 +471,133 @@ impl<N: Fsm, C: Fsm, Ns: Clone, Cs: Clone> Clone for Router<N, C, Ns, Cs> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam::channel::{SendError, TryRecvError, TrySendError};
+    use crate::raftstore::store::fsm::batch::tests::Message;
+    use crate::raftstore::store::fsm::batch::{self, tests::*};
+    use crossbeam::channel::{SendError, TrySendError};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
-    use std::thread;
+    use std::time::Duration;
     use test::Bencher;
-    use util::mpsc;
 
-    struct Counter {
-        counter: Arc<AtomicUsize>,
-        recv: mpsc::Receiver<usize>,
-        mailbox: Option<BasicMailbox<Counter>>,
+    fn counter_closure(counter: &Arc<AtomicUsize>) -> Message {
+        let c = counter.clone();
+        Some(Box::new(move |_: &mut Runner| {
+            c.fetch_add(1, Ordering::SeqCst);
+        }))
     }
 
-    impl Fsm for Counter {
-        type Message = usize;
-
-        fn notify(&self) {}
-
-        fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
-            self.mailbox = Some(mailbox.into_owned());
-        }
-
-        fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>> {
-            self.mailbox.take()
-        }
+    fn noop() -> Message {
+        None
     }
 
-    impl Drop for Counter {
-        fn drop(&mut self) {
-            self.counter.store(0, Ordering::SeqCst);
-        }
-    }
-
-    #[derive(Clone)]
-    struct CounterScheduler {
-        sender: mpsc::Sender<Option<Box<Counter>>>,
-    }
-
-    impl FsmScheduler for CounterScheduler {
-        type Fsm = Counter;
-
-        fn schedule(&self, fsm: Box<Counter>) {
-            self.sender.send(Some(fsm)).unwrap();
-        }
-
-        fn shutdown(&self) {
-            // Note that CounterScheduler is used as both normal scheduler
-            // and control scheduler, so this method can be called twice.
-            let _ = self.sender.send(None);
-        }
-    }
-
-    fn poll_fsm(fsm_receiver: &mpsc::Receiver<Option<Box<Counter>>>, block: bool) -> bool {
-        loop {
-            let mut fsm = if block {
-                match fsm_receiver.recv() {
-                    Ok(Some(fsm)) => fsm,
-                    Err(_) | Ok(None) => return true,
-                }
-            } else {
-                match fsm_receiver.try_recv() {
-                    Ok(Some(fsm)) => fsm,
-                    Err(TryRecvError::Empty) => return false,
-                    Err(_) | Ok(None) => return true,
-                }
-            };
-
-            while let Ok(c) = fsm.recv.try_recv() {
-                fsm.counter.fetch_add(c, Ordering::SeqCst);
-            }
-            let mailbox = fsm.mailbox.take().unwrap();
-            mailbox.release(fsm);
-        }
-    }
-
-    fn new_counter(cap: usize) -> (mpsc::LooseBoundedSender<usize>, Arc<AtomicUsize>, Counter) {
-        let cnt = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = mpsc::loose_bounded(cap);
-        let fsm = Counter {
-            counter: cnt.clone(),
-            recv: rx,
-            mailbox: None,
-        };
-        (tx, cnt, fsm)
+    fn unreachable() -> Message {
+        Some(Box::new(|_: &mut Runner| unreachable!()))
     }
 
     #[test]
     fn test_basic() {
-        let (schedule_tx, schedule_rx) = mpsc::unbounded();
-        let (control_tx, control_cnt, control_fsm) = new_counter(10);
-        let (normal_tx, normal_cnt, normal_fsm) = new_counter(10);
-        let control_box = BasicMailbox::new(control_tx, Box::new(control_fsm));
-        let scheduler = CounterScheduler {
-            sender: schedule_tx,
-        };
-        let router = Router::new(control_box, scheduler.clone(), scheduler);
-        let normal_box = BasicMailbox::new(normal_tx, Box::new(normal_fsm));
-        router.register(2, normal_box);
+        let (control_tx, control_fsm) = new_runner(10);
+        let control_dropped = control_fsm.dropped.clone();
+        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let builder = Builder::new();
+        system.spawn("test".to_owned(), builder);
 
-        // Mising mailbox should report error.
-        assert_eq!(router.force_send(1, 1), Err(SendError(1)));
-        assert_eq!(router.send(1, 1), Err(TrySendError::Disconnected(1)));
-        assert!(schedule_rx.is_empty());
+        // Missing mailbox should report error.
+        match router.force_send(1, unreachable()) {
+            Err(SendError(_)) => (),
+            Ok(_) => panic!("send should fail"),
+        }
+        match router.send(1, unreachable()) {
+            Err(TrySendError::Disconnected(_)) => (),
+            Ok(_) => panic!("send should fail"),
+            Err(TrySendError::Full(_)) => panic!("expect disconnected."),
+        }
 
-        // Existing mailbox should trigger readiness.
-        router.force_send(2, 1).unwrap();
-        router.send(2, 4).unwrap();
-        assert_eq!(schedule_rx.len(), 1);
-        poll_fsm(&schedule_rx, false);
-        assert_eq!(normal_cnt.load(Ordering::SeqCst), 5);
+        let (tx, rx) = mpsc::unbounded();
+        let router_ = router.clone();
+        // Control mailbox should be connected.
+        router
+            .send_control(Some(Box::new(move |_: &mut Runner| {
+                let (sender, runner) = new_runner(10);
+                let dropped = runner.dropped.clone();
+                let mailbox = BasicMailbox::new(sender, runner);
+                tx.send(dropped).unwrap();
+                router_.register(1, mailbox);
+            })))
+            .unwrap();
+        let dropped = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
-        // Control mailbox should also trigger readiness.
-        router.send_control(2).unwrap();
-        assert_eq!(schedule_rx.len(), 1);
-        poll_fsm(&schedule_rx, false);
-        assert_eq!(control_cnt.load(Ordering::SeqCst), 2);
+        // Registered mailbox should be connected.
+        router.force_send(1, noop()).unwrap();
+        router.send(1, noop()).unwrap();
 
-        // send should respect capacity limit, while force_send not.
-        let sent_cnt = (0..).take_while(|_| router.send(2, 20).is_ok()).count();
-        assert_eq!(router.send(2, 20), Err(TrySendError::Full(20)));
-        router.force_send(2, 20).unwrap();
-        let old_value = normal_cnt.load(Ordering::SeqCst);
-        poll_fsm(&schedule_rx, false);
-        let diff = normal_cnt.load(Ordering::SeqCst) - old_value;
-        assert_eq!(diff, 20 * (sent_cnt + 1));
+        // Send should respect capacity limit, while force_send not.
+        let (tx, rx) = mpsc::unbounded();
+        router
+            .send(
+                1,
+                Some(Box::new(move |_: &mut Runner| {
+                    rx.recv_timeout(Duration::from_secs(100)).unwrap();
+                })),
+            )
+            .unwrap();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let sent_cnt = (0..)
+            .take_while(|_| router.send(1, counter_closure(&counter)).is_ok())
+            .count();
+        match router.send(1, counter_closure(&counter)) {
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => panic!("mailbox should still be connected."),
+            Ok(_) => panic!("send should fail"),
+        }
+        router.force_send(1, counter_closure(&counter)).unwrap();
+        tx.send(1).unwrap();
+        // Flush.
+        let (tx, rx) = mpsc::unbounded();
+        router
+            .force_send(
+                1,
+                Some(Box::new(move |_: &mut Runner| {
+                    tx.send(1).unwrap();
+                })),
+            )
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(100)).unwrap();
+
+        let c = counter.load(Ordering::SeqCst);
+        assert_eq!(c, sent_cnt + 1);
 
         // close should release resources.
-        router.close(2);
-        assert_eq!(normal_cnt.load(Ordering::SeqCst), 0);
-        assert_eq!(router.send(2, 20), Err(TrySendError::Disconnected(20)));
-        assert_eq!(router.force_send(2, 20), Err(SendError(20)));
-        assert!(schedule_rx.is_empty());
-
-        router.broadcast_shutdown();
-        assert_eq!(control_cnt.load(Ordering::SeqCst), 0);
+        assert!(!dropped.load(Ordering::SeqCst));
+        router.close(1);
+        assert!(dropped.load(Ordering::SeqCst));
+        match router.send(1, unreachable()) {
+            Err(TrySendError::Disconnected(_)) => (),
+            Ok(_) => panic!("send should fail."),
+            Err(TrySendError::Full(_)) => panic!("sender should be closed"),
+        }
+        match router.force_send(1, unreachable()) {
+            Err(SendError(_)) => (),
+            Ok(_) => panic!("send should fail."),
+        }
+        assert!(!control_dropped.load(Ordering::SeqCst));
+        system.shutdown();
+        assert!(control_dropped.load(Ordering::SeqCst));
     }
 
     #[bench]
     fn bench_send(b: &mut Bencher) {
-        let (schedule_tx, schedule_rx) = mpsc::unbounded();
-        let (control_tx, _, control_fsm) = new_counter(100000);
-        let (normal_tx, _, normal_fsm) = new_counter(100000);
-        let control_box = BasicMailbox::new(control_tx, Box::new(control_fsm));
-        let scheduler = CounterScheduler {
-            sender: schedule_tx,
-        };
-        let router = Router::new(control_box, scheduler.clone(), scheduler);
-        let normal_box = BasicMailbox::new(normal_tx, Box::new(normal_fsm));
-        router.register(2, normal_box);
-
-        let handle = thread::spawn(move || poll_fsm(&schedule_rx, true));
+        let (control_tx, control_fsm) = new_runner(100000);
+        let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
+        let builder = Builder::new();
+        system.spawn("test".to_owned(), builder);
+        let (normal_tx, normal_fsm) = new_runner(100000);
+        let normal_box = BasicMailbox::new(normal_tx, normal_fsm);
+        router.register(1, normal_box);
 
         b.iter(|| {
-            router.send(2, 2).unwrap();
+            router.send(1, noop()).unwrap();
         });
-        router.broadcast_shutdown();
-        handle.join().unwrap();
+        system.shutdown();
     }
 }

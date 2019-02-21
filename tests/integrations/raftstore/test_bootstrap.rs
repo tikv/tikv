@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 
 use tempdir::TempDir;
 
@@ -22,12 +22,10 @@ use kvproto::raft_serverpb::RegionLocalState;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{
-    bootstrap_store, create_event_loop, keys, Engines, Peekable, SnapManager,
-};
+use tikv::raftstore::store::{bootstrap_store, fsm, keys, Engines, Peekable, SnapManager};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
-use tikv::util::rocksdb;
+use tikv::util::rocksdb_util;
 use tikv::util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -50,25 +48,21 @@ fn test_node_bootstrap_with_prepared_data() {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
 
-    let mut event_loop = create_event_loop(&cfg.raft_store).unwrap();
+    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
-    let engine =
-        Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+    let engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+    );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine =
-        Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap());
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+    );
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
-    let mut node = Node::new(
-        &mut event_loop,
-        &cfg.server,
-        &cfg.raft_store,
-        Arc::clone(&pd_client),
-    );
+    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
-    let (_, snapshot_status_receiver) = mpsc::channel();
     let pd_worker = FutureWorker::new("test-pd-worker");
     let local_reader = Worker::new("test-local-reader");
 
@@ -79,19 +73,15 @@ fn test_node_bootstrap_with_prepared_data() {
     // now rocksDB must have some prepare data
     bootstrap_store(&engines, 0, 1).unwrap();
     let region = node.prepare_bootstrap_cluster(&engines, 1).unwrap();
-    assert!(
-        engine
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_some()
-    );
+    assert!(engine
+        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .unwrap()
+        .is_some());
     let region_state_key = keys::region_state_key(region.get_id());
-    assert!(
-        engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            .unwrap()
-            .is_some()
-    );
+    assert!(engine
+        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        .unwrap()
+        .is_some());
 
     // Create coprocessor.
     let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
@@ -103,28 +93,23 @@ fn test_node_bootstrap_with_prepared_data() {
 
     // try to restart this node, will clear the prepare data
     node.start(
-        event_loop,
         engines,
         simulate_trans,
         snap_mgr,
-        snapshot_status_receiver,
         pd_worker,
         local_reader,
         coprocessor_host,
         importer,
-    ).unwrap();
-    assert!(
-        Arc::clone(&engine)
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        engine
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-            .unwrap()
-            .is_none()
-    );
+    )
+    .unwrap();
+    assert!(Arc::clone(&engine)
+        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .unwrap()
+        .is_none());
+    assert!(engine
+        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        .unwrap()
+        .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
     node.stop().unwrap();
 }

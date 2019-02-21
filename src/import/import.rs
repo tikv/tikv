@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use pd::RegionInfo;
+use crate::pd::RegionInfo;
 
 use super::client::*;
 use super::common::*;
@@ -32,6 +32,7 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
+/// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
     tag: String,
     cfg: Config,
@@ -55,6 +56,7 @@ impl<Client: ImportClient> ImportJob<Client> {
         let start = Instant::now();
         info!("{} start", self.tag);
 
+        // Before importing data, we need to help to balance data in the cluster.
         let job = PrepareJob::new(
             self.cfg.clone(),
             self.client.clone(),
@@ -83,6 +85,7 @@ impl<Client: ImportClient> ImportJob<Client> {
         }
     }
 
+    /// Creates a new thread to run SubImportJob for importing a range of data.
     fn new_import_thread(&self, id: u64, range: RangeInfo) -> JoinHandle<Result<()>> {
         let cfg = self.cfg.clone();
         let client = self.client.clone();
@@ -107,6 +110,8 @@ impl<Client: ImportClient> ImportJob<Client> {
     }
 }
 
+/// SubImportJob is responsible for generating and importing sst files for a range of data
+/// stored in an engine.
 struct SubImportJob<Client> {
     id: u64,
     tag: String,
@@ -238,6 +243,8 @@ impl<Client: ImportClient> SubImportJob<Client> {
     }
 }
 
+/// ImportSSTJob is responsible for importing `sst` to all replicas of the
+/// specific Region
 struct ImportSSTJob<Client> {
     tag: String,
     sst: SSTFile,
@@ -260,12 +267,14 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
             let range = self.sst.meta.get_range().clone();
             let mut region = match self.client.get_region(range.get_start()) {
-                Ok(region) => if self.sst.inside_region(&region) {
-                    region
-                } else {
-                    warn!("{} outside of {:?}", self.tag, region);
-                    return Err(Error::ImportSSTJobFailed(self.tag.clone()));
-                },
+                Ok(region) => {
+                    if self.sst.inside_region(&region) {
+                        region
+                    } else {
+                        warn!("{} outside of {:?}", self.tag, region);
+                        return Err(Error::ImportSSTJobFailed(self.tag.clone()));
+                    }
+                }
                 Err(e) => {
                     warn!("{}: {:?}", self.tag, e);
                     continue;
@@ -311,21 +320,24 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::StaleEpoch(new_regions)) => {
-                let new_region = new_regions
+            Err(Error::EpochNotMatch(current_regions)) => {
+                let current_region = current_regions
                     .iter()
                     .find(|&r| self.sst.inside_region(r))
                     .cloned();
-                match new_region {
-                    Some(new_region) => {
+                match current_region {
+                    Some(current_region) => {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
-                        Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
+                            .and_then(|p| find_region_peer(&current_region, p.get_store_id()));
+                        Err(Error::UpdateRegion(RegionInfo::new(
+                            current_region,
+                            new_leader,
+                        )))
                     }
                     None => {
-                        warn!("{} stale epoch {:?}", self.tag, new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("{} epoch not match {:?}", self.tag, current_region);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }
@@ -359,14 +371,16 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
         ingest.set_sst(self.sst.meta.clone());
 
         let res = match self.client.ingest_sst(store_id, ingest) {
-            Ok(mut resp) => if !resp.has_error() {
-                Ok(())
-            } else {
-                match Error::from(resp.take_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_error() {
+                    Ok(())
+                } else {
+                    match Error::from(resp.take_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::EpochNotMatch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 

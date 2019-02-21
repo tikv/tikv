@@ -14,14 +14,12 @@
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::{io, u64};
-use std::{slice, thread};
+use std::time::Duration;
+use std::{env, slice, thread, u64};
 
 use protobuf::Message;
 use rand::{self, ThreadRng};
@@ -32,15 +30,13 @@ pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
-pub mod file_log;
 pub mod future;
 pub mod futurepool;
 pub mod io_limiter;
-pub mod jemalloc;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb;
+pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -48,9 +44,6 @@ pub mod time;
 pub mod timer;
 pub mod transport;
 pub mod worker;
-
-pub use self::rocksdb::properties;
-pub use self::rocksdb::stats as rocksdb_stats;
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
@@ -171,14 +164,6 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     }
 }
 
-// A helper function to parse SocketAddr for mio.
-// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-// but it is just ok for "ip:port", not "host:port".
-pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
-    let addrs = addr.to_socket_addrs()?;
-    Ok(addrs.collect::<Vec<SocketAddr>>()[0])
-}
-
 /// A function to escape a byte array to a readable ascii string.
 /// escape rules follow golang/protobuf.
 /// <https://github.com/golang/protobuf/blob/master/proto/text.go#L578>
@@ -262,7 +247,7 @@ pub fn unescape(s: &str) -> Vec<u8> {
     buf
 }
 
-/// Convert a borrow to a slice.
+/// Converts a borrow to a slice.
 pub fn as_slice<T>(t: &T) -> &[T] {
     unsafe {
         let ptr = t as *const T;
@@ -270,7 +255,7 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-/// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
+/// A helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
 }
@@ -294,7 +279,7 @@ pub fn get_tag_from_thread_name() -> Option<String> {
         .map(From::from)
 }
 
-/// `DeferContext` will invoke the wrapped closure when dropped.
+/// Invokes the wrapped closure when dropped.
 pub struct DeferContext<T: FnOnce()> {
     t: Option<T>,
 }
@@ -394,11 +379,11 @@ impl<T> RingQueue<T> {
     }
 }
 
-// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+/// Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
-        .map(|x| *x)
+        .cloned()
         .collect()
 }
 
@@ -450,14 +435,9 @@ impl<T> Drop for MustConsumeVec<T> {
 }
 
 /// Exit the whole process when panic.
-pub fn set_exit_hook(
-    panic_abort: bool,
-    guard: Option<::slog_scope::GlobalLoggerGuard>,
-    data_dir: &str,
-) {
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     use std::panic;
     use std::process;
-    use std::sync::Mutex;
 
     // HACK! New a backtrace ahead for caching necessary elf sections of this
     // tikv-server, in case it can not open more files during panicking
@@ -474,13 +454,11 @@ pub fn set_exit_hook(
         .spawn(::backtrace::Backtrace::new)
         .unwrap();
 
-    // Hold the guard.
-    let log_guard = Mutex::new(guard);
-
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
-        if log_enabled!(::log::LogLevel::Error) {
+        use slog::Drain;
+        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {
@@ -493,20 +471,28 @@ pub fn set_exit_hook(
             let loc = info
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = ::backtrace::Backtrace::new();
-            error!(
-                "thread '{}' panicked '{}' at {:?}\n{:?}",
-                name,
-                msg,
-                loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                bt
+            let bt = backtrace::Backtrace::new();
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
             );
         } else {
             orig_hook(info);
         }
 
-        // To collect remaining logs, drop the guard before exit.
-        drop(log_guard.lock().unwrap().take());
+        // There might be remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one with a
+        // terminal logger.
+        if let Some(level) = log::max_log_level().to_log_level() {
+            let drainer = logger::term_drainer();
+            let _ = logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+            );
+        }
 
         // If PANIC_MARK is true, create panic mark file.
         if panic_mark_is_on() {
@@ -521,12 +507,49 @@ pub fn set_exit_hook(
     })
 }
 
+#[inline]
+pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
+    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
+    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
+    // here.
+    let mut new_vec = Vec::with_capacity(vec.capacity());
+    new_vec.extend_from_slice(vec);
+    new_vec
+}
+
+/// Checks environment variables that affect TiKV.
+pub fn check_environment_variables() {
+    if cfg!(unix) && env::var("TZ").is_err() {
+        env::set_var("TZ", ":/etc/localtime");
+        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
+    }
+
+    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
+        info!(
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
+        );
+    }
+
+    for proxy in &["http_proxy", "https_proxy"] {
+        if let Ok(var) = env::var(proxy) {
+            info!("environment variable is present";
+                *proxy => var
+            );
+        }
+    }
+}
+
+#[inline]
+pub fn is_zero_duration(d: &Duration) -> bool {
+    d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use protobuf::Message;
     use raft::eraftpb::Entry;
-    use std::net::{AddrParseError, SocketAddr};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
@@ -545,28 +568,6 @@ mod tests {
         let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
         create_panic_mark_file(dir.path());
         assert!(panic_mark_file_exists(dir.path()));
-    }
-
-    #[test]
-    fn test_to_socket_addr() {
-        let tbls = vec![
-            ("", false),
-            ("127.0.0.1", false),
-            ("localhost", false),
-            ("127.0.0.1:80", true),
-            ("localhost:80", true),
-        ];
-
-        for (addr, ok) in tbls {
-            assert_eq!(to_socket_addr(addr).is_ok(), ok);
-        }
-
-        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
-
-        for (addr, ok) in tbls {
-            let ret: Result<SocketAddr, AddrParseError> = addr.parse();
-            assert_eq!(ret.is_ok(), ok);
-        }
     }
 
     #[test]
@@ -618,7 +619,7 @@ mod tests {
             }
         }
 
-        #[cfg_attr(feature = "cargo-clippy", allow(clone_on_copy))]
+        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }
@@ -664,8 +665,8 @@ mod tests {
                 v.push_back(10 + i - first);
             }
             for len in 0..10 {
-                for low in 0..len + 1 {
-                    for high in low..len + 1 {
+                for low in 0..=len {
+                    for high in low..=len {
                         let (p1, p2) = super::slices_in_range(&v, low, high);
                         let mut res = vec![];
                         res.extend_from_slice(p1);
@@ -709,7 +710,7 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = ::panic_hook::recover_safe(|| {
+        let res = panic_hook::recover_safe(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });
@@ -733,5 +734,12 @@ mod tests {
         // Hex Octals
         assert_eq!(unescape(r"abc\x64\x65\x66ghi"), b"abcdefghi");
         assert_eq!(unescape(r"JKL\x4d\x4E\x4fPQR"), b"JKLMNOPQR");
+    }
+
+    #[test]
+    fn test_is_zero() {
+        assert!(is_zero_duration(&Duration::new(0, 0)));
+        assert!(!is_zero_duration(&Duration::new(1, 0)));
+        assert!(!is_zero_duration(&Duration::new(0, 1)));
     }
 }

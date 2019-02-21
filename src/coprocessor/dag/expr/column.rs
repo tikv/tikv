@@ -18,8 +18,8 @@ use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeTp;
 
 use super::{Column, EvalContext, Result};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -96,10 +96,10 @@ mod tests {
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::col_expr;
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::col_expr;
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -152,7 +152,7 @@ mod tests {
             Datum::F64(124.32),
             Datum::Dec(dec.clone()),
             Datum::Bytes(s.clone()),
-            Datum::Dur(dur.clone()),
+            Datum::Dur(dur),
         ];
 
         let expecteds = vec![
@@ -162,7 +162,7 @@ mod tests {
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec.clone()), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur.clone()), None),
+            EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 
         let mut ctx = EvalContext::default();

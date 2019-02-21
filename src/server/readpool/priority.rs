@@ -14,6 +14,7 @@
 use kvproto::kvrpcpb;
 use std::fmt;
 
+/// A `Priority` decides which thread pool a task is scheduled to.
 #[derive(Debug, Copy, Clone)]
 pub enum Priority {
     Normal,

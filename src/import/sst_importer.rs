@@ -21,7 +21,9 @@ use kvproto::import_sstpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
 use uuid::Uuid;
 
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use crate::util::rocksdb_util::{
+    get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion,
+};
 
 use super::{Error, Result};
 
@@ -329,10 +331,10 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
+    use crate::util::rocksdb_util::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_import_dir() {
@@ -368,7 +370,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 

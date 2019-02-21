@@ -13,16 +13,16 @@
 
 use std::sync::Arc;
 
+use crate::test;
 use rocksdb::DB;
 use tempdir::TempDir;
-use test;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
 
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, Callback, Msg, ReadResponse, RegionSnapshot, SignificantMsg,
+    cmd_resp, engine, util, Callback, Msg, PeerMsg, ReadResponse, RegionSnapshot, SignificantMsg,
     WriteResponse,
 };
 use tikv::raftstore::Result;
@@ -33,7 +33,7 @@ use tikv::storage::engine::{
 };
 use tikv::storage::types::Key;
 use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
-use tikv::util::rocksdb;
+use tikv::util::rocksdb_util;
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -51,9 +51,9 @@ impl SyncBenchRouter {
     fn invoke(&self, msg: Msg) {
         let mut response = RaftCmdResponse::new();
         cmd_resp::bind_term(&mut response, 1);
-        if let Msg::RaftCmd {
+        if let Msg::PeerMsg(PeerMsg::RaftCmd {
             request, callback, ..
-        } = msg
+        }) = msg
         {
             match callback {
                 Callback::Read(cb) => {
@@ -88,7 +88,7 @@ impl RaftStoreRouter for SyncBenchRouter {
         Ok(())
     }
 
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _region_id: u64, _: SignificantMsg) -> Result<()> {
         Ok(())
     }
 }
@@ -96,7 +96,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb::new_engine(&path, ALL_CFS, None).unwrap();
+    let db = rocksdb_util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 
@@ -185,6 +185,7 @@ fn bench_async_write(b: &mut test::Bencher) {
                 Key::from_encoded(b"fooo".to_vec()),
             )],
             on_finished,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }

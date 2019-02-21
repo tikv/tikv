@@ -13,7 +13,7 @@
 
 //! The macros crate contains all useful needed macros.
 
-/// Get the count of macro's arguments.
+/// Gets the count of macro's arguments.
 ///
 /// # Examples
 ///
@@ -32,7 +32,7 @@ macro_rules! count_args {
     ($head:expr $(, $tail:expr)*) => { 1 + count_args!($($tail),*) };
 }
 
-/// Initial a `HashMap` with specify key-value pairs.
+/// Initializes a `HashMap` with specified key-value pairs.
 ///
 /// # Examples
 ///
@@ -77,7 +77,7 @@ macro_rules! map {
     };
 }
 
-/// box try will box error first, and then do the same thing as try!.
+/// Boxes error first, and then does the same thing as `try!`.
 #[macro_export]
 macro_rules! box_try {
     ($expr:expr) => {{
@@ -101,16 +101,16 @@ macro_rules! box_err {
     });
 }
 
-/// Log slow operations with warn!.
+/// Logs slow operations with `warn!`.
 macro_rules! slow_log {
     ($t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
-            warn!("{} [takes {:?}]", format_args!($($arg)*), $t.elapsed());
+            warn!($($arg)*; "takes" => ?$t.elapsed());
         }
     }}
 }
 
-/// make a thread name with additional tag inheriting from current thread.
+/// Makes a thread name with an additional tag inherited from the current thread.
 #[macro_export]
 macro_rules! thd_name {
     ($name:expr) => {{
@@ -120,7 +120,7 @@ macro_rules! thd_name {
     }};
 }
 
-/// Simulating go's defer.
+/// Simulates Go's defer.
 ///
 /// Please note that, different from go, this defer is bound to scope.
 /// When exiting the scope, its deferred calls are executed in last-in-first-out order.
@@ -131,9 +131,8 @@ macro_rules! defer {
     };
 }
 
-/// `wait_op!` waits for async operation. It returns `Option<Res>`
-/// after the expression get executed.
-/// It only accepts an `Result` expression.
+/// Waits for async operation. It returns `Option<Res>` after the expression gets executed.
+/// It only accepts a `Result` expression.
 #[macro_export]
 macro_rules! wait_op {
     ($expr:expr) => {
@@ -157,7 +156,7 @@ macro_rules! wait_op {
     }};
 }
 
-/// `try_opt` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.
+/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt {
     ($expr:expr) => {{
@@ -169,7 +168,7 @@ macro_rules! try_opt {
     }};
 }
 
-/// `try_opt_or` check `Result<Option<T>>`, return early when met `Err` or `Ok(None)`.
+/// Checks `Result<Option<T>>`, and returns early when it meets `Err` or `Ok(None)`.
 /// return `Ok(or)` when met `Ok(None)`.
 #[macro_export]
 macro_rules! try_opt_or {

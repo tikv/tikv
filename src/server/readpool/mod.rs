@@ -21,14 +21,18 @@ use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
 
-use util;
-use util::futurepool::{self, FuturePool};
+use crate::util;
+use crate::util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
 pub use self::priority::Priority;
 
 const TICK_INTERVAL_SEC: u64 = 1;
 
+/// A priority-aware thread pool for executing futures.
+///
+/// It is specifically used for all sorts of read operations like KV Get,
+/// KV Scan and Coprocessor Read to improve performance.
 pub struct ReadPool<T: futurepool::Context + 'static> {
     pool_high: FuturePool<T>,
     pool_normal: FuturePool<T>,
@@ -53,12 +57,10 @@ impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
 }
 
 impl<T: futurepool::Context + 'static> ReadPool<T> {
-    // Rust does not support copying closures (RFC 2132) so that we need a closure builder.
-    // TODO: Use a single closure once RFC 2132 is implemented.
-    pub fn new<F, CF>(name_prefix: &str, config: &Config, context_factory_builder: F) -> Self
+    /// Creates a new thread pool.
+    pub fn new<F>(name_prefix: &str, config: &Config, context_factory: F) -> Self
     where
-        F: futurepool::Factory<CF>,
-        CF: futurepool::Factory<T>,
+        F: Fn() -> T,
     {
         let tick_interval = Duration::from_secs(TICK_INTERVAL_SEC);
 
@@ -68,21 +70,21 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
                 config.stack_size.0 as usize,
                 &format!("{}-high", name_prefix),
                 tick_interval,
-                context_factory_builder.build(),
+                &context_factory,
             ),
             pool_normal: FuturePool::new(
                 config.normal_concurrency,
                 config.stack_size.0 as usize,
                 &format!("{}-normal", name_prefix),
                 tick_interval,
-                context_factory_builder.build(),
+                &context_factory,
             ),
             pool_low: FuturePool::new(
                 config.low_concurrency,
                 config.stack_size.0 as usize,
                 &format!("{}-low", name_prefix),
                 tick_interval,
-                context_factory_builder.build(),
+                &context_factory,
             ),
             max_tasks_high: config.max_tasks_per_worker_high * config.high_concurrency,
             max_tasks_normal: config.max_tasks_per_worker_normal * config.normal_concurrency,
@@ -194,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_future_execute() {
-        let read_pool = ReadPool::new("readpool", &Config::default_for_test(), || || Context {});
+        let read_pool = ReadPool::new("readpool", &Config::default_for_test(), || Context {});
 
         expect_val(
             vec![1, 2, 4],
@@ -251,7 +253,7 @@ mod tests {
                 max_tasks_per_worker_high: 2,
                 ..Config::default_for_test()
             },
-            || || Context {},
+            || Context {},
         );
 
         wait_on_new_thread(

@@ -18,14 +18,16 @@ use super::Result;
 
 pub struct ImportModeSwitcher {
     mode: SwitchMode,
-    backup_options: Vec<(String, ImportModeOptions)>,
+    backup_db_options: ImportModeDBOptions,
+    backup_cf_options: Vec<(String, ImportModeCFOptions)>,
 }
 
 impl ImportModeSwitcher {
     pub fn new() -> ImportModeSwitcher {
         ImportModeSwitcher {
             mode: SwitchMode::Normal,
-            backup_options: Vec::new(),
+            backup_db_options: ImportModeDBOptions::new(),
+            backup_cf_options: Vec::new(),
         }
     }
 
@@ -34,8 +36,9 @@ impl ImportModeSwitcher {
             return Ok(());
         }
 
-        for (cf_name, cf_opts) in &self.backup_options {
-            cf_opts.set_options_cf(db, cf_name)?;
+        self.backup_db_options.set_options(db)?;
+        for (cf_name, cf_opts) in &self.backup_cf_options {
+            cf_opts.set_options(db, cf_name)?;
         }
 
         self.mode = SwitchMode::Normal;
@@ -47,12 +50,16 @@ impl ImportModeSwitcher {
             return Ok(());
         }
 
-        let import_options = ImportModeOptions::new();
-        self.backup_options.clear();
+        self.backup_db_options = ImportModeDBOptions::new_options(db);
+        self.backup_cf_options.clear();
+
+        let import_db_options = ImportModeDBOptions::new();
+        import_db_options.set_options(db)?;
+        let import_cf_options = ImportModeCFOptions::new();
         for cf_name in db.cf_names() {
-            let cf_opts = ImportModeOptions::new_options_cf(db, cf_name);
-            self.backup_options.push((cf_name.to_owned(), cf_opts));
-            import_options.set_options_cf(db, cf_name)?;
+            let cf_opts = ImportModeCFOptions::new_options(db, cf_name);
+            self.backup_cf_options.push((cf_name.to_owned(), cf_opts));
+            import_cf_options.set_options(db, cf_name)?;
         }
 
         self.mode = SwitchMode::Import;
@@ -60,20 +67,47 @@ impl ImportModeSwitcher {
     }
 }
 
-struct ImportModeOptions {
+struct ImportModeDBOptions {
+    max_background_jobs: i32,
+}
+
+impl ImportModeDBOptions {
+    fn new() -> ImportModeDBOptions {
+        ImportModeDBOptions {
+            max_background_jobs: 32,
+        }
+    }
+
+    fn new_options(db: &DB) -> ImportModeDBOptions {
+        let db_opts = db.get_db_options();
+        ImportModeDBOptions {
+            max_background_jobs: db_opts.get_max_background_jobs(),
+        }
+    }
+
+    fn set_options(&self, db: &DB) -> Result<()> {
+        let opts = [(
+            "max_background_jobs".to_string(),
+            self.max_background_jobs.to_string(),
+        )];
+        let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        db.set_db_options(&tmp_opts)?;
+        Ok(())
+    }
+}
+
+struct ImportModeCFOptions {
     block_cache_size: u64,
-    disable_auto_compactions: bool,
     level0_stop_writes_trigger: u32,
     level0_slowdown_writes_trigger: u32,
     soft_pending_compaction_bytes_limit: u64,
     hard_pending_compaction_bytes_limit: u64,
 }
 
-impl ImportModeOptions {
-    fn new() -> ImportModeOptions {
-        ImportModeOptions {
-            block_cache_size: 1 << 30,
-            disable_auto_compactions: true,
+impl ImportModeCFOptions {
+    fn new() -> ImportModeCFOptions {
+        ImportModeCFOptions {
+            block_cache_size: 4 << 30,
             level0_stop_writes_trigger: 1 << 30,
             level0_slowdown_writes_trigger: 1 << 30,
             soft_pending_compaction_bytes_limit: 0,
@@ -81,13 +115,12 @@ impl ImportModeOptions {
         }
     }
 
-    fn new_options_cf(db: &DB, cf_name: &str) -> ImportModeOptions {
+    fn new_options(db: &DB, cf_name: &str) -> ImportModeCFOptions {
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
 
-        ImportModeOptions {
+        ImportModeCFOptions {
             block_cache_size: cf_opts.get_block_cache_capacity(),
-            disable_auto_compactions: cf_opts.get_disable_auto_compactions(),
             level0_stop_writes_trigger: cf_opts.get_level_zero_stop_writes_trigger(),
             level0_slowdown_writes_trigger: cf_opts.get_level_zero_slowdown_writes_trigger(),
             soft_pending_compaction_bytes_limit: cf_opts.get_soft_pending_compaction_bytes_limit(),
@@ -95,16 +128,12 @@ impl ImportModeOptions {
         }
     }
 
-    fn set_options_cf(&self, db: &DB, cf_name: &str) -> Result<()> {
+    fn set_options(&self, db: &DB, cf_name: &str) -> Result<()> {
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
 
         let opts = [
-            (
-                "disable_auto_compactions".to_owned(),
-                self.disable_auto_compactions.to_string(),
-            ),
             (
                 "level0_stop_writes_trigger".to_owned(),
                 self.level0_stop_writes_trigger.to_string(),
@@ -133,57 +162,65 @@ impl ImportModeOptions {
 mod tests {
     use super::*;
 
+    use crate::util::rocksdb_util::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
-    fn check_import_options(db: &DB, opts: &ImportModeOptions) {
+    fn check_import_options(
+        db: &DB,
+        expected_db_opts: &ImportModeDBOptions,
+        expected_cf_opts: &ImportModeCFOptions,
+    ) {
+        let db_opts = db.get_db_options();
+        assert_eq!(
+            db_opts.get_max_background_jobs(),
+            expected_db_opts.max_background_jobs,
+        );
+
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();
             let cf_opts = db.get_options_cf(cf);
-            assert_eq!(cf_opts.get_block_cache_capacity(), opts.block_cache_size);
             assert_eq!(
-                cf_opts.get_disable_auto_compactions(),
-                opts.disable_auto_compactions
+                cf_opts.get_block_cache_capacity(),
+                expected_cf_opts.block_cache_size
             );
             assert_eq!(
                 cf_opts.get_level_zero_stop_writes_trigger(),
-                opts.level0_stop_writes_trigger
+                expected_cf_opts.level0_stop_writes_trigger
             );
             assert_eq!(
                 cf_opts.get_level_zero_slowdown_writes_trigger(),
-                opts.level0_slowdown_writes_trigger
+                expected_cf_opts.level0_slowdown_writes_trigger
             );
-            // TODO: https://github.com/facebook/rocksdb/pull/3823
-            // These options are set correctly, but we can't get them
-            // because of the issue above.
-            // assert_eq!(
-            //     cf_opts.get_soft_pending_compaction_bytes_limit(),
-            //     opts.soft_pending_compaction_bytes_limit
-            // );
-            // assert_eq!(
-            //     cf_opts.get_hard_pending_compaction_bytes_limit(),
-            //     opts.hard_pending_compaction_bytes_limit
-            // );
+            assert_eq!(
+                cf_opts.get_soft_pending_compaction_bytes_limit(),
+                expected_cf_opts.soft_pending_compaction_bytes_limit
+            );
+            assert_eq!(
+                cf_opts.get_hard_pending_compaction_bytes_limit(),
+                expected_cf_opts.hard_pending_compaction_bytes_limit
+            );
         }
     }
 
     #[test]
     fn test_import_mode_switcher() {
         let temp_dir = TempDir::new("test_import_mode_switcher").unwrap();
-        let db = new_engine(temp_dir.path().to_str().unwrap(), &["a", "b"], None).unwrap();
+        let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
 
-        let import_options = ImportModeOptions::new();
-        let normal_options = ImportModeOptions::new_options_cf(&db, "default");
+        let import_db_options = ImportModeDBOptions::new();
+        let normal_db_options = ImportModeDBOptions::new_options(&db);
+        let import_cf_options = ImportModeCFOptions::new();
+        let normal_cf_options = ImportModeCFOptions::new_options(&db, "default");
 
         let mut switcher = ImportModeSwitcher::new();
-        check_import_options(&db, &normal_options);
+        check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_import_mode(&db).unwrap();
-        check_import_options(&db, &import_options);
+        check_import_options(&db, &import_db_options, &import_cf_options);
         switcher.enter_import_mode(&db).unwrap();
-        check_import_options(&db, &import_options);
+        check_import_options(&db, &import_db_options, &import_cf_options);
         switcher.enter_normal_mode(&db).unwrap();
-        check_import_options(&db, &normal_options);
+        check_import_options(&db, &normal_db_options, &normal_cf_options);
         switcher.enter_normal_mode(&db).unwrap();
-        check_import_options(&db, &normal_options);
+        check_import_options(&db, &normal_db_options, &normal_cf_options);
     }
 }

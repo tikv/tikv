@@ -12,36 +12,34 @@
 // limitations under the License.
 
 use std::process;
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use mio::EventLoop;
-
 use super::transport::RaftStoreRouter;
 use super::Result;
-use import::SSTImporter;
+use crate::import::SSTImporter;
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::fsm::{RaftBatchSystem, SendCh};
+use crate::raftstore::store::{
+    self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager, Transport,
+};
+use crate::server::readpool::ReadPool;
+use crate::server::Config as ServerConfig;
+use crate::server::ServerRaftStoreRouter;
+use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::util::worker::{FutureWorker, Worker};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
-    SnapManager, Store, StoreChannel, Transport,
-};
 use rocksdb::DB;
-use server::readpool::ReadPool;
-use server::Config as ServerConfig;
-use server::ServerRaftStoreRouter;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
+/// Creates a new storage engine which is backed by the Raft consensus
+/// protocol.
 pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
@@ -77,14 +75,14 @@ fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result
     Ok(())
 }
 
-// Node is a wrapper for raft store.
+/// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
 pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh<Msg>,
+    system: RaftBatchSystem,
 
     pd_client: Arc<C>,
 }
@@ -93,15 +91,13 @@ impl<C> Node<C>
 where
     C: PdClient,
 {
-    pub fn new<T>(
-        event_loop: &mut EventLoop<Store<T, C>>,
+    /// Creates a new Node.
+    pub fn new(
+        system: RaftBatchSystem,
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Node<C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -120,25 +116,25 @@ where
         }
         store.set_labels(RepeatedField::from_vec(labels));
 
-        let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
             store_handle: None,
             pd_client,
-            ch,
+            system,
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    /// Starts the Node. It tries to bootstrap cluster if the cluster is not
+    /// bootstrapped yet. Then it spawns a thread to run the raftstore in
+    /// background.
+    #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        event_loop: EventLoop<Store<T, C>>,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
@@ -174,12 +170,10 @@ where
         // inform pd.
         self.pd_client.put_store(self.store.clone())?;
         self.start_store(
-            event_loop,
             store_id,
             engines,
             trans,
             snap_mgr,
-            significant_msg_receiver,
             pd_worker,
             local_read_worker,
             coprocessor_host,
@@ -188,12 +182,15 @@ where
         Ok(())
     }
 
+    /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh<Msg> {
-        self.ch.clone()
+    /// Gets a transmission end of a channel which is used to send `Msg` to the
+    /// raftstore.
+    pub fn get_sendch(&self) -> SendCh {
+        SendCh::new(self.system.router(), "raftstore")
     }
 
     // check store, return store id for the engine.
@@ -237,6 +234,8 @@ where
         Ok(store_id)
     }
 
+    // Exported for tests.
+    #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
         engines: &Engines,
@@ -322,15 +321,13 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     fn start_store<T>(
         &mut self,
-        mut event_loop: EventLoop<Store<T, C>>,
         store_id: u64,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
@@ -348,58 +345,28 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let sender = event_loop.channel();
-
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
-        let h = builder.spawn(move || {
-            let ch = StoreChannel {
-                sender,
-                significant_msg_receiver,
-            };
-            let mut store = match Store::new(
-                ch,
-                store,
-                cfg,
-                engines,
-                trans,
-                pd_client,
-                snap_mgr,
-                pd_worker,
-                local_read_worker,
-                coprocessor_host,
-                importer,
-            ) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
-            tx.send(0).unwrap();
-            if let Err(e) = store.run(&mut event_loop) {
-                error!("store {} run err {:?}", store_id, e);
-            };
-        })?;
-        // wait for store to be initialized
-        rx.recv().unwrap();
-
-        self.store_handle = Some(h);
+        self.system.spawn(
+            store,
+            cfg,
+            engines,
+            trans,
+            pd_client,
+            snap_mgr,
+            pd_worker,
+            local_read_worker,
+            coprocessor_host,
+            importer,
+        )?;
         Ok(())
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
         info!("stop raft store {} thread", store_id);
-        let h = match self.store_handle.take() {
-            None => return Ok(()),
-            Some(h) => h,
-        };
-
-        box_try!(self.ch.send(Msg::Quit));
-        if let Err(e) = h.join() {
-            return Err(box_err!("join store {} thread err {:?}", store_id, e));
-        }
-
+        self.system.shutdown();
         Ok(())
     }
 
+    /// Stops the Node.
     pub fn stop(&mut self) -> Result<()> {
         let store_id = self.store.get_id();
         self.stop_store(store_id)
@@ -409,8 +376,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::check_region_epoch;
+    use crate::raftstore::store::keys;
     use kvproto::metapb;
-    use raftstore::store::keys;
 
     #[test]
     fn test_check_region_epoch() {

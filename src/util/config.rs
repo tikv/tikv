@@ -24,7 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use util;
+use crate::util;
+use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
@@ -48,6 +49,34 @@ quick_error! {
         FileSystem(msg: String) {
             description(msg)
             display("config fs: {}", msg)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompressionType {
+    No,
+    Snappy,
+    Zlib,
+    Bz2,
+    Lz4,
+    Lz4hc,
+    Zstd,
+    ZstdNotFinal,
+}
+
+impl Into<DBCompressionType> for CompressionType {
+    fn into(self) -> DBCompressionType {
+        match self {
+            CompressionType::No => DBCompressionType::No,
+            CompressionType::Snappy => DBCompressionType::Snappy,
+            CompressionType::Zlib => DBCompressionType::Zlib,
+            CompressionType::Bz2 => DBCompressionType::Bz2,
+            CompressionType::Lz4 => DBCompressionType::Lz4,
+            CompressionType::Lz4hc => DBCompressionType::Lz4hc,
+            CompressionType::Zstd => DBCompressionType::Zstd,
+            CompressionType::ZstdNotFinal => DBCompressionType::ZstdNotFinal,
         }
     }
 }
@@ -122,7 +151,7 @@ pub mod compression_type_level_serde {
                             return Err(S::Error::invalid_value(
                                 Unexpected::Str(&value),
                                 &"invalid compression type",
-                            ))
+                            ));
                         }
                     };
                     i += 1;
@@ -208,19 +237,19 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-numeric_enum_mod!{compaction_pri_serde CompactionPriority {
+numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod!{compaction_style_serde DBCompactionStyle {
+numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
 }}
 
-numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
+numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
@@ -650,7 +679,7 @@ mod check_kernel {
             )));
         }
 
-        info!("kernel parameters {}: {}", param, got);
+        info!("kernel parameters"; "param" => param, "value" => got);
         Ok(())
     }
 
@@ -822,16 +851,16 @@ mod check_data_dir {
                 return Err(ConfigError::FileSystem(format!(
                     "{}: path: {:?} canonicalize failed: {:?}",
                     op, data_path, e
-                )))
+                )));
             }
         };
 
-        let fs_info = get_fs_info(&real_path, mnt_file)?;
         // TODO check ext4 nodelalloc
-        info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
-        let rotational_info = get_rotational_info(&fs_info.fsname)?;
-        if rotational_info != "0" {
-            warn!("{:?} not on SSD device", data_path);
+        let fs_info = get_fs_info(&real_path, mnt_file)?;
+        info!("check data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+
+        if get_rotational_info(&fs_info.fsname)? != "0" {
+            warn!("not on SSD device"; "data_path" => data_path);
         }
         Ok(())
     }
@@ -954,9 +983,9 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr)))?;
+    let port: u16 = parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    })?;
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(format!(
@@ -1167,21 +1196,19 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
         // value is wrong.
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
     }
 
     #[test]

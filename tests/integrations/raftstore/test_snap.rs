@@ -21,7 +21,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::Msg;
+use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
@@ -179,8 +179,6 @@ fn test_server_snap_gc() {
         if now.elapsed() > Duration::from_secs(10) {
             panic!("snap files is still not empty: {:?}", snap_files);
         }
-        // trigger log compaction.
-        cluster.must_put(b"k2", b"v2");
         sleep_ms(20);
     }
 }
@@ -396,7 +394,7 @@ impl Filter<Msg> for SnapshotAppendFilter {
         let mut stale = false;
         for m in msgs.drain(..) {
             let mut should_collect = false;
-            if let Msg::RaftMessage(ref msg) = m {
+            if let Msg::PeerMsg(PeerMsg::RaftMessage(ref msg)) = m {
                 should_collect =
                     !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
                 stale = !pending_msg.is_empty()

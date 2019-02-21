@@ -25,7 +25,7 @@ use test_raftstore::*;
 
 #[test]
 fn test_follower_slow_split() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();

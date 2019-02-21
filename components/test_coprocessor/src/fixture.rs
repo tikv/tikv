@@ -50,7 +50,7 @@ impl ProductTable {
     }
 }
 
-impl ::std::ops::Deref for ProductTable {
+impl std::ops::Deref for ProductTable {
     type Target = Table;
 
     fn deref(&self) -> &Table {
@@ -101,7 +101,7 @@ pub fn init_data_with_details<E: Engine>(
     }
     let pd_worker = FutureWorker::new("test-pd-worker");
     let pool = ReadPool::new("readpool", read_pool_cfg, || {
-        || ReadPoolContext::new(pd_worker.scheduler())
+        ReadPoolContext::new(pd_worker.scheduler())
     });
     let cop = Endpoint::new(cfg, store.get_engine(), pool);
     (store, cop)

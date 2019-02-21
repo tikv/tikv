@@ -19,14 +19,14 @@ use prometheus::{self, Encoder, TextEncoder};
 #[cfg(target_os = "linux")]
 mod threads_linux;
 #[cfg(target_os = "linux")]
-pub use self::threads_linux::{get_thread_ids, monitor_threads, Stat};
+pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads};
 
 #[cfg(not(target_os = "linux"))]
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
 
-/// `run_prometheus` runs a background prometheus client.
+/// Runs a background Prometheus client.
 pub fn run_prometheus(
     interval: Duration,
     address: &str,
@@ -50,7 +50,7 @@ pub fn run_prometheus(
                 metric_familys,
             );
             if let Err(e) = res {
-                error!("fail to push metrics: {}", e);
+                error!("fail to push metrics"; "err" => ?e);
             }
 
             thread::sleep(interval);
@@ -66,7 +66,7 @@ pub fn dump() -> String {
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-            warn!("prometheus encoding error: {:?}", e);
+            warn!("prometheus encoding error"; "err" => ?e);
         }
     }
     String::from_utf8(buffer).unwrap()

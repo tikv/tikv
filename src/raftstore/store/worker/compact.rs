@@ -17,13 +17,11 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::storage::CF_WRITE;
+use crate::util::escape;
+use crate::util::rocksdb_util::{self, compact_range, stats::get_range_entries_and_versions};
+use crate::util::worker::Runnable;
 use rocksdb::DB;
-use storage::CF_WRITE;
-use util::escape;
-use util::rocksdb;
-use util::rocksdb::compact_range;
-use util::rocksdb::stats::get_range_entries_and_versions;
-use util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -103,13 +101,14 @@ impl Runner {
         Runner { engine }
     }
 
+    /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
         cf_name: String,
         start_key: Option<Vec<u8>>,
         end_key: Option<Vec<u8>>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[&cf_name])
@@ -126,11 +125,11 @@ impl Runner {
         );
         compact_range_timer.observe_duration();
         info!(
-            "compact range ({:?}, {:?}) for cf {:?} finished, takes: {:?}",
-            &start.as_ref().map(|k| escape(k)),
-            &end.as_ref().map(|k| escape(k)),
-            cf_name,
-            timer.elapsed()
+            "compact range finished";
+            "range_start" => start.map(::log_wrappers::Key),
+            "range_end" => end.map(::log_wrappers::Key),
+            "cf" => cf_name,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
@@ -146,7 +145,7 @@ impl Runnable<Task> for Runner {
             } => {
                 let cf = cf_name.clone();
                 if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
-                    error!("execute compact range for cf {} failed, err {}", &cf, e);
+                    error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
             Task::CheckAndCompact {
@@ -160,20 +159,25 @@ impl Runnable<Task> for Runner {
                 tombstones_num_threshold,
                 tombstones_percent_threshold,
             ) {
-                Ok(mut ranges) => for (start, end) in ranges.drain(..) {
-                    for cf in &cf_names {
-                        if let Err(e) = self.compact_range_cf(
-                            cf.clone(),
-                            Some(start.clone()),
-                            Some(end.clone()),
-                        ) {
-                            error!(
-                                "compact range ({:?}, {:?}) for cf {:?} failed, error {:?}",
-                                start, end, cf, e
-                            );
+                Ok(mut ranges) => {
+                    for (start, end) in ranges.drain(..) {
+                        for cf in &cf_names {
+                            if let Err(e) = self.compact_range_cf(
+                                cf.clone(),
+                                Some(start.clone()),
+                                Some(end.clone()),
+                            ) {
+                                error!(
+                                    "compact range failed";
+                                    "range_start" => log_wrappers::Key(&start),
+                                    "range_end" => log_wrappers::Key(&end),
+                                    "cf" => cf,
+                                    "err" => %e,
+                                );
+                            }
                         }
                     }
-                },
+                }
                 Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
             },
         }
@@ -202,15 +206,15 @@ fn collect_ranges_need_compact(
     tombstones_num_threshold: u64,
     tombstones_percent_threshold: u64,
 ) -> Result<VecDeque<(Key, Key)>, Error> {
-    // Check the SST properties for each range, and we will compact a range if the range
-    // contains too much RocksDB tombstones. we will merge multiple neighbouring ranges
+    // Check the SST properties for each range, and TiKV will compact a range if the range
+    // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(rocksdb::get_cf_handle(engine, CF_WRITE));
+    let cf = box_try!(rocksdb_util::get_cf_handle(engine, CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
-        // Get total entries and total versions in this range and check if need compacting.
+        // Get total entries and total versions in this range and checks if it needs to be compacted.
         if let Some((num_ent, num_ver)) =
             get_range_entries_and_versions(engine, cf, &range[0], &range[1])
         {
@@ -238,7 +242,7 @@ fn collect_ranges_need_compact(
         }
     }
 
-    // Save the last range that need compacting.
+    // Save the last range that needs to be compacted.
     if compact_start.is_some() {
         ranges_need_compact.push_back((compact_start.unwrap(), compact_end.unwrap()));
     }
@@ -253,15 +257,15 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use raftstore::store::keys::data_key;
+    use crate::raftstore::store::keys::data_key;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::types::Key as MvccKey;
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb_util::{
+        get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
+        stats::get_range_entries_and_versions, CFOptions,
+    };
     use rocksdb::{self, Writable, WriteBatch, DB};
-    use storage::mvcc::{Write, WriteType};
-    use storage::types::Key as MvccKey;
-    use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::properties::MvccPropertiesCollectorFactory;
-    use util::rocksdb::new_engine;
-    use util::rocksdb::stats::get_range_entries_and_versions;
-    use util::rocksdb::{get_cf_handle, new_engine_opt, CFOptions};
 
     use super::*;
 
@@ -270,14 +274,14 @@ mod tests {
     #[test]
     fn test_compact_range() {
         let path = TempDir::new("compact-range-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
         let mut runner = Runner::new(Arc::clone(&db));
 
         let handle = get_cf_handle(&db, CF_DEFAULT).unwrap();
 
-        // generate first sst file.
+        // Generate the first SST file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
@@ -287,7 +291,7 @@ mod tests {
         db.write(wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
-        // generate another sst file has the same content with first sst file.
+        // Generate another SST file has the same content with first SST file.
         let wb = WriteBatch::new();
         for i in 0..1000 {
             let k = format!("key_{}", i);
@@ -297,12 +301,12 @@ mod tests {
         db.write(wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
-        // get total sst files size.
+        // Get the total SST files size.
         let old_sst_files_size = db
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
 
-        // schedule compact range task
+        // Schedule compact range task.
         runner.run(Task::Compact {
             cf_name: String::from(CF_DEFAULT),
             start_key: None,
@@ -310,7 +314,7 @@ mod tests {
         });
         sleep(Duration::from_secs(5));
 
-        // get total sst files size after compact range.
+        // Get the total SST files size after compact range.
         let new_sst_files_size = db
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .unwrap();
@@ -387,7 +391,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k5"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));
@@ -410,7 +415,8 @@ mod tests {
             vec![data_key(b"k0"), data_key(b"k5"), data_key(b"k9")],
             1,
             50,
-        ).unwrap();
+        )
+        .unwrap();
         let (s, e) = (data_key(b"k0"), data_key(b"k9"));
         let mut expected_ranges = VecDeque::new();
         expected_ranges.push_back((s, e));

@@ -11,33 +11,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::Future;
-use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
-use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
+//! This mod implemented a wrapped future pool that supports `on_tick()` which
+//! is invoked no less than the specific interval.
+
 use std::cell::{Cell, RefCell, RefMut};
-/// This mod implemented a wrapped future pool that supports `on_tick()` which is driven by
-/// tasks and is invoked no less than the specific interval.
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use util;
-use util::collections::HashMap;
-use util::time::Instant;
+use futures::Future;
+use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
+use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
+
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::time::Instant;
 
 lazy_static! {
     pub static ref FUTUREPOOL_PENDING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_futurepool_pending_task_total",
         "Current future_pool pending + running tasks.",
         &["name"]
-    ).unwrap();
+    )
+    .unwrap();
     pub static ref FUTUREPOOL_HANDLED_TASK_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_futurepool_handled_task_total",
         "Total number of future_pool handled tasks.",
         &["name"]
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 pub trait Context: fmt::Debug + Send {
@@ -157,19 +161,6 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
 impl<T: Context + 'static> util::AssertSend for FuturePool<T> {}
 impl<T: Context + 'static> util::AssertSync for FuturePool<T> {}
 
-pub trait Factory<T> {
-    fn build(&self) -> T;
-}
-
-impl<T, F> Factory<T> for F
-where
-    F: Fn() -> T,
-{
-    fn build(&self) -> T {
-        self()
-    }
-}
-
 impl<T: Context + 'static> FuturePool<T> {
     pub fn new<F>(
         pool_size: usize,
@@ -179,7 +170,7 @@ impl<T: Context + 'static> FuturePool<T> {
         context_factory: F,
     ) -> FuturePool<T>
     where
-        F: Factory<T>,
+        F: Fn() -> T,
     {
         let (tx, rx) = mpsc::sync_channel(pool_size);
         let pool = cpupool::Builder::new()
@@ -196,8 +187,7 @@ impl<T: Context + 'static> FuturePool<T> {
         let contexts = (0..pool_size)
             .map(|_| {
                 let thread_id = rx.recv().unwrap();
-                let context = context_factory.build();
-                let context_delegator = ContextDelegator::new(context, tick_interval);
+                let context_delegator = ContextDelegator::new(context_factory(), tick_interval);
                 (thread_id, context_delegator)
             })
             .collect();
@@ -212,7 +202,7 @@ impl<T: Context + 'static> FuturePool<T> {
         }
     }
 
-    /// Get current running task count
+    /// Gets current running task count
     #[inline]
     pub fn get_running_task_count(&self) -> usize {
         self.running_task_count.load(Ordering::Acquire)
@@ -300,8 +290,9 @@ mod tests {
             let ctx = ctxd.current_thread_context_mut();
             assert_eq!(ctx.ctx_thread_id, main_thread_id);
             future::ok::<(), ()>(())
-        }).wait()
-            .unwrap();
+        })
+        .wait()
+        .unwrap();
     }
 
     #[test]

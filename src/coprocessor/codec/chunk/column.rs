@@ -17,15 +17,15 @@ use cop_datatype::prelude::*;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, Result};
-use coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
-use coprocessor::codec::mysql::{
+use crate::coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
+use crate::coprocessor::codec::mysql::{
     Decimal, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time, TimeEncoder,
 };
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 
-use util::codec::number::{self, NumberEncoder};
+use crate::util::codec::number::{self, NumberEncoder};
 #[cfg(test)]
-use util::codec::BytesSlice;
+use crate::util::codec::BytesSlice;
 
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
@@ -92,7 +92,7 @@ impl Column {
                 return Err(box_err!(
                     "get datum with {} is not supported yet.",
                     field_type.tp()
-                ))
+                ));
             }
             FieldTypeTp::VarChar
             | FieldTypeTp::VarString
@@ -339,7 +339,7 @@ impl Column {
 
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice, tp: &FieldTypeAccessor) -> Result<Column> {
-        use util::codec::read_slice;
+        use crate::util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;
@@ -355,7 +355,7 @@ impl Column {
             col.fixed_len * col.length
         } else {
             col.var_offsets.clear();
-            for _ in 0..length + 1 {
+            for _ in 0..=length {
                 col.var_offsets.push(number::decode_i32_le(buf)? as usize);
             }
             col.var_offsets[col.length]
@@ -395,9 +395,9 @@ impl<T: Write> ColumnEncoder for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::chunk::tests::field_type;
-    use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::*;
+    use crate::coprocessor::codec::chunk::tests::field_type;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::mysql::*;
     use std::{f64, u64};
     use tipb::expression::FieldType;
 

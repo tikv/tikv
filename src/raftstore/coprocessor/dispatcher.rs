@@ -17,8 +17,8 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use raftstore::store::msg::Msg;
-use util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::msg::Msg;
+use crate::util::transport::{RetryableSendCh, Sender};
 
 use super::*;
 
@@ -131,7 +131,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
+    pub fn new<C: Sender<Msg> + Send + 'static>(
         cfg: Config,
         ch: RetryableSendCh<Msg, C>,
     ) -> CoprocessorHost {
@@ -248,12 +248,13 @@ impl CoprocessorHost {
         loop_ob!(region, &self.registry.role_observers, on_role_change, role);
     }
 
-    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent) {
+    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
         loop_ob!(
             region,
             &self.registry.region_change_observers,
             on_region_changed,
-            event
+            event,
+            role
         );
     }
 
@@ -272,8 +273,8 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::*;
     use protobuf::RepeatedField;
-    use raftstore::coprocessor::*;
     use std::sync::atomic::*;
     use std::sync::*;
 
@@ -345,7 +346,7 @@ mod tests {
     }
 
     impl RegionChangeObserver for TestCoprocessor {
-        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent) {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -403,7 +404,7 @@ mod tests {
         host.on_role_change(&region, StateRole::Leader);
         assert_all!(&[&ob.called], &[28]);
 
-        host.on_region_changed(&region, RegionChangeEvent::Create);
+        host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         assert_all!(&[&ob.called], &[36]);
     }
 

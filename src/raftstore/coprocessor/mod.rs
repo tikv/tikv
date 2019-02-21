@@ -22,18 +22,20 @@ pub mod config;
 pub mod dispatcher;
 mod error;
 mod metrics;
+pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
+pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor};
 pub use self::split_check::{
     HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
     TableCheckObserver,
 };
 
-pub use raftstore::store::KeyEntry;
+pub use crate::raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -100,7 +102,7 @@ pub trait SplitChecker {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
-    fn on_kv(&mut self, _: &mut ObserverContext, &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext, _: &KeyEntry) -> bool {
         false
     }
 
@@ -121,7 +123,7 @@ pub trait SplitCheckObserver: Coprocessor {
     fn add_checker(
         &self,
         _: &mut ObserverContext,
-        &mut SplitCheckerHost,
+        _: &mut SplitCheckerHost,
         _: &DB,
         policy: CheckPolicy,
     );
@@ -145,5 +147,5 @@ pub enum RegionChangeEvent {
 
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
-    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent) {}
+    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {}
 }
