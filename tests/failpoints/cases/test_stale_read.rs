@@ -273,7 +273,7 @@ fn test_stale_read_during_merging() {
     cluster.must_transfer_leader(region1000.get_id(), leader1000.clone());
     assert_ne!(leader1.get_store_id(), leader1000.get_store_id());
 
-    // Sleeps an election timeout. The new leader needs enough time to gether
+    // Sleeps an election timeout. The new leader needs enough time to gather
     // all followers progress, in cause the merge request is reject by the
     // log gap too large (min_progress == 0).
     thread::sleep(election_timeout);
