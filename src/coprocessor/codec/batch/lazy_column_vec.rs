@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,12 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Remove this.
-#![allow(dead_code)]
-
 use tipb::schema::ColumnInfo;
 
-use super::{LazyBatchColumn, VectorValue};
+use super::LazyBatchColumn;
+use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::Result;
 
@@ -40,6 +38,7 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
 impl LazyBatchColumnVec {
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
+    #[inline]
     pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
@@ -57,6 +56,7 @@ impl LazyBatchColumnVec {
     ///
     /// It is caller's duty to ensure that these columns are not decoded and the number of datums
     /// matches the number of columns. Otherwise there will be panics.
+    // TODO: Remove this function, since it is not used at all.
     #[inline]
     pub fn push_raw_row<D, V>(&mut self, raw_row: V)
     where
@@ -70,6 +70,24 @@ impl LazyBatchColumnVec {
             assert!(lazy_col.is_raw());
             lazy_col.push_raw(raw_datum);
         }
+
+        self.debug_assert_columns_equal_length();
+    }
+
+    /// Moves all elements of `other` into `Self`, leaving `other` empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `other` and `Self` does not have same column schemas.
+    #[inline]
+    pub fn append(&mut self, other: &mut Self) {
+        let len = self.columns_len();
+        assert_eq!(len, other.columns_len());
+        for i in 0..len {
+            self.columns[i].append(&mut other[i]);
+        }
+
+        self.debug_assert_columns_equal_length();
     }
 
     /// Ensures that a column at specified `column_index` is decoded and returns a reference
@@ -113,6 +131,17 @@ impl LazyBatchColumnVec {
         self.columns[0].len()
     }
 
+    /// Debug asserts that all columns have equal length.
+    #[inline]
+    pub fn debug_assert_columns_equal_length(&self) {
+        if cfg!(debug_assertions) {
+            let len = self.rows_len();
+            for column in &self.columns {
+                debug_assert_eq!(len, column.len());
+            }
+        }
+    }
+
     /// Returns the number of rows this container can hold without reallocating.
     #[inline]
     pub fn rows_capacity(&self) -> usize {
@@ -141,6 +170,8 @@ impl LazyBatchColumnVec {
             assert_eq!(col.len(), current_rows_len);
             col.retain_by_index(&mut f);
         }
+
+        self.debug_assert_columns_equal_length();
     }
 }
 
@@ -159,6 +190,7 @@ impl std::ops::DerefMut for LazyBatchColumnVec {
         self.columns.deref_mut()
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
