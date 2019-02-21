@@ -690,7 +690,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -723,7 +723,7 @@ impl<E: Engine> Storage<E> {
                     result
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -746,7 +746,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -783,7 +783,7 @@ impl<E: Engine> Storage<E> {
                     Ok(kv_pairs)
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -810,7 +810,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -855,7 +855,7 @@ impl<E: Engine> Storage<E> {
                     })
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -1108,7 +1108,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let _timer = SCHED_HISTOGRAM_VEC
+        let timer = SCHED_HISTOGRAM_VEC
             .with_label_values(&[CMD])
             .start_coarse_timer();
 
@@ -1143,7 +1143,7 @@ impl<E: Engine> Storage<E> {
                             })
                     })
                     .and_then(move |res| {
-                        _timer.observe_duration();
+                        timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future callback: Failed to send result to the future rx, discarded.");
@@ -1172,7 +1172,7 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        let _timer = SCHED_HISTOGRAM_VEC
+        let timer = SCHED_HISTOGRAM_VEC
             .with_label_values(&[CMD])
             .start_coarse_timer();
 
@@ -1213,7 +1213,7 @@ impl<E: Engine> Storage<E> {
                         Ok(result)
                     })
                     .and_then(move |res| {
-                        _timer.observe_duration();
+                        timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
@@ -1471,7 +1471,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let _timer = SCHED_HISTOGRAM_VEC
+        let timer = SCHED_HISTOGRAM_VEC
             .with_label_values(&[CMD])
             .start_coarse_timer();
 
@@ -1521,7 +1521,7 @@ impl<E: Engine> Storage<E> {
                         result
                     })
                     .and_then(move |res| {
-                        _timer.observe_duration();
+                        timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
@@ -1590,7 +1590,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let _timer = SCHED_HISTOGRAM_VEC
+        let timer = SCHED_HISTOGRAM_VEC
             .with_label_values(&[CMD])
             .start_coarse_timer();
 
@@ -1655,7 +1655,7 @@ impl<E: Engine> Storage<E> {
                         Ok(result)
                     })
                     .and_then(move |res| {
-                        _timer.observe_duration();
+                        timer.observe_duration();
                         let r = tx.send(res);
                         if r.is_err() {
                             warn!("future_callback: Failed to send result to the future rx, discarded.");
