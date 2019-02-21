@@ -83,6 +83,7 @@ hex = "0.3"
 rust-crypto = "^0.2"
 hyper = "0.12"
 tokio-threadpool = "0.1"
+more-asserts = "0.1"
 
 [replace]
 "raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
