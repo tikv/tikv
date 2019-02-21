@@ -107,7 +107,7 @@ impl Client {
 
     pub fn switch_cluster(&self, req: &SwitchModeRequest) -> Result<()> {
         let mut futures = Vec::new();
-        // do not include tombstone stores.
+        // Do not include tombstone stores.
         for store in self.pd.get_all_stores(false)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
@@ -135,7 +135,7 @@ impl Client {
 
     pub fn compact_cluster(&self, req: &CompactRequest) -> Result<()> {
         let mut futures = Vec::new();
-        // do not include tombstone stores.
+        // Do not include tombstone stores.
         for store in self.pd.get_all_stores(false)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
