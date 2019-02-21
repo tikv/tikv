@@ -818,10 +818,12 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
 
         info!(
-            "starts with {} regions, including {} tombstones, {} applying \
-             regions and {} merging regions",
-            total_count, tomebstone_count, applying_count, merging_count;
+            "start store";
             "store_id" => store_id,
+            "region_count" => total_count,
+            "tombstone_count" => tomebstone_count,
+            "applying_count" =>  applying_count,
+            "merge_count" => merging_count,
             "takes" => ?t.elapsed(),
         );
 
@@ -868,8 +870,9 @@ impl<T, C> RaftPollerBuilder<T, C> {
         rocksdb_util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
         info!(
-            "cleans up {} ranges garbage data", ranges.len();
+            "cleans up garbage data";
             "store_id" => self.store.get_id(),
+            "garbage_range" => ranges.len(),
             "takes" => ?t.elapsed()
         );
 
@@ -1277,9 +1280,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         }
 
         debug!(
-            "handle raft message, from {} to {}",
-            msg.get_from_peer().get_id(),
-            msg.get_to_peer().get_id();
+            "handle raft message";
+            "from" => msg.get_from_peer().get_id(),
+            "to" => msg.get_to_peer().get_id(),
             "store_id" => self.fsm.store.id,
             "region_id" => region_id,
             "msg_type" => ?msg.get_message().get_msg_type(),
@@ -1287,11 +1290,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
             warn!(
-                "store not match, to store id {}, mine {}, ignore it",
-                msg.get_to_peer().get_store_id(),
-                self.ctx.store_id();
-                "region_id" => region_id,
+                "store not match, ignore it";
                 "store_id" => self.ctx.store_id(),
+                "to_store_id" => msg.get_to_peer().get_store_id(),
+                "region_id" => region_id,
             );
             self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
             return Ok(());
