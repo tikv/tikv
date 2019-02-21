@@ -393,8 +393,8 @@ impl SnapContext {
                 error!(
                     "failed to delete files in range";
                     "region_id" => region_id,
-                    "start_key" => ::log_wrappers::Key(start_key),
-                    "end_key" => ::log_wrappers::Key(end_key),
+                    "start_key" => log_wrappers::Key(start_key),
+                    "end_key" => log_wrappers::Key(end_key),
                     "err" => %e,
                 );
                 return;
@@ -406,16 +406,16 @@ impl SnapContext {
             error!(
                 "failed to delete data in range";
                 "region_id" => region_id,
-                "start_key" => ::log_wrappers::Key(start_key),
-                "end_key" => ::log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
                 "err" => %e,
             );
         } else {
             info!(
                 "succeed in deleting data in range";
                 "region_id" => region_id,
-                "start_key" => ::log_wrappers::Key(start_key),
-                "end_key" => ::log_wrappers::Key(end_key),
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
             );
         }
     }
@@ -447,8 +447,8 @@ impl SnapContext {
         info!(
             "register deleting data in range";
             "region_id" => region_id,
-            "start_key" => ::log_wrappers::Key(start_key),
-            "end_key" => ::log_wrappers::Key(end_key),
+            "start_key" => log_wrappers::Key(start_key),
+            "end_key" => log_wrappers::Key(end_key),
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges

@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,19 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        BufferTooSmall {
-            description("The buffer is too small to read or write data")
-        }
-        UnexpectedEOF {
-            description("Expecting more data but got EOF")
-        }
-        BadPadding {
-            description("Data padding is wrong")
-        }
-    }
-}
+mod vector;
 
-pub type Result<T> = std::result::Result<T, Error>;
+// Concrete eval types without a nullable wrapper.
+pub type Int = i64;
+pub type Real = f64;
+pub type Bytes = Vec<u8>;
+pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
+
+// Dynamic eval types.
+pub use self::vector::VectorValue;

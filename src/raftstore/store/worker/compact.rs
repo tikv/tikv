@@ -169,8 +169,8 @@ impl Runnable<Task> for Runner {
                             ) {
                                 error!(
                                     "compact range failed";
-                                    "range_start" => ::log_wrappers::Key(&start),
-                                    "range_end" => ::log_wrappers::Key(&end),
+                                    "range_start" => log_wrappers::Key(&start),
+                                    "range_end" => log_wrappers::Key(&end),
                                     "cf" => cf,
                                     "err" => %e,
                                 );
