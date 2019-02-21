@@ -2210,7 +2210,12 @@ fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let opts = cfg.rocksdb.build_opt();
+    let mut opts = cfg.rocksdb.build_opt();
+    if !cfg.security.cipher_file.is_empty() {
+        let encrypted_env =
+            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file).unwrap();
+        opts.set_env(encrypted_env);
+    }
     rocksdb::run_ldb_tool(&args, &opts);
 }
 
