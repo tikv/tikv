@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
-mod rows;
+mod lazy_column;
+mod lazy_column_vec;
 
-pub use self::column::BatchColumn;
-pub use self::rows::BatchRows;
+pub use self::lazy_column::LazyBatchColumn;
+pub use self::lazy_column_vec::LazyBatchColumnVec;

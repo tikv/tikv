@@ -537,7 +537,7 @@ fn format_radix(mut x: u64, radix: u32) -> String {
         let m = x % u64::from(radix);
         x /= u64::from(radix);
         r.push(
-            ::std::char::from_digit(m as u32, radix)
+            std::char::from_digit(m as u32, radix)
                 .unwrap()
                 .to_ascii_uppercase(),
         );

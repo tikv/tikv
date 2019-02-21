@@ -132,7 +132,7 @@ impl RaftRouter {
     pub fn send_raft_message(
         &self,
         mut msg: RaftMessage,
-    ) -> ::std::result::Result<(), TrySendError<RaftMessage>> {
+    ) -> std::result::Result<(), TrySendError<RaftMessage>> {
         let id = msg.get_region_id();
         match self.try_send(id, PeerMsg::RaftMessage(msg)) {
             Either::Left(Ok(())) => return Ok(()),
@@ -155,7 +155,7 @@ impl RaftRouter {
         }
     }
 
-    pub fn send_peer_msg(&self, msg: PeerMsg) -> ::std::result::Result<(), TrySendError<Msg>> {
+    pub fn send_peer_msg(&self, msg: PeerMsg) -> std::result::Result<(), TrySendError<Msg>> {
         let region_id = match msg {
             PeerMsg::RaftMessage(msg) => {
                 return match self.send_raft_message(msg) {
@@ -209,7 +209,7 @@ impl RaftRouter {
         }
     }
 
-    fn send_store_msg(&self, msg: StoreMsg) -> ::std::result::Result<(), TrySendError<Msg>> {
+    fn send_store_msg(&self, msg: StoreMsg) -> std::result::Result<(), TrySendError<Msg>> {
         match self.send_control(msg) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(m)) => Err(TrySendError::Full(Msg::StoreMsg(m))),
@@ -220,7 +220,7 @@ impl RaftRouter {
 
 // TODO: drop Sender support.
 impl crate::util::transport::Sender<Msg> for RaftRouter {
-    fn send(&self, msg: Msg) -> ::std::result::Result<(), TrySendError<Msg>> {
+    fn send(&self, msg: Msg) -> std::result::Result<(), TrySendError<Msg>> {
         match msg {
             Msg::PeerMsg(msg) => self.send_peer_msg(msg),
             Msg::StoreMsg(msg) => self.send_store_msg(msg),
@@ -992,7 +992,7 @@ impl RaftBatchSystem {
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
             coprocessor_host: Arc::new(coprocessor_host),
-            future_poller: ::tokio_threadpool::Builder::new()
+            future_poller: tokio_threadpool::Builder::new()
                 .name_prefix("future-poller")
                 .pool_size(cfg.future_poll_size)
                 .build(),
