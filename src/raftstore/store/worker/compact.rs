@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn test_compact_range() {
         let path = TempDir::new("compact-range-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let db = Arc::new(db);
 
         let mut runner = Runner::new(Arc::clone(&db));

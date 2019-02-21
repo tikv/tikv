@@ -395,6 +395,7 @@ hard-pending-compaction-bytes-limit = "12GB"
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+cipher-file = "invalid path"
 
 [import]
 import-dir = "/abc"
