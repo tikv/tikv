@@ -1117,6 +1117,7 @@ fn future_prewrite<E: Engine>(
             Op::Put => Mutation::Put((Key::from_raw(x.get_key()), x.take_value())),
             Op::Del => Mutation::Delete(Key::from_raw(x.get_key())),
             Op::Lock => Mutation::Lock(Key::from_raw(x.get_key())),
+            Op::Insert => Mutation::Insert((Key::from_raw(x.get_key()), x.take_value())),
             _ => panic!("mismatch Op in prewrite mutations"),
         })
         .collect();
@@ -1613,6 +1614,11 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             key_error.set_conflict(write_conflict);
             // for compatibility with older versions.
             key_error.set_retryable(format!("{:?}", err));
+        }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
+            let mut exist = AlreadyExist::new();
+            exist.set_key(key.clone());
+            key_error.set_already_exist(exist);
         }
         // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
