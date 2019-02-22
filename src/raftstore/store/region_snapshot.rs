@@ -21,6 +21,8 @@ use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use crate::util::set_panic_mark;
 
+use super::metrics::*;
+
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
@@ -316,6 +318,7 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+            KEY_NOT_IN_REGION.inc();
             if self.panic_when_exceed_bound {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
