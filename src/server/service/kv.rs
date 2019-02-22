@@ -32,6 +32,7 @@ use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
 use crate::util::collections::HashMap;
 use crate::util::future::{paired_future_callback, AndThenWith};
 use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Scheduler;
 use futures::{future, Future, Sink, Stream};
 use kvproto::coprocessor::*;
@@ -42,7 +43,6 @@ use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
 use protobuf::RepeatedField;
-use tokio_timer::Delay;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -833,7 +833,8 @@ fn response_batch_commands_request<F>(
         if let Some(notifier) = tx.get_notifier() {
             if thread_load.in_heavy_load() {
                 let _ = executor1.spawn(
-                    Delay::new(Instant::now() + DELAY_DURATION)
+                    GLOBAL_TIMER_HANDLE
+                        .delay(Instant::now() + DELAY_DURATION)
                         .map_err(|e| error!("batch commands delay error: {:?}", e))
                         .inspect(move |_| notifier.notify()),
                 );

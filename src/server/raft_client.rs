@@ -26,13 +26,14 @@ use crate::grpc::{
 use crate::util::collections::{HashMap, HashMapEntry};
 use crate::util::mpsc::batch::{self, Sender as BatchSender};
 use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
-use tokio_timer::Delay;
+use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -160,6 +161,7 @@ pub struct RaftClient {
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio::timer::Delay to the runtime.
     stats_pool: tokio_threadpool::Sender,
+    timer: Handle,
 }
 
 impl RaftClient {
@@ -178,6 +180,7 @@ impl RaftClient {
             security_mgr,
             grpc_thread_load,
             stats_pool,
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         }
     }
 
@@ -228,7 +231,8 @@ impl RaftClient {
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
                 let _ = self.stats_pool.spawn(
-                    Delay::new(Instant::now() + wait)
+                    self.timer
+                        .delay(Instant::now() + wait)
                         .map_err(|_| error!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );

@@ -23,13 +23,14 @@ use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
 use tokio_threadpool::{Builder as TrheadPoolBuilder, ThreadPool};
-use tokio_timer::Interval;
+use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::{Engines, SnapManager};
 use crate::storage::{Engine, Storage};
 use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;
 use crate::util::Either;
 
@@ -68,6 +69,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     // Currently load statistics is done in the thread.
     stats_pool: ThreadPool,
     thread_load: Arc<ThreadLoad>,
+    timer: Handle,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -166,6 +168,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             snap_worker,
             stats_pool,
             thread_load,
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
@@ -198,7 +201,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
         self.stats_pool.spawn(
-            Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
+            self.timer
+                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
                 .for_each(move |i| {
                     load_stats.record(i);
