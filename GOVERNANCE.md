@@ -35,9 +35,7 @@
 * Monitor email aliases.
 * Monitor Slack (delayed response is perfectly acceptable).
 * Triage GitHub issues and perform pull request reviews for other maintainers and the community.
-  The areas of specialization listed in [OWNERS.md](OWNERS.md) can be used to help with routing
-  an issue/question to the right person.
-* During GitHub issue triage, apply all applicable [labels](https://github.com/envoyproxy/envoy/labels)
+* During GitHub issue triage, apply all applicable [labels](https://github.com/tikv/tikv/labels)
   to each new issue. Labels are extremely useful for future issue follow up. Which labels to apply
   is somewhat subjective so just use your best judgment. A few of the most important labels that are
   not self explanatory are:
@@ -50,11 +48,11 @@
     can be promoted to other issue types once it's clear they are actionable (at which point the
     question label should be removed).
 * Make sure that ongoing PRs are moving forward at the right pace or closing them.
-* Participate when called upon in the [security release process](SECURITY_RELEASE_PROCESS.md). Note
+* Participate when called upon in the security release process. Note
   that although this should be a rare occurrence, if a serious vulnerability is found, the process
   may take up to several full days of work to implement. This reality should be taken into account
   when discussing time commitment obligations with employers.
-* In general continue to be willing to spend at least 25% of ones time working on Envoy (~1.25
+* In general continue to be willing to spend at least 25% of ones time working on TiKV (~1.25
   business days per week).
 * We currently maintain an "on-call" rotation within the maintainers. Each on-call is 1 week.
   Although all maintainers are welcome to perform all of the above tasks, it is the on-call
@@ -62,60 +60,31 @@
   forward. To reiterate, it is *not* the responsibility of the on-call maintainer to answer all
   questions and do all reviews, but it is their responsibility to make sure that everything is
   being actively covered by someone.
-* The on-call rotation is tracked at Opsgenie. The calendar is visible
-[here](https://calendar.google.com/calendar/embed?src=ms6efr2erlvum9aolnvg1688cd3mu85e%40import.calendar.google.com&ctz=America%2FNew_York)
-or you can subscribe to the iCal feed [here](https://app.opsgenie.com/webcal/getRecentSchedule?webcalToken=75f2990470ca21de1033ecf4586bea1e40bae32bf3c39e2289f6186da1904ee0&scheduleId=a3505963-c064-4c97-8865-947dfcb06060)
 
 ## Cutting a release
 
-* We do releases approximately every 3 months as described in the
-  [release cadence documentation](CONTRIBUTING.md#release-cadence).
+* We do releases approximately every 6 weeks.
 * Decide on the somewhat arbitrary time that a release will occur.
 * Take a look at open issues tagged with the current release, by
-  [searching](https://github.com/envoyproxy/envoy/issues) for
+  [searching](https://github.com/tikv/tikv/issues) for
   "is:open is:issue milestone:[current milestone]" and either hold off until
   they are fixed or bump them to the next milestone.
-* Begin marshalling the ongoing PR flow in this repo. Ask maintainers to hold off merging any
-  particularly risky PRs until after the release is tagged. This is because we currently don't use
-  release branches and assume that master is RC quality at all times.
-* Do a final check of the [release notes](docs/root/intro/version_history.rst) and make any needed
+* Do a final check of the [changelog](https://github.com/tikv/tikv/blob/master/CHANGELOG.md) and make any needed
   corrections.
-* Switch the [VERSION](VERSION) from a "dev" variant to a final variant. E.g., "1.6.0-dev" to
-  "1.6.0". Also remove the "Pending" tag from the top of the [release notes](docs/root/intro/version_history.rst)
-  and [DEPRECATED.md](DEPRECATED.md). Get a review and merge.
 * **Wait for tests to pass on
-  [master](https://circleci.com/gh/envoyproxy/envoy/tree/master).**
-* Create a [tagged release](https://github.com/envoyproxy/envoy/releases). The release should
+  [master](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/).**
+* Create a [tagged release](https://github.com/tikv/tikv/releases). The release should
   start with "v" and be followed by the version number. E.g., "v1.6.0". **This must match the
   [VERSION](VERSION).**
-* Monitor the CircleCI tag build to make sure that the final docker images get pushed along with
-  the final docs. The final documentation will end up in the
-  [envoyproxy.github.io repository](https://github.com/envoyproxy/envoyproxy.github.io/tree/master/docs/envoy).
-* Contact rdl@ on Slack so that the website can be updated for the new release.
-* Craft a witty/uplifting email and send it to all the email aliases including envoy-announce@.
-* If possible post on Twitter (either have Matt do it or contact caniszczyk@ on Slack and have the
-  Envoy account post).
-* Do a new PR to update [VERSION](VERSION) to the next development release. E.g., "1.7.0-dev". At
-  the same time, also add a new empty "pending" section to the [release
-  notes](docs/root/intro/version_history.rst) and to [DEPRECATED.md](DEPRECATED.md) for the
-  following version. E.g., "1.7.0 (pending)".
-* Run the deprecate_versions.py script (e.g. `sh tools/deprecate_version/deprecate_version.sh 1.8.0 1.10.0`)
-  to file tracking issues for code which can be removed.
-* Run the deprecate_features.py script (e.g. `sh tools/deprecate_version/deprecate_features.sh`)
-  to make the last release's deprecated features fatal-by-default. Submit the resultant PR and send
-  an email to envoy-announce.
+* Open a PR on the [Website repo](https://github.com/tikv/website) to reflect the new release.
+* If possible post on Twitter (or, ask @hoverbear to do it).
+* Do a new PR to update [Cargo.toml](Cargo.toml) to the next development release. E.g., "1.7.0-dev".
 
 ## When does a maintainer lose maintainer status
 
 If a maintainer is no longer interested or cannot perform the maintainer duties listed above, they
 should volunteer to be moved to emeritus status. In extreme cases this can also occur by a vote of
 the maintainers per the voting process below.
-
-# Extension addition policy
-
-Adding new [extensions](REPO_LAYOUT.md#sourceextensions-layout) has a dedicated policy. Please
-see [this](https://docs.google.com/document/d/1eDQQSxqx2khTXfa2vVm4vqkyRwXYkPzZCcbjxJ2_AvA) document
-for more information.
 
 # Conflict resolution and voting
 
@@ -125,7 +94,7 @@ called in to decide an issue. If the maintainers themselves cannot decide an iss
 be resolved by voting. The voting process is a simple majority in which each senior maintainer
 receives two votes and each normal maintainer receives one vote.
 
-# Adding new projects to the envoyproxy GitHub organization
+# Adding new projects to the tikv GitHub organization
 
 New projects will be added to the envoyproxy organization via GitHub issue discussion in one of the
 existing projects in the organization. Once sufficient discussion has taken place (~3-5 business
