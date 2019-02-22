@@ -634,7 +634,8 @@ mod tests {
         Receiver<StoreMsg>,
     ) {
         let path = TempDir::new(path).unwrap();
-        let db = rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap();
+        let db =
+            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_id,
