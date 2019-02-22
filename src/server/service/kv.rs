@@ -14,23 +14,11 @@ use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::coprocessor::Endpoint;
 use crate::grpc::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
     RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
-use futures::{future, Future, Sink, Stream};
-use kvproto::coprocessor::*;
-use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
-use kvproto::kvrpcpb::{self, *};
-use kvproto::raft_serverpb::*;
-use kvproto::tikvpb::*;
-use kvproto::tikvpb_grpc;
-use prometheus::HistogramTimer;
-use protobuf::RepeatedField;
-use tokio::runtime::{Runtime, TaskExecutor};
-use tokio::timer::Delay;
-
-use crate::coprocessor::Endpoint;
 use crate::raftstore::store::{Callback, Msg as StoreMessage, PeerMsg};
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -45,6 +33,16 @@ use crate::util::collections::HashMap;
 use crate::util::future::{paired_future_callback, AndThenWith};
 use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use crate::util::worker::Scheduler;
+use futures::{future, Future, Sink, Stream};
+use kvproto::coprocessor::*;
+use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
+use kvproto::kvrpcpb::{self, *};
+use kvproto::raft_serverpb::*;
+use kvproto::tikvpb::*;
+use kvproto::tikvpb_grpc;
+use prometheus::HistogramTimer;
+use protobuf::RepeatedField;
+use tokio_timer::Delay;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
@@ -67,7 +65,7 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     snap_scheduler: Scheduler<SnapTask>,
 
     // A futures::Executor used to collect responses for batch_commands interface.
-    collect_runtime: Arc<Runtime>,
+    collect_pool: tokio_threadpool::Sender,
     thread_load: Arc<ThreadLoad>,
 }
 
@@ -78,7 +76,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        collect_runtime: Arc<Runtime>,
+        collect_pool: tokio_threadpool::Sender,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
         Service {
@@ -86,7 +84,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
             cop,
             ch,
             snap_scheduler,
-            collect_runtime,
+            collect_pool,
             thread_load,
         }
     }
@@ -755,7 +753,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         sink: DuplexSink<BatchCommandsResponse>,
     ) {
         let (tx, rx) = unbounded(GRPC_MSG_NOTIFY_SIZE);
-        let executor = self.collect_runtime.executor();
+        let executor = self.collect_pool.clone();
 
         let ctx = Arc::new(ctx);
         let peer = ctx.peer();
@@ -816,7 +814,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 }
 
 fn response_batch_commands_request<F>(
-    executor: &TaskExecutor,
+    executor: &tokio_threadpool::Sender,
     id: u64,
     resp: F,
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
@@ -834,7 +832,7 @@ fn response_batch_commands_request<F>(
         timer.observe_duration();
         if let Some(notifier) = tx.get_notifier() {
             if thread_load.in_heavy_load() {
-                executor1.spawn(
+                let _ = executor1.spawn(
                     Delay::new(Instant::now() + DELAY_DURATION)
                         .map_err(|e| error!("batch commands delay error: {:?}", e))
                         .inspect(move |_| notifier.notify()),
@@ -845,14 +843,14 @@ fn response_batch_commands_request<F>(
         }
         Ok(())
     });
-    executor.spawn(f);
+    let _ = executor.spawn(f);
 }
 
 fn handle_batch_commands_request<E: Engine>(
     storage: &Storage<E>,
     cop: &Endpoint<E>,
     peer: String,
-    executor: &TaskExecutor,
+    executor: &tokio_threadpool::Sender,
     id: u64,
     req: BatchCommandsRequest_Request,
     tx: Sender<(u64, BatchCommandsResponse_Response)>,

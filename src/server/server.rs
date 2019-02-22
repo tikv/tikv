@@ -22,8 +22,8 @@ use futures::Stream;
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tokio::timer::Interval;
+use tokio_threadpool::{Builder as TrheadPoolBuilder, ThreadPool};
+use tokio_timer::Interval;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
@@ -66,7 +66,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
-    stats_runtime: Arc<Runtime>,
+    stats_pool: ThreadPool,
     thread_load: Arc<ThreadLoad>,
 }
 
@@ -84,13 +84,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_runtime = Arc::new(
-            RuntimeBuilder::new()
-                .core_threads(cfg.as_ref().stats_concurrency)
-                .name_prefix(STATS_THREAD_PREFIX)
-                .build()
-                .unwrap(),
-        );
+        let stats_pool = TrheadPoolBuilder::new()
+            .pool_size(cfg.stats_concurrency)
+            .name_prefix(STATS_THREAD_PREFIX)
+            .build();
         let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
@@ -106,7 +103,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             cop,
             raft_router.clone(),
             snap_worker.scheduler(),
-            Arc::clone(&stats_runtime),
+            stats_pool.sender().clone(),
             Arc::clone(&thread_load),
         );
 
@@ -149,7 +146,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(cfg),
             Arc::clone(security_mgr),
             Arc::clone(&thread_load),
-            Arc::clone(&stats_runtime),
+            stats_pool.sender().clone(),
         )));
 
         let trans = ServerTransport::new(
@@ -167,7 +164,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
-            stats_runtime,
+            stats_pool,
             thread_load,
         };
 
@@ -200,7 +197,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        self.stats_runtime.executor().spawn(
+        self.stats_pool.spawn(
             Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
                 .for_each(move |i| {

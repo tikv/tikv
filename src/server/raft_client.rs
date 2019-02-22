@@ -17,24 +17,22 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::load_statistics::ThreadLoad;
+use super::metrics::*;
+use super::{Config, Result};
 use crate::grpc::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::mpsc::batch::{self, Sender as BatchSender};
+use crate::util::security::SecurityManager;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
-use tokio::runtime::Runtime;
-use tokio::timer::Delay;
-
-use super::load_statistics::ThreadLoad;
-use super::metrics::*;
-use super::{Config, Result};
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::mpsc::batch::{self, Sender as BatchSender};
-use crate::util::security::SecurityManager;
+use tokio_timer::Delay;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -161,7 +159,7 @@ pub struct RaftClient {
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
     // it can put a tokio::timer::Delay to the runtime.
-    async_runtime: Arc<Runtime>,
+    stats_pool: tokio_threadpool::Sender,
 }
 
 impl RaftClient {
@@ -170,7 +168,7 @@ impl RaftClient {
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
         grpc_thread_load: Arc<ThreadLoad>,
-        async_runtime: Arc<Runtime>,
+        stats_pool: tokio_threadpool::Sender,
     ) -> RaftClient {
         RaftClient {
             env,
@@ -179,7 +177,7 @@ impl RaftClient {
             cfg,
             security_mgr,
             grpc_thread_load,
-            async_runtime,
+            stats_pool,
         }
     }
 
@@ -229,7 +227,7 @@ impl RaftClient {
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                self.async_runtime.executor().spawn(
+                let _ = self.stats_pool.spawn(
                     Delay::new(Instant::now() + wait)
                         .map_err(|_| error!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
