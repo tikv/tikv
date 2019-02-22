@@ -22,7 +22,7 @@ use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
-use tokio_threadpool::{Builder as TrheadPoolBuilder, ThreadPool};
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
@@ -86,7 +86,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_pool = TrheadPoolBuilder::new()
+        let stats_pool = ThreadPoolBuilder::new()
             .pool_size(cfg.stats_concurrency)
             .name_prefix(STATS_THREAD_PREFIX)
             .build();
