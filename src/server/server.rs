@@ -18,7 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use futures::Stream;
+use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
@@ -67,7 +67,7 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
-    stats_pool: ThreadPool,
+    stats_pool: Option<ThreadPool>,
     thread_load: Arc<ThreadLoad>,
     timer: Handle,
 }
@@ -166,7 +166,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
-            stats_pool,
+            stats_pool: Some(stats_pool),
             thread_load,
             timer: GLOBAL_TIMER_HANDLE.clone(),
         };
@@ -200,7 +200,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        self.stats_pool.spawn(
+        self.stats_pool.as_ref().unwrap().spawn(
             self.timer
                 .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
@@ -219,6 +219,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.snap_worker.stop();
         if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
             server.shutdown();
+        }
+        if let Some(pool) = self.stats_pool.take() {
+            let _ = pool.shutdown_now().wait();
         }
         Ok(())
     }
