@@ -159,7 +159,7 @@ pub struct RaftClient {
     // To access CPU load of gRPC threads.
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
-    // it can put a tokio::timer::Delay to the runtime.
+    // it can put a tokio_timer::Delay to the runtime.
     stats_pool: tokio_threadpool::Sender,
     timer: Handle,
 }
