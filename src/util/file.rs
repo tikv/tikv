@@ -17,6 +17,13 @@ use std::path::Path;
 
 use crc::crc32::{self, Digest, Hasher32};
 
+pub fn read_all<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
+    let mut f = File::open(path)?;
+    let mut content = Vec::new();
+    f.read_to_end(&mut content)?;
+    Ok(content)
+}
+
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
     Ok(meta.len())
