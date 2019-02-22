@@ -1024,6 +1024,7 @@ pub struct TiKvConfig {
     pub log_level: slog::Level,
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
+    pub panic_when_key_exceed_bound: bool,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -1036,7 +1037,6 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
     pub import: ImportConfig,
-    pub panic_when_key_exceed_bound: bool,
 }
 
 impl Default for TiKvConfig {
@@ -1045,6 +1045,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
+            panic_when_key_exceed_bound: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -1056,7 +1057,6 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
-            panic_when_key_exceed_bound: false,
         }
     }
 }
@@ -1242,7 +1242,11 @@ impl TiKvConfig {
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = match toml::to_string(&self) {
+            Ok(content) => content,
+            Err(e) => panic!("toml to string error: {:?}", e),
+        };
+        //let content = toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
