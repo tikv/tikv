@@ -9,6 +9,7 @@ max-tasks-per-worker-high = 1000
 max-tasks-per-worker-normal = 1500
 max-tasks-per-worker-low = 2500
 stack-size = "20MB"
+panic-when-key-exceed-bound = true
 
 [readpool.coprocessor]
 high-concurrency = 2

@@ -1036,6 +1036,7 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
     pub import: ImportConfig,
+    pub panic_when_key_exceed_bound: bool,
 }
 
 impl Default for TiKvConfig {
@@ -1055,6 +1056,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            panic_when_key_exceed_bound: false,
         }
     }
 }
