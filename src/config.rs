@@ -411,7 +411,7 @@ impl Default for DbConfig {
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
             max_background_jobs: 6,
-            max_manifest_file_size: ReadableSize::mb(20),
+            max_manifest_file_size: ReadableSize::mb(128),
             create_if_missing: true,
             max_open_files: 40960,
             enable_statistics: true,
