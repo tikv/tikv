@@ -1242,11 +1242,7 @@ impl TiKvConfig {
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = match toml::to_string(&self) {
-            Ok(content) => content,
-            Err(e) => panic!("toml to string error: {:?}", e),
-        };
-        //let content = toml::to_string(&self).unwrap();
+        let content = toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
