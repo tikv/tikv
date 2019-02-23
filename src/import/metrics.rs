@@ -45,4 +45,46 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref IMPORT_RANGE_DELIVERY_DURATION: Histogram = register_histogram!(
+        "tikv_import_range_delivery_duration",
+        "Bucketed histogram of import range delivery duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SPLIT_SST_DURATION: Histogram = register_histogram!(
+        "tikv_import_split_sst_duration",
+        "Bucketed histogram of import split sst duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SST_DELIVERY_DURATION: Histogram = register_histogram!(
+        "tikv_import_sst_delivery_duration",
+        "Bucketed histogram of import sst delivery duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SST_RECV_DURATION: Histogram = register_histogram!(
+        "tikv_import_sst_recv_duration",
+        "Bucketed histogram of import sst recv duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SST_UPLOAD_DURATION: Histogram = register_histogram!(
+        "tikv_import_sst_upload_duration",
+        "Bucketed histogram of import sst upload duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SST_INGEST_DURATION: Histogram = register_histogram!(
+        "tikv_import_sst_ingest_duration",
+        "Bucketed histogram of import sst ingest duration",
+        exponential_buckets(0.1, 2.0, 20).unwrap()
+    )
+    .unwrap();
+    pub static ref IMPORT_SST_CHUNK_BYTES: Histogram = register_histogram!(
+        "tikv_import_sst_chunk_bytes",
+        "Bucketed histogram of sst chunk bytes",
+        exponential_buckets(1024.0, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }
