@@ -73,25 +73,25 @@ impl LocalStoreStat {
             self.global
                 .stat
                 .lock_cf_bytes_written
-                .fetch_add(self.lock_cf_bytes_written, Ordering::Relaxed);
+                .fetch_add(self.lock_cf_bytes_written, Ordering::SeqCst);
             self.lock_cf_bytes_written = 0;
         }
         if self.engine_total_bytes_written != 0 {
             self.global
                 .stat
                 .engine_total_bytes_written
-                .fetch_add(self.engine_total_bytes_written, Ordering::Relaxed);
+                .fetch_add(self.engine_total_bytes_written, Ordering::SeqCst);
             self.engine_total_bytes_written = 0;
         }
         if self.engine_total_keys_written != 0 {
             self.global
                 .stat
                 .engine_total_keys_written
-                .fetch_add(self.engine_total_keys_written, Ordering::Relaxed);
+                .fetch_add(self.engine_total_keys_written, Ordering::SeqCst);
             self.engine_total_keys_written = 0;
         }
         if self.is_busy {
-            self.global.stat.is_busy.store(true, Ordering::Relaxed);
+            self.global.stat.is_busy.store(true, Ordering::SeqCst);
             self.is_busy = false;
         }
     }
