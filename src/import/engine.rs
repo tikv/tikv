@@ -327,9 +327,7 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     // RocksDB preserves `max_background_jobs/4` for flush.
     db_opts.set_max_background_jobs(opts.max_background_jobs);
 
-    let mut block_base_opts = BlockBasedOptions::new();
-    // Use a large block size for sequential access.
-    block_base_opts.set_block_size(MB as usize);
+    let block_base_opts = BlockBasedOptions::new();
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
