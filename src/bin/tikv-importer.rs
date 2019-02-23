@@ -38,6 +38,7 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
+extern crate crossbeam;
 extern crate slog_term;
 extern crate tikv;
 extern crate tikv_alloc;
