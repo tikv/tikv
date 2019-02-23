@@ -195,7 +195,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
         )
     }
 
-    fn run_import_stream(&self, tx: mpsc::SyncSender<SSTRange>) -> Result<()> {
+    fn run_import_stream(&self, tx: mpsc::SyncSender<LazySSTRange>) -> Result<()> {
         let mut stream = self.new_import_stream();
         while let Some(info) = stream.next()? {
             tx.send(info).unwrap();
@@ -203,7 +203,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
         Ok(())
     }
 
-    fn run_import_threads(&self, rx: mpsc::Receiver<SSTRange>) -> Vec<JoinHandle<()>> {
+    fn run_import_threads(&self, rx: mpsc::Receiver<LazySSTRange>) -> Vec<JoinHandle<()>> {
         let mut handles = Vec::new();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..self.cfg.num_import_sst_jobs {
@@ -212,7 +212,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
         handles
     }
 
-    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<SSTRange>>>) -> JoinHandle<()> {
+    fn new_import_thread(&self, rx: Arc<Mutex<mpsc::Receiver<LazySSTRange>>>) -> JoinHandle<()> {
         let sub_id = self.id;
         let client = Arc::clone(&self.client);
         let engine = Arc::clone(&self.engine);
@@ -224,10 +224,11 @@ impl<Client: ImportClient> SubImportJob<Client> {
             .name("import-sst-job".to_owned())
             .spawn(move || {
                 'OUTER_LOOP: while let Ok((range, ssts)) = rx.lock().unwrap().recv() {
-                    for sst in ssts {
+                    for lazy_sst in ssts {
+                        let mut sst = lazy_sst.into_sst_file().unwrap();
                         let id = counter.fetch_add(1, Ordering::SeqCst);
                         let tag = format!("[ImportSSTJob {}:{}:{}]", engine.uuid(), sub_id, id);
-                        let mut job = ImportSSTJob::new(tag, sst, Arc::clone(&client));
+                        let mut job = ImportSSTJob::new(tag, &mut sst, Arc::clone(&client));
                         if job.run().is_err() {
                             num_errors.fetch_add(1, Ordering::SeqCst);
                             continue 'OUTER_LOOP;
@@ -242,15 +243,23 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
 /// ImportSSTJob is responsible for importing `sst` to all replicas of the
 /// specific Region
-struct ImportSSTJob<Client> {
+struct ImportSSTJob<'a, Client> {
     tag: String,
-    sst: SSTFile,
+    sst: &'a mut SSTFile,
     client: Arc<Client>,
 }
 
-impl<Client: ImportClient> ImportSSTJob<Client> {
-    fn new(tag: String, sst: SSTFile, client: Arc<Client>) -> ImportSSTJob<Client> {
-        ImportSSTJob { tag, sst, client }
+impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
+    fn new(
+        tag: String,
+        sst: &'a mut SSTFile,
+        client: Arc<Client>,
+    ) -> Self {
+        ImportSSTJob {
+            tag,
+            sst,
+            client,
+        }
     }
 
     fn run(&mut self) -> Result<()> {
@@ -344,7 +353,8 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
     fn upload(&self, region: &RegionInfo) -> Result<()> {
         for peer in region.get_peers() {
-            let upload = UploadStream::new(self.sst.meta.clone(), &self.sst.data);
+            let file = self.sst.info.open()?;
+            let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
