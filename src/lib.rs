@@ -18,6 +18,7 @@
 #![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
 #![feature(range_contains)]
+#![feature(duration_float)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![allow(clippy::nonminimal_bool)]
