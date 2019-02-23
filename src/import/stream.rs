@@ -12,6 +12,8 @@
 // limitations under the License.
 
 use std::fmt;
+use std::io::Read;
+use std::mem::uninitialized;
 use std::sync::Arc;
 
 use crc::crc32::{self, Hasher32};
@@ -28,7 +30,7 @@ use super::{Config, Result};
 
 pub struct SSTFile {
     pub meta: SSTMeta,
-    pub data: Vec<u8>,
+    pub(crate) info: LazySSTInfo,
 }
 
 impl SSTFile {
@@ -51,7 +53,7 @@ impl fmt::Debug for SSTFile {
     }
 }
 
-pub type SSTRange = (Range, Vec<SSTFile>);
+pub type LazySSTRange = (Range, Vec<LazySSTInfo>);
 
 pub struct SSTFileStream<Client> {
     ctx: RangeContext<Client>,
@@ -80,7 +82,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTRange>> {
+    pub fn next(&mut self) -> Result<Option<LazySSTRange>> {
         if !self.iter.valid() {
             return Ok(None);
         }
@@ -109,31 +111,36 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         let range = new_range(&start, end);
 
         let infos = w.finish()?;
-        let mut ssts = Vec::new();
-        for info in infos {
-            ssts.push(self.new_sst_file(info));
-        }
-
-        Ok(Some((range, ssts)))
+        Ok(Some((range, infos)))
     }
+}
 
-    fn new_sst_file(&self, info: SSTInfo) -> SSTFile {
+impl LazySSTInfo {
+    pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
+        let mut seq_file = self.open()?;
+        let mut buf: [u8; 65536] = unsafe { uninitialized() };
+
+        // TODO: If we can compute the CRC simultaneously with upload, we don't
+        // need to open() and read() the file twice.
         let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&info.data);
-        let crc32 = digest.sum32();
-        let length = info.data.len() as u64;
+        let mut length = 0u64;
+        loop {
+            let size = seq_file.read(&mut buf)?;
+            if size == 0 {
+                break;
+            }
+            digest.write(&buf[..size]);
+            length += size as u64;
+        }
 
         let mut meta = SSTMeta::new();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(info.range.clone());
-        meta.set_crc32(crc32);
+        meta.set_range(self.range.clone());
+        meta.set_crc32(digest.sum32());
         meta.set_length(length);
-        meta.set_cf_name(info.cf_name.clone());
+        meta.set_cf_name(self.cf_name.to_owned());
 
-        SSTFile {
-            meta,
-            data: info.data,
-        }
+        Ok(SSTFile { meta, info: self })
     }
 }
 
@@ -492,8 +499,8 @@ mod tests {
             assert_eq!(range.get_start(), start.as_slice());
             assert_eq!(range.get_end(), range_end.as_slice());
             for sst in ssts {
-                assert_eq!(sst.meta.get_range().get_start(), start.as_slice());
-                assert_eq!(sst.meta.get_range().get_end(), end.as_slice());
+                assert_eq!(sst.range.get_start(), start.as_slice());
+                assert_eq!(sst.range.get_end(), end.as_slice());
             }
         }
         assert!(stream.next().unwrap().is_none());
