@@ -48,21 +48,21 @@ pub mod worker;
 static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);
 
 pub fn panic_when_key_exceed_bound() -> bool {
-    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::SeqCst)
+    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::Relaxed)
 }
 
 pub fn set_panic_when_key_exceed_bound(flag: bool) {
-    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::SeqCst);
+    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::Relaxed);
 }
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
-    PANIC_MARK.store(true, Ordering::SeqCst);
+    PANIC_MARK.store(true, Ordering::Relaxed);
 }
 
 pub fn panic_mark_is_on() -> bool {
-    PANIC_MARK.load(Ordering::SeqCst)
+    PANIC_MARK.load(Ordering::Relaxed)
 }
 
 pub const PANIC_MARK_FILE: &str = "panic_mark_file";
