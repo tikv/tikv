@@ -26,6 +26,7 @@
 #![feature(cell_update)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
+#![feature(duration_float)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
 #![cfg_attr(feature = "cargo-clippy", allow(clippy::nonminimal_bool))]

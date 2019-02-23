@@ -13,7 +13,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::thread::{self, sleep, JoinHandle};
 use std::time::Duration;
 
 use crossbeam::channel::{bounded, Receiver, Sender};
@@ -21,7 +21,7 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
-use crate::util::time::Instant;
+use crate::util::time::{duration_to_sec, Instant};
 
 use super::client::*;
 use super::common::*;
@@ -34,6 +34,90 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
 
+/// Speed limit enforcement.
+///
+/// We need to restrict the maximum upload speed to avoid saturating the network
+/// bandwidth, which caused tikv-importer unable to contact PD.
+///
+/// This is implemented using the Token Bucket algorithm based on [1], but
+/// allowing bursting.
+///
+/// [1]: https://medium.com/smyte/rate-limiter-df3408325846
+struct SpeedLimiter {
+    // The maximum speed limit, unit = Byte/s.
+    speed_limit: f64,
+    // The last update time and the remaining amount of bytes can be sent during
+    // this second.
+    value: Mutex<(Instant, f64)>,
+}
+
+impl SpeedLimiter {
+    /// Creates a speed limiter.
+    fn new(cfg: &Config) -> Self {
+        let speed_limit = cfg.upload_speed_limit.0 as f64;
+        Self {
+            speed_limit,
+            value: Mutex::new((Instant::now_coarse(), speed_limit)),
+        }
+    }
+
+    /// Takes a block of the given size (in bytes) from the speed limiter. If
+    /// the block is taken too quickly, this method will sleep until the speed
+    /// limit is below the specified value.
+    ///
+    /// This method will block the entire thread if the speed limit is violated,
+    /// and thus should not be invoked when implementing an async fn.
+    fn take(&self, tag: &str, size: u64) {
+        let z = size as f64;
+
+        loop {
+            let mut lock = self.value.lock().expect("no poison");
+            let (last_update, mut value) = *lock;
+            let now = Instant::now_coarse();
+            let elapsed = duration_to_sec(now.duration_since(last_update));
+            value = self.speed_limit.min(value + elapsed * self.speed_limit);
+            if value >= z || value >= self.speed_limit {
+                // The second condition allows take() to proceed on a completely
+                // filled bucket, i.e. allows sending a 1 GB file on a 512 MB/s
+                // limit. The bucket value will temporarily drop to -512 MB,
+                // which will be refilled after 2 seconds as expected.
+                *lock = (now, value - z);
+                return;
+            }
+
+            // Reaching here means the bucket's value is not high enough to send
+            // all bytes. We sleep for the time needed to completely refill the
+            // bucket.
+            drop(lock);
+
+            let sleep_seconds = 1.0 - value / self.speed_limit;
+            let dur = Duration::from_float_secs(sleep_seconds);
+            let should_log = dur > Duration::from_secs(1);
+            if should_log {
+                // Don't bother with short waits, avoiding flooding the log with
+                // useless information.
+                info!(
+                    "speed limited begin";
+                    "tag" => %tag,
+                    "value" => %value,
+                    "size" => %size,
+                    "going to wait" => ?dur,
+                );
+            }
+            sleep(dur);
+            if should_log {
+                info!(
+                    "speed limited end";
+                    "tag" => %tag,
+                    "value" => %value,
+                    "size" => %size,
+                    "takes" => ?dur,
+                );
+            }
+        }
+    }
+}
+
 /// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
     tag: String,
@@ -41,16 +125,19 @@ pub struct ImportJob<Client> {
     client: Client,
     engine: Arc<Engine>,
     counter: Arc<AtomicUsize>,
+    speed_limit: Arc<SpeedLimiter>,
 }
 
 impl<Client: ImportClient> ImportJob<Client> {
     pub fn new(cfg: Config, client: Client, engine: Engine) -> ImportJob<Client> {
+        let speed_limit = Arc::new(SpeedLimiter::new(&cfg));
         ImportJob {
             tag: format!("[ImportJob {}]", engine.uuid()),
             cfg,
             client,
             engine: Arc::new(engine),
             counter: Arc::new(AtomicUsize::new(1)),
+            speed_limit,
         }
     }
 
@@ -114,11 +201,12 @@ impl<Client: ImportClient> ImportJob<Client> {
         let client = self.client.clone();
         let engine = Arc::clone(&self.engine);
         let counter = Arc::clone(&self.counter);
+        let speed_limit = Arc::clone(&self.speed_limit);
 
         thread::Builder::new()
             .name("import-job".to_owned())
             .spawn(move || {
-                let job = SubImportJob::new(id, rx, client, engine, counter);
+                let job = SubImportJob::new(id, rx, client, engine, counter, speed_limit);
                 job.run(retry_ranges)
             })
             .unwrap()
@@ -232,6 +320,7 @@ struct SubImportJob<Client> {
     engine: Arc<Engine>,
     counter: Arc<AtomicUsize>,
     num_errors: Arc<AtomicUsize>,
+    speed_limit: Arc<SpeedLimiter>,
 }
 
 impl<Client: ImportClient> SubImportJob<Client> {
@@ -241,6 +330,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
         client: Client,
         engine: Arc<Engine>,
         counter: Arc<AtomicUsize>,
+        speed_limit: Arc<SpeedLimiter>,
     ) -> SubImportJob<Client> {
         SubImportJob {
             id,
@@ -249,6 +339,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
             engine,
             counter,
             num_errors: Arc::new(AtomicUsize::new(0)),
+            speed_limit,
         }
     }
 
@@ -269,7 +360,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
                 let id = counter.fetch_add(1, Ordering::SeqCst);
                 let tag = format!("[ImportSSTJob {}:{}:{}]", engine.uuid(), sub_id, id);
                 let res = {
-                    ImportSSTJob::new(tag, &mut sst, Arc::clone(&client)).run()
+                    ImportSSTJob::new(tag, &mut sst, Arc::clone(&client), &self.speed_limit).run()
                 };
                 // Entire range will be retried if any sst in this range failed,
                 // so there is no need for retry single sst
@@ -294,6 +385,7 @@ struct ImportSSTJob<'a, Client> {
     tag: String,
     sst: &'a mut SSTFile,
     client: Arc<Client>,
+    speed_limit: &'a SpeedLimiter,
 }
 
 impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
@@ -301,11 +393,13 @@ impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
         tag: String,
         sst: &'a mut SSTFile,
         client: Arc<Client>,
+        speed_limit: &'a SpeedLimiter,
     ) -> Self {
         ImportSSTJob {
             tag,
             sst,
             client,
+            speed_limit,
         }
     }
 
@@ -407,6 +501,9 @@ impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
 
     fn upload(&self, region: &RegionInfo) -> Result<()> {
         for peer in region.get_peers() {
+            let size = self.sst.info.file_size;
+            self.speed_limit.take(&self.tag, size);
+
             let file = self.sst.info.open()?;
             let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();

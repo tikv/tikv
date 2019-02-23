@@ -496,6 +496,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
         max_open_engines: 2,
+        upload_speed_limit: ReadableSize::mb(456),
     };
     value.panic_when_key_exceed_bound = true;
 

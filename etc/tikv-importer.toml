@@ -51,3 +51,5 @@ num-import-jobs = 24
 # stream-channel-window = 128
 # maximum number of open engines
 max-open-engines = 8
+# speed limit of uploading SST to TiKV (unit: byte/s)
+upload-speed-limit = "512MB"
