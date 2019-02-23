@@ -117,6 +117,19 @@ format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
+pre-audit:
+	@cargo install cargo-audit --force
+
+LATEST_AUDIT_VERSION = $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }'))
+CURRENT_AUDIT_VERSION = $(strip $(shell (cargo audit --version 2> /dev/null || echo "noop 0") | awk '{ print $$2 }'))
+audit:
+	echo "$(strip $(LATEST_AUDIT_VERSION))"
+	echo "$(strip $(CURRENT_AUDIT_VERSION))"
+ifneq ($(LATEST_AUDIT_VERSION),$(CURRENT_AUDIT_VERSION))
+	cargo install cargo-audit --force
+endif
+	@cargo audit
+
 clean:
 	@cargo clean
 
