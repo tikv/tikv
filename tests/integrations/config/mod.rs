@@ -485,6 +485,7 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+        cipher_file: "invalid path".to_owned(),
     };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),

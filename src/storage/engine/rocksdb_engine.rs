@@ -100,7 +100,7 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocksdb_util::new_engine(&path, cfs, cfs_opts)?);
+        let db = Arc::new(rocksdb_util::new_engine(&path, None, cfs, cfs_opts)?);
         box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
