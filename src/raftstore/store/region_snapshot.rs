@@ -352,10 +352,12 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
             Arc::new(
-                rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
+                rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                    .unwrap(),
             ),
             Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             ),
         )
     }
