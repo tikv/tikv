@@ -13,7 +13,7 @@
 
 use std::convert::{TryFrom, TryInto};
 
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp, FieldTypeFlag};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 
 use super::*;
 use crate::coprocessor::codec::datum;
