@@ -272,6 +272,7 @@ impl LazyBatchColumn {
     }
 
     /// Encodes into binary format.
+    // FIXME: Use BufferWriter.
     pub fn encode(
         &self,
         row_index: usize,
@@ -297,7 +298,7 @@ impl LazyBatchColumn {
                 output.extend_from_slice(value);
                 Ok(())
             }
-            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, output),
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, column_info, output),
         }
     }
 }
