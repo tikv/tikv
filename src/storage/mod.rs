@@ -1112,7 +1112,6 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
-        let region_id = ctx.get_region_id();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
@@ -1134,7 +1133,7 @@ impl<E: Engine> Storage<E> {
                             let mut stats = Statistics::default();
                             stats.data.flow_stats.read_keys = 1;
                             stats.data.flow_stats.read_bytes = key_len + value.len();
-                            thread_ctx.collect_read_flow(region_id, &stats);
+                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
                             thread_ctx.collect_key_reads(CMD, 1);
                         }
                         r
@@ -1164,7 +1163,6 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
-        let region_id = ctx.get_region_id();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
@@ -1196,7 +1194,7 @@ impl<E: Engine> Storage<E> {
                     })
                     .collect();
                 thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
-                thread_ctx.collect_read_flow(region_id, &stats);
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
 
                 timer.observe_duration();
                 future::result(Ok(result))
@@ -1451,7 +1449,6 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
-        let region_id = ctx.get_region_id();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
@@ -1485,7 +1482,7 @@ impl<E: Engine> Storage<E> {
                     .map_err(Error::from)
                 };
 
-                thread_ctx.collect_read_flow(region_id, &statistics);
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                 thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                 thread_ctx.collect_scan_count(CMD, &statistics);
 
@@ -1553,7 +1550,6 @@ impl<E: Engine> Storage<E> {
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
-        let region_id = ctx.get_region_id();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
@@ -1608,7 +1604,7 @@ impl<E: Engine> Storage<E> {
                     result.extend(pairs.into_iter());
                 }
 
-                thread_ctx.collect_read_flow(region_id, &statistics);
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
                 thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                 thread_ctx.collect_scan_count(CMD, &statistics);
 
