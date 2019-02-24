@@ -13,7 +13,7 @@
 
 use std::convert::{TryFrom, TryInto};
 
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp, FieldTypeFlag};
 
 use super::*;
 use crate::coprocessor::codec::datum;
@@ -516,7 +516,13 @@ impl VectorValue {
     }
 
     /// Encodes a single element into binary format.
-    pub fn encode(&self, row_index: usize, output: &mut Vec<u8>) -> Result<()> {
+    // FIXME: Use BufferWriter.
+    pub fn encode(
+        &self,
+        row_index: usize,
+        field_type: &FieldTypeAccessor,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
         use crate::coprocessor::codec::mysql::DecimalEncoder;
         use crate::coprocessor::codec::mysql::JsonEncoder;
         use crate::util::codec::bytes::BytesEncoder;
@@ -529,8 +535,14 @@ impl VectorValue {
                         output.push(datum::NIL_FLAG);
                     }
                     Some(val) => {
-                        output.push(datum::INT_FLAG);
-                        output.encode_i64(val)?;
+                        // Always encode to INT / UINT instead of VAR INT to be efficient.
+                        if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                            output.push(datum::UINT_FLAG);
+                            output.encode_u64(val as u64)?;
+                        } else {
+                            output.push(datum::INT_FLAG);
+                            output.encode_i64(val)?;
+                        }
                     }
                 }
                 Ok(())
