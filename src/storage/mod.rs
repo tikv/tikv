@@ -1117,10 +1117,9 @@ impl<E: Engine> Storage<E> {
             let res = readpool.future_execute(priority, move |ctxd| {
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                // let cf = Self::rawkv_cf(&cf)?;
                 let cf = match Self::rawkv_cf(&cf) {
                     Ok(x) => x,
-                    Err(e) => return future::result(Err(e)),
+                    Err(e) => return future::err(e),
                 };
                 // no scan_count for this kind of op.
 
@@ -1169,10 +1168,9 @@ impl<E: Engine> Storage<E> {
                 let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                //let cf = Self::rawkv_cf(&cf)?;
                 let cf = match Self::rawkv_cf(&cf) {
                     Ok(x) => x,
-                    Err(e) => return future::result(Err(e)),
+                    Err(e) => return future::err(e),
                 };
                 // no scan_count for this kind of op.
                 let mut stats = Statistics::default();
@@ -1197,7 +1195,7 @@ impl<E: Engine> Storage<E> {
                 thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
 
                 timer.observe_duration();
-                future::result(Ok(result))
+                future::ok(result)
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
@@ -1585,7 +1583,7 @@ impl<E: Engine> Storage<E> {
                             key_only,
                         ) {
                             Ok(x) => x,
-                            Err(e) => return future::result(Err(e)),
+                            Err(e) => return future::err(e),
                         }
                     } else {
                         match Self::raw_scan(
@@ -1598,7 +1596,7 @@ impl<E: Engine> Storage<E> {
                             key_only,
                         ) {
                             Ok(x) => x,
-                            Err(e) => return future::result(Err(e)),
+                            Err(e) => return future::err(e),
                         }
                     };
                     result.extend(pairs.into_iter());
@@ -1609,7 +1607,7 @@ impl<E: Engine> Storage<E> {
                 thread_ctx.collect_scan_count(CMD, &statistics);
 
                 timer.observe_duration();
-                future::result(Ok(result))
+                future::ok(result)
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
