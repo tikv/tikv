@@ -909,7 +909,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 // When the target doesn't exist(add peer but the store is isolated), source peer decide to destroy by itself.
                 // Without target, the `pending_merge_targets` for target won't be removed, so here source peer help target to clear.
                 if self.region_peers.get(&target).is_none()
-                    && self.pending_merge_targets.get(&target).unwrap().is_empty()
+                    && self.pending_merge_targets[&target].is_empty()
                 {
                     self.pending_merge_targets.remove(&target);
                 }
