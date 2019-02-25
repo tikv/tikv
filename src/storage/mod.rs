@@ -687,45 +687,49 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        let read_pool = self.read_pool.clone();
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
-
-        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = read_pool.future_execute(priority, move |ctxd| {
+        let res = self.read_pool.future_execute(priority, move |ctxd| {
+            let mut _timer = {
+                let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                thread_ctx.start_command_duration_timer(CMD, priority)
+            };
 
-                let mut statistics = Statistics::default();
-                let snap_store = SnapshotStore::new(
-                    snapshot,
-                    start_ts,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                );
-                let result = snap_store
-                    .get(&key, &mut statistics)
-                    // map storage::txn::Error -> storage::Error
-                    .map_err(Error::from)
-                    .map(|r| {
-                        thread_ctx.collect_key_reads(CMD, 1);
-                        r
-                    });
+            Self::async_snapshot(engine, &ctx)
+                .and_then(move |snapshot: E::Snap| {
+                    let mut thread_ctx = ctxd.current_thread_context_mut();
+                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
-                thread_ctx.collect_scan_count(CMD, &statistics);
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                    let mut statistics = Statistics::default();
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                    );
+                    let result = snap_store
+                        .get(&key, &mut statistics)
+                        // map storage::txn::Error -> storage::Error
+                        .map_err(Error::from)
+                        .map(|r| {
+                            thread_ctx.collect_key_reads(CMD, 1);
+                            r
+                        });
 
-                timer.observe_duration();
+                    thread_ctx.collect_scan_count(CMD, &statistics);
+                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
 
-                future::result(result)
-            });
+                    result
+                })
+                .then(move |r| {
+                    _timer.observe_duration();
+                    r
+                })
+        });
 
-            future::result(res)
-                .map_err(|_| Error::SchedTooBusy)
-                .flatten()
-        })
+        future::result(res)
+            .map_err(|_| Error::SchedTooBusy)
+            .flatten()
     }
 
     /// Get values of a set of keys in a batch from the snapshot. Only writes that are committed
