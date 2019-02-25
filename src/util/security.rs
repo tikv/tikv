@@ -162,7 +162,10 @@ impl SecurityManager {
     }
 }
 
-pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(path: P) -> Result<Arc<Env>, String> {
+pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(
+    path: P,
+    base_env: Option<Arc<Env>>,
+) -> Result<Arc<Env>, String> {
     let cipher_hex = match file::read_all(path) {
         Err(e) => return Err(format!("failed to load cipher file: {:?}", e)),
         Ok(content) => {
@@ -182,7 +185,11 @@ pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(path: P) -> Result<Arc<Env
         Err(e) => return Err(format!("cipher file should be hex type, error: {:?}", e)),
         Ok(text) => text,
     };
-    match Env::new_default_ctr_encrypted_env(&cipher_text) {
+    let base = match base_env {
+        Some(env) => env,
+        None => Arc::new(Env::default()),
+    };
+    match Env::new_ctr_encrypted_env(base, &cipher_text) {
         Err(e) => Err(format!("failed to create encrypted env: {:?}", e)),
         Ok(env) => Ok(Arc::new(env)),
     }
@@ -253,24 +260,24 @@ mod tests {
         let path = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
 
         // Cipher file not exists.
-        assert!(encrypted_env_from_cipher_file(path.path().join("file0")).is_err());
+        assert!(encrypted_env_from_cipher_file(path.path().join("file0"), None).is_err());
 
         // Cipher file in hex type.
         let mut file1 = File::create(path.path().join("file1")).unwrap();
         file1.write_all(b"ACFFDBCC").unwrap();
         file1.sync_all().unwrap();
-        assert!(encrypted_env_from_cipher_file(path.path().join("file1")).is_ok());
+        assert!(encrypted_env_from_cipher_file(path.path().join("file1"), None).is_ok());
 
         // Cipher file not in hex type.
         let mut file2 = File::create(path.path().join("file2")).unwrap();
         file2.write_all(b"AGGGGGGG").unwrap();
         file2.sync_all().unwrap();
-        assert!(encrypted_env_from_cipher_file(path.path().join("file2")).is_err());
+        assert!(encrypted_env_from_cipher_file(path.path().join("file2"), None).is_err());
 
         // The length of cipher file's content is not power of 2.
         let mut file3 = File::create(path.path().join("file3")).unwrap();
         file3.write_all(b"ACFFDBCCA").unwrap();
         file3.sync_all().unwrap();
-        assert!(encrypted_env_from_cipher_file(path.path().join("file3")).is_err());
+        assert!(encrypted_env_from_cipher_file(path.path().join("file3"), None).is_err());
     }
 }
