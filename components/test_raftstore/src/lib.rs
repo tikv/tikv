@@ -21,8 +21,7 @@ extern crate raft;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate tokio;
-extern crate tokio_timer;
+extern crate tokio_threadpool;
 #[macro_use(
     slog_kv,
     slog_error,

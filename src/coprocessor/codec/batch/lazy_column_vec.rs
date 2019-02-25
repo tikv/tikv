@@ -18,7 +18,7 @@ use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::Result;
 
-/// Stores multiple `LazyBatchColumn`s. Each column have equal length.
+/// Stores multiple `LazyBatchColumn`s. Each column has an equal length.
 #[derive(Clone, Debug)]
 pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
@@ -172,6 +172,34 @@ impl LazyBatchColumnVec {
         }
 
         self.debug_assert_columns_equal_length();
+    }
+
+    /// Returns maximum encoded size.
+    pub fn maximum_encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
+        let mut size = 0;
+        for offset in output_offsets.as_ref() {
+            size += self.columns[(*offset) as usize].maximum_encoded_size()?;
+        }
+        Ok(size)
+    }
+
+    /// Encodes into binary format.
+    pub fn encode(
+        &self,
+        output_offsets: impl AsRef<[u32]>,
+        columns_info: impl AsRef<[ColumnInfo]>,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        let len = self.rows_len();
+        let columns_info = columns_info.as_ref();
+        for i in 0..len {
+            for offset in output_offsets.as_ref() {
+                let offset = *offset as usize;
+                let col = &self.columns[offset];
+                col.encode(i, &columns_info[offset], output)?;
+            }
+        }
+        Ok(())
     }
 }
 
