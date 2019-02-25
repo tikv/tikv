@@ -478,6 +478,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             if let Some(epoch) =
                 (*v).insert(msg.get_region_id(), merge_target.get_region_epoch().clone())
             {
+                // Merge target epoch records the version of target region when source region is merged.
+                // So it must be same no matter when receiving merge target.
                 if epoch.get_version() != merge_target.get_region_epoch().get_version() {
                     panic!(
                         "conflict epoch version {:?} {:?}",
@@ -608,6 +610,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
+        let start_key = enc_start_key(&snap_region);
+        let end_key = enc_end_key(&snap_region);
 
         if snap_region
             .get_peers()
@@ -625,8 +629,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         for region in &self.pending_snapshot_regions {
-            if enc_start_key(region) < enc_end_key(&snap_region) &&
-               enc_end_key(region) > enc_start_key(&snap_region) &&
+            if enc_start_key(region) < end_key &&
+               enc_end_key(region) > start_key &&
                // Same region can overlap, we will apply the latest version of snapshot.
                region.get_id() != snap_region.get_id()
             {
@@ -648,10 +652,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         for (_, &id) in self
             .region_ranges
-            .range((Excluded(enc_start_key(&snap_region)), Unbounded::<Vec<u8>>))
+            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
         {
             let exist_region = self.region_peers[&id].region();
-            if enc_start_key(exist_region) >= enc_end_key(&snap_region) {
+            if enc_start_key(exist_region) >= end_key {
                 break;
             }
             if exist_region.get_id() == region_id {
@@ -686,6 +690,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
     }
 
     /// Checks merge target, returns whether the source peer should be destroyed.
+    /// It returns true when there is a network isolation which leads to a follower of a merge target
+    /// Region's log falls behind and then receive a snapshot with epoch version after merge.
     pub fn maybe_destroy_source(
         &self,
         target_region_id: u64,
