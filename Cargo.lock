@@ -1007,6 +1007,7 @@ dependencies = [
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-term 2.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv_alloc 0.1.0",
 ]
 
 [[package]]
