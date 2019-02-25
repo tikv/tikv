@@ -163,7 +163,7 @@ impl Config {
         } else {
             info!(
                 "no advertise-addr is specified, falling back to default addr";
-                "fall_back_to" => %self.addr
+                "fall_back_addr" => %self.addr
             );
             self.advertise_addr = self.addr.clone();
         }
