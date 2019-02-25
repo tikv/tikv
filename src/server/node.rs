@@ -204,10 +204,10 @@ where
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
             error!(
-                "cluster ID mismatch: local_id {} remote_id {}. \
-                 you are trying to connect to another cluster, please reconnect to the correct PD",
-                ident.get_cluster_id(),
-                self.cluster_id
+                "cluster ID mismatch. \
+                 you are trying to connect to another cluster, please reconnect to the correct PD";
+                "local_id" => ident.get_cluster_id(),
+                "remote_id" => self.cluster_id
             );
             process::exit(1);
         }
@@ -227,7 +227,7 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        info!("alloc store id {} ", store_id);
+        info!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
@@ -243,13 +243,16 @@ where
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
         info!(
-            "alloc first region id {} for cluster {}, store {}",
-            region_id, self.cluster_id, store_id
+            "alloc first region id";
+            "region_id" => region_id,
+            "cluster" => self.cluster_id,
+            "store" => store_id
         );
         let peer_id = self.alloc_id()?;
         info!(
-            "alloc first peer id {} for first region {}",
-            peer_id, region_id
+            "alloc first peer id for first region";
+            "peer_id" => peer_id,
+            "region" => region_id,
         );
 
         let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
@@ -278,7 +281,7 @@ where
                 }
 
                 Err(e) => {
-                    warn!("check cluster prepare bootstrapped failed: {:?}", e);
+                    warn!("check cluster prepare bootstrapped failed"; "err" => ?e);
                 }
             }
             thread::sleep(Duration::from_secs(
@@ -292,7 +295,7 @@ where
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
-                error!("cluster {} is already bootstrapped", self.cluster_id);
+                error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
                 store::clear_prepare_bootstrap(engines, region_id)?;
                 Ok(())
             }
@@ -300,7 +303,7 @@ where
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
                 store::clear_prepare_bootstrap_state(engines)?;
-                info!("bootstrap cluster {} ok", self.cluster_id);
+                info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                 Ok(())
             }
         }
@@ -311,7 +314,7 @@ where
             match self.pd_client.is_cluster_bootstrapped() {
                 Ok(b) => return Ok(b),
                 Err(e) => {
-                    warn!("check cluster bootstrapped failed: {:?}", e);
+                    warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
             thread::sleep(Duration::from_secs(
@@ -336,7 +339,7 @@ where
     where
         T: Transport + 'static,
     {
-        info!("start raft store {} thread", store_id);
+        info!("start raft store thread"; "store_id" => store_id);
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
@@ -361,7 +364,7 @@ where
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
-        info!("stop raft store {} thread", store_id);
+        info!("stop raft store thread"; "store_id" => store_id);
         self.system.shutdown();
         Ok(())
     }

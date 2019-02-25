@@ -161,10 +161,7 @@ impl Config {
         if !self.advertise_addr.is_empty() {
             box_try!(config::check_addr(&self.advertise_addr));
         } else {
-            info!(
-                "no advertise-addr is specified, falling back to {}.",
-                self.addr
-            );
+            info!("no advertise-addr is specified"; "fall_back_to" => %self.addr);
             self.advertise_addr = self.addr.clone();
         }
         if self.advertise_addr.starts_with("0.") {

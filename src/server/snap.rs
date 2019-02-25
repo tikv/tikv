@@ -215,7 +215,7 @@ impl RecvSnapContext {
 
             if s.exists() {
                 let p = s.path();
-                info!("{} snapshot file {} already exists, skip receiving", key, p);
+                info!("snapshot file already exists, skip receiving"; "snap_key" => %key, "file" => p);
                 None
             } else {
                 Some(s)
@@ -232,7 +232,7 @@ impl RecvSnapContext {
     fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
-            info!("{} saving snapshot file {}", key, file.path());
+            info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
             if let Err(e) = file.save() {
                 let path = file.path();
                 let e = box_err!("{} failed to save snapshot file {}: {:?}", key, path, e);
@@ -355,7 +355,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let f = recv_snap(stream, sink, snap_mgr, raft_router).then(move |result| {
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot {}", e);
+                        error!("failed to recv snapshot"; "err" => %e);
                     }
                     future::ok::<_, ()>(())
                 });
@@ -385,13 +385,16 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         match res {
                             Ok(stat) => {
                                 info!(
-                                    "[region {}] sent snapshot {} [size: {}, dur: {:?}]",
-                                    stat.key.region_id, stat.key, stat.total_size, stat.elapsed,
+                                    "sent snapshot";
+                                    "region" => stat.key.region_id,
+                                    "snap_key" => %stat.key,
+                                    "size" => stat.total_size,
+                                    "duration" => ?stat.elapsed
                                 );
                                 cb(Ok(()));
                             }
                             Err(e) => {
-                                error!("failed to send snap to {}: {:?}", addr, e);
+                                error!("failed to send snap"; "to_addr" => addr, "err" => ?e);
                                 cb(Err(e));
                             }
                         };
