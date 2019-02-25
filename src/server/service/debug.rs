@@ -429,12 +429,12 @@ fn region_detail<T: RaftStoreRouter>(
             rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
                 if r.response.get_header().has_error() {
                     let e = r.response.get_header().get_error();
-                    warn!("region_detail got error: {:?}", e);
+                    warn!("region_detail got error"; "err" => ?e);
                     let msg = print_to_string(e);
                     return Err(Error::Other(msg.into()));
                 }
                 let detail = r.response.take_status_response().take_region_detail();
-                debug!("region_detail got region detail: {:?}", detail);
+                debug!("region_detail got region detail"; "detail" => ?detail);
                 let leader_store_id = detail.get_leader().get_store_id();
                 if leader_store_id != store_id {
                     let msg = format!("Leader is on store {}", leader_store_id);
@@ -466,7 +466,7 @@ fn consistency_check<T: RaftStoreRouter>(
             rx.map_err(|e| Error::Other(box e)).and_then(move |r| {
                 if r.response.get_header().has_error() {
                     let e = r.response.get_header().get_error();
-                    warn!("consistency-check got error: {:?}", e);
+                    warn!("consistency-check got error"; "err" => ?e);
                     let msg = print_to_string(e);
                     return Err(Error::Other(msg.into()));
                 }
