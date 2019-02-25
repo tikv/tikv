@@ -455,6 +455,14 @@ fn main() {
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
         )
+        .arg(
+            Arg::with_name("metrics-addr")
+                .long("metrics-addr")
+                .value_name("IP:PORT")
+                .help(
+                    "prometheus pushgateway address, leaves it empty will disable prometheus push",
+                ),
+        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {
