@@ -256,6 +256,51 @@ impl LazyBatchColumn {
             },
         }
     }
+
+    /// Returns maximum encoded size.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let mut size = 0;
+                for s in v {
+                    size += s.len();
+                }
+                Ok(size)
+            }
+            LazyBatchColumn::Decoded(ref v) => v.maximum_encoded_size(),
+        }
+    }
+
+    /// Encodes into binary format.
+    // FIXME: Use BufferWriter.
+    pub fn encode(
+        &self,
+        row_index: usize,
+        column_info: &ColumnInfo,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let value = if v[row_index].is_empty() {
+                    if column_info.has_default_val() {
+                        column_info.get_default_val()
+                    } else if !column_info.flag().contains(FieldTypeFlag::NOT_NULL) {
+                        datum::DATUM_DATA_NULL
+                    } else {
+                        return Err(box_err!(
+                            "Column (id = {}) has flag NOT NULL, but no value is given",
+                            column_info.get_column_id()
+                        ));
+                    }
+                } else {
+                    v[row_index].as_slice()
+                };
+                output.extend_from_slice(value);
+                Ok(())
+            }
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, column_info, output),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -553,7 +598,7 @@ mod benches {
         }
     }
 
-    /// Bench performance of push 10 bytes to a vector based LazyBatchColumn.
+    /// Bench performance of pushing 10 bytes to a vector based LazyBatchColumn.
     #[bench]
     fn bench_lazy_batch_column_by_vec_push_raw_10bytes(b: &mut test::Bencher) {
         let mut column = VectorLazyBatchColumn::raw_with_capacity(1000);
