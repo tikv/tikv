@@ -48,7 +48,7 @@ Use TLS to encrypt:
 
 + PD address
 + Default address: http://127.0.0.1:2379
-+ Enviroment variable: PD_ADDR
++ Environment variable: PD_ADDR
 
 ### \-\-detach,-d
 
