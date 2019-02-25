@@ -386,7 +386,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                             Ok(stat) => {
                                 info!(
                                     "sent snapshot";
-                                    "region" => stat.key.region_id,
+                                    "region_id" => stat.key.region_id,
                                     "snap_key" => %stat.key,
                                     "size" => stat.total_size,
                                     "duration" => ?stat.elapsed

@@ -539,7 +539,7 @@ impl Debugger {
                 let old_peers = region_state.mut_region().take_peers();
                 info!(
                     "peers changed";
-                    "region" => region_id,
+                    "region_id" => region_id,
                     "old_peers" => ?old_peers,
                     "new_peers" => ?new_peers,
                 );

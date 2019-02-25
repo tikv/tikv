@@ -245,14 +245,14 @@ where
         info!(
             "alloc first region id";
             "region_id" => region_id,
-            "cluster" => self.cluster_id,
-            "store" => store_id
+            "cluster_id" => self.cluster_id,
+            "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
         info!(
             "alloc first peer id for first region";
             "peer_id" => peer_id,
-            "region" => region_id,
+            "region_id" => region_id,
         );
 
         let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
