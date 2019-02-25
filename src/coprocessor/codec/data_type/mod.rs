@@ -11,8 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod lazy_column;
-mod lazy_column_vec;
+mod vector;
 
-pub use self::lazy_column::LazyBatchColumn;
-pub use self::lazy_column_vec::LazyBatchColumnVec;
+// Concrete eval types without a nullable wrapper.
+pub type Int = i64;
+pub type Real = f64;
+pub type Bytes = Vec<u8>;
+pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
+
+// Dynamic eval types.
+pub use self::vector::VectorValue;

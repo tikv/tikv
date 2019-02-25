@@ -19,7 +19,9 @@ use std::sync::Arc;
 use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use crate::util::set_panic_mark;
+use crate::util::{panic_when_key_exceed_bound, set_panic_mark};
+
+use super::metrics::*;
 
 /// Snapshot of a region.
 ///
@@ -154,7 +156,6 @@ pub struct RegionIterator {
     region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    panic_when_exceed_bound: bool,
 }
 
 fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -195,7 +196,6 @@ impl RegionIterator {
             start_key,
             end_key,
             region,
-            panic_when_exceed_bound: true,
         }
     }
 
@@ -216,13 +216,7 @@ impl RegionIterator {
             start_key,
             end_key,
             region,
-            panic_when_exceed_bound: true,
         }
-    }
-
-    // Set false only in test.
-    pub fn panic_when_exceed_bound(&mut self, panic: bool) {
-        self.panic_when_exceed_bound = panic;
     }
 
     pub fn seek_to_first(&mut self) -> bool {
@@ -316,7 +310,8 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            if self.panic_when_exceed_bound {
+            KEY_NOT_IN_REGION.inc();
+            if panic_when_key_exceed_bound() {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
             } else {
@@ -352,10 +347,12 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
             Arc::new(
-                rocksdb_util::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
+                rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                    .unwrap(),
             ),
             Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             ),
         )
     }
@@ -485,7 +482,6 @@ mod tests {
                 true,
             );
             let mut iter = snap.iter(iter_opt);
-            iter.panic_when_exceed_bound(false);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
                 let check_res =
                     |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
@@ -655,8 +651,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut it = snap.iter(IterOption::default());
-        it.panic_when_exceed_bound(false);
+        let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
@@ -707,8 +702,7 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut it = snap.iter(IterOption::default());
-        it.panic_when_exceed_bound(false);
+        let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
         assert!(!iter
             .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
@@ -761,7 +755,6 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3".to_vec());
         let mut iter = snap.iter(iter_opt);
-        iter.panic_when_exceed_bound(false);
         assert!(iter.seek_to_last());
         let mut res = vec![];
         loop {

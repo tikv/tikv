@@ -88,7 +88,6 @@ indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
 tikv_alloc = { path = "components/tikv_alloc" }
-tokio = "0.1"
 tokio-core = "0.1"
 tokio-timer = "0.2"
 tokio-executor = "0.1"

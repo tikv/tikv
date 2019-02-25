@@ -45,6 +45,16 @@ pub mod timer;
 pub mod transport;
 pub mod worker;
 
+static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);
+
+pub fn panic_when_key_exceed_bound() -> bool {
+    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::SeqCst)
+}
+
+pub fn set_panic_when_key_exceed_bound(flag: bool) {
+    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::SeqCst);
+}
+
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
