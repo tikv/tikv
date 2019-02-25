@@ -218,7 +218,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 .inc();
             // If we are resolving the address, drop the message here.
             debug!(
-                "store address is being resolved, drop msg";
+                "store address is being resolved, msg dropped";
                 "store_id" => store_id,
                 "msg" => ?msg
             );
