@@ -931,7 +931,7 @@ impl Peer {
                 .take_while(|r| enc_start_key(r) < enc_end_key(&region))
                 .find(|r| r.get_id() != region.get_id())
             {
-                debug!(
+                info!(
                     "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
                     self.tag,
                     self.get_store().applied_index(),
