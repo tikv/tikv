@@ -20,7 +20,6 @@ use crate::grpc::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::{self, RaftMessage};
 use tempdir::TempDir;
-use tokio::runtime::Builder as RuntimeBuilder;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
@@ -68,6 +67,7 @@ pub struct ServerCluster {
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
     raft_client: RaftClient,
+    _stats_pool: tokio_threadpool::ThreadPool,
 }
 
 impl ServerCluster {
@@ -79,12 +79,13 @@ impl ServerCluster {
                 .build(),
         );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
+        let stats_pool = tokio_threadpool::Builder::new().pool_size(1).build();
         let raft_client = RaftClient::new(
             env,
             Arc::new(Config::default()),
             security_mgr,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
-            Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap()),
+            stats_pool.sender().clone(),
         );
         ServerCluster {
             metas: HashMap::default(),
@@ -94,6 +95,7 @@ impl ServerCluster {
             region_info_accessors: HashMap::default(),
             snap_paths: HashMap::default(),
             raft_client,
+            _stats_pool: stats_pool,
         }
     }
 
