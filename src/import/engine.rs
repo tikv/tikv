@@ -318,6 +318,7 @@ mod tests {
     use crate::storage::mvcc::MvccReader;
     use crate::util::rocksdb_util::new_engine_opt;
     use crate::util::security::encrypted_env_from_cipher_file;
+    use crate::util::file::file_exists;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
@@ -365,18 +366,20 @@ mod tests {
         test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
 
-        let security_cfg = create_security_cfg();
+        let temp_dir= TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let security_cfg = create_security_cfg(&temp_dir);
         test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
     }
 
-    fn create_security_cfg() -> SecurityConfig {
-        let path = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
-        let mut security_cfg = SecurityConfig::default();
-        let mut cipher_file = File::create(path.path().join("cipher_file")).unwrap();
+    fn create_security_cfg(temp_dir: &TempDir) -> SecurityConfig {
+        let path = temp_dir.path().join("cipher_file");
+        let mut cipher_file = File::create(&path).unwrap();
         cipher_file.write_all(b"ACFFDBCC").unwrap();
         cipher_file.sync_all().unwrap();
-        security_cfg.cipher_file = path.path().join("cipher_file").to_str().unwrap().to_owned();
+        let mut security_cfg = SecurityConfig::default();
+        security_cfg.cipher_file = path.to_str().unwrap().to_owned();
+        assert_eq!(file_exists(&security_cfg.cipher_file), true);
         security_cfg
     }
 
