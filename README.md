@@ -181,6 +181,32 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
 
+## Communication
+
+Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT). Here is an excerpt:
+
+> In the interest of fostering an open and welcoming environment, we as
+contributors and maintainers pledge to making participation in our project and
+our community a harassment-free experience for everyone, regardless of age, body
+size, disability, ethnicity, sex characteristics, gender identity and expression,
+level of experience, education, socio-economic status, nationality, personal
+appearance, race, religion, or sexual identity and orientation.
+
+### Socia Media
+
+- [Twitter](https://twitter.com/tikvproject)
+- [Blog](https://tikv.org/blog/)
+- [Reddit](https://www.reddit.com/r/TiKV)
+- Post questions or help answer them on [Stack Overflow](https://stackoverflow.com/questions/tagged/tikv)
+
+### Slack
+
+Join TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk) - Sign up and join channels on TiKV topics that interest you. 
+
+### WeChat
+
+TiKV community is also available on WeChat, a very popular channel for instant messages and discussions in China. If you want to join our WeChat group, send a request mail to tl@pingcap.com, with your personel information (WeChat ID, and other basic information) included. We will invite you in right away.
+
 ## License
 
 TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
