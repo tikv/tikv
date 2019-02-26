@@ -6,7 +6,7 @@ Depending on the status of your current organization, the process for becoming a
 
 1. Express interest to the senior maintainers that your organization is interested in becoming a
   maintainer. Becoming a maintainer generally means that you are going to be spending substantial
-  time (>25%) on Envoy for the foreseeable future. You are expected to have domain expertise and be extremely
+  time (>25%) on TiKV for the foreseeable future. You are expected to have domain expertise and be extremely
   proficient in C++. Ultimately your goal is to become a senior maintainer that will represent your
   organization.
 2. We will expect you to start contributing increasingly complicated PRs, under the guidance
@@ -49,7 +49,8 @@ Depending on the status of your current organization, the process for becoming a
     question label. Questions are easy to search for and close out at a later time. Questions
     can be promoted to other issue types once it's clear they are actionable (at which point the
     question label should be removed).
-* Make sure that ongoing PRs are moving forward at the right pace or closing them.
+* Make sure that ongoing PRs are moving forward at the right pace or closing them if they are not
+  moving in a productive direction.
 * Participate when called upon in the security release process. Note
   that although this should be a rare occurrence, if a serious vulnerability is found, the process
   may take up to several full days of work to implement. This possibility should be taken into account
@@ -99,7 +100,7 @@ receives two votes and each normal maintainer receives one vote.
 
 # Adding new projects to the TiKV GitHub organization
 
-New projects will be added to the envoyproxy organization via GitHub issue discussion in one of the
+New projects will be added to the tikv organization via GitHub issue discussion in one of the
 existing projects in the organization. Once sufficient discussions have taken place (normally 3-5 business
 days but depending on the volume of conversation), the maintainers of *the project where the issue
 was opened* (since different projects in the organization may have different maintainers) will
