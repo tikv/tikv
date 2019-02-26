@@ -316,9 +316,9 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
+    use crate::util::file::file_exists;
     use crate::util::rocksdb_util::new_engine_opt;
     use crate::util::security::encrypted_env_from_cipher_file;
-    use crate::util::file::file_exists;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
@@ -366,7 +366,7 @@ mod tests {
         test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
 
-        let temp_dir= TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let temp_dir = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
         let security_cfg = create_security_cfg(&temp_dir);
         test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
