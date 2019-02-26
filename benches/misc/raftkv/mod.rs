@@ -95,7 +95,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb_util::new_engine(&path, ALL_CFS, None).unwrap();
+    let db = rocksdb_util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 

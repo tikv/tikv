@@ -258,7 +258,8 @@ mod tests {
     #[test]
     fn test_last_key_of_region() {
         let path = TempDir::new("test_last_key_of_region").unwrap();
-        let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+        let engine =
+            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
         let mut region = Region::new();
@@ -309,7 +310,8 @@ mod tests {
     #[test]
     fn test_table_check_observer() {
         let path = TempDir::new("test_table_check_observer").unwrap();
-        let engine = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+        let engine =
+            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
 
         let mut region = Region::new();

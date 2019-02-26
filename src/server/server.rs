@@ -18,18 +18,19 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use futures::Stream;
+use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
 use kvproto::tikvpb_grpc::*;
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-use tokio::timer::Interval;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::{Engines, SnapManager};
 use crate::storage::{Engine, Storage};
 use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;
 use crate::util::Either;
 
@@ -66,8 +67,9 @@ pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> 
     snap_worker: Worker<SnapTask>,
 
     // Currently load statistics is done in the thread.
-    stats_runtime: Arc<Runtime>,
+    stats_pool: Option<ThreadPool>,
     thread_load: Arc<ThreadLoad>,
+    timer: Handle,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
@@ -84,13 +86,10 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         import_service: Option<ImportSSTService<T>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
-        let stats_runtime = Arc::new(
-            RuntimeBuilder::new()
-                .core_threads(cfg.as_ref().stats_concurrency)
-                .name_prefix(STATS_THREAD_PREFIX)
-                .build()
-                .unwrap(),
-        );
+        let stats_pool = ThreadPoolBuilder::new()
+            .pool_size(cfg.stats_concurrency)
+            .name_prefix(STATS_THREAD_PREFIX)
+            .build();
         let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
 
         let env = Arc::new(
@@ -106,12 +105,12 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             cop,
             raft_router.clone(),
             snap_worker.scheduler(),
-            Arc::clone(&stats_runtime),
+            stats_pool.sender().clone(),
             Arc::clone(&thread_load),
         );
 
         let mut addr = SocketAddr::from_str(&cfg.addr)?;
-        info!("listening on {}", addr);
+        info!("listening on addr"; "addr" => addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
@@ -149,7 +148,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(cfg),
             Arc::clone(security_mgr),
             Arc::clone(&thread_load),
-            Arc::clone(&stats_runtime),
+            stats_pool.sender().clone(),
         )));
 
         let trans = ServerTransport::new(
@@ -167,8 +166,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             raft_router,
             snap_mgr,
             snap_worker,
-            stats_runtime,
+            stats_pool: Some(stats_pool),
             thread_load,
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
@@ -200,8 +200,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             let tl = Arc::clone(&self.thread_load);
             ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
         };
-        self.stats_runtime.executor().spawn(
-            Interval::new(Instant::now(), LOAD_STATISTICS_INTERVAL)
+        self.stats_pool.as_ref().unwrap().spawn(
+            self.timer
+                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
                 .map_err(|_| ())
                 .for_each(move |i| {
                     load_stats.record(i);
@@ -218,6 +219,9 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.snap_worker.stop();
         if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
             server.shutdown();
+        }
+        if let Some(pool) = self.stats_pool.take() {
+            let _ = pool.shutdown_now().wait();
         }
         Ok(())
     }

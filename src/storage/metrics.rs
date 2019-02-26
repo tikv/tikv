@@ -142,4 +142,9 @@ lazy_static! {
         &["state"]
     )
     .unwrap();
+    pub static ref REQUEST_EXCEED_BOUND: IntCounter = register_int_counter!(
+        "tikv_request_exceed_bound",
+        "Counter of request exceed bound"
+    )
+    .unwrap();
 }

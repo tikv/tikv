@@ -52,11 +52,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap(),
+        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine =
-        Arc::new(rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap());
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+    );
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
