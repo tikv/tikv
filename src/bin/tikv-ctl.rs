@@ -2156,7 +2156,7 @@ fn compact_whole_cluster(
     bottommost: BottommostLevelCompaction,
 ) {
     let stores = pd_client
-        .get_all_stores(false) // Do not include tombstone stores.
+        .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
     let mut handles = Vec::new();

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tikv::util::collections::HashMap;
 
-use kvproto::metapb::{Peer, Region, Store};
+use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;
 
 use protobuf::RepeatedField;
@@ -150,11 +150,15 @@ impl PdMocker for Service {
         }
     }
 
-    fn get_all_stores(&self, _: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
+    fn get_all_stores(&self, req: &GetAllStoresRequest) -> Option<Result<GetAllStoresResponse>> {
         let mut resp = GetAllStoresResponse::new();
         resp.set_header(Service::header());
+        let exclude_tombstone = req.get_exclude_tombstone_stores();
         let stores = self.stores.lock().unwrap();
         for store in stores.values() {
+            if exclude_tombstone && store.get_state() == StoreState::Tombstone {
+                continue;
+            }
             resp.mut_stores().push(store.clone());
         }
         Some(Ok(resp))

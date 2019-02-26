@@ -174,7 +174,7 @@ fn test_get_tombstone_stores() {
 
     all_stores.push(store.clone());
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
-    let s = client.get_all_stores(true).unwrap();
+    let s = client.get_all_stores(false).unwrap();
     assert_eq!(s, all_stores);
 
     // Add tombstone store.
@@ -184,13 +184,13 @@ fn test_get_tombstone_stores() {
     server.default_handler().add_store(store99.clone());
 
     // do not include tombstone.
-    let s = client.get_all_stores(false).unwrap();
+    let s = client.get_all_stores(true).unwrap();
     assert_eq!(s, all_stores);
 
     all_stores.push(store99.clone());
     all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     // include tombstone, there should be 2 stores.
-    let mut s = client.get_all_stores(true).unwrap();
+    let mut s = client.get_all_stores(false).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     assert_eq!(s, all_stores);
 
@@ -201,7 +201,7 @@ fn test_get_tombstone_stores() {
 
     all_stores.push(store199.clone());
     all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
-    let mut s = client.get_all_stores(true).unwrap();
+    let mut s = client.get_all_stores(false).unwrap();
     s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
     assert_eq!(s, all_stores);
 
