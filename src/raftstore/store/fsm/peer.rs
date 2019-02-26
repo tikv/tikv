@@ -1122,7 +1122,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 )
             {
                 // The snapshot that we decide to whether destroy peer based on must can be applied.
-                // So here not to destroy peer immediately, or the snapshot maybe dropped in later 
+                // So here not to destroy peer immediately, or the snapshot maybe dropped in later
                 // check but the peer is already destroyed.
                 regions_to_destroy.push(exist_region.get_id());
                 continue;
