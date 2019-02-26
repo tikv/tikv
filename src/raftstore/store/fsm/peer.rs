@@ -913,18 +913,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .map(|r| r.get_region_epoch())
         {
             // In the case that the source peer's range isn't overlapped with target's anymore:
-            //     | region 1 | region 2 | region 3 |
-            //                   || merge 2 into 1
+            //     | region 2 | region 3 | region 1 |
+            //                   || merge 3 into 2
             //                   \/
-            //     |       region 1      | region 3 |
-            //                   || merge 3 into 1
+            //     |       region 2      | region 1 |
+            //                   || merge 1 into 2
             //                   \/
-            //     |            region 1            |
-            //                   || split 1 into 4
+            //     |            region 2            |
+            //                   || split 2 into 4
             //                   \/
-            //     |        region 4       |region 1|
+            //     |        region 4       |region 2|
             // so the new target peer can't find the source peer.
-            // e.g. new region 1 is overlapped with region 2
+            // e.g. new region 2 is overlapped with region 1
             //
             // If that, source peer still need to decide whether to destroy itself. When the target
             // peer has already moved on, source peer can destroy itself.
@@ -1121,6 +1121,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     snap_region.get_region_epoch().to_owned(),
                 )
             {
+                // The snapshot that we decide to whether destroy peer based on must can be applied.
+                // So here not to destroy peer immediately, or the snapshot maybe dropped in later 
+                // check but the peer is already destroyed.
                 regions_to_destroy.push(exist_region.get_id());
                 continue;
             }
