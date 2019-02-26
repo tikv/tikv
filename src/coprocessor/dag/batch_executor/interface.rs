@@ -95,7 +95,7 @@ pub struct BatchExecutorContextInner {
     // the aggregation executor's schema instead of base schema.
     pub columns_info: Vec<ColumnInfo>,
 
-    // TODO: This is really a execution config, alhtough called eval config.
+    // TODO: This is really a execution config, although called eval config.
     pub config: EvalConfig,
 }
 
