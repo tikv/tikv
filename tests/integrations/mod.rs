@@ -27,7 +27,7 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
-extern crate tokio;
+extern crate tokio_threadpool;
 extern crate toml;
 extern crate uuid;
 #[macro_use(

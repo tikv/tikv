@@ -18,6 +18,7 @@ extern crate kvproto as lib_kvproto;
 #[macro_use]
 extern crate slog;
 extern crate slog_term;
+extern crate tikv_alloc;
 
 pub mod test_util;
 

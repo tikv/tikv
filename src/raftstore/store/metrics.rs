@@ -221,4 +221,10 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+
+    pub static ref KEY_NOT_IN_REGION: IntCounter = register_int_counter!(
+        "tikv_key_not_in_region",
+        "Counter of key not in region"
+    )
+    .unwrap();
 }

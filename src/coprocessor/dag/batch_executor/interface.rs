@@ -86,10 +86,16 @@ impl crate::util::AssertSend for BatchExecutorContext {}
 
 impl crate::util::AssertSync for BatchExecutorContext {}
 
+/// The actual inner structure for `BatchExecutorContext`. Normally this structure should be
+/// accessed via `BatchExecutorContext` and should not be constructed directly.
 pub struct BatchExecutorContextInner {
+    /// The column info of base physical table schemas.
+    // TODO: Actually we may need different columns_info for different executors. For example,
+    // the executor above the aggregation executor's (e.g. Projection Executor) schema should be
+    // the aggregation executor's schema instead of base schema.
     pub columns_info: Vec<ColumnInfo>,
 
-    // TODO: This is really a execution config, alhtough called eval config.
+    // TODO: This is really a execution config, although called eval config.
     pub config: EvalConfig,
 }
 
@@ -99,20 +105,35 @@ pub struct BatchExecutorContextInner {
 /// However they are flowed at once, just before response, instead of each step during execution.
 /// Hence they are not covered by this structure. See `BatchExecuteMetaData`.
 ///
-/// TODO: Warnings should be flowed in each function call.
-///
 /// It is only `Send` but not `Sync` because executor returns its own data copy. However `Send`
 /// enables executors to live in different threads.
 ///
 /// It is designed to be used in new generation executors, i.e. executors support batch execution.
 /// The old executors will not be refined to return this kind of result.
 pub struct BatchExecuteResult {
+    /// The columns data generated during this invocation. Note that empty column data doesn't mean
+    /// that there is no more data. See `is_drained`.
     pub data: LazyBatchColumnVec,
 
+    /// The warnings generated during this invocation.
     // TODO: It can be more general, e.g. `ExecuteWarnings` instead of `EvalWarnings`.
     // TODO: Should be recorded by row.
     pub warnings: EvalWarnings,
 
+    /// Whether or not there is no more data.
+    ///
+    /// This structure is a `Result`. When it is:
+    /// - `Ok(false)`: The normal case, means that there could be more data. The caller should
+    ///                continue calling `next_batch()` although for each call the returned data may
+    ///                be empty.
+    /// - `Ok(true)`:  Means that the executor is drained and no more data will be returned in
+    ///                future. However there could be some (last) data in the `data` field this
+    ///                time. The caller should NOT call `next_batch()` any more.
+    /// - `Err(_)`:    Means that there is an error when trying to retrieve more data. In this case,
+    ///                the error is returned and the executor is also drained. Similar to
+    ///                `Ok(true)`, there could be some remaining data in the `data` field which is
+    ///                valid data and should be processed. The caller should NOT call `next_batch()`
+    ///                any more.
     pub is_drained: Result<bool, Error>,
 }
 
@@ -126,7 +147,6 @@ pub struct BatchExecuteStatistics {
 
     /// Scanning statistics for each CF during execution.
     pub cf_stats: crate::storage::Statistics,
-    // TODO: Find somewhere to report exec count.
 }
 
 impl BatchExecuteStatistics {
