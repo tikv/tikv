@@ -32,6 +32,7 @@ struct Metrics {
     cpu_totals: CounterVec,
     io_totals: CounterVec,
     threads_state: IntGaugeVec,
+    ctxt_switches: CounterVec,
 }
 
 /// A collector to collect threads metrics, including CPU usage
@@ -67,10 +68,20 @@ impl ThreadsCollector {
             Opts::new(
                 "threads_io_bytes_total",
                 "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
-            ).namespace(ns),
+            ).namespace(ns.clone()),
             &["name", "tid", "io"],
-        ).unwrap();
+        )
+        .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
+        let ctxt_switches = CounterVec::new(
+            Opts::new(
+                "thread_context_switches",
+                "Number of thread context switches.",
+            )
+            .namespace(ns),
+            &["name", "tid"],
+        )
+        .unwrap();
 
         ThreadsCollector {
             pid,
@@ -79,6 +90,7 @@ impl ThreadsCollector {
                 cpu_totals,
                 io_totals,
                 threads_state,
+                ctxt_switches,
             }),
         }
     }
@@ -143,11 +155,25 @@ impl Collector for ThreadsCollector {
                         write_total.inc_by(write_delta);
                     }
                 }
+
+                if let Ok(status) = pid::status_task(self.pid, tid) {
+                    let total = status.voluntary_ctxt_switches + status.nonvoluntary_ctxt_switches;
+                    let ctxt_swtiches = metrics
+                        .ctxt_switches
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .unwrap();
+                    let past = ctxt_swtiches.get();
+                    let delta = total as f64 - past;
+                    if delta > 0.0 {
+                        ctxt_swtiches.inc_by(delta);
+                    }
+                }
             }
         }
         let mut mfs = metrics.cpu_totals.collect();
         mfs.extend(metrics.threads_state.collect());
         mfs.extend(metrics.io_totals.collect());
+        mfs.extend(metrics.ctxt_switches.collect());
         mfs
     }
 }
