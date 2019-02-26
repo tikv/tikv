@@ -32,7 +32,8 @@ struct Metrics {
     cpu_totals: CounterVec,
     io_totals: CounterVec,
     threads_state: IntGaugeVec,
-    ctxt_switches: CounterVec,
+    voluntary_ctxt_switches: CounterVec,
+    nonvoluntary_ctxt_switches: CounterVec,
 }
 
 /// A collector to collect threads metrics, including CPU usage
@@ -73,10 +74,19 @@ impl ThreadsCollector {
         )
         .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
-        let ctxt_switches = CounterVec::new(
+        let voluntary_ctxt_switches = CounterVec::new(
             Opts::new(
-                "thread_context_switches",
-                "Number of thread context switches.",
+                "thread_voluntary_context_switches",
+                "Number of thread voluntary context switches.",
+            )
+            .namespace(ns.clone()),
+            &["name", "tid"],
+        )
+        .unwrap();
+        let nonvoluntary_ctxt_switches = CounterVec::new(
+            Opts::new(
+                "thread_nonvoluntary_context_switches",
+                "Number of thread nonvoluntary context switches.",
             )
             .namespace(ns),
             &["name", "tid"],
@@ -90,7 +100,8 @@ impl ThreadsCollector {
                 cpu_totals,
                 io_totals,
                 threads_state,
-                ctxt_switches,
+                voluntary_ctxt_switches,
+                nonvoluntary_ctxt_switches,
             }),
         }
     }
@@ -157,15 +168,26 @@ impl Collector for ThreadsCollector {
                 }
 
                 if let Ok(status) = pid::status_task(self.pid, tid) {
-                    let total = status.voluntary_ctxt_switches + status.nonvoluntary_ctxt_switches;
-                    let ctxt_swtiches = metrics
-                        .ctxt_switches
+                    let voluntary_total = status.voluntary_ctxt_switches;
+                    let voluntary_ctxt_swtiches = metrics
+                        .voluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-                    let past = ctxt_swtiches.get();
-                    let delta = total as f64 - past;
-                    if delta > 0.0 {
-                        ctxt_swtiches.inc_by(delta);
+                    let voluntary_past = voluntary_ctxt_swtiches.get();
+                    let voluntary_delta = voluntary_total as f64 - voluntary_past;
+                    if voluntary_delta > 0.0 {
+                        voluntary_ctxt_swtiches.inc_by(voluntary_delta);
+                    }
+
+                    let nonvoluntary_total = status.nonvoluntary_ctxt_switches;
+                    let nonvoluntary_ctxt_swtiches = metrics
+                        .nonvoluntary_ctxt_switches
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .unwrap();
+                    let nonvoluntary_past = nonvoluntary_ctxt_swtiches.get();
+                    let nonvoluntary_delta = nonvoluntary_total as f64 - nonvoluntary_past;
+                    if nonvoluntary_delta > 0.0 {
+                        nonvoluntary_ctxt_swtiches.inc_by(nonvoluntary_delta);
                     }
                 }
             }
@@ -173,7 +195,8 @@ impl Collector for ThreadsCollector {
         let mut mfs = metrics.cpu_totals.collect();
         mfs.extend(metrics.threads_state.collect());
         mfs.extend(metrics.io_totals.collect());
-        mfs.extend(metrics.ctxt_switches.collect());
+        mfs.extend(metrics.voluntary_ctxt_switches.collect());
+        mfs.extend(metrics.nonvoluntary_ctxt_switches.collect());
         mfs
     }
 }
