@@ -220,6 +220,7 @@ impl PdClient for RpcClient {
 
         let mut req = pdpb::GetAllStoresRequest::new();
         req.set_header(self.header());
+        req.set_exclude_tombstone_stores(true);
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             client.get_all_stores_opt(&req, Self::call_option())
