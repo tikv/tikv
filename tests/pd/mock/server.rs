@@ -40,6 +40,10 @@ impl Server<Service> {
         let case = Option::None::<Arc<Service>>;
         Self::with_configuration(&mgr, eps, case)
     }
+
+    pub fn default_handler(&self) -> &Service {
+        &self.mocker.default_handler
+    }
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Server<C> {

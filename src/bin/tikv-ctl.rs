@@ -1950,7 +1950,7 @@ fn compact_whole_cluster(
         .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
     let stores = pd_client
-        .get_all_stores()
+        .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
     let mut handles = Vec::new();
