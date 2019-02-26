@@ -640,10 +640,13 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             }
         }
         let mut regions_to_destroy = vec![];
-        // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
-        // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
-        // update `pending_cross_snap` here may cause source peer destroys itself improperly. So don't update
-        // `pending_cross_snap` here if peer is applying snapshot.
+        // In some extreme cases, it may cause source peer destroyed improperly so that a later
+        // CommitMerge may panic because source is already destroyed, so just drop the message:
+        // 1. A new snapshot is received whereas a snapshot is still in applying, and the snapshot
+        // under applying is generated before merge and the new snapshot is generated after merge.
+        // After the applying snapshot is finished, the log may able to catch up and so a
+        // CommitMerge will be applied.
+        // 2. There is a CommitMerge pending in apply thread.
         let ready = {
             let peer = &self.region_peers[&region_id];
             !peer.is_applying_snapshot()
