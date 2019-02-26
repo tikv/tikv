@@ -11,10 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+extern crate hex;
+
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::ptr;
+use std::sync::Arc;
+
+use super::file;
+
+use rocksdb::Env;
 
 use crate::grpc::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
@@ -30,6 +38,7 @@ pub struct SecurityConfig {
     // Test purpose only.
     #[serde(skip)]
     pub override_ssl_target: String,
+    pub cipher_file: String,
 }
 
 impl Default for SecurityConfig {
@@ -39,6 +48,7 @@ impl Default for SecurityConfig {
             cert_path: String::new(),
             key_path: String::new(),
             override_ssl_target: String::new(),
+            cipher_file: String::new(),
         }
     }
 }
@@ -96,6 +106,7 @@ pub struct SecurityManager {
     cert: Vec<u8>,
     key: Vec<u8>,
     override_ssl_target: String,
+    cipher_file: String,
 }
 
 impl Drop for SecurityManager {
@@ -115,6 +126,7 @@ impl SecurityManager {
             cert: load_key("certificate", &cfg.cert_path)?,
             key: load_key("private key", &cfg.key_path)?,
             override_ssl_target: cfg.override_ssl_target.clone(),
+            cipher_file: cfg.cipher_file.clone(),
         })
     }
 
@@ -143,6 +155,36 @@ impl SecurityManager {
                 .build();
             sb.bind_secure(addr, port, cred)
         }
+    }
+
+    pub fn cipher_file(&self) -> &str {
+        &self.cipher_file
+    }
+}
+
+pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(path: P) -> Result<Arc<Env>, String> {
+    let cipher_hex = match file::read_all(path) {
+        Err(e) => return Err(format!("failed to load cipher file: {:?}", e)),
+        Ok(content) => {
+            // Trim head and tail space
+            match String::from_utf8(content) {
+                Err(e) => {
+                    return Err(format!(
+                        "failed to convert file content to string, error: {:?}",
+                        e
+                    ));
+                }
+                Ok(s) => s.trim().as_bytes().to_vec(),
+            }
+        }
+    };
+    let cipher_text = match hex::decode(cipher_hex) {
+        Err(e) => return Err(format!("cipher file should be hex type, error: {:?}", e)),
+        Ok(text) => text,
+    };
+    match Env::new_default_ctr_encrypted_env(&cipher_text) {
+        Err(e) => Err(format!("failed to create encrypted env: {:?}", e)),
+        Ok(env) => Ok(Arc::new(env)),
     }
 }
 
@@ -204,5 +246,31 @@ mod tests {
         assert_eq!(mgr.ca, vec![0]);
         assert_eq!(mgr.cert, vec![1]);
         assert_eq!(mgr.key, vec![2]);
+    }
+
+    #[test]
+    fn test_encrypted_env_from_cipher_file() {
+        let path = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+
+        // Cipher file not exists.
+        assert!(encrypted_env_from_cipher_file(path.path().join("file0")).is_err());
+
+        // Cipher file in hex type.
+        let mut file1 = File::create(path.path().join("file1")).unwrap();
+        file1.write_all(b"ACFFDBCC").unwrap();
+        file1.sync_all().unwrap();
+        assert!(encrypted_env_from_cipher_file(path.path().join("file1")).is_ok());
+
+        // Cipher file not in hex type.
+        let mut file2 = File::create(path.path().join("file2")).unwrap();
+        file2.write_all(b"AGGGGGGG").unwrap();
+        file2.sync_all().unwrap();
+        assert!(encrypted_env_from_cipher_file(path.path().join("file2")).is_err());
+
+        // The length of cipher file's content is not power of 2.
+        let mut file3 = File::create(path.path().join("file3")).unwrap();
+        file3.write_all(b"ACFFDBCCA").unwrap();
+        file3.sync_all().unwrap();
+        assert!(encrypted_env_from_cipher_file(path.path().join("file3")).is_err());
     }
 }
