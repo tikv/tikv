@@ -56,7 +56,7 @@ impl Conn {
         security_mgr: &SecurityManager,
         store_id: u64,
     ) -> Conn {
-        info!("server: new connection with tikv endpoint: {}", addr);
+        info!("server: new connection with tikv endpoint"; "addr" => addr);
 
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
@@ -117,13 +117,13 @@ impl Conn {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => error!("raft RPC finished fail: {}", e),
+                                Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
                         })
                     }
                     Err(e) => {
-                        error!("batch_raft RPC finished fail: {}", e);
+                        error!("batch_raft RPC finished fail"; "err" => ?e);
                         box future::err(e)
                     }
                 }
@@ -136,7 +136,7 @@ impl Conn {
                     REPORT_FAILURE_MSG_COUNTER
                         .with_label_values(&["unreachable", &*store_id.to_string()])
                         .inc();
-                    warn!("batch_raft/raft RPC to {} finally fail: {:?}", addr, e);
+                    warn!("batch_raft/raft RPC finally fail"; "to_addr" => addr, "err" => ?e);
                 })
                 .map(|_| ()),
         );
