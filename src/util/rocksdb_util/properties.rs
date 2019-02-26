@@ -377,7 +377,10 @@ impl SizePropertiesCollector {
 
 impl TablePropertiesCollector for SizePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        let size = key.len() as u64 + get_entry_size(value, entry_type).unwrap();
+        let size = match get_entry_size(value, entry_type) {
+            Ok(entry_size) => key.len() as u64 + entry_size,
+            Err(_) => return,
+        };
         self.index_handle.size += size;
         self.index_handle.offset += size as u64;
         // Add the start key for convenience.
@@ -625,11 +628,14 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        // size
+        let size = match get_entry_size(value, entry_type) {
+            Ok(entry_size) => key.len() as u64 + entry_size,
+            Err(_) => return,
+        };
+        self.cur_offsets.size += size;
         // keys
         self.cur_offsets.keys += 1;
-        // size
-        let size = key.len() as u64 + get_entry_size(value, entry_type).unwrap();
-        self.cur_offsets.size += size;
         // Add the start key for convenience.
         if self.last_key.is_empty()
             || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE
