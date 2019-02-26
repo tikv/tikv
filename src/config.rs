@@ -37,6 +37,7 @@ use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
 use crate::server::readpool;
 use crate::server::Config as ServerConfig;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::{
     Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
@@ -713,16 +714,10 @@ impl DbConfig {
     }
 
     fn write_into_metrics(&self) {
-        let metrics = register_gauge_vec!(
-            "tikv_config_rocksdb",
-            "Config information of rocksdb",
-            &["cf", "name"]
-        )
-        .unwrap();
-        write_into_metrics!(self.defaultcf, "default_cf", metrics);
-        write_into_metrics!(self.lockcf, "lock_cf", metrics);
-        write_into_metrics!(self.writecf, "write_cf", metrics);
-        write_into_metrics!(self.raftcf, "raft_cf", metrics);
+        write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
