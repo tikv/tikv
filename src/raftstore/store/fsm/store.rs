@@ -346,7 +346,7 @@ impl<T: Transport, C> PollContext<T, C> {
             info!(
                 "raft message is stale, ignore it";
                 "region_id" => region_id,
-                "epoch" => ?cur_epoch,
+                "region_epoch" => ?cur_epoch,
                 "msg_type" => ?msg_type,
             );
             self.raft_metrics.message_dropped.stale_msg += 1;
@@ -356,7 +356,7 @@ impl<T: Transport, C> PollContext<T, C> {
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
-            "epoch" => ?cur_epoch,
+            "region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
 
@@ -1219,7 +1219,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             info!(
                 "merged peer receives a stale message";
                 "region_id" => region_id,
-                "epoch" => ?region_epoch,
+                "region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
 
@@ -1244,7 +1244,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             info!(
                 "tombstone peer receives a stale message";
                 "region_id" => region_id,
-                "epoch" => ?region_epoch,
+                "region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
 
