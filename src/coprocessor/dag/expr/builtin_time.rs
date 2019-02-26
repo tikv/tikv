@@ -15,7 +15,7 @@ use super::{EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::error::Error;
 use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use crate::coprocessor::codec::mysql::time::weekmode::WeekMode;
-use crate::coprocessor::codec::mysql::{self, Duration as MyDuration, Time, TimeType};
+use crate::coprocessor::codec::mysql::{Duration as MyDuration, Time, TimeType};
 use crate::coprocessor::codec::Datum;
 use chrono::offset::TimeZone;
 use chrono::Datelike;
@@ -314,10 +314,10 @@ impl ScalarFunc {
     #[inline]
     pub fn add_time_datetime_null<'a>(
         &self,
-        ctx: &mut EvalContext,
+        _ctx: &mut EvalContext,
         _row: &[Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
+        Ok(None)
     }
 
     #[inline]
@@ -387,7 +387,7 @@ impl ScalarFunc {
         _ctx: &mut EvalContext,
         _row: &[Datum],
     ) -> Result<Option<Cow<'a, MyDuration>>> {
-        Ok(Some(Cow::Owned(MyDuration::zero())))
+        Ok(None)
     }
 
     #[inline]
@@ -427,10 +427,10 @@ impl ScalarFunc {
     #[inline]
     pub fn sub_time_datetime_null<'a>(
         &self,
-        ctx: &mut EvalContext,
+        _ctx: &mut EvalContext,
         _row: &[Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        Ok(Some(Cow::Owned(mysql::time::zero_datetime(ctx.cfg.tz))))
+        Ok(None)
     }
 
     #[inline]
@@ -1338,12 +1338,12 @@ mod tests {
         test_ok_case_zero_arg(
             &mut ctx,
             ScalarFuncSig::AddTimeDateTimeNull,
-            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap()),
+            Datum::Null,
         );
         test_ok_case_zero_arg(
             &mut ctx,
             ScalarFuncSig::SubTimeDateTimeNull,
-            Datum::Time(Time::parse_utc_datetime("0000-00-00 00:00:00.000000", 6).unwrap()),
+            Datum::Null,
         );
     }
 
@@ -1567,7 +1567,7 @@ mod tests {
         test_ok_case_zero_arg(
             &mut ctx,
             ScalarFuncSig::AddTimeDurationNull,
-            Datum::Dur(Duration::parse(b"0 00:00:00.000000", 6).unwrap()),
+            Datum::Null,
         );
     }
 
