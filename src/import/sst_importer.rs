@@ -372,7 +372,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 
