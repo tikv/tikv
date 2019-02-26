@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
+use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
 
@@ -32,8 +32,8 @@ struct Metrics {
     cpu_totals: CounterVec,
     io_totals: CounterVec,
     threads_state: IntGaugeVec,
-    voluntary_ctxt_switches: CounterVec,
-    nonvoluntary_ctxt_switches: CounterVec,
+    voluntary_ctxt_switches: IntCounterVec,
+    nonvoluntary_ctxt_switches: IntCounterVec,
 }
 
 /// A collector to collect threads metrics, including CPU usage
@@ -74,7 +74,7 @@ impl ThreadsCollector {
         )
         .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
-        let voluntary_ctxt_switches = CounterVec::new(
+        let voluntary_ctxt_switches = IntCounterVec::new(
             Opts::new(
                 "thread_voluntary_context_switches",
                 "Number of thread voluntary context switches.",
@@ -83,7 +83,7 @@ impl ThreadsCollector {
             &["name", "tid"],
         )
         .unwrap();
-        let nonvoluntary_ctxt_switches = CounterVec::new(
+        let nonvoluntary_ctxt_switches = IntCounterVec::new(
             Opts::new(
                 "thread_nonvoluntary_context_switches",
                 "Number of thread nonvoluntary context switches.",
@@ -168,26 +168,28 @@ impl Collector for ThreadsCollector {
                 }
 
                 if let Ok(status) = pid::status_task(self.pid, tid) {
-                    let voluntary_total = status.voluntary_ctxt_switches;
-                    let voluntary_ctxt_swtiches = metrics
+                    // Thread voluntary context switches.
+                    let voluntary_ctxt_switches = status.voluntary_ctxt_switches;
+                    let voluntary_total = metrics
                         .voluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-                    let voluntary_past = voluntary_ctxt_swtiches.get();
-                    let voluntary_delta = voluntary_total as f64 - voluntary_past;
-                    if voluntary_delta > 0.0 {
-                        voluntary_ctxt_swtiches.inc_by(voluntary_delta);
+                    let voluntary_past = voluntary_total.get();
+                    let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
+                    if voluntary_delta > 0 {
+                        voluntary_total.inc_by(voluntary_delta);
                     }
 
-                    let nonvoluntary_total = status.nonvoluntary_ctxt_switches;
-                    let nonvoluntary_ctxt_swtiches = metrics
+                    // Thread nonvoluntary context switches.
+                    let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
+                    let nonvoluntary_total = metrics
                         .nonvoluntary_ctxt_switches
                         .get_metric_with_label_values(&[&name, &format!("{}", tid)])
                         .unwrap();
-                    let nonvoluntary_past = nonvoluntary_ctxt_swtiches.get();
-                    let nonvoluntary_delta = nonvoluntary_total as f64 - nonvoluntary_past;
-                    if nonvoluntary_delta > 0.0 {
-                        nonvoluntary_ctxt_swtiches.inc_by(nonvoluntary_delta);
+                    let nonvoluntary_past = nonvoluntary_total.get();
+                    let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;
+                    if nonvoluntary_delta > 0 {
+                        nonvoluntary_total.inc_by(nonvoluntary_delta);
                     }
                 }
             }
