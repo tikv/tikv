@@ -365,14 +365,19 @@ mod tests {
         test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
         test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
 
+        let security_cfg = create_security_cfg();
+        test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
+        test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
+    }
+
+    fn create_security_cfg() -> SecurityConfig {
         let path = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
         let mut security_cfg = SecurityConfig::default();
         let mut cipher_file = File::create(path.path().join("cipher_file")).unwrap();
         cipher_file.write_all(b"ACFFDBCC").unwrap();
         cipher_file.sync_all().unwrap();
         security_cfg.cipher_file = path.path().join("cipher_file").to_str().unwrap().to_owned();
-        test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
-        test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
+        security_cfg
     }
 
     fn test_sst_writer_with(value_size: usize, cf_names: &[&str], security_cfg: &SecurityConfig) {
@@ -381,8 +386,7 @@ mod tests {
         let cfg = DbConfig::default();
         let mut db_opts = cfg.build_opt();
         if !security_cfg.cipher_file.is_empty() {
-            let cipher_file = &security_cfg.cipher_file;
-            let env = encrypted_env_from_cipher_file(cipher_file, None).unwrap();
+            let env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, None).unwrap();
             db_opts.set_env(env);
         }
         let cfs_opts = cfg.build_cf_opts();
