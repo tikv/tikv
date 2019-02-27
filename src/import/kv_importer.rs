@@ -26,6 +26,7 @@ use super::client::*;
 use super::engine::*;
 use super::import::*;
 use super::{Config, Error, Result};
+use crate::util::security::SecurityConfig;
 
 pub struct Inner {
     engines: HashMap<Uuid, Arc<EngineFile>>,
@@ -40,8 +41,8 @@ pub struct KVImporter {
 }
 
 impl KVImporter {
-    pub fn new(cfg: Config, opts: DbConfig) -> Result<KVImporter> {
-        let dir = EngineDir::new(&cfg.import_dir, opts)?;
+    pub fn new(cfg: Config, db_cfg: DbConfig, security_cfg: SecurityConfig) -> Result<KVImporter> {
+        let dir = EngineDir::new(&cfg.import_dir, db_cfg, security_cfg)?;
         Ok(KVImporter {
             cfg,
             dir,
@@ -190,7 +191,8 @@ impl KVImporter {
 /// The temporary RocksDB engine is placed in `$root/.temp/$uuid`. After writing
 /// is completed, the files are stored in `$root/$uuid`.
 pub struct EngineDir {
-    opts: DbConfig,
+    db_cfg: DbConfig,
+    security_cfg: SecurityConfig,
     root_dir: PathBuf,
     temp_dir: PathBuf,
 }
@@ -198,7 +200,11 @@ pub struct EngineDir {
 impl EngineDir {
     const TEMP_DIR: &'static str = ".temp";
 
-    fn new<P: AsRef<Path>>(root: P, opts: DbConfig) -> Result<EngineDir> {
+    fn new<P: AsRef<Path>>(
+        root: P,
+        db_cfg: DbConfig,
+        security_cfg: SecurityConfig,
+    ) -> Result<EngineDir> {
         let root_dir = root.as_ref().to_owned();
         let temp_dir = root_dir.join(Self::TEMP_DIR);
         if temp_dir.exists() {
@@ -206,7 +212,8 @@ impl EngineDir {
         }
         fs::create_dir_all(&temp_dir)?;
         Ok(EngineDir {
-            opts,
+            db_cfg,
+            security_cfg,
             root_dir,
             temp_dir,
         })
@@ -228,13 +235,18 @@ impl EngineDir {
         if path.save.exists() {
             return Err(Error::FileExists(path.save));
         }
-        EngineFile::new(uuid, path, self.opts.clone())
+        EngineFile::new(uuid, path, self.db_cfg.clone(), self.security_cfg.clone())
     }
 
     /// Creates an engine from `$root/$uuid` for importing data.
     fn import(&self, uuid: Uuid) -> Result<Engine> {
         let path = self.join(uuid);
-        Engine::new(&path.save, uuid, self.opts.clone())
+        Engine::new(
+            &path.save,
+            uuid,
+            self.db_cfg.clone(),
+            self.security_cfg.clone(),
+        )
     }
 
     /// Cleans up directories for both `$root/.temp/$uuid` and `$root/$uuid`
@@ -277,8 +289,13 @@ pub struct EngineFile {
 
 impl EngineFile {
     /// Creates an engine in the temp directory for writing.
-    fn new(uuid: Uuid, path: EnginePath, opts: DbConfig) -> Result<EngineFile> {
-        let engine = Engine::new(&path.temp, uuid, opts)?;
+    fn new(
+        uuid: Uuid,
+        path: EnginePath,
+        db_cfg: DbConfig,
+        security_cfg: SecurityConfig,
+    ) -> Result<EngineFile> {
+        let engine = Engine::new(&path.temp, uuid, db_cfg, security_cfg)?;
         Ok(EngineFile {
             uuid,
             path,
@@ -340,7 +357,8 @@ mod tests {
 
         let mut cfg = Config::default();
         cfg.import_dir = temp_dir.path().to_str().unwrap().to_owned();
-        let importer = KVImporter::new(cfg, DbConfig::default()).unwrap();
+        let importer =
+            KVImporter::new(cfg, DbConfig::default(), SecurityConfig::default()).unwrap();
 
         let uuid = Uuid::new_v4();
         // Can not bind to an unopened engine.
@@ -359,7 +377,8 @@ mod tests {
         let temp_dir = TempDir::new("test_engine_file").unwrap();
 
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
         let path = EnginePath {
             save: temp_dir.path().join("save"),
             temp: temp_dir.path().join("temp"),
@@ -367,9 +386,12 @@ mod tests {
 
         // Test close.
         {
-            let mut f = EngineFile::new(uuid, path.clone(), opts.clone()).unwrap();
+            let mut f =
+                EngineFile::new(uuid, path.clone(), db_cfg.clone(), security_cfg.clone()).unwrap();
             // Cannot create the same file again.
-            assert!(EngineFile::new(uuid, path.clone(), opts.clone()).is_err());
+            assert!(
+                EngineFile::new(uuid, path.clone(), db_cfg.clone(), security_cfg.clone()).is_err()
+            );
             assert!(path.temp.exists());
             assert!(!path.save.exists());
             f.close().unwrap();
@@ -380,7 +402,8 @@ mod tests {
 
         // Test cleanup.
         {
-            let f = EngineFile::new(uuid, path.clone(), opts.clone()).unwrap();
+            let f =
+                EngineFile::new(uuid, path.clone(), db_cfg.clone(), security_cfg.clone()).unwrap();
             assert!(path.temp.exists());
             assert!(!path.save.exists());
             drop(f);

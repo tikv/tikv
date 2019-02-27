@@ -319,13 +319,13 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
-        info!("Debugger starts manual compact on {:?}.{}", db, cf);
+        info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
         let mut opts = CompactOptions::new();
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact on {:?}.{}", db, cf);
+        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -538,8 +538,10 @@ impl Debugger {
                 let region_id = region_state.get_region().get_id();
                 let old_peers = region_state.mut_region().take_peers();
                 info!(
-                    "region {} change peers from {:?}, to {:?}",
-                    region_id, old_peers, new_peers
+                    "peers changed";
+                    "region_id" => region_id,
+                    "old_peers" => ?old_peers,
+                    "new_peers" => ?new_peers,
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state

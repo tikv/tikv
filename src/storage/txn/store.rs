@@ -13,6 +13,7 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use crate::storage::metrics::*;
 use crate::storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
 };
@@ -159,6 +160,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         if let Some(ref l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
+                    REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
@@ -171,6 +173,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         if let Some(ref u) = upper_bound {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
+                    REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
