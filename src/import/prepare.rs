@@ -242,7 +242,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 
         match res {
             Ok(mut resp) => {
-                info!("split succ"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key));
+                info!("split"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key));
                 // Just assume that the leader will be at the same store.
                 let left = resp.take_left();
                 let leader = match region.leader {
