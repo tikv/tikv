@@ -88,7 +88,7 @@ impl ChunkBuilder {
 
     pub fn build(self, tps: &[FieldType]) -> Chunk {
         let mut fields = Vec::with_capacity(tps.len());
-        let mut arrays: Vec<Arc<array::Array>> = Vec::with_capacity(tps.len());
+        let mut arrays: Vec<Arc<dyn array::Array>> = Vec::with_capacity(tps.len());
         for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
             let (field, data) = match field_type.tp() {
                 FieldTypeTp::Tiny
@@ -135,7 +135,7 @@ impl ColumnsBuilder {
         self.data.push(data)
     }
 
-    fn into_i64_array(self) -> (Field, Arc<array::Array>) {
+    fn into_i64_array(self) -> (Field, Arc<dyn array::Array>) {
         let field = Field::new("", DataType::Int64, true);
         let mut data: Vec<Option<i64>> = Vec::with_capacity(self.data.len());
         for v in self.data {
@@ -148,7 +148,7 @@ impl ColumnsBuilder {
         (field, Arc::new(array::PrimitiveArray::from(data)))
     }
 
-    fn into_u64_array(self) -> (Field, Arc<array::Array>) {
+    fn into_u64_array(self) -> (Field, Arc<dyn array::Array>) {
         let field = Field::new("", DataType::UInt64, true);
         let mut data: Vec<Option<u64>> = Vec::with_capacity(self.data.len());
         for v in self.data {
@@ -161,7 +161,7 @@ impl ColumnsBuilder {
         (field, Arc::new(array::PrimitiveArray::from(data)))
     }
 
-    fn into_f64_array(self) -> (Field, Arc<array::Array>) {
+    fn into_f64_array(self) -> (Field, Arc<dyn array::Array>) {
         let field = Field::new("", DataType::Float64, true);
         let mut data: Vec<Option<f64>> = Vec::with_capacity(self.data.len());
         for v in self.data {

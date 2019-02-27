@@ -49,7 +49,7 @@ const STAT_SEEK: &str = "seek";
 const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
-pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnBox((CbContext, Result<T>)) + Send>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -653,7 +653,7 @@ quick_error! {
             description("an empty request")
             display("an empty request")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())

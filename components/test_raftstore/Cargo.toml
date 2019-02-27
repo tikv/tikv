@@ -12,7 +12,7 @@ tempdir = "0.3"
 raft = "0.4"
 futures = "0.1"
 tokio-timer = "0.2"
-tokio = "0.1"
+tokio-threadpool = "0.1"
 grpcio = { version = "0.4", features = [ "secure" ] }
 rand = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
