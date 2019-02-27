@@ -19,7 +19,7 @@ log = "0.3.9"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch="release-2.1-cps"
+branch="release-2.1"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"

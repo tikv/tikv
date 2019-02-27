@@ -13,4 +13,4 @@ futures = "0.1"
 
 [dependencies.kvproto]
 git = "https://github.com/pingcap/kvproto.git"
-branch="release-2.1-cps"
+branch="release-2.1"
