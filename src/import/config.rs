@@ -47,7 +47,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<Error>> {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("import.num_threads can not be 0".into());
         }

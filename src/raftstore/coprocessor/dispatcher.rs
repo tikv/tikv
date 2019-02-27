@@ -28,11 +28,11 @@ struct Entry<T> {
 }
 
 // TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
-pub type BoxRoleObserver = Box<RoleObserver + Send + Sync>;
-pub type BoxRegionChangeObserver = Box<RegionChangeObserver + Send + Sync>;
+pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
+pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
+pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
+pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
