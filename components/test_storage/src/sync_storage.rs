@@ -162,6 +162,7 @@ impl<E: Engine> SyncTestStorage<E> {
             cb
         ))
         .unwrap()
+        .map(|(v, _)| v)
     }
 
     pub fn commit(

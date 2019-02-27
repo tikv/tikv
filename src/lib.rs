@@ -20,6 +20,7 @@
 #![feature(slice_patterns)]
 #![feature(box_syntax)]
 #![feature(integer_atomics)]
+#![feature(no_more_cas)]
 #![feature(duration_as_u128)]
 #![feature(proc_macro_hygiene)]
 #![feature(const_int_ops)]

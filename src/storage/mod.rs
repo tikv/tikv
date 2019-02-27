@@ -922,10 +922,10 @@ impl<E: Engine> Storage<E> {
         let inspector = self.inspector.clone();
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
-        let callback = box move |res| {
+        let callback = box move |res: Result<Vec<Result<()>>>| {
             let mut max_read_ts = 0;
-            if let Ok(key_errs) = res {
-                if key_errs.len() == 0 {
+            if let Ok(key_errs) = &res {
+                if key_errs.is_empty() {
                     max_read_ts = inspector.get_max_read_ts(region_id, version);
                 }
             }

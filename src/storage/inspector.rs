@@ -12,9 +12,8 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::sync::atomic::{self, AtomicU64, AtomicUsize};
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::thread;
+use std::sync::atomic::{self, AtomicU64};
+use std::sync::{Arc, RwLock};
 
 use raft::StateRole;
 
@@ -23,7 +22,7 @@ use crate::raftstore::coprocessor::{
     RoleObserver,
 };
 use crate::util::collections::HashMap;
-use crate::util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
+use crate::util::worker::Scheduler;
 use crate::util::HandyRwLock;
 
 //const KEY_BUCKET_SIZE: usize = 1024;
@@ -46,9 +45,9 @@ struct LeaderChangeObserver {
 }
 
 impl LeaderChangeObserver {
-    pub fn new(scheduler: Scheduler<LeaderChangeEvent>) -> Self {
-        Self { scheduler }
-    }
+    //    pub fn new(scheduler: Scheduler<LeaderChangeEvent>) -> Self {
+    //        Self { scheduler }
+    //    }
 }
 
 impl Coprocessor for LeaderChangeObserver {}
@@ -97,7 +96,7 @@ impl RegionChangeObserver for LeaderChangeObserver {
 }
 
 // region_id -> (epoch_version, max_read_ts)
-type TsMap = HashMap<(u64, u64), AtomicU64>;
+type TsMap = HashMap<(u64, u64), Arc<AtomicU64>>;
 
 #[derive(Clone)]
 pub struct MvccInspector {
@@ -124,7 +123,7 @@ impl MvccInspector {
         }
     }
 
-    pub fn register_observer(&self, host: &mut CoprocessorHost) {
+    pub fn register_observer(&self, _host: &mut CoprocessorHost) {
         //        let scheduler = self.update_worker.lock().unwrap().scheduler();
         //        let observer = LeaderChangeObserver::new(scheduler);
         //
@@ -134,23 +133,25 @@ impl MvccInspector {
         //            .register_region_change_observer(1, box observer);
     }
 
-    fn stop(&self) {
-        //        self.update_worker
-        //            .lock()
-        //            .unwrap()
-        //            .stop()
-        //            .unwrap()
-        //            .join()
-        //            .unwrap();
-    }
+    //    fn stop(&self) {
+    //        self.update_worker
+    //            .lock()
+    //            .unwrap()
+    //            .stop()
+    //            .unwrap()
+    //            .join()
+    //            .unwrap();
+    //    }
 
     pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64) {
         let entry = self.lock_entry(region_id, version);
-        entry.fetch_update(
-            |saved_ts| Some(::std::cmp::max(saved_ts, ts)),
-            atomic::Ordering::SeqCst,
-            atomic::Ordering::SeqCst,
-        );
+        entry
+            .fetch_update(
+                |saved_ts| Some(::std::cmp::max(saved_ts, ts)),
+                atomic::Ordering::SeqCst,
+                atomic::Ordering::SeqCst,
+            )
+            .unwrap();
     }
 
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
@@ -158,12 +159,12 @@ impl MvccInspector {
         entry.load(atomic::Ordering::SeqCst)
     }
 
-    fn lock_entry(&self, region_id: u64, version: u64) -> AtomicU64 {
+    fn lock_entry(&self, region_id: u64, version: u64) -> Arc<AtomicU64> {
         if let Some(entry) = self.max_read_ts_map.rl().get(&(region_id, version)) {
-            return entry;
+            return entry.clone();
         }
         let mut map = self.max_read_ts_map.wl();
-        *map.entry((region_id, version)).or_default()
+        map.entry((region_id, version)).or_default().clone()
     }
 }
 
