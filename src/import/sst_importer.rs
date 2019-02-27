@@ -68,7 +68,7 @@ impl SSTImporter {
     pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
-                info!("ingest succ"; "meta" => ?meta);
+                info!("ingest"; "meta" => ?meta);
                 Ok(())
             }
             Err(e) => {
