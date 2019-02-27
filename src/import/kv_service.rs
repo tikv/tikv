@@ -89,7 +89,7 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
-                            info!("switch cluster succ"; "req" => ?req.get_request());
+                            info!("switch cluster"; "req" => ?req.get_request());
                             Ok(())
                         }
                         Err(e) => {
