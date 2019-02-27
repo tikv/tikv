@@ -28,7 +28,7 @@ use tokio_timer::timer::Handle;
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::{Engines, SnapManager};
-use crate::storage::{Engine, Storage};
+use crate::storage::{Engine, MvccInspector, Storage};
 use crate::util::security::SecurityManager;
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;
@@ -332,7 +332,12 @@ mod tests {
             &readpool::Config::default_for_test(),
             || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
+        let cop = coprocessor::Endpoint::new(
+            &cfg,
+            storage.get_engine(),
+            MvccInspector::new(),
+            cop_read_pool,
+        );
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

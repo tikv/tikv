@@ -197,12 +197,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
             storage::ReadPoolContext::new(pd_sender.clone())
         });
+    let mvcc_inspector = storage::MvccInspector::new();
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,
         storage_read_pool,
         Some(Arc::clone(&kv_engine)),
         Some(raft_router.clone()),
+        mvcc_inspector.clone(),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft stroage: {}", e));
 
@@ -244,7 +246,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
         coprocessor::ReadPoolContext::new(pd_sender.clone())
     });
-    let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
+    let cop = coprocessor::Endpoint::new(
+        &server_cfg,
+        storage.get_engine(),
+        mvcc_inspector.clone(),
+        cop_read_pool,
+    );
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -268,6 +275,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
     region_info_accessor.start();
+
+    mvcc_inspector.register_observer(&mut coprocessor_host);
 
     node.start(
         engines.clone(),

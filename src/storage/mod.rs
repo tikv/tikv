@@ -14,6 +14,7 @@
 pub mod config;
 pub mod engine;
 pub mod gc_worker;
+mod inspector;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -54,6 +55,7 @@ pub use self::engine::{
     TestEngineBuilder,
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::inspector::MvccInspector;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
@@ -491,6 +493,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
+            MvccInspector::new(),
         )
     }
 }
@@ -533,6 +536,8 @@ pub struct Storage<E: Engine> {
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
 
+    inspector: MvccInspector,
+
     // Fields below are storage configurations.
     max_key_size: usize,
 }
@@ -552,6 +557,7 @@ impl<E: Engine> Clone for Storage<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
+            inspector: self.inspector.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
         }
@@ -600,6 +606,7 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool<ReadPoolContext>,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        mvcc_inspector: MvccInspector,
     ) -> Result<Self> {
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
@@ -633,6 +640,7 @@ impl<E: Engine> Storage<E> {
             worker_scheduler,
             read_pool,
             gc_worker,
+            inspector: mvcc_inspector,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
@@ -649,6 +657,10 @@ impl<E: Engine> Storage<E> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn get_mvcc_inspector(&self) -> MvccInspector {
+        self.inspector.clone()
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing

@@ -25,7 +25,7 @@ use tipb::select::DAGRequest;
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
-use crate::storage::{self, Engine, SnapshotStore};
+use crate::storage::{self, Engine, MvccInspector, SnapshotStore};
 use crate::util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
@@ -45,6 +45,8 @@ pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool<ReadPoolContext>,
 
+    inspector: MvccInspector,
+
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
 
@@ -61,6 +63,7 @@ impl<E: Engine> Clone for Endpoint<E> {
         Self {
             engine: self.engine.clone(),
             read_pool: self.read_pool.clone(),
+            inspector: self.inspector.clone(),
             ..*self
         }
     }
@@ -69,10 +72,16 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
+    pub fn new(
+        cfg: &Config,
+        engine: E,
+        mvcc_inspector: MvccInspector,
+        read_pool: ReadPool<ReadPoolContext>,
+    ) -> Self {
         Self {
             engine,
             read_pool,
+            inspector: mvcc_inspector,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -667,7 +676,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         // a normal request
         let handler_builder =
@@ -710,6 +719,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
+            MvccInspector::new(),
             read_pool,
         );
 
@@ -744,7 +754,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         let mut req = coppb::Request::new();
         req.set_tp(9999);
@@ -763,7 +773,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         let mut req = coppb::Request::new();
         req.set_tp(REQ_TYPE_DAG);
@@ -789,7 +799,7 @@ mod tests {
             },
             || ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         let (tx, rx) = mpsc::channel();
 
@@ -834,7 +844,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         let handler_builder =
             box |_, _: &_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
@@ -853,7 +863,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         // Fail immediately
         let handler_builder = box |_, _: &_| {
@@ -898,7 +908,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         let handler_builder = box |_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed());
         let resp_vec = cop
@@ -918,7 +928,7 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1010,6 +1020,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
+            MvccInspector::new(),
             read_pool,
         );
 
@@ -1063,7 +1074,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::new(&config, engine, read_pool);
+        let cop = Endpoint::new(&config, engine, MvccInspector::new(), read_pool);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
