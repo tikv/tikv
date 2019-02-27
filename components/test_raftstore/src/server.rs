@@ -53,9 +53,9 @@ pub type SimulateEngine = RaftKv<SimulateStoreTransport>;
 struct ServerMeta {
     node: Node<TestPdClient>,
     server: Server<SimulateStoreTransport, PdStoreAddrResolver>,
-    router: SimulateStoreTransport,
+    sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
-    store_ch: RaftRouter,
+    raw_router: RaftRouter,
     worker: Worker<ResolveTask>,
 }
 
@@ -248,10 +248,10 @@ impl Simulator for ServerCluster {
         self.metas.insert(
             node_id,
             ServerMeta {
-                store_ch: router,
+                raw_router: router,
                 node,
                 server,
-                router: sim_router,
+                sim_router,
                 sim_trans: simulate_trans,
                 worker,
             },
@@ -289,7 +289,7 @@ impl Simulator for ServerCluster {
     ) -> Result<()> {
         let router = match self.metas.get(&node_id) {
             None => return Err(box_err!("missing sender for store {}", node_id)),
-            Some(meta) => meta.router.clone(),
+            Some(meta) => meta.sim_router.clone(),
         };
         router.send_command(request, cb)
     }
@@ -322,16 +322,20 @@ impl Simulator for ServerCluster {
         self.metas
             .get_mut(&node_id)
             .unwrap()
-            .router
+            .sim_router
             .add_filter(filter);
     }
 
     fn clear_recv_filters(&mut self, node_id: u64) {
-        self.metas.get_mut(&node_id).unwrap().router.clear_filters();
+        self.metas
+            .get_mut(&node_id)
+            .unwrap()
+            .sim_router
+            .clear_filters();
     }
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
-        self.metas.get(&node_id).map(|m| m.store_ch.clone())
+        self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
 }
 

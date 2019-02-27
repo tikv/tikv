@@ -813,17 +813,18 @@ impl<T: Simulator> Cluster<T> {
     // Caller must ensure that the `split_key` is in the `region`.
     pub fn split_region(&mut self, region: &metapb::Region, split_key: &[u8], cb: Callback) {
         let leader = self.leader_of_region(region.get_id()).unwrap();
-        let ch = self.sim.rl().get_router(leader.get_store_id()).unwrap();
+        let router = self.sim.rl().get_router(leader.get_store_id()).unwrap();
         let split_key = split_key.to_vec();
-        ch.send(
-            region.get_id(),
-            PeerMsg::CasualMessage(CasualMessage::SplitRegion {
-                region_epoch: region.get_region_epoch().clone(),
-                split_keys: vec![split_key.clone()],
-                callback: cb,
-            }),
-        )
-        .unwrap();
+        router
+            .send(
+                region.get_id(),
+                PeerMsg::CasualMessage(CasualMessage::SplitRegion {
+                    region_epoch: region.get_region_epoch().clone(),
+                    split_keys: vec![split_key.clone()],
+                    callback: cb,
+                }),
+            )
+            .unwrap();
     }
 
     pub fn must_split(&mut self, region: &metapb::Region, split_key: &[u8]) {
