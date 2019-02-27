@@ -42,7 +42,7 @@ impl SSTImporter {
     pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
-                info!("create succ"; "file" => ?f);
+                info!("create"; "file" => ?f);
                 Ok(f)
             }
             Err(e) => {
