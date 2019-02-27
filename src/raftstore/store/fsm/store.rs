@@ -346,7 +346,7 @@ impl<T: Transport, C> PollContext<T, C> {
             info!(
                 "raft message is stale, ignore it";
                 "region_id" => region_id,
-                "region_epoch" => ?cur_epoch,
+                "current_region_epoch" => ?cur_epoch,
                 "msg_type" => ?msg_type,
             );
             self.raft_metrics.message_dropped.stale_msg += 1;
@@ -356,7 +356,7 @@ impl<T: Transport, C> PollContext<T, C> {
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
-            "region_epoch" => ?cur_epoch,
+            "current_region_epoch" => ?cur_epoch,
             "msg_type" => ?msg_type,
         );
 
@@ -872,7 +872,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         info!(
             "cleans up garbage data";
             "store_id" => self.store.get_id(),
-            "garbage_range" => ranges.len(),
+            "garbage_range_count" => ranges.len(),
             "takes" => ?t.elapsed()
         );
 
@@ -1100,7 +1100,7 @@ impl RaftBatchSystem {
         box_try!(workers.local_reader.start_with_timer(reader, timer));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed, error: {:?}", e);
+            warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         let tag = format!("raftstore-{}", builder.store.get_id());
         let store = builder.store.clone();
@@ -1219,7 +1219,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             info!(
                 "merged peer receives a stale message";
                 "region_id" => region_id,
-                "region_epoch" => ?region_epoch,
+                "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
 
@@ -1244,7 +1244,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             info!(
                 "tombstone peer receives a stale message";
                 "region_id" => region_id,
-                "region_epoch" => ?region_epoch,
+                "from_region_epoch" => ?from_epoch,
+                "current_region_epoch" => ?region_epoch,
                 "msg_type" => ?msg_type,
             );
 
@@ -1281,8 +1282,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         debug!(
             "handle raft message";
-            "from" => msg.get_from_peer().get_id(),
-            "to" => msg.get_to_peer().get_id(),
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
             "store_id" => self.fsm.store.id,
             "region_id" => region_id,
             "msg_type" => ?msg.get_message().get_msg_type(),
@@ -1338,7 +1339,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
-                "target peer {:?} doesn't exist, stale message", target;
+                "target peer doesn't exist, stale message", target;
+                "target_peer" => ?target,
                 "region_id" => region_id,
                 "msg_type" => ?msg_type,
             );
@@ -1355,8 +1357,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             let exist_region = &meta.regions[&exist_region_id];
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
                 debug!(
-                    "msg {:?} is overlapped with region {:?}", msg, exist_region;
+                    "msg is overlapped with exist region";
                     "region_id" => exist_region_id,
+                    "msg" => >msg,
+                    "exist_region" => ?exist_region,
                 );
                 if util::is_first_vote_msg(msg.get_message()) {
                     meta.pending_votes.push(msg.to_owned());
@@ -1624,8 +1628,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.
                     info!(
-                        "region is disconnected, remove snaps {:?}", snaps;
+                        "region is disconnected, remove snaps";
                         "region_id" => region_id,
+                        "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
                         let snap = if is_sending {
