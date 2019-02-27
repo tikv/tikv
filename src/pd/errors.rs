@@ -49,6 +49,10 @@ quick_error! {
             description("region is not found")
             display("region is not found for key {:?}", key)
         }
+        StoreTombstone(msg: String) {
+            description("store is tombstone")
+            display("store is tombstone {:?}", msg)
+        }
     }
 }
 

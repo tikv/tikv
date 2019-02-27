@@ -1557,7 +1557,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
 
-        let apply_snapshot_count = self.ctx.applying_snap_count.load(Ordering::Relaxed);
+        let apply_snapshot_count = self.ctx.applying_snap_count.load(Ordering::SeqCst);
         stats.set_applying_snap_count(apply_snapshot_count as u32);
         STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC
             .with_label_values(&["applying"])
@@ -1571,14 +1571,14 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .global_stat
                 .stat
                 .engine_total_bytes_written
-                .swap(0, Ordering::Relaxed),
+                .swap(0, Ordering::SeqCst),
         );
         stats.set_keys_written(
             self.ctx
                 .global_stat
                 .stat
                 .engine_total_keys_written
-                .swap(0, Ordering::Relaxed),
+                .swap(0, Ordering::SeqCst),
         );
 
         stats.set_is_busy(
@@ -1586,7 +1586,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .global_stat
                 .stat
                 .is_busy
-                .swap(false, Ordering::Relaxed),
+                .swap(false, Ordering::SeqCst),
         );
 
         let store_info = StoreInfo {
@@ -1686,13 +1686,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .global_stat
             .stat
             .lock_cf_bytes_written
-            .load(Ordering::Relaxed);
+            .load(Ordering::SeqCst);
         if lock_cf_bytes_written > self.ctx.cfg.lock_cf_compact_bytes_threshold.0 {
             self.ctx
                 .global_stat
                 .stat
                 .lock_cf_bytes_written
-                .fetch_sub(lock_cf_bytes_written, Ordering::Relaxed);
+                .fetch_sub(lock_cf_bytes_written, Ordering::SeqCst);
 
             let task = CompactTask::Compact {
                 cf_name: String::from(CF_LOCK),
