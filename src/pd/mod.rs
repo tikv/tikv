@@ -32,7 +32,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
+pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
