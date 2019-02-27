@@ -881,6 +881,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         debug!(
             "receive merge target";
             "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
             "merge_target" => ?merge_target,
         );
 
