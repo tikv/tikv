@@ -107,7 +107,7 @@ fn new_debug_executor(
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file()).unwrap();
+                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
@@ -120,7 +120,7 @@ fn new_debug_executor(
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file()).unwrap();
+                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 raft_db_opts.set_env(encrypted_env);
             }
             let raft_db =
@@ -2229,7 +2229,7 @@ fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     if !cfg.security.cipher_file.is_empty() {
         let encrypted_env =
-            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file).unwrap();
+            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
     rocksdb::run_ldb_tool(&args, &opts);
