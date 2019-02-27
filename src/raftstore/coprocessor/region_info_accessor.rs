@@ -189,7 +189,7 @@ impl RegionCollector {
             self.regions
                 .insert(region_id, RegionInfo::new(region, role))
                 .is_none(),
-            "region_collector: trying to create new region {} but it already exists.",
+            "trying to create new region {} but it already exists.",
             region_id
         );
     }
@@ -227,7 +227,7 @@ impl RegionCollector {
         // handle it according to whether the region exists in the collection.
         if self.regions.contains_key(&region.get_id()) {
             info!(
-                "region_collector: trying to create region but it already exists, try to update it";
+                "trying to create region but it already exists, try to update it";
                 "region_id" => region.get_id(),
             );
             self.update_region(region);
@@ -241,7 +241,7 @@ impl RegionCollector {
             self.update_region(region);
         } else {
             info!(
-                "region_collector: trying to update region but it doesn't exist, try to create it";
+                "trying to update region but it doesn't exist, try to create it";
                 "region_id" => region.get_id(),
             );
             self.create_region(region, role);
@@ -261,7 +261,7 @@ impl RegionCollector {
             // It's possible that the region is already removed because it's end_key is used by
             // another newer region.
             debug!(
-                "region_collector: destroying region but it doesn't exist";
+                "destroying region but it doesn't exist";
                 "region_id" => region.get_id(),
             )
         }
@@ -276,7 +276,7 @@ impl RegionCollector {
         }
 
         warn!(
-            "region_collector: role change on region but the region doesn't exist. create it.";
+            "role change on region but the region doesn't exist. create it.";
             "region_id" => region_id,
         );
         self.create_region(region, new_role);
@@ -404,7 +404,7 @@ impl RegionCollector {
             }
             if !self.check_region_range(region, true) {
                 debug!(
-                    "region_collector: Received stale event";
+                    "Received stale event";
                     "event" => ?event,
                 );
                 return;
@@ -535,10 +535,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
             limit,
             callback: box move |res| {
                 tx.send(res).unwrap_or_else(|e| {
-                    panic!(
-                        "region_collector: failed to send seek_region result back to caller: {:?}",
-                        e
-                    )
+                    panic!("failed to send seek_region result back to caller: {:?}", e)
                 })
             },
         };
