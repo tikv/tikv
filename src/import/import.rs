@@ -348,7 +348,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             let store_id = peer.get_store_id();
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
-                    info!("upload succ"; "tag" => %self.tag, "store" => %store_id);
+                    info!("upload"; "tag" => %self.tag, "store" => %store_id);
                 }
                 Err(e) => {
                     warn!("upload failed"; "tag" => %self.tag, "store" => %store_id, "err" => %e);
