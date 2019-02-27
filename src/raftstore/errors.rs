@@ -115,9 +115,9 @@ quick_error!{
             description("request timeout")
             display("Timeout {}", msg)
         }
-        StaleEpoch(msg: String, new_regions: Vec<metapb::Region>) {
-            description("region is stale")
-            display("StaleEpoch {}", msg)
+        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
+            description("region epoch is not match")
+            display("EpochNotMatch {}", msg)
         }
         StaleCommand {
             description("stale command")
@@ -166,7 +166,14 @@ impl Into<errorpb::Error> for Error {
                     .mut_raft_entry_too_large()
                     .set_entry_size(entry_size);
             }
-            Error::StoreNotMatch(..) => errorpb.set_store_not_match(errorpb::StoreNotMatch::new()),
+            Error::StoreNotMatch(to_store_id, my_store_id) => {
+                errorpb
+                    .mut_store_not_match()
+                    .set_request_store_id(to_store_id);
+                errorpb
+                    .mut_store_not_match()
+                    .set_actual_store_id(my_store_id);
+            }
             Error::KeyNotInRegion(key, region) => {
                 errorpb.mut_key_not_in_region().set_key(key);
                 errorpb
@@ -179,10 +186,10 @@ impl Into<errorpb::Error> for Error {
                     .mut_key_not_in_region()
                     .set_end_key(region.get_end_key().to_vec());
             }
-            Error::StaleEpoch(_, new_regions) => {
-                let mut e = errorpb::StaleEpoch::new();
-                e.set_new_regions(RepeatedField::from_vec(new_regions));
-                errorpb.set_stale_epoch(e);
+            Error::EpochNotMatch(_, new_regions) => {
+                let mut e = errorpb::EpochNotMatch::new();
+                e.set_current_regions(RepeatedField::from_vec(new_regions));
+                errorpb.set_epoch_not_match(e);
             }
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());

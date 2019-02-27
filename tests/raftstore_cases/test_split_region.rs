@@ -597,13 +597,13 @@ fn test_node_split_region_diff_check() {
     test_split_region_diff_check(&mut cluster);
 }
 
-fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
     let old = pd_client.get_region(b"k1").unwrap();
     // Construct a get command using old region meta.
-    let get = new_request(
+    let get_old = new_request(
         old.get_id(),
         old.get_region_epoch().clone(),
         vec![new_get_cmd(b"k1")],
@@ -613,52 +613,70 @@ fn test_split_stale_epoch<T: Simulator>(cluster: &mut Cluster<T>, right_derive: 
     let left = pd_client.get_region(b"k1").unwrap();
     let right = pd_client.get_region(b"k3").unwrap();
 
-    let resp = cluster
-        .call_command_on_leader(get, Duration::from_secs(5))
-        .unwrap();
-    assert!(resp.get_header().has_error());
-    assert!(resp.get_header().get_error().has_stale_epoch());
-    if right_derive {
-        assert_eq!(
-            resp.get_header()
-                .get_error()
-                .get_stale_epoch()
-                .get_new_regions(),
-            &[right, left]
-        );
+    let new = if right_derive {
+        right.clone()
     } else {
-        assert_eq!(
-            resp.get_header()
-                .get_error()
-                .get_stale_epoch()
-                .get_new_regions(),
-            &[left, right]
+        left.clone()
+    };
+
+    // Newer epoch also triggers the EpochNotMatch error.
+    let mut latest_epoch = new.get_region_epoch().clone();
+    let latest_version = latest_epoch.get_version() + 1;
+    latest_epoch.set_version(latest_version);
+
+    let get_new = new_request(new.get_id(), latest_epoch, vec![new_get_cmd(b"k1")], false);
+    for get in &[get_old, get_new] {
+        let resp = cluster
+            .call_command_on_leader(get.clone(), Duration::from_secs(5))
+            .unwrap();
+        assert!(resp.get_header().has_error(), "{:?}", get);
+        assert!(
+            resp.get_header().get_error().has_epoch_not_match(),
+            "{:?}",
+            get
         );
+        if right_derive {
+            assert_eq!(
+                resp.get_header()
+                    .get_error()
+                    .get_epoch_not_match()
+                    .get_current_regions(),
+                &[right.clone(), left.clone()]
+            );
+        } else {
+            assert_eq!(
+                resp.get_header()
+                    .get_error()
+                    .get_epoch_not_match()
+                    .get_current_regions(),
+                &[left.clone(), right.clone()]
+            );
+        }
     }
 }
 
 #[test]
-fn test_server_split_stale_epoch_left_derive() {
+fn test_server_split_epoch_not_match_left_derive() {
     let mut cluster = new_server_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster, false);
+    test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
-fn test_server_split_stale_epoch_right_derive() {
+fn test_server_split_epoch_not_match_right_derive() {
     let mut cluster = new_server_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster, true);
+    test_split_epoch_not_match(&mut cluster, true);
 }
 
 #[test]
-fn test_node_split_stale_epoch_left_derive() {
+fn test_node_split_epoch_not_match_left_derive() {
     let mut cluster = new_node_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster, false);
+    test_split_epoch_not_match(&mut cluster, false);
 }
 
 #[test]
-fn test_node_split_stale_epoch_right_derive() {
+fn test_node_split_epoch_not_match_right_derive() {
     let mut cluster = new_node_cluster(0, 3);
-    test_split_stale_epoch(&mut cluster, true);
+    test_split_epoch_not_match(&mut cluster, true);
 }
 
 // For the peer which is the leader of the region before split,

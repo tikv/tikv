@@ -1530,7 +1530,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         match util::check_region_epoch(msg, peer.region(), true) {
-            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -1540,8 +1540,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     let sibling_region = self.region_peers[&sibling_region_id].region();
                     new_regions.push(sibling_region.to_owned());
                 }
-                self.raft_metrics.invalid_proposal.stale_epoch += 1;
-                Err(Error::StaleEpoch(msg, new_regions))
+                self.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
             Ok(()) => Ok(None),
@@ -1848,7 +1848,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 region.get_region_epoch(),
                 epoch
             );
-            return Err(Error::StaleEpoch(
+            return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     peer.tag, latest_epoch, epoch

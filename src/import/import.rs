@@ -311,21 +311,24 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::StaleEpoch(new_regions)) => {
-                let new_region = new_regions
+            Err(Error::EpochNotMatch(current_regions)) => {
+                let current_region = current_regions
                     .iter()
                     .find(|&r| self.sst.inside_region(r))
                     .cloned();
-                match new_region {
-                    Some(new_region) => {
+                match current_region {
+                    Some(current_region) => {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
-                        Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
+                            .and_then(|p| find_region_peer(&current_region, p.get_store_id()));
+                        Err(Error::UpdateRegion(RegionInfo::new(
+                            current_region,
+                            new_leader,
+                        )))
                     }
                     None => {
-                        warn!("{} stale epoch {:?}", self.tag, new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("{} epoch not match {:?}", self.tag, current_region);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }
@@ -359,14 +362,16 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
         ingest.set_sst(self.sst.meta.clone());
 
         let res = match self.client.ingest_sst(store_id, ingest) {
-            Ok(mut resp) => if !resp.has_error() {
-                Ok(())
-            } else {
-                match Error::from(resp.take_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_error() {
+                    Ok(())
+                } else {
+                    match Error::from(resp.take_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::EpochNotMatch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 

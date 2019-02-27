@@ -471,16 +471,18 @@ pub fn try_connect_leader(
     Err(box_err!("failed to connect to {:?}", members))
 }
 
+/// Convert a PD protobuf error to an `Error`.
 pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
     if !header.has_error() {
         return Ok(());
     }
-    // TODO: translate more error types
     let err = header.get_error();
     match err.get_field_type() {
         ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
         ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
-        _ => Err(box_err!(err.get_message())),
+        ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
+        ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
+        ErrorType::OK => Ok(()),
     }
 }
