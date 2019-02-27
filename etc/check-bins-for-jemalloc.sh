@@ -64,5 +64,6 @@ done
 
 if [[ "$errors" -ne 0 ]]; then
     echo "some binaries do not link to jemalloc"
+    echo "fix this by adding tikv_alloc as a dependency and importing it with 'extern crate'"
     exit 1
 fi

@@ -59,7 +59,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
 
-use clap::{App, Arg};
+use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
@@ -76,7 +76,7 @@ use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb_util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::util::security::SecurityManager;
+use tikv::util::security::{self, SecurityManager};
 use tikv::util::time::Monitor;
 use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
@@ -110,6 +110,17 @@ fn check_system_config(config: &TiKvConfig) {
             "raft check data dir";
             "err" => %e
         );
+    }
+}
+
+fn pre_start(cfg: &TiKvConfig) {
+    // Before any startup, check system configuration and environment variables.
+    check_system_config(&cfg);
+    check_environment_variables();
+
+    if cfg.panic_when_key_exceed_bound {
+        info!("panic-when-key-exceed-bound is on");
+        tikv_util::set_panic_when_key_exceed_bound(true);
     }
 }
 
@@ -158,9 +169,25 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
     let pd_sender = pd_worker.scheduler();
 
+    // Create encrypted env from ciphter file
+    let encrypted_env = if !cfg.security.cipher_file.is_empty() {
+        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
+            Err(e) => fatal!(
+                "failed to create encrypted env from ciphter file, err {:?}",
+                e
+            ),
+            Ok(env) => Some(env),
+        }
+    } else {
+        None
+    };
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
+    if encrypted_env.is_some() {
+        kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
+    }
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
     let kv_engine = Arc::new(
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
@@ -180,7 +207,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     .unwrap_or_else(|e| fatal!("failed to create raft stroage: {}", e));
 
     // Create raft engine.
-    let raft_db_opts = cfg.raftdb.build_opt();
+    let mut raft_db_opts = cfg.raftdb.build_opt();
+    if encrypted_env.is_some() {
+        raft_db_opts.set_env(encrypted_env.unwrap());
+    }
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
     let raft_engine = Arc::new(
         rocksdb_util::new_engine_opt(
@@ -320,38 +350,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
 fn main() {
     let matches = App::new("TiKV")
+        .about("A distributed transactional key-value database powered by Rust and Raft")
+        .author(crate_authors!())
+        .version(crate_version!())
         .long_version(util::tikv_version_info().as_ref())
-        .author("TiKV Org.")
-        .about("A Distributed transactional key-value database powered by Rust and Raft")
         .arg(
             Arg::with_name("config")
                 .short("C")
                 .long("config")
                 .value_name("FILE")
-                .help("Sets config file")
+                .help("Set the configuration file")
                 .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("addr")
-                .short("A")
-                .long("addr")
-                .takes_value(true)
-                .value_name("IP:PORT")
-                .help("Sets listening address"),
-        )
-        .arg(
-            Arg::with_name("advertise-addr")
-                .long("advertise-addr")
-                .takes_value(true)
-                .value_name("IP:PORT")
-                .help("Sets advertise listening address for client communication"),
-        )
-        .arg(
-            Arg::with_name("status-addr")
-                .long("status-addr")
-                .takes_value(true)
-                .value_name("IP:PORT")
-                .help("Sets HTTP listening address for the status report service"),
         )
         .arg(
             Arg::with_name("log-level")
@@ -363,7 +372,7 @@ fn main() {
                 .possible_values(&[
                     "trace", "debug", "info", "warn", "warning", "error", "critical",
                 ])
-                .help("Sets log level"),
+                .help("Set the log level"),
         )
         .arg(
             Arg::with_name("log-file")
@@ -372,7 +381,29 @@ fn main() {
                 .takes_value(true)
                 .value_name("FILE")
                 .help("Sets log file")
-                .long_help("Sets log file. If not set, output log to stderr"),
+                .long_help("Set the log file path. If not set, logs will output to stderr"),
+        )
+        .arg(
+            Arg::with_name("addr")
+                .short("A")
+                .long("addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the listening address"),
+        )
+        .arg(
+            Arg::with_name("advertise-addr")
+                .long("advertise-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the advertise listening address for client communication"),
+        )
+        .arg(
+            Arg::with_name("status-addr")
+                .long("status-addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the HTTP listening address for the status report service"),
         )
         .arg(
             Arg::with_name("data-dir")
@@ -381,15 +412,15 @@ fn main() {
                 .alias("store")
                 .takes_value(true)
                 .value_name("PATH")
-                .help("Sets the path to store directory"),
+                .help("Set the directory used to store data"),
         )
         .arg(
             Arg::with_name("capacity")
                 .long("capacity")
                 .takes_value(true)
                 .value_name("CAPACITY")
-                .help("Sets the store capacity")
-                .long_help("Sets the store capacity. If not set, use entire partition"),
+                .help("Set the store capacity")
+                .long_help("Set the store capacity to use. If not set, use entire partition"),
         )
         .arg(
             Arg::with_name("pd-endpoints")
@@ -402,7 +433,7 @@ fn main() {
                 .require_delimiter(true)
                 .value_delimiter(",")
                 .help("Sets PD endpoints")
-                .long_help("Sets PD endpoints. Uses `,` to separate multiple PDs"),
+                .long_help("Set the PD endpoints to use. Use `,` to separate multiple PDs"),
         )
         .arg(
             Arg::with_name("labels")
@@ -416,7 +447,7 @@ fn main() {
                 .value_delimiter(",")
                 .help("Sets server labels")
                 .long_help(
-                    "Sets server labels. Uses `,` to separate kv pairs, like \
+                    "Set the server labels. Uses `,` to separate kv pairs, like \
                      `zone=cn,disk=ssd`",
                 ),
         )
@@ -461,10 +492,8 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
-    // Before any startup, check system configuration.
-    check_system_config(&config);
-
-    check_environment_variables();
+    // Do some prepare works before start.
+    pre_start(&config);
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)

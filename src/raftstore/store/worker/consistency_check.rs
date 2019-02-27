@@ -172,7 +172,13 @@ mod tests {
     #[test]
     fn test_consistency_check() {
         let path = TempDir::new("tikv-store-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT], None).unwrap();
+        let db = new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            &[CF_DEFAULT, CF_RAFT],
+            None,
+        )
+        .unwrap();
         let db = Arc::new(db);
 
         let mut region = Region::new();
