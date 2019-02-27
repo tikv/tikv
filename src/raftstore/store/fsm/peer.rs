@@ -1032,8 +1032,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
-        let start_key = enc_start_key(&snap_region);
-        let end_key = enc_end_key(&snap_region);
+        let snap_enc_start_key = enc_start_key(&snap_region);
+        let snap_enc_end_key = enc_end_key(&snap_region);
 
         if snap_region
             .get_peers()
@@ -1071,8 +1071,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
         }
         for region in &meta.pending_snapshot_regions {
-            if enc_start_key(region) < end_key &&
-               enc_end_key(region) > start_key &&
+            if enc_start_key(region) < snap_enc_end_key &&
+               enc_end_key(region) > snap_enc_start_key &&
                // Same region can overlap, we will apply the latest version of snapshot.
                region.get_id() != snap_region.get_id()
             {
@@ -1101,9 +1101,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             && self.fsm.peer.ready_to_handle_pending_snap();
         for exist_region in meta
             .region_ranges
-            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+            .range((Excluded(snap_enc_start_key), Unbounded::<Vec<u8>>))
             .map(|(_, &region_id)| &meta.regions[&region_id])
-            .take_while(|r| enc_start_key(r) < end_key)
+            .take_while(|r| enc_start_key(r) < snap_enc_end_key)
             .filter(|r| r.get_id() != region_id)
         {
             info!(
