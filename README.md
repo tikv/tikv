@@ -201,11 +201,11 @@ appearance, race, religion, or sexual identity and orientation.
 
 ### Slack
 
-Join TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk) - Sign up and join channels on TiKV topics that interest you. 
+Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk) - Sign up and join channels on TiKV topics that interest you.
 
 ### WeChat
 
-TiKV community is also available on WeChat, a very popular channel for instant messages and discussions in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personel information (WeChat ID, and other basic information) included. We will invite you in right away.
+The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personal information (WeChat ID, and other basic information) included. We will invite you in right away.
 
 ## License
 
