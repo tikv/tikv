@@ -58,7 +58,7 @@ pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
 pub const CF_DEFAULT: CfName = "default";
@@ -1666,7 +1666,7 @@ quick_error! {
         Closed {
             description("storage is closed.")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())

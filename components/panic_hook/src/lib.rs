@@ -21,7 +21,7 @@ use std::sync::{Once, ONCE_INIT};
 
 static INIT: Once = ONCE_INIT;
 // store the default panic hook defined in std.
-static mut DEFAULT_HOOK: Option<*mut (Fn(&PanicInfo) + 'static + Sync + Send)> = None;
+static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo) + 'static + Sync + Send)> = None;
 
 thread_local! {
     static MUTED: RefCell<bool> = RefCell::new(false)
