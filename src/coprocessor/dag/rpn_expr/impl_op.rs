@@ -11,52 +11,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::RpnRuntimeContext;
 use tipb::expression::FieldType;
 
-#[inline(always)]
-pub fn logical_and(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<i64>,
-    _: &FieldType,
-    arg1: &Option<i64>,
-) -> Option<i64> {
-    // Intentionally not merging `None` and `Some(0)` conditions to be clear.
-    match arg0 {
-        None => match arg1 {
+use super::types::RpnRuntimeContext;
+
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnLogicalAnd;
+
+impl_template_fn! { 2 arg @ RpnFnLogicalAnd }
+
+impl RpnFnLogicalAnd {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<i64>,
+        _: &FieldType,
+        arg1: &Option<i64>,
+    ) -> Option<i64> {
+        // Intentionally not merging `None` and `Some(0)` conditions to be clear.
+        match arg0 {
+            None => match arg1 {
+                Some(0) => Some(0),
+                _ => None,
+            },
             Some(0) => Some(0),
-            _ => None,
-        },
-        Some(0) => Some(0),
-        Some(_) => match arg1 {
-            None => None,
-            Some(0) => Some(0),
-            Some(_) => Some(1),
-        },
+            Some(_) => match arg1 {
+                None => None,
+                Some(0) => Some(0),
+                Some(_) => Some(1),
+            },
+        }
     }
 }
 
-#[inline(always)]
-pub fn logical_or(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<i64>,
-    _: &FieldType,
-    arg1: &Option<i64>,
-) -> Option<i64> {
-    // Intentionally not merging `None` and `Some(0)` conditions to be clear.
-    match arg0 {
-        None => match arg1 {
-            None => None,
-            Some(0) => None,
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnLogicalOr;
+
+impl_template_fn! { 2 arg @ RpnFnLogicalOr }
+
+impl RpnFnLogicalOr {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<i64>,
+        _: &FieldType,
+        arg1: &Option<i64>,
+    ) -> Option<i64> {
+        // Intentionally not merging `None` and `Some(0)` conditions to be clear.
+        match arg0 {
+            None => match arg1 {
+                None => None,
+                Some(0) => None,
+                Some(_) => Some(1),
+            },
+            Some(0) => match arg1 {
+                None => None,
+                Some(0) => Some(0),
+                Some(_) => Some(1),
+            },
             Some(_) => Some(1),
-        },
-        Some(0) => match arg1 {
-            None => None,
-            Some(0) => Some(0),
-            Some(_) => Some(1),
-        },
-        Some(_) => Some(1),
+        }
     }
 }

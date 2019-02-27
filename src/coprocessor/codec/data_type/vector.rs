@@ -222,6 +222,11 @@ impl VectorValue {
         }
     }
 
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+        VectorLikeValueRef::Vector(self)
+    }
+
     /// Evaluates values into MySQL logic values.
     ///
     /// The caller must provide an output buffer which is large enough for holding values.

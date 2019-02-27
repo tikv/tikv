@@ -11,66 +11,96 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::RpnRuntimeContext;
 use tipb::expression::FieldType;
 
-#[inline(always)]
-pub fn eq_real(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<f64>,
-    _: &FieldType,
-    arg1: &Option<f64>,
-) -> Option<i64> {
-    // FIXME: It really should be a `Result<Option<f64>>`.
-    match (arg0, arg1) {
-        (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
-        // TODO: Use `partial_cmp`.
-        _ => None,
+use super::types::RpnRuntimeContext;
+
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnEQReal;
+
+impl_template_fn! { 2 arg @ RpnFnEQReal }
+
+impl RpnFnEQReal {
+    #[allow(clippy::float_cmp)]
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<f64>,
+        _: &FieldType,
+        arg1: &Option<f64>,
+    ) -> Option<i64> {
+        // FIXME: It really should be a `Result<Option<f64>>`.
+        match (arg0, arg1) {
+            (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
+            // TODO: Use `partial_cmp`.
+            _ => None,
+        }
     }
 }
 
-#[inline(always)]
-pub fn eq_int(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<i64>,
-    _: &FieldType,
-    arg1: &Option<i64>,
-) -> Option<i64> {
-    // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-    match (arg0, arg1) {
-        (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
-        _ => None,
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnEQInt;
+
+impl_template_fn! { 2 arg @ RpnFnEQInt }
+
+impl RpnFnEQInt {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<i64>,
+        _: &FieldType,
+        arg1: &Option<i64>,
+    ) -> Option<i64> {
+        // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
+        match (arg0, arg1) {
+            (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
+            _ => None,
+        }
     }
 }
 
-#[inline(always)]
-pub fn gt_int(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<i64>,
-    _: &FieldType,
-    arg1: &Option<i64>,
-) -> Option<i64> {
-    // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-    match (arg0, arg1) {
-        (Some(ref arg0), Some(ref arg1)) => Some((*arg0 > *arg1) as i64),
-        _ => None,
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnGTInt;
+
+impl_template_fn! { 2 arg @ RpnFnGTInt }
+
+impl RpnFnGTInt {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<i64>,
+        _: &FieldType,
+        arg1: &Option<i64>,
+    ) -> Option<i64> {
+        // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
+        match (arg0, arg1) {
+            (Some(ref arg0), Some(ref arg1)) => Some((*arg0 > *arg1) as i64),
+            _ => None,
+        }
     }
 }
 
-#[inline(always)]
-pub fn lt_int(
-    _ctx: &mut RpnRuntimeContext,
-    _: &FieldType,
-    arg0: &Option<i64>,
-    _: &FieldType,
-    arg1: &Option<i64>,
-) -> Option<i64> {
-    // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-    match (arg0, arg1) {
-        (Some(ref arg0), Some(ref arg1)) => Some((*arg0 < *arg1) as i64),
-        _ => None,
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnLTInt;
+
+impl_template_fn! { 2 arg @ RpnFnLTInt }
+
+impl RpnFnLTInt {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _: &FieldType,
+        arg0: &Option<i64>,
+        _: &FieldType,
+        arg1: &Option<i64>,
+    ) -> Option<i64> {
+        // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
+        match (arg0, arg1) {
+            (Some(ref arg0), Some(ref arg1)) => Some((*arg0 < *arg1) as i64),
+            _ => None,
+        }
     }
 }

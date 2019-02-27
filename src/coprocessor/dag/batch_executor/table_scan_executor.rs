@@ -163,6 +163,8 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             if !self.is_column_filled[self.handle_index] {
                 let handle_id = table::decode_handle(key)?;
                 // FIXME: The columns may be not in the same length if there is error.
+                // TODO: We should avoid calling `push_int` repeatly. Instead we should specialize
+                // a `&mut Vec` first.
                 columns[self.handle_index]
                     .mut_decoded()
                     .push_int(Some(handle_id));

@@ -52,6 +52,11 @@ impl ScalarValue {
             ScalarValue::Json(_) => EvalType::Json,
         }
     }
+
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+        VectorLikeValueRef::Scalar(self)
+    }
 }
 
 impl AsMySQLBool for ScalarValue {

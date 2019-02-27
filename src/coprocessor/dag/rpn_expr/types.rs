@@ -16,6 +16,7 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::function::RpnFunction;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
@@ -59,8 +60,9 @@ impl Default for RpnRuntimeContext {
 ///
 /// When nodes comes from an evaluated result, it is an owned node.
 pub enum RpnStackNodeVectorValue<'a> {
-    // There can be frequent stack push & pops, so we wrap this field in a `Box` to reduce move
-    // cost.
+    /// There can be frequent stack push & pops, so we wrap this field in a `Box` to reduce move
+    /// cost.
+    // TODO: Check whether it is more efficient to just remove the box.
     Owned(Box<VectorValue>),
     Ref(&'a VectorValue),
 }
@@ -71,6 +73,14 @@ impl<'a> RpnStackNodeVectorValue<'a> {
         match self {
             RpnStackNodeVectorValue::Owned(ref value) => &value,
             RpnStackNodeVectorValue::Ref(ref value) => *value,
+        }
+    }
+
+    #[inline]
+    pub fn as_vector_like(&'a self) -> VectorLikeValueRef {
+        match self {
+            RpnStackNodeVectorValue::Owned(ref value) => value.as_vector_like(),
+            RpnStackNodeVectorValue::Ref(ref value) => value.as_vector_like(),
         }
     }
 }
@@ -118,6 +128,14 @@ impl<'a> RpnStackNode<'a> {
     }
 
     #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+        match self {
+            RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
+            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
+        }
+    }
+
+    #[inline]
     pub fn is_scalar(&self) -> bool {
         match self {
             RpnStackNode::Scalar { .. } => true,
@@ -139,7 +157,7 @@ impl<'a> RpnStackNode<'a> {
 pub enum RpnExpressionNode {
     /// Represents a function.
     Fn {
-        func: RpnFunction,
+        func: Box<RpnFunction>,
         field_type: FieldType,
     },
 
@@ -170,9 +188,9 @@ impl RpnExpressionNode {
     }
 
     #[inline]
-    pub fn fn_func(&self) -> Option<RpnFunction> {
+    pub fn fn_func(&self) -> Option<&RpnFunction> {
         match self {
-            RpnExpressionNode::Fn { ref func, .. } => Some(*func),
+            RpnExpressionNode::Fn { ref func, .. } => Some(&*func),
             _ => None,
         }
     }
@@ -445,7 +463,7 @@ impl RpnExpressionNodeVec {
                 })
             }
             ExprType::ScalarFunc => {
-                let func = RpnFunction::try_from(def.get_sig()).unwrap();
+                let func = super::map_pb_sig_to_rpn_func(def.get_sig()).unwrap();
                 let args = def.take_children().into_vec();
                 // FIXME: Don't use assert_eq
                 assert_eq!(func.args_len(), args.len());
@@ -519,7 +537,7 @@ mod tests {
         assert_eq!(rpn_nodes[1].field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(rpn_nodes[1].table_column_ref_offset().unwrap(), 1);
         assert_eq!(rpn_nodes[2].field_type().tp(), FieldTypeTp::LongLong);
-        assert_eq!(rpn_nodes[2].fn_func().unwrap(), RpnFunction::GTInt);
+        assert_eq!(rpn_nodes[2].fn_func().unwrap().name(), "RpnFnGTInt");
 
         // TODO: Nested
     }
@@ -556,5 +574,49 @@ mod tests {
                 Some(1)
             ]
         );
+    }
+
+    #[bench]
+    fn bench_eval_100(b: &mut test::Bencher) {
+        let expr = new_gt_int_def(0, 10);
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+
+        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
+        for i in 0..100 {
+            col.mut_decoded().push_int(Some(i));
+        }
+
+        let cols = LazyBatchColumnVec::from(vec![col]);
+        let mut ctx = RpnRuntimeContext::default();
+        b.iter(|| {
+            let ret = rpn_nodes.eval(
+                test::black_box(&mut ctx),
+                cols.rows_len(),
+                test::black_box(&cols),
+            );
+            test::black_box(ret);
+        });
+    }
+
+    #[bench]
+    fn bench_eval_1000(b: &mut test::Bencher) {
+        let expr = new_gt_int_def(0, 10);
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+
+        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1000, EvalType::Int);
+        for i in 0..1000 {
+            col.mut_decoded().push_int(Some(i));
+        }
+
+        let cols = LazyBatchColumnVec::from(vec![col]);
+        let mut ctx = RpnRuntimeContext::default();
+        b.iter(|| {
+            let ret = rpn_nodes.eval(
+                test::black_box(&mut ctx),
+                cols.rows_len(),
+                test::black_box(&cols),
+            );
+            test::black_box(ret);
+        });
     }
 }

@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,114 +11,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::convert::TryFrom;
-
-use tipb::expression::{FieldType, ScalarFuncSig};
+use tipb::expression::FieldType;
 
 use super::types::{RpnRuntimeContext, RpnStackNode};
-use super::{impl_compare, impl_dummy, impl_op};
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
-use crate::coprocessor::Error;
 
-// TODO: Merge into ScalarFuncSig
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RpnFunction {
-    Dummy0ArgFunc,  // Optimized for type expand
-    Dummy1ArgFunc,  // Optimized for scalar expand + type expand
-    Dummy2ArgsFunc, // Optimized for scalar expand + type expand
-    //    Dummy3ArgsFunc,  // Optimized for type expand
-    //    Dummy4OrMoreArgsFunc,   // Optimized for type
-    //    DummyVariableArgsFunc,
-    EQReal,
-    EQInt,
-    GTInt,
-    LTInt,
-    LogicalAnd,
-    LogicalOr,
+pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
+    /// The display name of the function.
+    fn name(&self) -> &'static str;
+
+    /// The accepted argument length of this RPN function.
+    ///
+    /// Currently we do not support variable arguments.
+    fn args_len(&self) -> usize;
+
+    /// Evaluates the function according to given arguments.
+    fn eval(
+        &self,
+        rows: usize,
+        context: &mut RpnRuntimeContext,
+        args: &[RpnStackNode],
+    ) -> VectorValue;
 }
 
-impl TryFrom<ScalarFuncSig> for RpnFunction {
-    type Error = Error;
-
-    fn try_from(value: ScalarFuncSig) -> Result<Self, Error> {
-        match value {
-            ScalarFuncSig::EQReal => Ok(RpnFunction::EQReal),
-            ScalarFuncSig::EQInt => Ok(RpnFunction::EQInt),
-            ScalarFuncSig::GTInt => Ok(RpnFunction::GTInt),
-            ScalarFuncSig::LTInt => Ok(RpnFunction::LTInt),
-            ScalarFuncSig::LogicalAnd => Ok(RpnFunction::LogicalAnd),
-            ScalarFuncSig::LogicalOr => Ok(RpnFunction::LogicalOr),
-            v => Err(box_err!(
-                "ScalarFunction {:?} is not supported in batch mode",
-                v
-            )),
-        }
-    }
-}
-
-impl RpnFunction {
-    pub fn args_len(self) -> usize {
-        match self {
-            RpnFunction::Dummy0ArgFunc => 0,
-            RpnFunction::Dummy1ArgFunc => 1,
-            RpnFunction::Dummy2ArgsFunc => 2,
-            RpnFunction::EQReal => 2,
-            RpnFunction::EQInt => 2,
-            RpnFunction::GTInt => 2,
-            RpnFunction::LTInt => 2,
-            RpnFunction::LogicalAnd => 2,
-            RpnFunction::LogicalOr => 2,
-        }
+impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
+    #[inline]
+    fn name(&self) -> &'static str {
+        (**self).name()
     }
 
-    pub fn eval(
-        self,
+    #[inline]
+    fn args_len(&self) -> usize {
+        (**self).args_len()
+    }
+
+    #[inline]
+    fn eval(
+        &self,
         rows: usize,
         context: &mut RpnRuntimeContext,
         args: &[RpnStackNode],
     ) -> VectorValue {
-        debug_assert_eq!(args.len(), self.args_len());
-        match self {
-            RpnFunction::Dummy0ArgFunc => {
-                Self::eval_0_arg(rows, impl_dummy::dummy_0_arg_func, context)
-            }
-            RpnFunction::Dummy1ArgFunc => {
-                Self::eval_1_arg(rows, impl_dummy::dummy_1_arg_func, context, &args[0])
-            }
-            RpnFunction::Dummy2ArgsFunc => Self::eval_2_args(
-                rows,
-                impl_dummy::dummy_2_args_func,
-                context,
-                &args[0],
-                &args[1],
-            ),
-            RpnFunction::EQReal => {
-                Self::eval_2_args(rows, impl_compare::eq_real, context, &args[0], &args[1])
-            }
-            RpnFunction::EQInt => {
-                Self::eval_2_args(rows, impl_compare::eq_int, context, &args[0], &args[1])
-            }
-            RpnFunction::GTInt => {
-                Self::eval_2_args(rows, impl_compare::gt_int, context, &args[0], &args[1])
-            }
-            RpnFunction::LTInt => {
-                Self::eval_2_args(rows, impl_compare::lt_int, context, &args[0], &args[1])
-            }
-            RpnFunction::LogicalAnd => {
-                Self::eval_2_args(rows, impl_op::logical_and, context, &args[0], &args[1])
-            }
-            RpnFunction::LogicalOr => {
-                Self::eval_2_args(rows, impl_op::logical_or, context, &args[0], &args[1])
-            }
-        }
+        (**self).eval(rows, context, args)
     }
+}
 
+pub struct Helper;
+
+impl Helper {
     #[inline(always)]
-    fn eval_0_arg<Ret, F>(rows: usize, mut f: F, context: &mut RpnRuntimeContext) -> VectorValue
+    pub fn eval_0_arg<Ret, F>(
+        rows: usize,
+        mut f: F,
+        context: &mut RpnRuntimeContext,
+        args: &[RpnStackNode],
+    ) -> VectorValue
     where
         Ret: Evaluable,
         F: FnMut(&mut RpnRuntimeContext) -> Ret,
     {
+        debug_assert_eq!(args.len(), 0);
+
         let mut result = Vec::with_capacity(rows);
         for _ in 0..rows {
             result.push(f(context));
@@ -127,27 +80,30 @@ impl RpnFunction {
     }
 
     #[inline(always)]
-    fn eval_1_arg<Arg0, Ret, F>(
+    pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
         context: &mut RpnRuntimeContext,
-        arg0: &RpnStackNode,
+        args: &[RpnStackNode],
     ) -> VectorValue
     where
         Arg0: Evaluable,
         Ret: Evaluable,
         F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0) -> Ret,
     {
+        debug_assert_eq!(args.len(), 1);
+
         let mut result = Vec::with_capacity(rows);
-        if arg0.is_scalar() {
-            let v = Arg0::borrow_scalar_value(arg0.scalar_value());
-            let field_type = arg0.field_type();
+        if args[0].is_scalar() {
+            let v = Arg0::borrow_scalar_value(args[0].scalar_value());
+            let field_type = args[0].field_type();
             for _ in 0..rows {
                 result.push(f(context, field_type, v));
             }
         } else {
-            let v = Arg0::borrow_vector_value(arg0.vector_value());
-            let field_type = arg0.field_type();
+            let v = Arg0::borrow_vector_value(args[0].vector_value());
+            debug_assert_eq!(rows, v.len());
+            let field_type = args[0].field_type();
             for i in 0..rows {
                 result.push(f(context, field_type, &v[i]));
             }
@@ -156,12 +112,11 @@ impl RpnFunction {
     }
 
     #[inline(always)]
-    fn eval_2_args<Arg0, Arg1, Ret, F>(
+    pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
         context: &mut RpnRuntimeContext,
-        arg0: &RpnStackNode,
-        arg1: &RpnStackNode,
+        args: &[RpnStackNode],
     ) -> VectorValue
     where
         Arg0: Evaluable,
@@ -169,48 +124,50 @@ impl RpnFunction {
         Ret: Evaluable,
         F: FnMut(&mut RpnRuntimeContext, &FieldType, &Arg0, &FieldType, &Arg1) -> Ret,
     {
-        if arg0.is_scalar() {
-            if arg1.is_scalar() {
+        debug_assert_eq!(args.len(), 2);
+
+        if args[0].is_scalar() {
+            if args[1].is_scalar() {
                 Self::eval_2_args_scalar_scalar(
                     rows,
                     f,
                     context,
-                    arg0.field_type(),
-                    arg0.scalar_value(),
-                    arg1.field_type(),
-                    arg1.scalar_value(),
+                    args[0].field_type(),
+                    args[0].scalar_value(),
+                    args[1].field_type(),
+                    args[1].scalar_value(),
                 )
             } else {
                 Self::eval_2_args_scalar_vector(
                     rows,
                     f,
                     context,
-                    arg0.field_type(),
-                    arg0.scalar_value(),
-                    arg1.field_type(),
-                    arg1.vector_value(),
+                    args[0].field_type(),
+                    args[0].scalar_value(),
+                    args[1].field_type(),
+                    args[1].vector_value(),
                 )
             }
         } else {
-            if arg1.is_scalar() {
+            if args[1].is_scalar() {
                 Self::eval_2_args_vector_scalar(
                     rows,
                     f,
                     context,
-                    arg0.field_type(),
-                    arg0.vector_value(),
-                    arg1.field_type(),
-                    arg1.scalar_value(),
+                    args[0].field_type(),
+                    args[0].vector_value(),
+                    args[1].field_type(),
+                    args[1].scalar_value(),
                 )
             } else {
                 Self::eval_2_args_vector_vector(
                     rows,
                     f,
                     context,
-                    arg0.field_type(),
-                    arg0.vector_value(),
-                    arg1.field_type(),
-                    arg1.vector_value(),
+                    args[0].field_type(),
+                    args[0].vector_value(),
+                    args[1].field_type(),
+                    args[1].vector_value(),
                 )
             }
         }
@@ -319,4 +276,88 @@ impl RpnFunction {
         }
         Ret::into_vector_value(result)
     }
+
+    #[inline(always)]
+    pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
+        rows: usize,
+        mut f: F,
+        context: &mut RpnRuntimeContext,
+        args: &[RpnStackNode],
+    ) -> VectorValue
+    where
+        Arg0: Evaluable,
+        Arg1: Evaluable,
+        Arg2: Evaluable,
+        Ret: Evaluable,
+        F: FnMut(
+            &mut RpnRuntimeContext,
+            &FieldType,
+            &Arg0,
+            &FieldType,
+            &Arg1,
+            &FieldType,
+            &Arg2,
+        ) -> Ret,
+    {
+        debug_assert_eq!(args.len(), 0);
+
+        let mut result = Vec::with_capacity(rows);
+        let ft_arg0 = args[0].field_type();
+        let ft_arg1 = args[1].field_type();
+        let ft_arg2 = args[2].field_type();
+        let s_arg0 = Arg0::borrow_vector_like_specialized(args[0].as_vector_like());
+        let s_arg1 = Arg1::borrow_vector_like_specialized(args[1].as_vector_like());
+        let s_arg2 = Arg2::borrow_vector_like_specialized(args[2].as_vector_like());
+        for i in 0..rows {
+            result.push(f(
+                context, ft_arg0, &s_arg0[i], ft_arg1, &s_arg1[i], ft_arg2, &s_arg2[i],
+            ));
+        }
+        Ret::into_vector_value(result)
+    }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! impl_template_fn {
+    (0 arg @ $name:ident) => {
+        impl_template_fn! { @inner $name, 0, eval_0_arg }
+    };
+    (1 arg @ $name:ident) => {
+        impl_template_fn! { @inner $name, 1, eval_1_arg }
+    };
+    (2 arg @ $name:ident) => {
+        impl_template_fn! { @inner $name, 2, eval_2_args }
+    };
+    (3 arg @ $name:ident) => {
+        impl_template_fn! { @inner $name, 3, eval_3_args }
+    };
+    (@inner $name:ident, $args:expr, $eval_fn:ident) => {
+        impl $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
+            #[inline]
+            fn name(&self) -> &'static str {
+                stringify!($name)
+            }
+
+            #[inline]
+            fn args_len(&self) -> usize {
+                $args
+            }
+
+            #[inline]
+            fn eval(
+                &self,
+                rows: usize,
+                context: &mut $crate::coprocessor::dag::rpn_expr::RpnRuntimeContext,
+                args: &[$crate::coprocessor::dag::rpn_expr::types::RpnStackNode],
+            ) -> $crate::coprocessor::codec::data_type::VectorValue {
+                $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(
+                    rows,
+                    Self::call,
+                    context,
+                    args,
+                )
+            }
+        }
+    };
 }

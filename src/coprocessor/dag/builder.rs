@@ -27,7 +27,7 @@ use super::executor::{
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::dag::rpn_expr::RpnFunction;
+use crate::coprocessor::dag::rpn_expr::map_pb_sig_to_rpn_func;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
@@ -51,7 +51,7 @@ fn check_condition(c: &Expr) -> bool {
     match c.get_tp() {
         ExprType::ScalarFunc => {
             let sig = c.get_sig();
-            let func = RpnFunction::try_from(sig);
+            let func = map_pb_sig_to_rpn_func(sig);
             if func.is_err() {
                 return false;
             }
