@@ -285,6 +285,7 @@ mod tests {
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
+    use crate::util::security::SecurityConfig;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {
@@ -298,8 +299,9 @@ mod tests {
     fn test_prepare_job() {
         let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
 
         // Generate entries to prepare.
         let (n, m) = (4, 4);
