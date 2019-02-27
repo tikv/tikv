@@ -281,7 +281,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             for _ in 0..MAX_RETRY_TIMES {
                 match self.import(region) {
                     Ok(_) => {
-                        info!("import sst succ"; "tag" => %self.tag, "takes" => ?start.elapsed());
+                        info!("import sst"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(());
                     }
                     Err(Error::UpdateRegion(new_region)) => {
