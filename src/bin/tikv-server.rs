@@ -459,8 +459,10 @@ fn main() {
             Arg::with_name("metrics-addr")
                 .long("metrics-addr")
                 .value_name("IP:PORT")
-                .help(
-                    "prometheus pushgateway address, leaves it empty will disable prometheus push",
+                .help("Sets Prometheus Pushgateway address")
+                .long_help(
+                    "Sets push address to the Prometheus Pushgateway, \
+                     leaves it empty will disable Prometheus push",
                 ),
         )
         .get_matches();
