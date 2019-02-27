@@ -55,7 +55,7 @@ impl SSTImporter {
     pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
         match self.dir.delete(meta) {
             Ok(path) => {
-                info!("delete succ"; "path" => ?path);
+                info!("delete"; "path" => ?path);
                 Ok(())
             }
             Err(e) => {
