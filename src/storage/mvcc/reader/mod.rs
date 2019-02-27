@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod backward_scanner;
-mod forward_scanner;
+mod scanner;
 mod util;
 
 use super::lock::{Lock, LockType};
@@ -25,8 +24,7 @@ use crate::util::rocksdb_util::properties::MvccProperties;
 use kvproto::kvrpcpb::IsolationLevel;
 use std::u64;
 
-pub use self::backward_scanner::{BackwardScanner, BackwardScannerBuilder};
-pub use self::forward_scanner::{ForwardScanner, ForwardScannerBuilder};
+pub use self::scanner::{BackwardScanner, ForwardScanner, Scanner, ScannerBuilder};
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 

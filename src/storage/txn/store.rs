@@ -14,10 +14,8 @@
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -115,29 +113,14 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     ) -> Result<StoreScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+            .range(lower_bound, upper_bound)
+            .omit_value(key_only)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build()?;
 
-        let (forward_scanner, backward_scanner) = if !desc {
-            let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                .range(lower_bound, upper_bound)
-                .omit_value(key_only)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .build()?;
-            (Some(forward_scanner), None)
-        } else {
-            let backward_scanner =
-                BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                    .range(lower_bound, upper_bound)
-                    .omit_value(key_only)
-                    .fill_cache(self.fill_cache)
-                    .isolation_level(self.isolation_level)
-                    .build()?;
-            (None, Some(backward_scanner))
-        };
-        Ok(StoreScanner {
-            forward_scanner,
-            backward_scanner,
-        })
+        Ok(StoreScanner { scanner })
     }
 }
 
@@ -189,30 +172,25 @@ impl<S: Snapshot> SnapshotStore<S> {
 }
 
 pub struct StoreScanner<S: Snapshot> {
-    forward_scanner: Option<ForwardScanner<S>>,
-    backward_scanner: Option<BackwardScanner<S>>,
+    scanner: MvccScanner<S>,
 }
 
 impl<S: Snapshot> Scanner for StoreScanner<S> {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Value)>> {
         // TODO: Verify that these branches can be optimized away in `scan()`.
-        if let Some(scanner) = self.forward_scanner.as_mut() {
-            Ok(scanner.read_next()?)
-        } else {
-            Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
+        match &mut self.scanner {
+            MvccScanner::Forward(scanner) => Ok(scanner.read_next()?),
+            MvccScanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
 
     #[inline]
     fn take_statistics(&mut self) -> Statistics {
-        if self.forward_scanner.is_some() {
-            return self.forward_scanner.as_mut().unwrap().take_statistics();
+        match &mut self.scanner {
+            MvccScanner::Forward(scanner) => scanner.take_statistics(),
+            MvccScanner::Backward(scanner) => scanner.take_statistics(),
         }
-        if self.backward_scanner.is_some() {
-            return self.backward_scanner.as_mut().unwrap().take_statistics();
-        }
-        unreachable!();
     }
 }
 
