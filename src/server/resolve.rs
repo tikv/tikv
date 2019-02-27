@@ -27,7 +27,7 @@ use super::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
-pub type Callback = Box<FnBox(Result<String>) + Send>;
+pub type Callback = Box<dyn FnBox(Result<String>) + Send>;
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {

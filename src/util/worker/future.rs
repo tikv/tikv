@@ -38,8 +38,8 @@ impl<T> Debug for Stopped<T> {
     }
 }
 
-impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
-    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
+impl<T> From<Stopped<T>> for Box<dyn Error + Sync + Send + 'static> {
+    fn from(_: Stopped<T>) -> Box<dyn Error + Sync + Send + 'static> {
         box_err!("channel has been closed")
     }
 }

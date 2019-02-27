@@ -137,13 +137,13 @@ impl CompactedEvent {
 pub type Filter = fn(&CompactionJobInfo) -> bool;
 
 pub struct CompactionListener {
-    ch: Box<Fn(CompactedEvent) + Send + Sync>,
+    ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
     filter: Option<Filter>,
 }
 
 impl CompactionListener {
     pub fn new(
-        ch: Box<Fn(CompactedEvent) + Send + Sync>,
+        ch: Box<dyn Fn(CompactedEvent) + Send + Sync>,
         filter: Option<Filter>,
     ) -> CompactionListener {
         CompactionListener { ch, filter }
