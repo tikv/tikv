@@ -922,23 +922,32 @@ impl Peer {
             let region = snap_data.take_region();
 
             let meta = ctx.store_meta.lock().unwrap();
-            // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
-            // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
-            if let Some(r) = meta
-                .region_ranges
-                .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
-                .map(|(_, &region_id)| &meta.regions[&region_id])
-                .take_while(|r| enc_start_key(r) < enc_end_key(&region))
-                .find(|r| r.get_id() != region.get_id())
+            // Region's range changes if and only if epoch version change. So if the snapshot's
+            // version is not larger than now, we can make sure there is no overlap.
+            if region.get_region_epoch().get_version()
+                > meta.regions[&region.get_id()]
+                    .get_region_epoch()
+                    .get_version()
             {
-                info!(
-                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
-                    self.tag,
-                    self.get_store().applied_index(),
-                    self.last_applying_idx,
-                    r,
-                );
-                return;
+                // For merge process, when applying snapshot or create new peer the stale source
+                // peer is destroyed asynchronously. So here checks whether there is any overlap, if
+                // so, wait and do not handle raft ready.
+                if let Some(r) = meta
+                    .region_ranges
+                    .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
+                    .map(|(_, &region_id)| &meta.regions[&region_id])
+                    .take_while(|r| enc_start_key(r) < enc_end_key(&region))
+                    .find(|r| r.get_id() != region.get_id())
+                {
+                    info!(
+                        "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
+                        self.tag,
+                        self.get_store().applied_index(),
+                        self.last_applying_idx,
+                        r,
+                    );
+                    return;
+                }
             }
         }
 
