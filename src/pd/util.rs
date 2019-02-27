@@ -81,7 +81,7 @@ impl Stream for HeartbeatReceiver {
                 receiver = recv.take();
             }
             if receiver.is_some() {
-                info!("heartbeat receiver is refreshed.");
+                info!("heartbeat receiver is refreshed");
                 self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(task::current());
@@ -184,7 +184,7 @@ impl LeaderClient {
         {
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap();
-            warn!("heartbeat sender and receiver are stale, refreshing..");
+            warn!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
             if let Either::Left(Some(ref mut r)) = inner.hb_sender {
@@ -203,7 +203,7 @@ impl LeaderClient {
                 on_reconnect();
             }
         }
-        warn!("updating PD client done, spent {:?}", start.elapsed());
+        warn!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
@@ -231,7 +231,7 @@ where
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
     fn reconnect_if_needed(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
-        debug!("reconnect remains: {}", self.reconnect_count);
+        debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
             return Box::new(ok(self));
@@ -241,7 +241,7 @@ where
         self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
-        warn!("updating PD client, block the tokio core");
+        info!("updating PD client, block the tokio core");
         match self.client.reconnect() {
             Ok(_) => {
                 self.request_sent = 0;
@@ -295,7 +295,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed: {:?}, retry", err);
+                error!("request failed, retry"; "err" => ?err);
                 false
             }
         }
@@ -335,9 +335,9 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!("fail to request: {:?}", e);
+                error!("request failed"; "err" => ?e);
                 if let Err(e) = client.reconnect() {
-                    error!("fail to reconnect: {:?}", e);
+                    error!("reconnect failed"; "err" => ?e);
                 }
             }
         }
@@ -365,7 +365,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };
@@ -393,7 +393,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
-            info!("All PD endpoints are consistent: {:?}", cfg.endpoints);
+            info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
@@ -405,7 +405,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    info!("connecting to PD endpoint: {:?}", addr);
+    info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_left_matches("http://")
         .trim_left_matches("https://");
@@ -452,7 +452,7 @@ pub fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("failed to connect to {}, {:?}", ep, e);
+                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
                     continue;
                 }
             }
@@ -464,7 +464,7 @@ pub fn try_connect_leader(
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
             if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
-                info!("connected to PD leader {:?}", ep);
+                info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }
         }
