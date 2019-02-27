@@ -284,7 +284,7 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.compact_cluster(&compact) {
                         Ok(_) => {
-                            info!("compact cluster succ"; "req" => ?compact);
+                            info!("compact cluster"; "req" => ?compact);
                             Ok(())
                         }
                         Err(e) => {
