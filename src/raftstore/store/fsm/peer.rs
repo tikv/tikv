@@ -610,8 +610,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         snap_data.merge_from_bytes(snap.get_data())?;
         let snap_region = snap_data.take_region();
         let peer_id = msg.get_to_peer().get_id();
-        let start_key = enc_start_key(&snap_region);
-        let end_key = enc_end_key(&snap_region);
+        let snap_enc_start_key = enc_start_key(&snap_region);
+        let snap_enc_end_key = enc_end_key(&snap_region);
 
         if snap_region
             .get_peers()
@@ -629,8 +629,8 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         }
 
         for region in &self.pending_snapshot_regions {
-            if enc_start_key(region) < end_key &&
-               enc_end_key(region) > start_key &&
+            if enc_start_key(region) < snap_enc_end_key &&
+               enc_end_key(region) > snap_enc_start_key &&
                // Same region can overlap, we will apply the latest version of snapshot.
                region.get_id() != snap_region.get_id()
             {
@@ -655,10 +655,10 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         };
         for (_, &id) in self
             .region_ranges
-            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
+            .range((Excluded(snap_enc_start_key), Unbounded::<Vec<u8>>))
         {
             let exist_region = self.region_peers[&id].region();
-            if enc_start_key(exist_region) >= end_key {
+            if enc_start_key(exist_region) >= snap_enc_end_key {
                 break;
             }
             if exist_region.get_id() == region_id {
