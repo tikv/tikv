@@ -383,7 +383,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("ingest succ"; "tag" => %self.tag, "store" => %store_id);
+                info!("ingest"; "tag" => %self.tag, "store" => %store_id);
                 Ok(())
             }
             Err(e) => {
