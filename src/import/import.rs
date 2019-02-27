@@ -75,7 +75,7 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("import engine succ"; "tag" => %self.tag, "takes" => ?start.elapsed());
+                info!("import engine"; "tag" => %self.tag, "takes" => ?start.elapsed());
                 Ok(())
             }
             Err(e) => {
