@@ -1217,6 +1217,7 @@ fn future_prewrite<E: Engine>(
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::new();
+        if let Ok((_, max_read_ts)) = &v {}
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {

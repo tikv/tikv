@@ -688,6 +688,14 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
+    fn report_read_ts(&self, ctx: &Context, start_ts: u64) {
+        self.inspector.report_read_ts(
+            ctx.get_region_id(),
+            ctx.get_region_epoch().get_version(),
+            start_ts,
+        );
+    }
+
     /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
     /// is visible.
     pub fn async_get(
@@ -699,6 +707,8 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.report_read_ts(&ctx, start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -755,6 +765,8 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.report_read_ts(&ctx, start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -819,6 +831,8 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
+
+        self.report_read_ts(&ctx, start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -903,8 +917,21 @@ impl<E: Engine> Storage<E> {
         primary: Vec<u8>,
         start_ts: u64,
         options: Options,
-        callback: Callback<Vec<Result<()>>>,
+        callback: Callback<(Vec<Result<()>>, u64)>,
     ) -> Result<()> {
+        let inspector = self.inspector.clone();
+        let region_id = ctx.get_region_id();
+        let version = ctx.get_region_epoch().get_version();
+        let callback = box move |res| {
+            let mut max_read_ts = 0;
+            if let Ok(key_errs) = res {
+                if key_errs.len() == 0 {
+                    max_read_ts = inspector.get_max_read_ts(region_id, version);
+                }
+            }
+            callback(res.map(|key_errs| (key_errs, max_read_ts)))
+        };
+
         for m in &mutations {
             let size = m.key().as_encoded().len();
             if size > self.max_key_size {

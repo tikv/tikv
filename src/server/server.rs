@@ -28,7 +28,7 @@ use tokio_timer::timer::Handle;
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::{Engines, SnapManager};
-use crate::storage::{Engine, MvccInspector, Storage};
+use crate::storage::{Engine, Storage};
 use crate::util::security::SecurityManager;
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;

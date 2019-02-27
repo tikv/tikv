@@ -308,6 +308,14 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
+        if let Some(ts) = req_ctx.txn_start_ts {
+            self.inspector.report_read_ts(
+                req_ctx.context.get_region_id(),
+                req_ctx.context.get_region_epoch().get_version(),
+                ts,
+            );
+        }
+
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let mut tracker = box Tracker::new(req_ctx);
@@ -437,6 +445,14 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
+        if let Some(ts) = req_ctx.txn_start_ts {
+            self.inspector.report_read_ts(
+                req_ctx.context.get_region_id(),
+                req_ctx.context.get_region_epoch().get_version(),
+                ts,
+            );
+        }
+
         let (tx, rx) = mpsc::channel::<coppb::Response>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
