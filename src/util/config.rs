@@ -476,35 +476,49 @@ impl ReadableDuration {
     }
 }
 
+impl fmt::Display for ReadableDuration {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut dur = util::time::duration_to_ms(self.0);
+        let mut written = false;
+        if dur >= DAY {
+            written = true;
+            write!(f, "{}d", dur / DAY)?;
+            dur %= DAY;
+        }
+        if dur >= HOUR {
+            written = true;
+            write!(f, "{}h", dur / HOUR)?;
+            dur %= HOUR;
+        }
+        if dur >= MINUTE {
+            written = true;
+            write!(f, "{}m", dur / MINUTE)?;
+            dur %= MINUTE;
+        }
+        if dur >= SECOND {
+            written = true;
+            write!(f, "{}s", dur / SECOND)?;
+            dur %= SECOND;
+        }
+        if dur > 0 {
+            written = true;
+            write!(f, "{}ms", dur)?;
+        }
+        if !written {
+            write!(f, "0s")?;
+        }
+        Ok(())
+    }
+}
+
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
-        if dur >= DAY {
-            write!(buffer, "{}d", dur / DAY).unwrap();
-            dur %= DAY;
-        }
-        if dur >= HOUR {
-            write!(buffer, "{}h", dur / HOUR).unwrap();
-            dur %= HOUR;
-        }
-        if dur >= MINUTE {
-            write!(buffer, "{}m", dur / MINUTE).unwrap();
-            dur %= MINUTE;
-        }
-        if dur >= SECOND {
-            write!(buffer, "{}s", dur / SECOND).unwrap();
-            dur %= SECOND;
-        }
-        if dur > 0 {
-            write!(buffer, "{}ms", dur).unwrap();
-        }
-        if buffer.is_empty() && dur == 0 {
-            write!(buffer, "0s").unwrap();
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }
