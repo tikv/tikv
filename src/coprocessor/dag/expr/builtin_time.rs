@@ -286,10 +286,11 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(&arg1) {
+        let mut res = match arg0.into_owned().checked_add(&arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
+        res.set_time_type(TimeType::DateTime)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -304,10 +305,11 @@ impl ScalarFunc {
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(&arg1) {
+        let mut res = match arg0.into_owned().checked_add(&arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
+        res.set_time_type(TimeType::DateTime)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -399,10 +401,11 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_sub(&arg1) {
+        let mut res = match arg0.into_owned().checked_sub(&arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
+        res.set_time_type(TimeType::DateTime)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -417,10 +420,11 @@ impl ScalarFunc {
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_sub(&arg1) {
+        let mut res = match arg0.into_owned().checked_sub(&arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
+        res.set_time_type(TimeType::DateTime)?;
         Ok(Some(Cow::Owned(res)))
     }
 
@@ -1335,16 +1339,8 @@ mod tests {
     #[test]
     fn test_add_sub_time_datetime_null() {
         let mut ctx = EvalContext::default();
-        test_ok_case_zero_arg(
-            &mut ctx,
-            ScalarFuncSig::AddTimeDateTimeNull,
-            Datum::Null,
-        );
-        test_ok_case_zero_arg(
-            &mut ctx,
-            ScalarFuncSig::SubTimeDateTimeNull,
-            Datum::Null,
-        );
+        test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeDateTimeNull, Datum::Null);
+        test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::SubTimeDateTimeNull, Datum::Null);
     }
 
     #[test]
@@ -1564,11 +1560,7 @@ mod tests {
     #[test]
     fn test_add_time_duration_null() {
         let mut ctx = EvalContext::default();
-        test_ok_case_zero_arg(
-            &mut ctx,
-            ScalarFuncSig::AddTimeDurationNull,
-            Datum::Null,
-        );
+        test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeDurationNull, Datum::Null);
     }
 
     #[test]
