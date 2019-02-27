@@ -598,11 +598,11 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
-pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let parent = Path::new(path);
     let p = parent.join(Path::new(sub_path));
     if p.exists() && p.is_file() {
@@ -660,7 +660,7 @@ mod check_kernel {
     use super::ConfigError;
 
     // pub for tests.
-    pub type Checker = Fn(i64, i64) -> bool;
+    pub type Checker = dyn Fn(i64, i64) -> bool;
 
     // pub for tests.
     pub fn check_kernel_params(

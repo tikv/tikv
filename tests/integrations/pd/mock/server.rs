@@ -116,7 +116,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
 fn hijack_unary<F, R, C: PdMocker>(mock: &mut PdMock<C>, ctx: RpcContext, sink: UnarySink<R>, f: F)
 where
     R: Send + 'static,
-    F: Fn(&PdMocker) -> Option<Result<R>>,
+    F: Fn(&dyn PdMocker) -> Option<Result<R>>,
 {
     let resp = mock
         .case

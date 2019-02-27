@@ -59,7 +59,7 @@ impl RpcClient {
                     });
                 }
                 Err(e) => {
-                    warn!("validate PD endpoints failed: {:?}", e);
+                    warn!("validate PD endpoints failed"; "err" => ?e);
                     thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
                 }
             }
@@ -326,7 +326,7 @@ impl PdClient for RpcClient {
                 )) as PdFuture<_>;
             }
 
-            info!("heartbeat sender is refreshed.");
+            info!("heartbeat sender is refreshed");
             let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
             let (tx, rx) = mpsc::unbounded();
             tx.unbounded_send(req).unwrap();
@@ -345,7 +345,7 @@ impl PdClient for RpcClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("failed to send heartbeat: {:?}", e);
+                            error!("failed to send heartbeat"; "err" => ?e);
                             Err(e)
                         }
                     }),
