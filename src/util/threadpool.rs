@@ -51,7 +51,7 @@ impl<C: Context + Default> ContextFactory<C> for DefaultContextFactory {
 }
 
 pub struct Task<C> {
-    task: Box<FnBox(&mut C) + Send>,
+    task: Box<dyn FnBox(&mut C) + Send>,
 }
 
 impl<C: Context> Task<C> {

@@ -36,7 +36,7 @@ use super::metrics::*;
 use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
-pub type Callback = Box<FnBox(Result<()>) + Send>;
+pub type Callback = Box<dyn FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 
@@ -66,7 +66,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<Snapshot>,
+    snap: Box<dyn Snapshot>,
     remain_bytes: usize,
 }
 
@@ -188,7 +188,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<Snapshot>>,
+    file: Option<Box<dyn Snapshot>>,
     raft_msg: RaftMessage,
 }
 
@@ -255,7 +255,7 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     let stream = stream.map_err(Error::from);
 
     let f = stream.into_future().map_err(|(e, _)| e).and_then(
-        move |(head, chunks)| -> Box<Future<Item = (), Error = Error> + Send> {
+        move |(head, chunks)| -> Box<dyn Future<Item = (), Error = Error> + Send> {
             let context = match RecvSnapContext::new(head, &snap_mgr) {
                 Ok(context) => context,
                 Err(e) => return box future::err(e),

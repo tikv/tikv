@@ -470,7 +470,7 @@ pub mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    pub type Message = Option<Box<FnBox(&mut Runner) + Send>>;
+    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
 
     pub struct Runner {
         is_stopped: bool,

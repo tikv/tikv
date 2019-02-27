@@ -92,7 +92,7 @@ impl Conn {
                 match r {
                     Ok(_) => {
                         info!("batch_raft RPC finished success");
-                        box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>
+                        box future::ok(()) as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
                         if status == RpcStatusCode::Unimplemented =>

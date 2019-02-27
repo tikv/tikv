@@ -48,7 +48,7 @@ pub struct Inner {
     pub client: PdClient,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
-    on_reconnect: Option<Box<Fn() + Sync + Send + 'static>>,
+    on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
 }
@@ -138,7 +138,7 @@ impl LeaderClient {
         )
     }
 
-    pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
+    pub fn on_reconnect(&self, f: Box<dyn Fn() + Sync + Send + 'static>) {
         let mut inner = self.inner.wl();
         inner.on_reconnect = Some(f);
     }
@@ -230,7 +230,7 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    fn reconnect_if_needed(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
+    fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
         debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
@@ -256,7 +256,7 @@ where
         }
     }
 
-    fn send_and_receive(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
+    fn send_and_receive(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
