@@ -60,7 +60,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
 
         let props = match self.engine.get_size_properties() {
             Ok(v) => {
-                info!("get size properties succ"; "tag" => %self.tag, "size" => %v.total_size);
+                info!("get size properties"; "tag" => %self.tag, "size" => %v.total_size);
                 v
             }
             Err(e) => {
