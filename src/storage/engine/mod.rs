@@ -130,6 +130,16 @@ pub trait Snapshot: Send + Debug + Clone + Sized {
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
         Err(Error::RocksDb("no user properties".to_owned()))
     }
+    // The minimum key this snapshot can retrieve.
+    #[inline]
+    fn lower_bound(&self) -> Option<&[u8]> {
+        None
+    }
+    // The maximum key can be fetched from the snapshot should less than the upper bound.
+    #[inline]
+    fn upper_bound(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 pub trait Iterator: Send + Sized {

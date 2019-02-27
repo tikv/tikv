@@ -145,6 +145,10 @@ impl CompactionListener {
 
 impl rocksdb::EventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
+        if info.status().is_err() {
+            return;
+        }
+
         if let Some(ref f) = self.filter {
             if !f(info) {
                 return;

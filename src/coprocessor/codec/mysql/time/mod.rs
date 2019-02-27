@@ -30,7 +30,7 @@ use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC,
 use coprocessor::codec::mysql::{self, Decimal};
 use coprocessor::codec::{Error, Result, TEN_POW};
 
-use self::extension::*;
+pub use self::extension::*;
 use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
@@ -46,7 +46,7 @@ const ZERO_TIMESTAMP: i64 = -62169984000;
 pub const MAX_TIMESTAMP: i64 = 253402300799;
 pub const MAX_TIME_NANOSECONDS: u32 = 999999000;
 
-const MONTH_NAMES: &[&str] = &[
+pub const MONTH_NAMES: &[&str] = &[
     "January",
     "February",
     "March",

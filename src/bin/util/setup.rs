@@ -92,6 +92,9 @@ pub fn init_log(config: &TiKvConfig) -> GlobalLoggerGuard {
 }
 
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
+    util::metrics::monitor_threads("tikv")
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
     }
@@ -102,10 +105,6 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     }
 
     info!("start prometheus client");
-
-    util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
-
     util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
@@ -124,6 +123,10 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(advertise_addr) = matches.value_of("advertise-addr") {
         config.server.advertise_addr = advertise_addr.to_owned();
+    }
+
+    if let Some(status_addr) = matches.value_of("status-addr") {
+        config.server.status_addr = status_addr.to_owned();
     }
 
     if let Some(data_dir) = matches.value_of("data-dir") {

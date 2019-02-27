@@ -1010,12 +1010,22 @@ mod tests {
 
     #[test]
     fn test_handle_time() {
-        // Asserted that the snapshot can be retrieved in 200ms.
-        const SNAPSHOT_DURATION_MS: i64 = 200;
+        use util::config::ReadableDuration;
 
-        // Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
-        // This is mostly for CI.
+        /// Asserted that the snapshot can be retrieved in 500ms.
+        const SNAPSHOT_DURATION_MS: i64 = 500;
+
+        /// Asserted that the delay caused by OS scheduling other tasks is smaller than 200ms.
+        /// This is mostly for CI.
         const HANDLE_ERROR_MS: i64 = 200;
+
+        /// The acceptable error range for a coarse timer. Note that we use CLOCK_MONOTONIC_COARSE
+        /// which can be slewed by time adjustment code (e.g., NTP, PTP).
+        const COARSE_ERROR_MS: i64 = 50;
+
+        /// The duration that payload executes.
+        const PAYLOAD_SMALL: i64 = 3000;
+        const PAYLOAD_LARGE: i64 = 6000;
 
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = engine::new_local_engine(TEMP_DIR, &[]).unwrap();
@@ -1024,7 +1034,11 @@ mod tests {
             &readpool::Config::default_with_concurrency(1),
             || || ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let mut config = Config::default();
+        config.end_point_request_max_handle_duration =
+            ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
+
+        let cop = Endpoint::new(&config, engine, read_pool);
 
         let (tx, rx) = ::std::sync::mpsc::channel();
 
@@ -1035,9 +1049,12 @@ mod tests {
         {
             let mut wait_time: i64 = 0;
 
-            // Request 1: Unary, success response, takes 1000ms to execute.
+            // Request 1: Unary, success response.
             let handler_builder = box |_, _: &_| {
-                Ok(UnaryFixture::new_with_duration(Ok(coppb::Response::new()), 1000).into_boxed())
+                Ok(UnaryFixture::new_with_duration(
+                    Ok(coppb::Response::new()),
+                    PAYLOAD_SMALL as u64,
+                ).into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1046,9 +1063,12 @@ mod tests {
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
-            // Request 2: Unary, error response, takes 1500ms to execute.
+            // Request 2: Unary, error response.
             let handler_builder = box |_, _: &_| {
-                Ok(UnaryFixture::new_with_duration(Err(box_err!("foo")), 1500).into_boxed())
+                Ok(
+                    UnaryFixture::new_with_duration(Err(box_err!("foo")), PAYLOAD_LARGE as u64)
+                        .into_boxed(),
+                )
             };
             let resp_future_2 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1059,43 +1079,54 @@ mod tests {
             // Response 1
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
-            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1000);
-            assert!(
-                resp.get_exec_details().get_handle_time().get_process_ms() < 1000 + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL - COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    >= wait_time - HANDLE_ERROR_MS
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    < wait_time + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
-            wait_time += 1000 - SNAPSHOT_DURATION_MS;
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+            wait_time += PAYLOAD_SMALL - SNAPSHOT_DURATION_MS;
 
             // Response 2
             let resp = &rx.recv().unwrap()[0];
             assert!(!resp.get_other_error().is_empty());
-            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1500);
-            assert!(
-                resp.get_exec_details().get_handle_time().get_process_ms() < 1500 + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    >= wait_time - HANDLE_ERROR_MS
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    < wait_time + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
+            );
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
 
         {
             let mut wait_time: i64 = 0;
 
-            // Request 1: Unary, success response, takes 1500ms to execute.
+            // Request 1: Unary, success response.
             let handler_builder = box |_, _: &_| {
-                Ok(UnaryFixture::new_with_duration(Ok(coppb::Response::new()), 1500).into_boxed())
+                Ok(UnaryFixture::new_with_duration(
+                    Ok(coppb::Response::new()),
+                    PAYLOAD_LARGE as u64,
+                ).into_boxed())
             };
             let resp_future_1 =
                 cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
@@ -1112,7 +1143,11 @@ mod tests {
                         Err(box_err!("foo")),
                         Ok(coppb::Response::new()),
                     ],
-                    vec![1000, 1500, 1000],
+                    vec![
+                        PAYLOAD_SMALL as u64,
+                        PAYLOAD_LARGE as u64,
+                        PAYLOAD_SMALL as u64,
+                    ],
                 ).into_boxed())
             };
             let resp_future_3 =
@@ -1124,68 +1159,77 @@ mod tests {
                     .unwrap()
             });
 
-            // Request 1, ignore. We have checked it in the previous case.
+            // Response 1
             let resp = &rx.recv().unwrap()[0];
             assert!(resp.get_other_error().is_empty());
-            assert!(resp.get_exec_details().get_handle_time().get_process_ms() >= 1500);
-            assert!(
-                resp.get_exec_details().get_handle_time().get_process_ms() < 1500 + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    >= wait_time - HANDLE_ERROR_MS
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
-            assert!(
-                resp.get_exec_details().get_handle_time().get_wait_ms()
-                    < wait_time + HANDLE_ERROR_MS
+            assert_ge!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
-            wait_time += 1500 - SNAPSHOT_DURATION_MS;
+            assert_lt!(
+                resp.get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
+            );
+            wait_time += PAYLOAD_LARGE - SNAPSHOT_DURATION_MS;
 
             // Response 2
             let resp = &rx.recv().unwrap();
+            println!("resp = {:?}", resp);
             assert_eq!(resp.len(), 2);
             assert!(resp[0].get_other_error().is_empty());
-            assert!(
+            assert_ge!(
                 resp[0]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() >= 1000
+                    .get_process_ms(),
+                PAYLOAD_SMALL - COARSE_ERROR_MS
             );
-            assert!(
+            assert_lt!(
                 resp[0]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() < 1000 + HANDLE_ERROR_MS
+                    .get_process_ms(),
+                PAYLOAD_SMALL + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
-            assert!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms()
-                    >= wait_time - HANDLE_ERROR_MS
+            assert_ge!(
+                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
-            assert!(
-                resp[0].get_exec_details().get_handle_time().get_wait_ms()
-                    < wait_time + HANDLE_ERROR_MS
+            assert_lt!(
+                resp[0].get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
 
             assert!(!resp[1].get_other_error().is_empty());
-            assert!(
+            assert_ge!(
                 resp[1]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() >= 1500
+                    .get_process_ms(),
+                PAYLOAD_LARGE - COARSE_ERROR_MS
             );
-            assert!(
+            assert_lt!(
                 resp[1]
                     .get_exec_details()
                     .get_handle_time()
-                    .get_process_ms() < 1500 + HANDLE_ERROR_MS
+                    .get_process_ms(),
+                PAYLOAD_LARGE + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
-            assert!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms()
-                    >= wait_time - HANDLE_ERROR_MS
+            assert_ge!(
+                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time - HANDLE_ERROR_MS - COARSE_ERROR_MS
             );
-            assert!(
-                resp[1].get_exec_details().get_handle_time().get_wait_ms()
-                    < wait_time + HANDLE_ERROR_MS
+            assert_lt!(
+                resp[1].get_exec_details().get_handle_time().get_wait_ms(),
+                wait_time + HANDLE_ERROR_MS + COARSE_ERROR_MS
             );
         }
     }

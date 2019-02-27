@@ -25,6 +25,7 @@ mod jemalloc {
         );
     }
 
+    #[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
     extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
         unsafe {
             let buf = &mut *(printer as *mut Vec<u8>);

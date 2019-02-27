@@ -437,6 +437,16 @@ impl Snapshot for RegionSnapshot {
     fn get_properties_cf(&self, cf: CfName) -> engine::Result<TablePropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
+
+    #[inline]
+    fn lower_bound(&self) -> Option<&[u8]> {
+        Some(self.get_start_key())
+    }
+
+    #[inline]
+    fn upper_bound(&self) -> Option<&[u8]> {
+        Some(self.get_end_key())
+    }
 }
 
 impl EngineIterator for RegionIterator {
