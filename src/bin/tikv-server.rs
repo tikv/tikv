@@ -170,7 +170,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create encrypted env from ciphter file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
-        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file) {
+        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
                 "failed to create encrypted env from ciphter file, err {:?}",
                 e
@@ -454,6 +454,16 @@ fn main() {
             Arg::with_name("print-sample-config")
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
+        )
+        .arg(
+            Arg::with_name("metrics-addr")
+                .long("metrics-addr")
+                .value_name("IP:PORT")
+                .help("Sets Prometheus Pushgateway address")
+                .long_help(
+                    "Sets push address to the Prometheus Pushgateway, \
+                     leaves it empty will disable Prometheus push",
+                ),
         )
         .get_matches();
 

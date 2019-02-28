@@ -87,7 +87,7 @@ quick_error! {
         TooManySnapshots {
             description("too many snapshots")
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -189,7 +189,7 @@ pub trait Snapshot: Read + Write + Send {
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()>;
     fn path(&self) -> &str;
     fn exists(&self) -> bool;
@@ -202,7 +202,7 @@ pub trait Snapshot: Read + Write + Send {
 
 // A helper function to copy snapshot.
 // Only used in tests.
-pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Result<()> {
+pub fn copy_snapshot(mut from: Box<dyn Snapshot>, mut to: Box<dyn Snapshot>) -> io::Result<()> {
     if !to.exists() {
         io::copy(&mut from, &mut to)?;
         to.save()?;
@@ -215,14 +215,14 @@ pub fn copy_snapshot(mut from: Box<Snapshot>, mut to: Box<Snapshot>) -> io::Resu
 /// to avoid race case for concurrent read/write.
 pub trait SnapshotDeleter {
     // Return true if it successfully delete the specified snapshot.
-    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool;
+    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot, check_entry: bool) -> bool;
 }
 
 // Try to delete the specified snapshot using deleter, return true if the deletion is done.
 pub fn retry_delete_snapshot(
-    deleter: Box<SnapshotDeleter>,
+    deleter: Box<dyn SnapshotDeleter>,
     key: &SnapKey,
-    snap: &Snapshot,
+    snap: &dyn Snapshot,
 ) -> bool {
     let d = time::Duration::from_millis(DELETE_RETRY_TIME_MILLIS);
     for _ in 0..DELETE_RETRY_MAX_TIMES {
@@ -332,7 +332,7 @@ impl Snap {
         size_track: Arc<AtomicU64>,
         is_sending: bool,
         to_build: bool,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<IOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let dir_path = dir.into();
@@ -411,7 +411,7 @@ impl Snap {
         key: &SnapKey,
         snap: &DbSnapshot,
         size_track: Arc<AtomicU64>,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<IOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, true, deleter, limiter)?;
@@ -423,7 +423,7 @@ impl Snap {
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, true, false, deleter, None)?;
 
@@ -446,7 +446,7 @@ impl Snap {
         key: &SnapKey,
         snapshot_meta: SnapshotMeta,
         size_track: Arc<AtomicU64>,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
         limiter: Option<Arc<IOLimiter>>,
     ) -> RaftStoreResult<Snap> {
         let mut s = Snap::new(dir, key, size_track, false, false, deleter, limiter)?;
@@ -480,7 +480,7 @@ impl Snap {
         dir: T,
         key: &SnapKey,
         size_track: Arc<AtomicU64>,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<Snap> {
         let s = Snap::new(dir, key, size_track, false, false, deleter, None)?;
         Ok(s)
@@ -690,7 +690,7 @@ impl Snap {
         snap: &DbSnapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
@@ -858,7 +858,7 @@ impl Snapshot for Snap {
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
-        deleter: Box<SnapshotDeleter>,
+        deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
         self.do_build(snap, region, stat, deleter)?;
@@ -1235,7 +1235,7 @@ impl SnapManager {
         &self,
         key: &SnapKey,
         snap: &DbSnapshot,
-    ) -> RaftStoreResult<Box<Snapshot>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot>> {
         let mut old_snaps = None;
         while self.get_total_snap_size() > self.max_total_snap_size() {
             if old_snaps.is_none() {
@@ -1277,7 +1277,7 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_sending(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
         let s = Snap::new_for_sending(
             &core.base,
@@ -1292,7 +1292,7 @@ impl SnapManager {
         &self,
         key: &SnapKey,
         data: &[u8],
-    ) -> RaftStoreResult<Box<Snapshot>> {
+    ) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
         let mut snapshot_data = RaftSnapshotData::new();
         snapshot_data.merge_from_bytes(data)?;
@@ -1307,7 +1307,7 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
-    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
+    pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
         let s = Snap::new_for_applying(
             &core.base,
@@ -1403,7 +1403,7 @@ impl SnapManager {
 }
 
 impl SnapshotDeleter for SnapManager {
-    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
+    fn delete_snapshot(&self, key: &SnapKey, snap: &dyn Snapshot, check_entry: bool) -> bool {
         let core = self.core.rl();
         if check_entry {
             if let Some(e) = core.registry.get(key) {
@@ -1509,7 +1509,7 @@ pub mod tests {
     ) -> Result<Arc<DB>>;
 
     impl SnapshotDeleter for DummyDeleter {
-        fn delete_snapshot(&self, _: &SnapKey, snap: &Snapshot, _: bool) -> bool {
+        fn delete_snapshot(&self, _: &SnapKey, snap: &dyn Snapshot, _: bool) -> bool {
             snap.delete();
             true
         }

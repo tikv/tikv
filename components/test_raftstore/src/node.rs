@@ -125,7 +125,7 @@ pub struct NodeCluster {
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    post_create_coprocessor_host: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
+    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl NodeCluster {
@@ -156,7 +156,7 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    pub fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
         self.post_create_coprocessor_host = Some(op)
     }
 }
@@ -320,7 +320,7 @@ impl Simulator for NodeCluster {
         self.trans.send(msg)
     }
 
-    fn add_send_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.simulate_trans
             .get_mut(&node_id)
             .unwrap()
@@ -334,7 +334,7 @@ impl Simulator for NodeCluster {
             .clear_filters();
     }
 
-    fn add_recv_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         let mut trans = self.trans.core.lock().unwrap();
         trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
     }

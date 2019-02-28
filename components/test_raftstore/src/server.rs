@@ -302,7 +302,7 @@ impl Simulator for ServerCluster {
         Ok(())
     }
 
-    fn add_send_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.metas
             .get_mut(&node_id)
             .unwrap()
@@ -318,7 +318,7 @@ impl Simulator for ServerCluster {
             .clear_filters();
     }
 
-    fn add_recv_filter(&mut self, node_id: u64, filter: Box<Filter>) {
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.metas
             .get_mut(&node_id)
             .unwrap()

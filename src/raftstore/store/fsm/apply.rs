@@ -2108,7 +2108,7 @@ pub enum Msg {
     LogsUpToDate(u64),
     Destroy(Destroy),
     #[cfg(test)]
-    Validate(u64, Box<FnBox(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
 }
 
 impl Msg {

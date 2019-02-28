@@ -132,7 +132,7 @@ impl Filter for DelayFilter {
 
 #[derive(Clone)]
 pub struct SimulateTransport<C> {
-    filters: Arc<RwLock<Vec<Box<Filter>>>>,
+    filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
 }
 
@@ -148,12 +148,16 @@ impl<C> SimulateTransport<C> {
         self.filters.wl().clear();
     }
 
-    pub fn add_filter(&mut self, filter: Box<Filter>) {
+    pub fn add_filter(&mut self, filter: Box<dyn Filter>) {
         self.filters.wl().push(filter);
     }
 }
 
-fn filter_send<H>(filters: &Arc<RwLock<Vec<Box<Filter>>>>, msg: RaftMessage, mut h: H) -> Result<()>
+fn filter_send<H>(
+    filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
+    msg: RaftMessage,
+    mut h: H,
+) -> Result<()>
 where
     H: FnMut(RaftMessage) -> Result<()>,
 {
@@ -212,14 +216,14 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
 }
 
 pub trait FilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>>;
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
 }
 
 #[derive(Default)]
 pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 
 impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
         vec![Box::new(F::default())]
     }
 }
@@ -227,7 +231,7 @@ impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
 pub struct CloneFilterFactory<F: Filter + Clone>(pub F);
 
 impl<F: Filter + Clone + 'static> FilterFactory for CloneFilterFactory<F> {
-    fn generate(&self, _: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
         vec![Box::new(self.0.clone())]
     }
 }
@@ -255,7 +259,7 @@ impl PartitionFilterFactory {
 }
 
 impl FilterFactory for PartitionFilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if self.s1.contains(&node_id) {
             return vec![box PartitionFilter {
                 node_ids: self.s2.clone(),
@@ -278,7 +282,7 @@ impl IsolationFilterFactory {
 }
 
 impl FilterFactory for IsolationFilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<Box<Filter>> {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if node_id == self.node_id {
             return vec![box DropPacketFilter { rate: 100 }];
         }

@@ -238,10 +238,10 @@ impl<T: PdClient> Runner<T> {
             match resp {
                 Ok(mut resp) => {
                     info!(
-                        "[region {}] try to split with new region id {} for region {:?}",
-                        region.get_id(),
-                        resp.get_new_region_id(),
-                        region
+                        "try to split region";
+                        "region_id" => region.get_id(),
+                        "new_region_id" => resp.get_new_region_id(),
+                        "region" => ?region
                     );
 
                     let req = new_split_region_request(
@@ -255,7 +255,9 @@ impl<T: PdClient> Runner<T> {
                     send_admin_request(&router, region_id, epoch, peer, req, callback)
                 }
                 Err(e) => {
-                    debug!("[region {}] failed to ask split: {:?}", region.get_id(), e);
+                    debug!("failed to ask split";
+                    "region_id" => region.get_id(),
+                    "err" => ?e);
                 }
             }
             Ok(())
@@ -281,10 +283,10 @@ impl<T: PdClient> Runner<T> {
                 match resp {
                     Ok(mut resp) => {
                         info!(
-                            "[region {}] try to batch split region {:?} with {:?}",
-                            region.get_id(),
-                            region,
-                            resp.get_ids()
+                            "try to batch split region";
+                            "region_id" => region.get_id(),
+                            "new_region_ids" => ?resp.get_ids(),
+                            "region" => ?region,
                         );
 
                         let req = new_batch_split_region_request(
@@ -302,8 +304,8 @@ impl<T: PdClient> Runner<T> {
                     Err(Error::Incompatible) => {
                         let (region_id, peer_id) = (region.id, peer.id);
                         info!(
-                            "[region {}] ask_batch_split is incompatible, use ask_split instead",
-                            region_id
+                            "ask_batch_split is incompatible, use ask_split instead";
+                            "region_id" => region_id
                         );
                         let task = Task::AskSplit {
                             region,
@@ -314,8 +316,9 @@ impl<T: PdClient> Runner<T> {
                         };
                         if let Err(Stopped(t)) = scheduler.schedule(task) {
                             error!(
-                                "[region {}] {} failed to notify pd to split: Stopped",
-                                region_id, peer_id
+                                "failed to notify pd to split: Stopped";
+                                "region_id" => region_id,
+                                "peer_id" =>  peer_id
                             );
                             match t {
                                 Task::AskSplit { callback, .. } => {
@@ -329,9 +332,9 @@ impl<T: PdClient> Runner<T> {
                     }
                     Err(e) => {
                         debug!(
-                            "[region {}] failed to ask batch split: {:?}",
-                            region.get_id(),
-                            e
+                            "ask batch split failed";
+                            "region_id" => region.get_id(),
+                            "err" => ?e,
                         );
                     }
                 }
@@ -365,9 +368,9 @@ impl<T: PdClient> Runner<T> {
             .region_heartbeat(region.clone(), peer.clone(), region_stat)
             .map_err(move |e| {
                 debug!(
-                    "[region {}] failed to send heartbeat: {:?}",
-                    region.get_id(),
-                    e
+                    "failed to send heartbeat";
+                    "region_id" => region.get_id(),
+                    "err" => ?e
                 );
             });
         handle.spawn(f);
@@ -382,9 +385,9 @@ impl<T: PdClient> Runner<T> {
         let disk_stats = match fs2::statvfs(store_info.engine.path()) {
             Err(e) => {
                 error!(
-                    "get disk stat for rocksdb {} failed: {}",
-                    store_info.engine.path(),
-                    e
+                    "get disk stat for rocksdb failed";
+                    "engine_path" => store_info.engine.path(),
+                    "err" => ?e
                 );
                 return;
             }
@@ -441,14 +444,14 @@ impl<T: PdClient> Runner<T> {
             .set(available as i64);
 
         let f = self.pd_client.store_heartbeat(stats).map_err(|e| {
-            error!("store heartbeat failed {:?}", e);
+            error!("store heartbeat failed"; "err" => ?e);
         });
         handle.spawn(f);
     }
 
     fn handle_report_batch_split(&self, handle: &Handle, regions: Vec<metapb::Region>) {
         let f = self.pd_client.report_batch_split(regions).map_err(|e| {
-            debug!("report split failed {:?}", e);
+            debug!("report split failed"; "err" => ?e);
         });
         handle.spawn(f);
     }
@@ -476,12 +479,12 @@ impl<T: PdClient> Runner<T> {
                             // after `max_leader_missing_duration`. Something is wrong in the system.
                             // Just add a log here for this situation.
                             info!(
-                                "[region {}] {} the local region epoch: {:?} is greater the \
-                                 region epoch in PD: {:?}, ignored.",
-                                local_region.get_id(),
-                                peer.get_id(),
-                                local_region.get_region_epoch(),
-                                pd_region.get_region_epoch()
+                                "local region epoch is greater the \
+                                 region epoch in PD ignore validate peer";
+                                "region_id" => local_region.get_id(),
+                                "peer_id" => peer.get_id(),
+                                "local_region_epoch" => ?local_region.get_region_epoch(),
+                                "pd_region_epoch" => ?pd_region.get_region_epoch()
                             );
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["region epoch error"])
@@ -497,11 +500,11 @@ impl<T: PdClient> Runner<T> {
                             // Peer is not a member of this Region anymore. Probably it's removed out.
                             // Send it a raft massage to destroy it since it's obsolete.
                             info!(
-                                "[region {}] {} is not a valid member of region {:?}. To be \
-                                 destroyed soon.",
-                                local_region.get_id(),
-                                peer.get_id(),
-                                pd_region
+                                "peer is not a valid member of region, to be \
+                                 destroyed soon";
+                                "region_id" => local_region.get_id(),
+                                "peer_id" => peer.get_id(),
+                                "pd_region" => ?pd_region
                             );
                             PD_VALIDATE_PEER_COUNTER_VEC
                                 .with_label_values(&["peer stale"])
@@ -514,10 +517,10 @@ impl<T: PdClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "[region {}] {} is still valid in region {:?}",
-                            local_region.get_id(),
-                            peer.get_id(),
-                            pd_region
+                            "peer is still valid a memeber of region";
+                            "region_id" => local_region.get_id(),
+                            "peer_id" => peer.get_id(),
+                            "pd_region" => ?pd_region
                         );
                         PD_VALIDATE_PEER_COUNTER_VEC
                             .with_label_values(&["peer valid"])
@@ -528,7 +531,7 @@ impl<T: PdClient> Runner<T> {
                         // TODO: handle merge
                     }
                     Err(e) => {
-                        error!("get region failed {:?}", e);
+                        error!("get region failed"; "err" => ?e);
                     }
                 }
                 Ok(())
@@ -553,10 +556,10 @@ impl<T: PdClient> Runner<T> {
 
                     let mut change_peer = resp.take_change_peer();
                     info!(
-                        "[region {}] try to change peer {:?} {:?}",
-                        region_id,
-                        change_peer.get_change_type(),
-                        change_peer.get_peer()
+                        "try to change peer";
+                        "region_id" => region_id,
+                        "change_type" => ?change_peer.get_change_type(),
+                        "peer" => ?change_peer.get_peer()
                     );
                     let req = new_change_peer_request(
                         change_peer.get_change_type(),
@@ -570,10 +573,10 @@ impl<T: PdClient> Runner<T> {
 
                     let mut transfer_leader = resp.take_transfer_leader();
                     info!(
-                        "[region {}] try to transfer leader from {:?} to {:?}",
-                        region_id,
-                        peer,
-                        transfer_leader.get_peer()
+                        "try to transfer leader";
+                        "region_id" => region_id,
+                        "from_peer" => ?peer,
+                        "to_peer" => ?transfer_leader.get_peer()
                     );
                     let req = new_transfer_leader_request(transfer_leader.take_peer());
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None);
@@ -583,19 +586,19 @@ impl<T: PdClient> Runner<T> {
                         .inc();
 
                     let split_region = resp.take_split_region();
-                    info!("[region {}] try to split {:?}", region_id, epoch);
+                    info!("try to split"; "region_id" => region_id, "region_epoch" => ?epoch);
                     let msg = CasualMessage::HalfSplitRegion {
                         region_epoch: epoch,
                         policy: split_region.get_policy(),
                     };
                     if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
-                        error!("[region {}] send halfsplit request err {:?}", region_id, e);
+                        error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
                     PD_HEARTBEAT_COUNTER_VEC.with_label_values(&["merge"]).inc();
 
                     let merge = resp.take_merge();
-                    info!("[region {}] try to merge {:?}", region_id, merge);
+                    info!("try to merge"; "region_id" => region_id, "merge" => ?merge);
                     let req = new_merge_request(merge);
                     send_admin_request(&router, region_id, epoch, peer, req, Callback::None)
                 } else {
@@ -605,8 +608,8 @@ impl<T: PdClient> Runner<T> {
             .map_err(|e| panic!("unexpected error: {:?}", e))
             .map(move |_| {
                 info!(
-                    "[store {}] region heartbeat response handler exit.",
-                    store_id
+                    "region heartbeat response handler exit";
+                    "store_id" => store_id,
                 )
             });
         handle.spawn(f);
@@ -629,14 +632,14 @@ impl<T: PdClient> Runner<T> {
     fn handle_destroy_peer(&mut self, region_id: u64) {
         match self.region_peers.remove(&region_id) {
             None => return,
-            Some(_) => info!("[region {}] remove peer statistic record in pd", region_id),
+            Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
     }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task, handle: &Handle) {
-        debug!("executing task {}", task);
+        debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
             self.schedule_heartbeat_receiver(handle);
@@ -819,8 +822,8 @@ fn send_admin_request(
 
     if let Err(e) = router.send_raft_command(RaftCommand::new(req, callback)) {
         error!(
-            "[region {}] send {:?} request err {:?}",
-            region_id, cmd_type, e
+            "send request failed";
+            "region_id" => region_id, "cmd_type" => ?cmd_type, "err" => ?e,
         );
     }
 }
@@ -836,8 +839,8 @@ fn send_merge_fail(router: &RaftRouter, source_region_id: u64, target: metapb::P
         }),
     ) {
         error!(
-            "[region {}] failed to report merge {} fail: {:?}",
-            source_region_id, target_id, e
+            "source region report merge failed";
+            "region_id" => source_region_id, "targe_region_id" => target_id, "err" => ?e,
         );
     }
 }
@@ -857,9 +860,9 @@ fn send_destroy_peer_message(
     message.set_is_tombstone(true);
     if let Err(e) = router.send_raft_message(message) {
         error!(
-            "send gc peer request to region {} err {:?}",
-            local_region.get_id(),
-            e
+            "send gc peer request failed";
+            "region_id" => local_region.get_id(),
+            "err" => ?e
         )
     }
 }

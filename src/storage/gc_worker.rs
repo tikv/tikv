@@ -498,7 +498,7 @@ pub struct AutoGCConfig<S: GCSafePointProvider, R: RegionInfoProvider> {
 
     /// This will be called when a round of GC has finished and goes back to idle state.
     /// This field is for test purpose.
-    pub post_a_round_of_gc: Option<Box<Fn() + Send>>,
+    pub post_a_round_of_gc: Option<Box<dyn Fn() + Send>>,
 }
 
 impl<S: GCSafePointProvider, R: RegionInfoProvider> AutoGCConfig<S, R> {
