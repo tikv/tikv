@@ -26,7 +26,7 @@ use super::executor::{Executor, ExecutorMetrics};
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
     deadline: Deadline,
-    executor: Box<Executor + Send>,
+    executor: Box<dyn Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
@@ -85,7 +85,7 @@ impl DAGRequestHandler {
         batch_row_limit: usize,
         is_streaming: bool,
         enable_batch_if_possible: bool,
-    ) -> Result<Box<RequestHandler>> {
+    ) -> Result<Box<dyn RequestHandler>> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {

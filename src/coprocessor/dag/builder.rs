@@ -49,7 +49,7 @@ impl DAGBuilder {
         _store: S,
         _ranges: Vec<KeyRange>,
         _eval_config: EvalConfig,
-    ) -> Result<(Box<BatchExecutor>, BatchExecutorContext)> {
+    ) -> Result<(Box<dyn BatchExecutor>, BatchExecutorContext)> {
         // Currently no batch executors and this function should never be called, so unreachable.
         unreachable!()
     }
