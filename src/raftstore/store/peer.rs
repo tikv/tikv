@@ -478,7 +478,7 @@ impl Peer {
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
+        self.mut_store().clear_meta(&raft_wb)?;
         write_peer_state(
             &ctx.engines.kv,
             &kv_wb,

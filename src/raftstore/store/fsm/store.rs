@@ -18,7 +18,6 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use protobuf;
 use raft::{Ready, StateRole};
 use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
@@ -680,7 +679,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         // Scan region meta to get saved regions.
         let start_key = keys::REGION_META_MIN_KEY;
         let end_key = keys::REGION_META_MAX_KEY;
-        let kv_engine = Arc::clone(&self.engines.kv);
+        let raft_engine = self.engines.raft.clone();
         let store_id = self.store.get_id();
         let mut total_count = 0;
         let mut tombstone_count = 0;
@@ -688,12 +687,11 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::new();
         let mut raft_wb = WriteBatch::new();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
-        kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+        raft_engine.scan(start_key, end_key, false, |key, value| {
             let (region_id, suffix) = keys::decode_region_meta_key(key)?;
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
@@ -706,13 +704,10 @@ impl<T, C> RaftPollerBuilder<T, C> {
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
                 debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                self.clear_stale_meta(&mut raft_wb, &local_state);
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Applying {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                peer_storage::recover_from_applying_state(&self.engines, &raft_wb, region_id)?;
                 applying_count += 1;
                 applying_regions.push(region.clone());
                 return Ok(true);
@@ -743,10 +738,6 @@ impl<T, C> RaftPollerBuilder<T, C> {
             Ok(true)
         })?;
 
-        if !kv_wb.is_empty() {
-            self.engines.kv.write(kv_wb).unwrap();
-            self.engines.kv.sync_wal().unwrap();
-        }
         if !raft_wb.is_empty() {
             self.engines.raft.write(raft_wb).unwrap();
             self.engines.raft.sync_wal().unwrap();
@@ -784,12 +775,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         Ok(region_peers)
     }
 
-    fn clear_stale_meta(
-        &self,
-        kv_wb: &mut WriteBatch,
-        raft_wb: &mut WriteBatch,
-        origin_state: &RegionLocalState,
-    ) {
+    fn clear_stale_meta(&self, raft_wb: &mut WriteBatch, origin_state: &RegionLocalState) {
         let region = origin_state.get_region();
         let raft_key = keys::raft_state_key(region.get_id());
         let raft_state = match self.engines.raft.get_msg(&raft_key).unwrap() {
@@ -798,11 +784,12 @@ impl<T, C> RaftPollerBuilder<T, C> {
             Some(value) => value,
         };
 
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
-            .unwrap();
+        peer_storage::clear_meta(&self.engines, raft_wb, region.get_id(), &raft_state).unwrap();
+
+        // We also keep an region local state in the raft engine even if the
+        // region is removed.
         let key = keys::region_state_key(region.get_id());
-        let handle = rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
-        kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
+        raft_wb.put_msg(&key, origin_state).unwrap();
     }
 
     /// `clear_stale_data` clean up all possible garbage data.
