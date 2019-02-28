@@ -155,7 +155,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
             }
         };
 
-        // send it to rafastore to update region approximate size
+        // send it to raftstore to update region approximate size
         let res = CasualMessage::RegionApproximateSize { size: region_size };
         if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
             warn!(
