@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: Maybe we can find a better place to put these interfaces, e.g. naming it as prelude?
+
 //! Batch executor common structures.
 
 use std::ops::Deref;
@@ -95,7 +97,7 @@ pub struct BatchExecutorContextInner {
     // the aggregation executor's schema instead of base schema.
     pub columns_info: Vec<ColumnInfo>,
 
-    // TODO: This is really a execution config, alhtough called eval config.
+    // TODO: This is really a execution config, although called eval config.
     pub config: EvalConfig,
 }
 
@@ -134,6 +136,8 @@ pub struct BatchExecuteResult {
     ///                `Ok(true)`, there could be some remaining data in the `data` field which is
     ///                valid data and should be processed. The caller should NOT call `next_batch()`
     ///                any more.
+    // TODO: The name of this field is confusing and not obvious, that we need so many comments to
+    // explain what it is. We can change it to a better name or use an enum if necessary.
     pub is_drained: Result<bool, Error>,
 }
 
