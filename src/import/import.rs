@@ -175,7 +175,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
             let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "import"; "tag" => %self.tag, "range count" => %range_count, "takes" => ?start.elapsed(),
+                "import"; "tag" => %self.tag, "range_count" => %range_count, "takes" => ?start.elapsed(),
             );
 
             return Ok(());
