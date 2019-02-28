@@ -203,7 +203,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("epoch not match"; "tag" => %self.tag, "new-regions" => ?current_regions);
+                        warn!("epoch not match"; "tag" => %self.tag, "new_regions" => ?current_regions);
                         Err(Error::EpochNotMatch(current_regions))
                     }
                 }
