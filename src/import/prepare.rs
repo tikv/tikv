@@ -263,7 +263,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn scatter_region(&self, region: &RegionInfo) -> Result<()> {
         match self.client.scatter_region(region) {
             Ok(_) => {
-                info!("scatter region succ"; "tag" => %self.tag, "region" => %region.get_id());
+                info!("scatter region"; "tag" => %self.tag, "region" => %region.get_id());
                 Ok(())
             }
             Err(e) => {
