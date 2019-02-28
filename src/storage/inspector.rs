@@ -144,6 +144,9 @@ impl MvccInspector {
     //    }
 
     pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64) {
+        if ts == u64::max_value() {
+            return;
+        }
         let entry = self.lock_entry(region_id, version);
         entry
             .fetch_update(
