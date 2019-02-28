@@ -182,7 +182,7 @@ impl Task {
         Task::Destroy(region_id)
     }
 
-    /// Task accepts `Mag`s that contain Get/Snap requests.
+    /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
     /// Returns `true`, it can be saftly sent to localreader,
     /// Returns `false`, it must not be sent to localreader.
     #[inline]

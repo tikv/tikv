@@ -169,9 +169,9 @@ pub enum SignificantMsg {
 
 /// Message that will be sent to a peer.
 ///
-/// These messages are not important enough and can be dropped occasionally.
+/// These messages are not significant and can be dropped occasionally.
 pub enum CasualMessage {
-    /// Split the target region into several partions.
+    /// Split the target region into several partitions.
     SplitRegion {
         region_epoch: RegionEpoch,
         // It's an encoded key.

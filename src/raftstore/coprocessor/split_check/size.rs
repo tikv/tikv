@@ -106,7 +106,7 @@ pub struct SizeCheckObserver<C> {
     region_max_size: u64,
     split_size: u64,
     split_limit: u64,
-    ch: Mutex<C>,
+    router: Mutex<C>,
 }
 
 impl<C: CasualRouter> SizeCheckObserver<C> {
@@ -114,13 +114,13 @@ impl<C: CasualRouter> SizeCheckObserver<C> {
         region_max_size: u64,
         split_size: u64,
         split_limit: u64,
-        ch: C,
+        router: C,
     ) -> SizeCheckObserver<C> {
         SizeCheckObserver {
             region_max_size,
             split_size,
             split_limit,
-            ch: Mutex::new(ch),
+            router: Mutex::new(router),
         }
     }
 }
@@ -157,7 +157,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
 
         // send it to rafastore to update region approximate size
         let res = CasualMessage::RegionApproximateSize { size: region_size };
-        if let Err(e) = self.ch.lock().unwrap().send(region_id, res) {
+        if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
             warn!(
                 "[region {}] failed to send approximate region size: {}",
                 region_id, e
