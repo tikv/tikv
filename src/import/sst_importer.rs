@@ -42,7 +42,7 @@ impl SSTImporter {
     pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
-                info!("create succ"; "file" => ?f);
+                info!("create"; "file" => ?f);
                 Ok(f)
             }
             Err(e) => {
@@ -55,7 +55,7 @@ impl SSTImporter {
     pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
         match self.dir.delete(meta) {
             Ok(path) => {
-                info!("delete succ"; "path" => ?path);
+                info!("delete"; "path" => ?path);
                 Ok(())
             }
             Err(e) => {
@@ -68,7 +68,7 @@ impl SSTImporter {
     pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
-                info!("ingest succ"; "meta" => ?meta);
+                info!("ingest"; "meta" => ?meta);
                 Ok(())
             }
             Err(e) => {
@@ -372,7 +372,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 

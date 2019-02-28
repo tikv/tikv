@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Remove this.
-#![allow(dead_code)]
-
 use std::convert::TryFrom;
 
 use smallvec::SmallVec;
@@ -21,14 +18,23 @@ use smallvec::SmallVec;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
 use tipb::schema::ColumnInfo;
 
-use super::VectorValue;
+use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{datum, Error, Result};
 
+/// A container stores an array of datums, which can be either raw (not decoded), or decoded into
+/// the `VectorValue` type.
+///
+/// TODO:
+/// Since currently the data format in response can be the same as in storage, we use this structure
+/// to avoid unnecessary repeated serialization / deserialization. In future, Coprocessor will
+/// respond all data in Arrow format which is different to the format in storage. At that time,
+/// this structure is no longer useful and should be removed.
 pub enum LazyBatchColumn {
     /// Ensure that small datum values (i.e. Int, Real, Time) are stored compactly.
-    /// Notice that there is an extra 1 byte for datum to store the flag, so there are 9 bytes.
-    Raw(Vec<SmallVec<[u8; 9]>>),
+    /// When using VarInt encoding there are 9 bytes. Plus 1 extra byte to store the datum flag.
+    /// Thus totally there are 10 bytes.
+    Raw(Vec<SmallVec<[u8; 10]>>),
     Decoded(VectorValue),
 }
 
@@ -71,6 +77,12 @@ impl LazyBatchColumn {
         LazyBatchColumn::Raw(Vec::with_capacity(capacity))
     }
 
+    /// Creates a new `LazyBatchColumnb::Decoded` with specified capacity and eval type.
+    #[inline]
+    pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
+        LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
+    }
+
     #[inline]
     pub fn is_raw(&self) -> bool {
         match self {
@@ -96,9 +108,25 @@ impl LazyBatchColumn {
     }
 
     #[inline]
-    pub fn raw(&self) -> &Vec<SmallVec<[u8; 9]>> {
+    pub fn mut_decoded(&mut self) -> &mut VectorValue {
+        match self {
+            LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
+            LazyBatchColumn::Decoded(ref mut v) => v,
+        }
+    }
+
+    #[inline]
+    pub fn raw(&self) -> &Vec<SmallVec<[u8; 10]>> {
         match self {
             LazyBatchColumn::Raw(ref v) => v,
+            LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
+        }
+    }
+
+    #[inline]
+    pub fn mut_raw(&mut self) -> &mut Vec<SmallVec<[u8; 10]>> {
+        match self {
+            LazyBatchColumn::Raw(ref mut v) => v,
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
         }
     }
@@ -157,7 +185,7 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Decodes this column according to column info if the column is not decoded.
+    /// Decodes this column in place according to column info if the column is not decoded.
     pub fn decode(&mut self, time_zone: Tz, column_info: &ColumnInfo) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
@@ -208,6 +236,71 @@ impl LazyBatchColumn {
             LazyBatchColumn::Decoded(_) => panic!("LazyBatchColumn is already decoded"),
         }
     }
+
+    /// Moves all elements of `other` into `Self`, leaving `other` empty.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `other` and `Self` does not have identical decoded status or identical
+    /// `EvalType`, i.e. one is `decoded` but another is `raw`, or one is `decoded(Int)` but
+    /// another is `decoded(Real)`.
+    pub fn append(&mut self, other: &mut Self) {
+        match self {
+            LazyBatchColumn::Raw(ref mut dest) => match other {
+                LazyBatchColumn::Raw(ref mut src) => dest.append(src),
+                _ => panic!("Cannot append decoded LazyBatchColumn into raw LazyBatchColumn"),
+            },
+            LazyBatchColumn::Decoded(ref mut dest) => match other {
+                LazyBatchColumn::Decoded(ref mut src) => dest.append(src),
+                _ => panic!("Cannot append raw LazyBatchColumn into decoded LazyBatchColumn"),
+            },
+        }
+    }
+
+    /// Returns maximum encoded size.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let mut size = 0;
+                for s in v {
+                    size += s.len();
+                }
+                Ok(size)
+            }
+            LazyBatchColumn::Decoded(ref v) => v.maximum_encoded_size(),
+        }
+    }
+
+    /// Encodes into binary format.
+    // FIXME: Use BufferWriter.
+    pub fn encode(
+        &self,
+        row_index: usize,
+        column_info: &ColumnInfo,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        match self {
+            LazyBatchColumn::Raw(ref v) => {
+                let value = if v[row_index].is_empty() {
+                    if column_info.has_default_val() {
+                        column_info.get_default_val()
+                    } else if !column_info.flag().contains(FieldTypeFlag::NOT_NULL) {
+                        datum::DATUM_DATA_NULL
+                    } else {
+                        return Err(box_err!(
+                            "Column (id = {}) has flag NOT NULL, but no value is given",
+                            column_info.get_column_id()
+                        ));
+                    }
+                } else {
+                    v[row_index].as_slice()
+                };
+                output.extend_from_slice(value);
+                Ok(())
+            }
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, column_info, output),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -215,26 +308,6 @@ mod tests {
     use super::*;
 
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
-
-    /// Helper method to generate raw row ([u8] vector) from datum vector.
-    fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {
-        datums
-            .as_ref()
-            .iter()
-            .map(|some_datum| {
-                let mut ret = Vec::new();
-                if some_datum.is_some() {
-                    DatumEncoder::encode(
-                        &mut ret,
-                        &[some_datum.clone().take().unwrap()],
-                        comparable,
-                    )
-                    .unwrap();
-                }
-                ret
-            })
-            .collect()
-    }
 
     #[test]
     fn test_lazy_batch_column_clone() {
@@ -317,8 +390,6 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::test;
-
     use super::*;
 
     #[bench]
@@ -508,35 +579,26 @@ mod benches {
 
     /// A vector based LazyBatchColumn
     #[derive(Clone)]
-    enum VectorLazyBatchColumn {
-        Raw(Vec<Vec<u8>>),
-        Decoded(VectorValue),
-    }
+    struct VectorLazyBatchColumn(Vec<Vec<u8>>);
 
     impl VectorLazyBatchColumn {
         #[inline]
         pub fn raw_with_capacity(capacity: usize) -> Self {
-            VectorLazyBatchColumn::Raw(Vec::with_capacity(capacity))
+            VectorLazyBatchColumn(Vec::with_capacity(capacity))
         }
 
         #[inline]
         pub fn clear(&mut self) {
-            match self {
-                VectorLazyBatchColumn::Raw(ref mut v) => v.clear(),
-                VectorLazyBatchColumn::Decoded(ref mut v) => v.clear(),
-            }
+            self.0.clear();
         }
 
         #[inline]
         pub fn push_raw(&mut self, raw_datum: &[u8]) {
-            match self {
-                VectorLazyBatchColumn::Raw(ref mut v) => v.push(raw_datum.to_vec()),
-                VectorLazyBatchColumn::Decoded(_) => panic!(),
-            }
+            self.0.push(raw_datum.to_vec());
         }
     }
 
-    /// Bench performance of push 10 bytes to a vector based LazyBatchColumn.
+    /// Bench performance of pushing 10 bytes to a vector based LazyBatchColumn.
     #[bench]
     fn bench_lazy_batch_column_by_vec_push_raw_10bytes(b: &mut test::Bencher) {
         let mut column = VectorLazyBatchColumn::raw_with_capacity(1000);

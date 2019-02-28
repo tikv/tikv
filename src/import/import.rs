@@ -75,7 +75,7 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("import engine succ"; "tag" => %self.tag, "takes" => ?start.elapsed());
+                info!("import engine"; "tag" => %self.tag, "takes" => ?start.elapsed());
                 Ok(())
             }
             Err(e) => {
@@ -175,7 +175,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
             let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "import"; "tag" => %self.tag, "range count" => %range_count, "takes" => ?start.elapsed(),
+                "import"; "tag" => %self.tag, "range_count" => %range_count, "takes" => ?start.elapsed(),
             );
 
             return Ok(());
@@ -281,7 +281,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             for _ in 0..MAX_RETRY_TIMES {
                 match self.import(region) {
                     Ok(_) => {
-                        info!("import sst succ"; "tag" => %self.tag, "takes" => ?start.elapsed());
+                        info!("import sst"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(());
                     }
                     Err(Error::UpdateRegion(new_region)) => {
@@ -333,7 +333,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("epoch not match"; "tag" => %self.tag, "new-regions" => ?current_regions);
+                        warn!("epoch not match"; "tag" => %self.tag, "new_regions" => ?current_regions);
                         Err(Error::EpochNotMatch(current_regions))
                     }
                 }
@@ -348,7 +348,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             let store_id = peer.get_store_id();
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
-                    info!("upload succ"; "tag" => %self.tag, "store" => %store_id);
+                    info!("upload"; "tag" => %self.tag, "store" => %store_id);
                 }
                 Err(e) => {
                     warn!("upload failed"; "tag" => %self.tag, "store" => %store_id, "err" => %e);
@@ -383,7 +383,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("ingest succ"; "tag" => %self.tag, "store" => %store_id);
+                info!("ingest"; "tag" => %self.tag, "store" => %store_id);
                 Ok(())
             }
             Err(e) => {

@@ -137,7 +137,8 @@ impl<T: Simulator> Cluster<T> {
             );
             let raft_path = path.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);

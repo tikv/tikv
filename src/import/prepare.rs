@@ -60,7 +60,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
 
         let props = match self.engine.get_size_properties() {
             Ok(v) => {
-                info!("get size properties succ"; "tag" => %self.tag, "size" => %v.total_size);
+                info!("get size properties"; "tag" => %self.tag, "size" => %v.total_size);
                 v
             }
             Err(e) => {
@@ -203,7 +203,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("epoch not match"; "tag" => %self.tag, "new-regions" => ?current_regions);
+                        warn!("epoch not match"; "tag" => %self.tag, "new_regions" => ?current_regions);
                         Err(Error::EpochNotMatch(current_regions))
                     }
                 }
@@ -242,7 +242,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 
         match res {
             Ok(mut resp) => {
-                info!("split succ"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key));
+                info!("split"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key));
                 // Just assume that the leader will be at the same store.
                 let left = resp.take_left();
                 let leader = match region.leader {
@@ -263,7 +263,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn scatter_region(&self, region: &RegionInfo) -> Result<()> {
         match self.client.scatter_region(region) {
             Ok(_) => {
-                info!("scatter region succ"; "tag" => %self.tag, "region" => %region.get_id());
+                info!("scatter region"; "tag" => %self.tag, "region" => %region.get_id());
                 Ok(())
             }
             Err(e) => {
@@ -285,6 +285,7 @@ mod tests {
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
+    use crate::util::security::SecurityConfig;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {
@@ -298,8 +299,9 @@ mod tests {
     fn test_prepare_job() {
         let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
 
         // Generate entries to prepare.
         let (n, m) = (4, 4);
