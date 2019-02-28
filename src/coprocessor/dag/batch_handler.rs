@@ -29,7 +29,7 @@ const BATCH_GROW_FACTOR: usize = 2;
 
 /// Must be built from DAGRequestHandler.
 pub struct BatchDAGHandler {
-    out_most_executor: Box<BatchExecutor>,
+    out_most_executor: Box<dyn BatchExecutor>,
     output_offsets: Vec<u32>,
     executor_context: BatchExecutorContext,
 
@@ -42,7 +42,7 @@ pub struct BatchDAGHandler {
 
 impl BatchDAGHandler {
     pub fn new(
-        out_most_executor: Box<BatchExecutor>,
+        out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
         executor_context: BatchExecutorContext,
         ranges_len: usize,
