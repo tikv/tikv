@@ -103,7 +103,7 @@ lazy_static! {
     )
     .unwrap();
     pub static ref KV_MAX_READ_TS_UPDATE_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "tikv_storage_prewrite_max_read_ts_res",
+        "tikv_storage_max_read_ts_update",
         "Statistics of max read ts updating",
         &["from", "res"]
     )
