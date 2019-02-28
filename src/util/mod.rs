@@ -45,6 +45,16 @@ pub mod timer;
 pub mod transport;
 pub mod worker;
 
+static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);
+
+pub fn panic_when_key_exceed_bound() -> bool {
+    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::SeqCst)
+}
+
+pub fn set_panic_when_key_exceed_bound(flag: bool) {
+    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::SeqCst);
+}
+
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {
@@ -472,12 +482,10 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = backtrace::Backtrace::new();
-            error!(
-                "thread '{}' panicked '{}' at {:?}\n{:?}",
-                name,
-                msg,
-                loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                bt
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
             );
         } else {
             orig_hook(info);

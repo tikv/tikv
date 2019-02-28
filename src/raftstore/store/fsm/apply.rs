@@ -2109,7 +2109,7 @@ pub enum Msg {
     LogsUpToDate(u64),
     Destroy(Destroy),
     #[cfg(test)]
-    Validate(u64, Box<FnBox(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
 }
 
 impl Msg {
@@ -2680,11 +2680,16 @@ mod tests {
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
         let db = Arc::new(
-            rocksdb_util::new_engine(path.path().join("db").to_str().unwrap(), ALL_CFS, None)
-                .unwrap(),
+            rocksdb_util::new_engine(
+                path.path().join("db").to_str().unwrap(),
+                None,
+                ALL_CFS,
+                None,
+            )
+            .unwrap(),
         );
         let raft_db = Arc::new(
-            rocksdb_util::new_engine(path.path().join("raft").to_str().unwrap(), &[], None)
+            rocksdb_util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
                 .unwrap(),
         );
         (path, Engines::new(db, raft_db))

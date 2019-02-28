@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,19 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
-use std::result::Result as StdResult;
+mod scalar;
+mod vector;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn StdError + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("{}", err)
-        }
-    }
-}
+// Concrete eval types without a nullable wrapper.
+pub type Int = i64;
+pub type Real = f64;
+pub type Bytes = Vec<u8>;
+pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
-pub type Result<T> = StdResult<T, Error>;
+// Dynamic eval types.
+pub use self::scalar::ScalarValue;
+pub use self::vector::VectorValue;

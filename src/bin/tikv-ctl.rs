@@ -59,7 +59,7 @@ use std::thread;
 use std::time::Duration;
 use std::{process, str, u64};
 
-use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
+use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
@@ -80,7 +80,7 @@ use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb_util;
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv::util::security::{self, SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -99,27 +99,39 @@ fn new_debug_executor(
     host: Option<&str>,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
-) -> Box<DebugExecutor> {
+) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
-            let kv_db_opts = cfg.rocksdb.build_opt();
+            let mut kv_db_opts = cfg.rocksdb.build_opt();
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+
+            if !mgr.cipher_file().is_empty() {
+                let encrypted_env =
+                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
+                kv_db_opts.set_env(encrypted_env);
+            }
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
-            let raft_db_opts = cfg.raftdb.build_opt();
+            let mut raft_db_opts = cfg.raftdb.build_opt();
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+
+            if !mgr.cipher_file().is_empty() {
+                let encrypted_env =
+                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
+                raft_db_opts.set_env(encrypted_env);
+            }
             let raft_db =
                 rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
-            ))) as Box<DebugExecutor>
+            ))) as Box<dyn DebugExecutor>
         }
-        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
+        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
     }
 }
@@ -551,7 +563,7 @@ trait DebugExecutor {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
 
@@ -645,7 +657,7 @@ impl DebugExecutor for DebugClient {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let mut req = ScanMvccRequest::new();
         req.set_from_key(from);
         req.set_to_key(to);
@@ -655,7 +667,7 @@ impl DebugExecutor for DebugClient {
                 .unwrap()
                 .map_err(|e| e.to_string())
                 .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        ) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -796,12 +808,12 @@ impl DebugExecutor for Debugger {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         let stream = stream::iter_result(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        Box::new(stream) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
@@ -950,106 +962,111 @@ impl DebugExecutor for Debugger {
 fn main() {
     vlog::set_verbosity_level(1);
 
-    let raw_key_hint: &'static str = "raw key (generally starts with \"z\") in escaped form";
+    let raw_key_hint: &'static str = "Raw key (generally starts with \"z\") in escaped form";
     let version_info = util::tikv_version_info();
 
-    let mut app = App::new("TiKV Ctl")
-        .setting(AppSettings::AllowExternalSubcommands)
+    let mut app = App::new("TiKV Control (tikv-ctl)")
+        .about("A tool for interacting with TiKV deployments.")
+        .author(crate_authors!())
+        .version(crate_version!())
         .long_version(version_info.as_ref())
-        .author("TiKV Org.")
-        .about("Distributed transactional key value database powered by Rust and Raft")
+        .setting(AppSettings::AllowExternalSubcommands)
         .arg(
             Arg::with_name("db")
                 .long("db")
                 .takes_value(true)
-                .help("set rocksdb path"),
+                .help("Set the rocksdb path"),
         )
         .arg(
             Arg::with_name("raftdb")
                 .long("raftdb")
                 .takes_value(true)
-                .help("set raft rocksdb path"),
+                .help("Set the raft rocksdb path"),
         )
         .arg(
             Arg::with_name("config")
                 .long("config")
                 .takes_value(true)
-                .help("set config for rocksdb"),
+                .help("Set the config for rocksdb"),
         )
         .arg(
             Arg::with_name("host")
                 .long("host")
                 .takes_value(true)
-                .help("set remote host"),
+                .help("Set the remote host"),
         )
         .arg(
             Arg::with_name("ca_path")
                 .required(false)
                 .long("ca-path")
                 .takes_value(true)
-                .help("set CA certificate path"),
+                .help("Set the CA certificate path"),
         )
         .arg(
             Arg::with_name("cert_path")
                 .required(false)
                 .long("cert-path")
                 .takes_value(true)
-                .help("set certificate path"),
+                .help("Set the certificate path"),
         )
         .arg(
             Arg::with_name("key_path")
                 .required(false)
                 .long("key-path")
                 .takes_value(true)
-                .help("set private key path"),
+                .help("Set the private key path"),
+        )
+        .arg(
+            Arg::with_name("cipher_file")
+            .required(false).long("cipher-file").takes_value(true).help("set cipher file path")
         )
         .arg(
             Arg::with_name("hex-to-escaped")
                 .conflicts_with("escaped-to-hex")
                 .long("to-escaped")
                 .takes_value(true)
-                .help("convert hex key to escaped key"),
+                .help("Convert a hex key to escaped key"),
         )
         .arg(
             Arg::with_name("escaped-to-hex")
                 .conflicts_with("hex-to-escaped")
                 .long("to-hex")
                 .takes_value(true)
-                .help("convert escaped key to hex key"),
+                .help("Convert an escaped key to hex key"),
         )
         .arg(
             Arg::with_name("decode")
                 .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
                 .long("decode")
                 .takes_value(true)
-                .help("decode a key in escaped format"),
+                .help("Decode a key in escaped format"),
         )
         .arg(
             Arg::with_name("encode")
                 .conflicts_with_all(&["hex-to-escaped", "escaped-to-hex"])
                 .long("encode")
                 .takes_value(true)
-                .help("encode a key in escaped format"),
+                .help("Encode a key in escaped format"),
             )
         .arg(
             Arg::with_name("pd")
                 .long("pd")
                 .takes_value(true)
-                .help("pd address"),
+                .help("Set the address of pd"),
         )
         .subcommand(
             SubCommand::with_name("raft")
-                .about("print raft log entry")
+                .about("Print a raft log entry")
                 .subcommand(
                     SubCommand::with_name("log")
-                        .about("print the raft log entry info")
+                        .about("Print the raft log entry info")
                         .arg(
                             Arg::with_name("region")
                                 .required_unless("key")
                                 .conflicts_with("key")
                                 .short("r")
                                 .takes_value(true)
-                                .help("set the region id"),
+                                .help("Set the region id"),
                         )
                         .arg(
                             Arg::with_name("index")
@@ -1057,7 +1074,7 @@ fn main() {
                                 .conflicts_with("key")
                                 .short("i")
                                 .takes_value(true)
-                                .help("set the raft log index"),
+                                .help("Set the raft log index"),
                         )
                         .arg(
                             Arg::with_name("key")
@@ -1075,13 +1092,13 @@ fn main() {
                             Arg::with_name("region")
                                 .short("r")
                                 .takes_value(true)
-                                .help("set the region id, if not specified, print all regions."),
+                                .help("Set the region id, if not specified, print all regions"),
                         )
                         .arg(
                             Arg::with_name("skip-tombstone")
                                 .long("skip-tombstone")
                                 .takes_value(false)
-                                .help("skip tombstone region."),
+                                .help("Skip tombstone regions"),
                         ),
                 ),
         )
@@ -1092,7 +1109,7 @@ fn main() {
                     Arg::with_name("region")
                         .short("r")
                         .takes_value(true)
-                        .help("set the region id, if not specified, print all regions."),
+                        .help("Set the region id, if not specified, print all regions"),
                 )
                 .arg(
                     Arg::with_name("cf")
@@ -1103,12 +1120,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .default_value("default,write,lock")
-                        .help("set the cf name, if not specified, print all cf."),
+                        .help("Set the cf name, if not specified, print all cf"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("scan")
-                .about("print the range db range")
+                .about("Print the range db range")
                 .arg(
                     Arg::with_name("from")
                         .required(true)
@@ -1128,19 +1145,19 @@ fn main() {
                     Arg::with_name("limit")
                         .long("limit")
                         .takes_value(true)
-                        .help("set the scan limit"),
+                        .help("Set the scan limit"),
                 )
                 .arg(
                     Arg::with_name("start_ts")
                         .long("start-ts")
                         .takes_value(true)
-                        .help("set the scan start_ts as filter"),
+                        .help("Set the scan start_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("commit_ts")
                         .long("commit-ts")
                         .takes_value(true)
-                        .help("set the scan commit_ts as filter"),
+                        .help("Set the scan commit_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("show-cf")
@@ -1151,12 +1168,12 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .default_value(CF_DEFAULT)
-                        .help("column family names, combined from default/lock/write"),
+                        .help("Column family names, combined from default/lock/write"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("raw-scan")
-                .about("print all raw keys in the range")
+                .about("Print all raw keys in the range")
                 .arg(
                     Arg::with_name("from")
                         .short("f")
@@ -1178,14 +1195,17 @@ fn main() {
                         .long("limit")
                         .takes_value(true)
                         .default_value("30")
-                        .help("at most how many keys to scan")
+                        .help("Limit the number of keys to scan")
                 )
                 .arg(
                     Arg::with_name("cf")
                         .long("cf")
                         .takes_value(true)
                         .default_value("default")
-                        .help("the cf to scan")
+                        .possible_values(&[
+                            "default", "lock", "write"
+                        ])
+                        .help("The column family name.")
                 )
         )
         .subcommand(
@@ -1196,7 +1216,10 @@ fn main() {
                         .short("c")
                         .takes_value(true)
                         .default_value(CF_DEFAULT)
-                        .help("column family name"),
+                        .possible_values(&[
+                            "default", "lock", "write"
+                        ])
+                        .help("The column family name.")
                 )
                 .arg(
                     Arg::with_name("key")
@@ -1208,7 +1231,7 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("mvcc")
-                .about("print the mvcc value")
+                .about("Print the mvcc value")
                 .arg(
                     Arg::with_name("key")
                         .required(true)
@@ -1225,19 +1248,19 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .default_value(CF_DEFAULT)
-                        .help("column family names, combined from default/lock/write"),
+                        .help("Column family names, combined from default/lock/write"),
                 )
                 .arg(
                     Arg::with_name("start_ts")
                         .long("start-ts")
                         .takes_value(true)
-                        .help("set start_ts as filter"),
+                        .help("Set start_ts as filter"),
                 )
                 .arg(
                     Arg::with_name("commit_ts")
                         .long("commit-ts")
                         .takes_value(true)
-                        .help("set commit_ts as filter"),
+                        .help("Set commit_ts as filter"),
                 ),
         )
         .subcommand(
@@ -1248,7 +1271,7 @@ fn main() {
                         .required(true)
                         .short("r")
                         .takes_value(true)
-                        .help("specify region id"),
+                        .help("Specify region id"),
                 )
                 .arg(
                     Arg::with_name("to_db")
@@ -1256,7 +1279,7 @@ fn main() {
                         .conflicts_with("to_host")
                         .long("to-db")
                         .takes_value(true)
-                        .help("to which db path"),
+                        .help("To which db path"),
                 )
                 .arg(
                     Arg::with_name("to_host")
@@ -1265,25 +1288,31 @@ fn main() {
                         .long("to-host")
                         .takes_value(true)
                         .conflicts_with("to_db")
-                        .help("to which remote host"),
+                        .help("To which remote host"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("compact")
-                .about("compact a column family in a specified range")
+                .about("Compact a column family in a specified range")
                 .arg(
                     Arg::with_name("db")
                         .short("d")
                         .takes_value(true)
                         .default_value("kv")
-                        .help("kv or raft"),
+                        .possible_values(&[
+                            "kv", "raft",
+                        ])
+                        .help("Which db to compact"),
                 )
                 .arg(
                     Arg::with_name("cf")
                         .short("c")
                         .takes_value(true)
                         .default_value(CF_DEFAULT)
-                        .help("column family name, only can be default/lock/write"),
+                        .possible_values(&[
+                            "default", "lock", "write"
+                        ])
+                        .help("The column family name"),
                 )
                 .arg(
                     Arg::with_name("from")
@@ -1305,14 +1334,14 @@ fn main() {
                         .long("threads")
                         .takes_value(true)
                         .default_value("8")
-                        .help("number of threads in one compaction")
+                        .help("Number of threads in one compaction")
                 )
                 .arg(
                     Arg::with_name("region")
                     .short("r")
                     .long("region")
                     .takes_value(true)
-                    .help("set the region id"),
+                    .help("Set the region id"),
                 )
                 .arg(
                     Arg::with_name("bottommost")
@@ -1321,12 +1350,12 @@ fn main() {
                         .takes_value(true)
                         .default_value("default")
                         .possible_values(&["skip", "force", "default"])
-                        .help("how to compact the bottommost level"),
+                        .help("Set how to compact the bottommost level"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("tombstone")
-                .about("set some regions on the node to tombstone by manual")
+                .about("Set some regions on the node to tombstone by manual")
                 .arg(
                     Arg::with_name("regions")
                         .required(true)
@@ -1336,7 +1365,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target regions, separated with commas if multiple"),
+                        .help("The target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1352,13 +1381,13 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("recover-mvcc")
-                .about("recover mvcc data on one node by deleting corrupted keys")
+                .about("Recover mvcc data on one node by deleting corrupted keys")
                 .arg(
                     Arg::with_name("all")
                         .short("a")
                         .long("all")
                         .takes_value(false)
-                        .help("recover the whole db"),
+                        .help("Recover the whole db"),
                 )
                 .arg(
                     Arg::with_name("regions")
@@ -1370,7 +1399,7 @@ fn main() {
                         .use_delimiter(true)
                         .require_delimiter(true)
                         .value_delimiter(",")
-                        .help("the target regions, separated with commas if multiple"),
+                        .help("The target regions, separated with commas if multiple"),
                 )
                 .arg(
                     Arg::with_name("pd")
@@ -1389,18 +1418,18 @@ fn main() {
                         .takes_value(true)
                         .default_value_if("all", None, "4")
                         .requires("all")
-                        .help("the number of threads to do recover, only for --all mode"),
+                        .help("The number of threads to do recover, only for --all mode"),
                 )
                 .arg(
                     Arg::with_name("read-only")
                         .short("R")
                         .long("read-only")
-                        .help("skip write RocksDB"),
+                        .help("Skip write RocksDB"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("unsafe-recover")
-                .about("unsafe recover the cluster when majority replicas are failed")
+                .about("Unsafely recover the cluster when the majority replicas are failed")
                 .subcommand(
                     SubCommand::with_name("remove-fail-stores")
                         .arg(
@@ -1412,7 +1441,7 @@ fn main() {
                                 .use_delimiter(true)
                                 .require_delimiter(true)
                                 .value_delimiter(",")
-                                .help("stores to be removed"),
+                                .help("Stores to be removed"),
                         )
                         .arg(
                             Arg::with_name("regions")
@@ -1424,7 +1453,7 @@ fn main() {
                                 .use_delimiter(true)
                                 .require_delimiter(true)
                                 .value_delimiter(",")
-                                .help("only for these regions"),
+                                .help("Only for these regions"),
                         )
                         .arg(
                             Arg::with_name("all-regions")
@@ -1432,13 +1461,13 @@ fn main() {
                                 .conflicts_with("regions")
                                 .long("all-regions")
                                 .takes_value(false)
-                                .help("do the command for all regions"),
+                                .help("Do the command for all regions"),
                         )
                 ),
         )
         .subcommand(
             SubCommand::with_name("recreate-region")
-                .about("recreate a region with given metadata, but alloc new id for it")
+                .about("Recreate a region with given metadata, but alloc new id for it")
                 .arg(
                     Arg::with_name("pd")
                         .required(true)
@@ -1455,12 +1484,12 @@ fn main() {
                         .required(true)
                         .short("r")
                         .takes_value(true)
-                        .help("the origin region id"),
+                        .help("The origin region id"),
                         ),
         )
         .subcommand(
             SubCommand::with_name("metrics")
-                .about("print the metrics")
+                .about("Print the metrics")
                 .arg(
                     Arg::with_name("tag")
                         .short("t")
@@ -1471,39 +1500,42 @@ fn main() {
                         .require_delimiter(true)
                         .value_delimiter(",")
                         .default_value(METRICS_PROMETHEUS)
+                        .possible_values(&[
+                            "prometheus", "jemalloc", "rocksdb_raft", "rocksdb_kv",
+                        ])
                         .help(
-                            "set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
+                            "Set the metrics tag, one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv, if not specified, print prometheus",
                         ),
                 ),
         )
         .subcommand(
             SubCommand::with_name("consistency-check")
-                .about("force consistency-check for a specified region")
+                .about("Force a consistency-check for a specified region")
                 .arg(
                     Arg::with_name("region")
                         .required(true)
                         .short("r")
                         .takes_value(true)
-                        .help("the target region"),
+                        .help("The target region"),
                 ),
         )
-        .subcommand(SubCommand::with_name("bad-regions").about("get all regions with corrupt raft"))
+        .subcommand(SubCommand::with_name("bad-regions").about("Get all regions with corrupt raft"))
         .subcommand(
             SubCommand::with_name("modify-tikv-config")
-                .about("modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
+                .about("Modify tikv config, eg. ./tikv-ctl -h ip:port modify-tikv-config -m kvdb -n default.disable_auto_compactions -v true")
                 .arg(
                     Arg::with_name("module")
                         .required(true)
                         .short("m")
                         .takes_value(true)
-                        .help("module of the tikv, eg. kvdb or raftdb"),
+                        .help("Module of tikv, eg. kvdb or raftdb"),
                 )
                 .arg(
                     Arg::with_name("config_name")
                         .required(true)
                         .short("n")
                         .takes_value(true)
-                        .help("config name of the module, for kvdb or raftdb, you can choose \
+                        .help("Config name of the module, for kvdb or raftdb, you can choose \
                             max_background_jobs to modify db options or default.disable_auto_compactions to modify column family(cf) options, \
                             and so on, default stands for default cf, \
                             for kvdb, default|write|lock|raft can be chosen, for raftdb, default can be chosen"),
@@ -1513,31 +1545,31 @@ fn main() {
                         .required(true)
                         .short("v")
                         .takes_value(true)
-                        .help("config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
+                        .help("Config value of the module, eg. 8 for max_background_jobs or true for disable_auto_compactions"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("dump-snap-meta")
-                .about("dump snapshot meta file")
+                .about("Dump snapshot meta file")
                 .arg(
                     Arg::with_name("file")
                         .required(true)
                         .short("f")
                         .long("file")
                         .takes_value(true)
-                        .help("meta file path"),
+                        .help("Output meta file path"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("compact-cluster")
-                .about("compact the whole cluster in a specified range in one or more column families")
+                .about("Compact the whole cluster in a specified range in one or more column families")
                 .arg(
                     Arg::with_name("db")
                         .short("d")
                         .takes_value(true)
                         .default_value("kv")
                         .possible_values(&["kv", "raft"])
-                        .help("kv or raft"),
+                        .help("The db to use"),
                 )
                 .arg(
                     Arg::with_name("cf")
@@ -1549,7 +1581,7 @@ fn main() {
                         .value_delimiter(",")
                         .default_value(CF_DEFAULT)
                         .possible_values(&["default", "lock", "write"])
-                        .help("column family names, for kv db, combine from default/lock/write; for raft db, can only be default"),
+                        .help("Column family names, for kv db, combine from default/lock/write; for raft db, can only be default"),
                 )
                 .arg(
                     Arg::with_name("from")
@@ -1571,7 +1603,7 @@ fn main() {
                         .long("threads")
                         .takes_value(true)
                         .default_value("8")
-                        .help("number of threads in one compaction")
+                        .help("Number of threads in one compaction")
                 )
                 .arg(
                     Arg::with_name("bottommost")
@@ -1580,41 +1612,41 @@ fn main() {
                         .takes_value(true)
                         .default_value("default")
                         .possible_values(&["skip", "force", "default"])
-                        .help("how to compact the bottommost level"),
+                        .help("How to compact the bottommost level"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("region-properties")
-                .about("show region properties")
+                .about("Show region properties")
                 .arg(
                     Arg::with_name("region")
                         .short("r")
                         .required(true)
                         .takes_value(true)
-                        .help("the target region id"),
+                        .help("The target region id"),
                 ),
         )
         .subcommand(
             SubCommand::with_name("split-region")
-                .about("split the region")
+                .about("Split the region")
                 .arg(
                     Arg::with_name("region")
                         .short("r")
                         .required(true)
                         .takes_value(true)
-                        .help("the target region id")
+                        .help("The target region id")
                 )
                 .arg(
                     Arg::with_name("key")
                         .short("k")
                         .required(true)
                         .takes_value(true)
-                        .help("the key to split it, in unecoded escaped format")
+                        .help("The key to split it, in unecoded escaped format")
                 ),
         )
         .subcommand(
             SubCommand::with_name("fail")
-                .about("injecting failures to TiKV and recovery")
+                .about("Inject failures to TiKV and recovery")
                 .subcommand(
                     SubCommand::with_name("inject")
                     .about("Inject failures")
@@ -2033,18 +2065,26 @@ fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
+    let cipher_file = matches.value_of("cipher_file");
 
     let mut cfg = SecurityConfig::default();
-    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() {
+    if ca_path.is_none() && cert_path.is_none() && key_path.is_none() && cipher_file.is_none() {
         return Arc::new(SecurityManager::new(&cfg).unwrap());
     }
 
-    if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
-        panic!("CA certificate and private key should all be set.");
+    if ca_path.is_some() || cert_path.is_some() || key_path.is_some() {
+        if ca_path.is_none() || cert_path.is_none() || key_path.is_none() {
+            panic!("CA certificate and private key should all be set.");
+        }
+        cfg.ca_path = ca_path.unwrap().to_owned();
+        cfg.cert_path = cert_path.unwrap().to_owned();
+        cfg.key_path = key_path.unwrap().to_owned();
     }
-    cfg.ca_path = ca_path.unwrap().to_owned();
-    cfg.cert_path = cert_path.unwrap().to_owned();
-    cfg.key_path = key_path.unwrap().to_owned();
+
+    if cipher_file.is_some() {
+        cfg.cipher_file = cipher_file.unwrap().to_owned();
+    }
+
     Arc::new(SecurityManager::new(&cfg).expect("failed to initialize security manager"))
 }
 
@@ -2132,7 +2172,7 @@ fn compact_whole_cluster(
     bottommost: BottommostLevelCompaction,
 ) {
     let stores = pd_client
-        .get_all_stores()
+        .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
     let mut handles = Vec::new();
@@ -2186,7 +2226,12 @@ fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
-    let opts = cfg.rocksdb.build_opt();
+    let mut opts = cfg.rocksdb.build_opt();
+    if !cfg.security.cipher_file.is_empty() {
+        let encrypted_env =
+            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
+        opts.set_env(encrypted_env);
+    }
     rocksdb::run_ldb_tool(&args, &opts);
 }
 

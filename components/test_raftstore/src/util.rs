@@ -514,7 +514,8 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             );
             Engines::new(engine, raft_engine)
         }
@@ -573,7 +574,7 @@ pub fn configure_for_lease_read<T: Simulator>(
 pub fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     limit: u64,
-    range: &mut Iterator<Item = u64>,
+    range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
@@ -582,7 +583,7 @@ pub fn put_cf_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     cf: &'static str,
     limit: u64,
-    range: &mut Iterator<Item = u64>,
+    range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     assert!(limit > 0);
     let mut len = 0;

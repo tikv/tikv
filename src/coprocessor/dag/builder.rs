@@ -44,14 +44,14 @@ impl DAGBuilder {
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
         collect: bool,
-    ) -> Result<Box<Executor + Send>> {
+    ) -> Result<Box<dyn Executor + Send>> {
         let mut exec_descriptors = exec_descriptors.into_iter();
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
         let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
         for mut exec in exec_descriptors {
-            let curr: Box<Executor + Send> = match exec.get_tp() {
+            let curr: Box<dyn Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
@@ -89,7 +89,7 @@ impl DAGBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         collect: bool,
-    ) -> Result<Box<Executor + Send>> {
+    ) -> Result<Box<dyn Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 let ex = Box::new(ScanExecutor::table_scan(

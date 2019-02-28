@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
 
 mod lazy_column;
 mod lazy_column_vec;
-mod vector;
 
 pub use self::lazy_column::LazyBatchColumn;
 pub use self::lazy_column_vec::LazyBatchColumnVec;
-pub use self::vector::VectorValue;

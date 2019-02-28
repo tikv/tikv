@@ -41,7 +41,7 @@ pub struct Column {
 
 impl Column {
     /// Create the column with a specified type and capacity.
-    pub fn new(field_type: &FieldTypeAccessor, init_cap: usize) -> Column {
+    pub fn new(field_type: &dyn FieldTypeAccessor, init_cap: usize) -> Column {
         match field_type.tp() {
             FieldTypeTp::Tiny
             | FieldTypeTp::Short
@@ -64,7 +64,7 @@ impl Column {
     }
 
     /// Get the datum of one row with the specified type.
-    pub fn get_datum(&self, idx: usize, field_type: &FieldTypeAccessor) -> Result<Datum> {
+    pub fn get_datum(&self, idx: usize, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
         if self.is_null(idx) {
             return Ok(Datum::Null);
         }
@@ -338,7 +338,7 @@ impl Column {
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tp: &FieldTypeAccessor) -> Result<Column> {
+    pub fn decode(buf: &mut BytesSlice, tp: &dyn FieldTypeAccessor) -> Result<Column> {
         use crate::util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;
         let mut col = Column::new(tp, length);
