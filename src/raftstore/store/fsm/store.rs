@@ -1339,7 +1339,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
-                "target peer doesn't exist, stale message", target;
+                "target peer doesn't exist, stale message";
                 "target_peer" => ?target,
                 "region_id" => region_id,
                 "msg_type" => ?msg_type,
@@ -1359,7 +1359,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 debug!(
                     "msg is overlapped with exist region";
                     "region_id" => exist_region_id,
-                    "msg" => >msg,
+                    "msg" => ?msg,
                     "exist_region" => ?exist_region,
                 );
                 if util::is_first_vote_msg(msg.get_message()) {
