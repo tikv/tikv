@@ -96,6 +96,18 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 21).unwrap()
     )
     .unwrap();
+    pub static ref KV_PREWRITE_MAX_READ_TS_RES_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_prewrite_max_read_ts_res",
+        "Whether a prewrite request returns the max read ts successfully",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref KV_MAX_READ_TS_UPDATE_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_storage_prewrite_max_read_ts_res",
+        "Statistics of max read ts updating",
+        &["from", "res"]
+    )
+    .unwrap();
     pub static ref KV_GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"

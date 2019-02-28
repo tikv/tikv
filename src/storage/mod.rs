@@ -688,11 +688,12 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    fn report_read_ts(&self, ctx: &Context, start_ts: u64) {
+    fn report_read_ts(&self, ctx: &Context, start_ts: u64, from: &str) {
         self.inspector.report_read_ts(
             ctx.get_region_id(),
             ctx.get_region_epoch().get_version(),
             start_ts,
+            from,
         );
     }
 
@@ -708,7 +709,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts);
+        self.report_read_ts(&ctx, start_ts, "kv_get");
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -766,7 +767,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts);
+        self.report_read_ts(&ctx, start_ts, "kv_batch_get");
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -832,7 +833,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts);
+        self.report_read_ts(&ctx, start_ts, "kv_scan");
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {

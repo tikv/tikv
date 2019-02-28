@@ -313,6 +313,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx.context.get_region_id(),
                 req_ctx.context.get_region_epoch().get_version(),
                 ts,
+                "cop_unary",
             );
         }
 
@@ -450,6 +451,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx.context.get_region_id(),
                 req_ctx.context.get_region_epoch().get_version(),
                 ts,
+                "cop_stream",
             );
         }
 

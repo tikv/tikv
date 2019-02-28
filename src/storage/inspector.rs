@@ -15,6 +15,7 @@ use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, RwLock};
 
+use super::metrics::*;
 use raft::StateRole;
 
 use crate::raftstore::coprocessor::{
@@ -143,23 +144,30 @@ impl MvccInspector {
     //            .unwrap();
     //    }
 
-    pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64) {
+    pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64, from: &str) {
         if ts == u64::max_value() {
             return;
         }
         let entry = self.lock_entry(region_id, version);
-        entry
+        let prev = entry
             .fetch_update(
                 |saved_ts| Some(::std::cmp::max(saved_ts, ts)),
                 atomic::Ordering::SeqCst,
                 atomic::Ordering::SeqCst,
             )
             .unwrap();
+        KV_MAX_READ_TS_UPDATE_COUNTER
+            .with_label_values(&[from, if prev >= ts { "fail" } else { "success" }])
+            .inc();
     }
 
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
         let entry = self.lock_entry(region_id, version);
-        entry.load(atomic::Ordering::SeqCst)
+        let res = entry.load(atomic::Ordering::SeqCst);
+        KV_PREWRITE_MAX_READ_TS_RES_COUNTER
+            .with_label_values(&[if res == 0 { "invalid" } else { "valid" }])
+            .inc();
+        res
     }
 
     fn lock_entry(&self, region_id: u64, version: u64) -> Arc<AtomicU64> {
