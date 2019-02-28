@@ -33,6 +33,7 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
+pub mod batch_executor;
 mod builder;
 pub mod executor;
 pub mod expr;
