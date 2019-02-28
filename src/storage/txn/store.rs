@@ -179,18 +179,12 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Value)>> {
         // TODO: Verify that these branches can be optimized away in `scan()`.
-        match &mut self.scanner {
-            MvccScanner::Forward(scanner) => Ok(scanner.read_next()?),
-            MvccScanner::Backward(scanner) => Ok(scanner.read_next()?),
-        }
+        Ok(self.scanner.read_next()?)
     }
 
     #[inline]
     fn take_statistics(&mut self) -> Statistics {
-        match &mut self.scanner {
-            MvccScanner::Forward(scanner) => scanner.take_statistics(),
-            MvccScanner::Backward(scanner) => scanner.take_statistics(),
-        }
+        self.scanner.take_statistics()
     }
 }
 
