@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
 use clap::ArgMatches;
@@ -22,7 +22,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::{self, logger};
 
 // A workaround for checking if log is initialized.
-pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
+pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({

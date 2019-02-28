@@ -84,7 +84,7 @@ impl fmt::Display for Tz {
 impl TimeZone for Tz {
     type Offset = TzOffset;
 
-    fn from_offset(offset: &Self::Offset) -> Self {
+    fn from_offset(offset: &<Self as TimeZone>::Offset) -> Self {
         match *offset {
             TzOffset::Local(ref offset) => Tz::Local(Local::from_offset(offset)),
             TzOffset::Fixed(ref offset) => Tz::Offset(FixedOffset::from_offset(offset)),
@@ -92,7 +92,7 @@ impl TimeZone for Tz {
         }
     }
 
-    fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<Self::Offset> {
+    fn offset_from_local_date(&self, local: &NaiveDate) -> LocalResult<<Self as TimeZone>::Offset> {
         match *self {
             Tz::Local(ref offset) => offset.offset_from_local_date(local).map(TzOffset::Local),
             Tz::Offset(ref offset) => offset.offset_from_local_date(local).map(TzOffset::Fixed),
@@ -100,7 +100,7 @@ impl TimeZone for Tz {
         }
     }
 
-    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
+    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<<Self as TimeZone>::Offset> {
         match *self {
             Tz::Local(ref offset) => offset
                 .offset_from_local_datetime(local)
@@ -114,7 +114,7 @@ impl TimeZone for Tz {
         }
     }
 
-    fn offset_from_utc_date(&self, utc: &NaiveDate) -> Self::Offset {
+    fn offset_from_utc_date(&self, utc: &NaiveDate) -> <Self as TimeZone>::Offset {
         match *self {
             Tz::Local(ref offset) => TzOffset::Local(offset.offset_from_utc_date(utc)),
             Tz::Offset(ref offset) => TzOffset::Fixed(offset.offset_from_utc_date(utc)),
@@ -122,7 +122,7 @@ impl TimeZone for Tz {
         }
     }
 
-    fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> Self::Offset {
+    fn offset_from_utc_datetime(&self, utc: &NaiveDateTime) -> <Self as TimeZone>::Offset {
         match *self {
             Tz::Local(ref offset) => TzOffset::Local(offset.offset_from_utc_datetime(utc)),
             Tz::Offset(ref offset) => TzOffset::Fixed(offset.offset_from_utc_datetime(utc)),

@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![cfg_attr(test, feature(test))]
-#![feature(try_from)]
 
 #[macro_use]
 extern crate bitflags;
