@@ -2,6 +2,12 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.5]
+- Fix the panic issue caused by Region merge in some cases [#4235](https://github.com/tikv/tikv/pull/4235)
+- Fix the issue that Importer fails to import data in some cases [#4223](https://github.com/tikv/tikv/pull/4223)
+- Fix the `KeyNotInRegion` error in some cases [#4125](https://github.com/tikv/tikv/pull/4125)
+- Add the detailed `StoreNotMatch` error message [#3885](https://github.com/tikv/tikv/pull/3885)
+
 ## [2.1.4]
 - Fix the abnormal result issue of the event listener in some cases [#4126](https://github.com/tikv/tikv/pull/4126)
 - Fix the duplicate write issue when closing TiKV [#4146](https://github.com/tikv/tikv/pull/4146)
