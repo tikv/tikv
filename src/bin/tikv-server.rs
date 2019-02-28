@@ -173,10 +173,29 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
     }
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let kv_engine = Arc::new(
+    let mut kv_engine =
         rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s)),
-    );
+            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+    // Create raft engine.
+    let mut raft_db_opts = cfg.raftdb.build_opt();
+    if encrypted_env.is_some() {
+        raft_db_opts.set_env(encrypted_env.unwrap());
+    }
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+    let raft_engine = rocksdb_util::new_engine_opt(
+        raft_db_path.to_str().unwrap(),
+        raft_db_opts,
+        raft_db_cf_opts,
+    )
+    .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+
+    // Upgrading from v2.x to v3.x.
+    // FIXME: remove raft CF options from kv_cfs_opts.
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(&mut kv_engine, &raft_engine);
+
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+
     let storage_read_pool =
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
             storage::ReadPoolContext::new(pd_sender.clone())
@@ -185,26 +204,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_router.clone(),
         &cfg.storage,
         storage_read_pool,
-        Some(Arc::clone(&kv_engine)),
+        Some(engines.kv.clone()),
         Some(raft_router.clone()),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
-
-    // Create raft engine.
-    let mut raft_db_opts = cfg.raftdb.build_opt();
-    if encrypted_env.is_some() {
-        raft_db_opts.set_env(encrypted_env.unwrap());
-    }
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s)),
-    );
-    let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
@@ -219,7 +222,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
         raft_router.clone(),
-        Arc::clone(&kv_engine),
+        engines.kv.clone(),
         Arc::clone(&importer),
     );
 
