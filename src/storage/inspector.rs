@@ -148,14 +148,17 @@ impl MvccInspector {
         if ts == u64::max_value() {
             return;
         }
-        let entry = self.lock_entry(region_id, version);
-        let prev = entry
+        let prev = self
+            .lock_entry(region_id, version)
             .fetch_update(
                 |saved_ts| Some(::std::cmp::max(saved_ts, ts)),
                 atomic::Ordering::SeqCst,
                 atomic::Ordering::SeqCst,
             )
             .unwrap();
+        if prev < ts {
+            info!("max_read_ts updated"; "region_id" => region_id, "version" => version, "from" => prev, "to" => ts);
+        }
         KV_MAX_READ_TS_UPDATE_COUNTER
             .with_label_values(&[from, if prev >= ts { "fail" } else { "success" }])
             .inc();
@@ -164,6 +167,9 @@ impl MvccInspector {
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
         let entry = self.lock_entry(region_id, version);
         let res = entry.load(atomic::Ordering::SeqCst);
+        if res == 0 {
+            info!("max_read_ts is unavailable"; "region_id" => region_id, "version" => version);
+        }
         KV_PREWRITE_MAX_READ_TS_RES_COUNTER
             .with_label_values(&[if res == 0 { "invalid" } else { "valid" }])
             .inc();
