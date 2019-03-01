@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use kvproto::kvrpcpb::Context;
+use kvproto::errorpb::Error as ErrorHeader;
 use tempdir::TempDir;
 
 use crate::raftstore::store::engine::{IterOption, Peekable};
@@ -249,6 +250,12 @@ impl Engine for RocksEngine {
     }
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+        fail_point!("rockskv_async_snapshot", |_| Err(box_err!("snapshot failed")));
+        fail_point!("rockskv_async_snapshot_not_leader", |_| {
+            let mut header = ErrorHeader::new();
+            header.mut_not_leader().set_region_id(100);
+            Err(Error::Request(header))
+        });
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }

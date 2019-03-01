@@ -124,6 +124,11 @@ impl<T: futurepool::Context + 'static> ReadPool<T> {
         F::Item: Send + 'static,
         F::Error: Send + 'static,
     {
+        fail_point!("read_pool_execute_full", |_| Err(Full {
+            current_tasks: 100,
+            max_tasks: 100,
+        }));
+
         let pool = self.get_pool_by_priority(priority);
         let max_tasks = self.get_max_tasks_by_priority(priority);
         let current_tasks = pool.get_running_task_count();
