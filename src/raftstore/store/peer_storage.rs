@@ -48,6 +48,11 @@ pub const RAFT_INIT_LOG_INDEX: u64 = 5;
 const MAX_SNAP_TRY_CNT: usize = 5;
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
+/// The initial region epoch version.
+pub const INIT_EPOCH_VER: u64 = 1;
+/// The initial region epoch conf_version.
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
+
 // One extra slot for VecDeque internal usage.
 const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -1376,7 +1381,7 @@ pub fn do_snapshot(
     Ok(snapshot)
 }
 
-// When we bootstrap the region we must call this to initialize region local state first.
+/// When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
@@ -1387,11 +1392,11 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Resu
     Ok(())
 }
 
-// When we bootstrap the region or handling split new region, we must
-// call this to initialize region apply state first.
+/// When we bootstrap the region or handling split new region, we must
+/// call this to initialize region apply state first.
 pub fn write_initial_apply_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
+    _raft_engine: &DB, // TODO: remove it.
+    raft_wb: &T,
     region_id: u64,
 ) -> Result<()> {
     let mut apply_state = RaftApplyState::new();
@@ -1403,8 +1408,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
-    kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
+    raft_wb.put_msg(&keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
 

@@ -659,7 +659,7 @@ impl Debugger {
     }
 
     pub fn get_store_id(&self) -> Result<u64> {
-        let db = &self.engines.kv;
+        let db = &self.engines.raft;
         db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
             .map_err(|e| box_err!(e))
             .and_then(|ident| match ident {

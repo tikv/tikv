@@ -408,8 +408,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_id(region_id);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         let peer = new_peer(peer_id, peer_id);
         region.mut_peers().push(peer.clone());
         self.pd_client.add_region(&region);

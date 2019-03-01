@@ -226,7 +226,7 @@ impl Simulator for NodeCluster {
             importer,
         )?;
         assert!(engines
-            .kv
+            .raft
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
