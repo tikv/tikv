@@ -33,7 +33,7 @@ impl slog::KV for PerfStatisticsInstant {
     fn serialize(
         &self,
         record: &::slog::Record,
-        serializer: &mut slog::Serializer,
+        serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::KV::serialize(&self.0, record, serializer)
     }
@@ -82,7 +82,7 @@ impl slog::KV for PerfStatisticsDelta {
     fn serialize(
         &self,
         record: &::slog::Record,
-        serializer: &mut slog::Serializer,
+        serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::KV::serialize(&self.0, record, serializer)
     }

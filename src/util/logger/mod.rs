@@ -191,7 +191,7 @@ where
 }
 
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
-fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_timestamp()?;
     write!(
         decorator,
@@ -225,7 +225,7 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
 }
 
 /// Writes log message to decorator. See [log-message](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-message-section)
-fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_msg(decorator: &mut dyn RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
 
@@ -240,7 +240,7 @@ fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result
 
 /// Writes log fields to decorator. See [log-fields](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-fields-section)
 fn write_log_fields(
-    decorator: &mut RecordDecorator,
+    decorator: &mut dyn RecordDecorator,
     record: &Record,
     values: &OwnedKVList,
 ) -> io::Result<()> {
@@ -256,11 +256,11 @@ fn write_log_fields(
 }
 
 struct Serializer<'a> {
-    decorator: &'a mut RecordDecorator,
+    decorator: &'a mut dyn RecordDecorator,
 }
 
 impl<'a> Serializer<'a> {
-    fn new(decorator: &'a mut RecordDecorator) -> Self {
+    fn new(decorator: &'a mut dyn RecordDecorator) -> Self {
         Serializer { decorator }
     }
 

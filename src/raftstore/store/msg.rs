@@ -49,11 +49,11 @@ pub enum SeekRegionResult {
     Ended,
 }
 
-pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
-pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
+pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
+pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
 
-pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<Fn(&metapb::Region, StateRole) -> bool + Send>;
+pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,

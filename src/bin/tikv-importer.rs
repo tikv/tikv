@@ -52,7 +52,7 @@ use crate::util::signal_handler;
 use std::process;
 use std::sync::atomic::Ordering;
 
-use clap::{App, Arg, ArgMatches};
+use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
@@ -60,23 +60,16 @@ use tikv::util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")
+        .about("The importer server for TiKV")
+        .author(crate_authors!())
+        .version(crate_version!())
         .long_version(util::tikv_version_info().as_ref())
-        .author("TiKV Org.")
-        .about("An import server for TiKV")
-        .arg(
-            Arg::with_name("addr")
-                .short("A")
-                .long("addr")
-                .takes_value(true)
-                .value_name("IP:PORT")
-                .help("Sets listening address"),
-        )
         .arg(
             Arg::with_name("config")
                 .short("C")
                 .long("config")
                 .value_name("FILE")
-                .help("Sets configuration file")
+                .help("Set the configuration")
                 .takes_value(true),
         )
         .arg(
@@ -84,7 +77,7 @@ fn main() {
                 .long("log-file")
                 .takes_value(true)
                 .value_name("FILE")
-                .help("Sets log file"),
+                .help("Set the log file"),
         )
         .arg(
             Arg::with_name("log-level")
@@ -92,14 +85,22 @@ fn main() {
                 .takes_value(true)
                 .value_name("LEVEL")
                 .possible_values(&["trace", "debug", "info", "warn", "error", "off"])
-                .help("Sets log level"),
+                .help("Set the log level"),
+        )
+        .arg(
+            Arg::with_name("addr")
+                .short("A")
+                .long("addr")
+                .takes_value(true)
+                .value_name("IP:PORT")
+                .help("Set the listening address"),
         )
         .arg(
             Arg::with_name("import-dir")
                 .long("import-dir")
                 .takes_value(true)
                 .value_name("PATH")
-                .help("Sets the directory to store importing kv data"),
+                .help("Set the directory to store importing kv data"),
         )
         .get_matches();
 

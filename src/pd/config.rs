@@ -21,7 +21,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.endpoints.is_empty() {
             return Err("please specify pd.endpoints.".into());
         }
