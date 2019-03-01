@@ -72,7 +72,7 @@ quick_error! {
             display("key {:?} already exists", escape(key))
         }
         KeyVersion {description("bad format key(version)")}
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())

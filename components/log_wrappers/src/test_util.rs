@@ -34,7 +34,7 @@ impl SyncLoggerBuffer {
 
         let decorator = slog_term::PlainDecorator::new(self.clone());
         let drain = slog_term::CompactFormat::new(decorator)
-            .use_custom_timestamp(|w: &mut io::Write| w.write(b"TIME").map(|_| ()))
+            .use_custom_timestamp(|w: &mut dyn io::Write| w.write(b"TIME").map(|_| ()))
             .build();
         let drain = sync::Mutex::new(drain).fuse();
         slog::Logger::root(drain, o!())
