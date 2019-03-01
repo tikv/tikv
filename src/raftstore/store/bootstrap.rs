@@ -22,8 +22,10 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 use rocksdb::{Writable, WriteBatch, DB};
 
-const INIT_EPOCH_VER: u64 = 1;
-const INIT_EPOCH_CONF_VER: u64 = 1;
+/// The initial region epoch version.
+pub const INIT_EPOCH_VER: u64 = 1;
+/// The initial region epoch conf_version.
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
@@ -58,8 +60,10 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     Ok(())
 }
 
-// Write first region meta and prepare state.
-pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<()> {
+/// The first phase of bootstrap
+///
+/// Write the first region meta and prepare state.
+pub fn prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
@@ -101,30 +105,6 @@ pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
     Ok(())
 }
 
-// Prepare bootstrap.
-pub fn prepare_bootstrap(
-    engines: &Engines,
-    store_id: u64,
-    region_id: u64,
-    peer_id: u64,
-) -> Result<metapb::Region> {
-    let mut region = metapb::Region::new();
-    region.set_id(region_id);
-    region.set_start_key(keys::EMPTY_KEY.to_vec());
-    region.set_end_key(keys::EMPTY_KEY.to_vec());
-    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
-    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-
-    let mut peer = metapb::Peer::new();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    region.mut_peers().push(peer);
-
-    write_prepare_bootstrap(engines, &region)?;
-
-    Ok(region)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -132,7 +112,7 @@ mod tests {
 
     use super::*;
     use crate::raftstore::store::engine::Peekable;
-    use crate::raftstore::store::{keys, Engines};
+    use crate::raftstore::store::{keys, util::new_peer, Engines};
     use crate::storage::CF_DEFAULT;
     use crate::util::rocksdb_util;
 
@@ -155,10 +135,18 @@ mod tests {
         );
         let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
+        let mut region = metapb::Region::new();
+        region.set_id(1);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+        region.mut_peers().push(new_peer(1, 1));
+
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
-        assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
+        assert!(prepare_bootstrap(&engines, &region).is_ok());
         assert!(kv_engine
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()

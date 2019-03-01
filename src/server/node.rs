@@ -22,7 +22,8 @@ use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager, Transport,
+    self, keys, util::new_peer, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager,
+    Transport, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
@@ -222,7 +223,15 @@ where
             "region_id" => region_id,
         );
 
-        let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
+        let mut region = metapb::Region::new();
+        region.set_id(region_id);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+        region.mut_peers().push(new_peer(store_id, peer_id));
+
+        store::prepare_bootstrap(engines, &region)?;
         Ok(region)
     }
 

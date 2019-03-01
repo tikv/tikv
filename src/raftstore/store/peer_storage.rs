@@ -1472,15 +1472,17 @@ impl Storage for PeerStorage {
 
 #[cfg(test)]
 mod tests {
-    use crate::raftstore::store::bootstrap;
     use crate::raftstore::store::fsm::apply::compact_raft_log;
-    use crate::raftstore::store::util::Engines;
-    use crate::raftstore::store::worker::{RegionRunner, RegionTask};
+    use crate::raftstore::store::util::{new_peer, Engines};
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::raftstore::store::{
+        bootstrap_store, prepare_bootstrap, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    };
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
@@ -1502,8 +1504,17 @@ mod tests {
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let engines = Engines::new(kv_db, raft_db);
-        bootstrap::bootstrap_store(&engines, 1, 1).expect("");
-        let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
+        bootstrap_store(&engines, 1, 1).expect("");
+
+        let mut region = metapb::Region::new();
+        region.set_id(1);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+        region.mut_peers().push(new_peer(1, 1));
+
+        prepare_bootstrap(&engines, &region).expect("");
         PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
@@ -1668,10 +1679,8 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
-        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        store.clear_meta(&kv_wb, &raft_wb).unwrap();
-        store.engines.kv.write(kv_wb).unwrap();
+        store.clear_meta(&raft_wb).unwrap();
         store.engines.raft.write(raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));

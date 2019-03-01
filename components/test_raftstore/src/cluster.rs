@@ -436,7 +436,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engines in self.engines.values() {
-            write_prepare_bootstrap(engines, &region)?;
+            prepare_bootstrap(engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -456,10 +456,20 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
-        let rid = region.get_id();
+        let region_id = 1;
+        let peer_id = 1;
+
+        let mut region = metapb::Region::new();
+        region.set_id(region_id);
+        region.set_start_key(keys::EMPTY_KEY.to_vec());
+        region.set_end_key(keys::EMPTY_KEY.to_vec());
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+        region.mut_peers().push(new_peer(node_id, peer_id));
+
+        prepare_bootstrap(&self.engines[&node_id], &region).unwrap();
         self.bootstrap_cluster(region);
-        rid
+        region_id
     }
 
     // This is only for fixed id test.
