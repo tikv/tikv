@@ -19,12 +19,6 @@ extern crate bitflags;
 extern crate enum_primitive_derive;
 #[macro_use]
 extern crate failure;
-extern crate num_traits;
-#[cfg(test)]
-extern crate test;
-extern crate tikv_alloc;
-
-extern crate tipb;
 
 mod def;
 mod error;

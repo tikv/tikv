@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate hex;
+use hex;
 
 use std::error::Error;
 use std::fs::File;

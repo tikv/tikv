@@ -800,7 +800,7 @@ impl Lease {
 }
 
 impl fmt::Debug for Lease {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut fmter = fmt.debug_struct("Lease");
         match self.bound {
             Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
@@ -843,7 +843,7 @@ impl RemoteLease {
 }
 
 impl fmt::Debug for RemoteLease {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RemoteLease")
             .field(
                 "expired_time",
@@ -961,7 +961,7 @@ impl Engines {
 pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
 
 impl<'a> fmt::Display for KeysInfoFormatter<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0.len() {
             0 => write!(f, "no key"),
             1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),

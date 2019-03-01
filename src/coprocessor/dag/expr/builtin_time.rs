@@ -58,25 +58,25 @@ impl ScalarFunc {
 
     #[inline]
     pub fn hour(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.hours() as i64))
     }
 
     #[inline]
     pub fn minute(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.minutes() as i64))
     }
 
     #[inline]
     pub fn second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.secs() as i64))
     }
 
     #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(i64::from(dur.micro_secs())))
     }
 
@@ -132,7 +132,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_month(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             if ctx.cfg.mode_no_zero_date_mode() {
                 return handle_incorrect_datetime_error(ctx, t).map(|_| None);
@@ -145,7 +145,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_week(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -155,7 +155,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -165,7 +165,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             if ctx.cfg.mode_no_zero_date_mode() {
                 return handle_incorrect_datetime_error(ctx, t).map(|_| None);
@@ -198,7 +198,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -209,7 +209,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_without_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -219,7 +219,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_day(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -229,7 +229,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -240,7 +240,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn year_week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -265,7 +265,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -324,7 +324,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -333,11 +333,11 @@ impl ScalarFunc {
     }
 
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if lhs.invalid_zero() {
             return handle_incorrect_datetime_error(ctx, lhs).map(|_| None);
         }
-        let rhs: Cow<Time> = try_opt!(self.children[1].eval_time(ctx, row));
+        let rhs: Cow<'_, Time> = try_opt!(self.children[1].eval_time(ctx, row));
         if rhs.invalid_zero() {
             return handle_incorrect_datetime_error(ctx, rhs).map(|_| None);
         }

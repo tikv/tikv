@@ -120,7 +120,7 @@ pub mod compression_type_level_serde {
         impl<'de> Visitor<'de> for SeqVisitor {
             type Value = [DBCompressionType; 7];
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(formatter, "a compression type vector")
             }
 
@@ -190,7 +190,7 @@ macro_rules! numeric_enum_mod {
                 impl<'de> Visitor<'de> for EnumVisitor {
                     type Value = $enum;
 
-                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                         write!(formatter, concat!("valid ", stringify!($enum)))
                     }
 
@@ -404,7 +404,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
         impl<'de> Visitor<'de> for SizeVisitor {
             type Value = ReadableSize;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("valid size")
             }
 
@@ -478,7 +478,7 @@ impl ReadableDuration {
 
 impl fmt::Display for ReadableDuration {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut dur = util::time::duration_to_ms(self.0);
         let mut written = false;
         if dur >= DAY {
@@ -533,7 +533,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
         impl<'de> Visitor<'de> for DurVisitor {
             type Value = ReadableDuration;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("valid duration")
             }
 

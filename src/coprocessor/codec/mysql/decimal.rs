@@ -1782,7 +1782,7 @@ impl FromStr for Decimal {
 }
 
 impl Display for Decimal {
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = self.clone();
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
@@ -2000,7 +2000,7 @@ impl<T: Write> DecimalEncoder for T {}
 
 impl Decimal {
     /// `decode` decodes value encoded by `encode_decimal`.
-    pub fn decode(data: &mut BytesSlice) -> Result<Decimal> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Decimal> {
         if data.len() < 3 {
             return Err(box_err!("decimal too short: {} < 3", data.len()));
         }
@@ -2083,7 +2083,7 @@ impl Decimal {
     }
 
     /// `decode_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
-    pub fn decode_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
+    pub fn decode_from_chunk(data: &mut BytesSlice<'_>) -> Result<Decimal> {
         let mut d = if data.len() > 4 {
             let int_cnt = data[0];
             let frac_cnt = data[1];

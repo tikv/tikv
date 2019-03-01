@@ -13,14 +13,6 @@
 
 #[macro_use]
 extern crate clap;
-#[cfg(unix)]
-extern crate nix;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
@@ -31,13 +23,8 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 #[macro_use]
 extern crate vlog;
 
@@ -2055,7 +2042,7 @@ fn convert_gbmb(mut bytes: u64) -> String {
     format!("{}{}", gb, mb)
 }
 
-fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
+fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
@@ -2214,7 +2201,7 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
+fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut args: Vec<String> = match cmd.values_of("") {
         Some(v) => v.map(|x| x.to_owned()).collect(),
         None => Vec::new(),

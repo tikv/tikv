@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate prometheus;
-extern crate toml;
-
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -29,6 +26,7 @@ use rocksdb::{
 };
 use slog;
 use sys_info;
+use toml;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
@@ -700,7 +698,7 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -889,7 +887,7 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
     }
 }

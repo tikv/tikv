@@ -244,13 +244,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
 }
 
 impl<S: RaftStoreRouter> Display for RaftKv<S> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
 impl<S: RaftStoreRouter> Debug for RaftKv<S> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }

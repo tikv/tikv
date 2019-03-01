@@ -31,7 +31,12 @@ struct TestObserver {
 impl Coprocessor for TestObserver {}
 
 impl RegionChangeObserver for TestObserver {
-    fn on_region_changed(&self, ctx: &mut ObserverContext, event: RegionChangeEvent, _: StateRole) {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
         self.sender.send((ctx.region().clone(), event)).unwrap();
     }
 }

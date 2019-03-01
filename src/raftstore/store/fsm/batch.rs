@@ -41,7 +41,7 @@ pub trait Fsm {
     fn is_stopped(&self) -> bool;
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, _mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -492,7 +492,7 @@ pub mod tests {
             self.is_stopped
         }
 
-        fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
+        fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
             self.mailbox = Some(mailbox.into_owned());
         }
 

@@ -13,7 +13,6 @@
 
 #[macro_use]
 extern crate tikv;
-extern crate test_raftstore;
 
 mod assert_storage;
 mod sync_storage;

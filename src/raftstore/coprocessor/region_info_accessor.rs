@@ -99,7 +99,7 @@ enum RegionCollectorMsg {
 }
 
 impl Display for RegionCollectorMsg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RegionCollectorMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionCollectorMsg::SeekRegion { from, limit, .. } => {
@@ -122,7 +122,7 @@ impl Coprocessor for RegionEventListener {}
 impl RegionChangeObserver for RegionEventListener {
     fn on_region_changed(
         &self,
-        context: &mut ObserverContext,
+        context: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         role: StateRole,
     ) {
@@ -139,7 +139,7 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler

@@ -429,7 +429,7 @@ impl ScalarFunc {
         &self,
         ctx: &mut EvalContext,
         row: &[Datum],
-    ) -> Result<Option<Cow<Decimal>>> {
+    ) -> Result<Option<Cow<'_, Decimal>>> {
         let x = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
         let d = if self.children[1].is_unsigned() {

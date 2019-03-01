@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate serde_json;
+use serde_json;
 
 use std::io;
 use std::io::prelude::*;

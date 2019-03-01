@@ -149,7 +149,7 @@ impl SnapKey {
 }
 
 impl Display for SnapKey {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)
     }
 }
@@ -844,7 +844,7 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
 }
 
 impl fmt::Debug for Snap {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
             .field("key", &self.key)
             .field("display_path", &self.display_path)
@@ -1539,7 +1539,7 @@ pub mod tests {
     type DBBuilder = fn(
         p: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>>;
 
     impl SnapshotDeleter for DummyDeleter {
@@ -1552,7 +1552,7 @@ pub mod tests {
     pub fn open_test_empty_db(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
         let db = rocksdb_util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
@@ -1562,7 +1562,7 @@ pub mod tests {
     pub fn open_test_db(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
         let db = rocksdb_util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
@@ -1581,7 +1581,7 @@ pub mod tests {
     pub fn get_test_db_for_regions(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
     ) -> Result<Arc<DB>> {
         let kv = open_test_db(path, db_opt, cf_opts)?;

@@ -197,7 +197,7 @@ pub struct ImportPath {
 }
 
 impl fmt::Debug for ImportPath {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportPath")
             .field("save", &self.save)
             .field("temp", &self.temp)
@@ -280,7 +280,7 @@ impl Drop for ImportFile {
 }
 
 impl fmt::Debug for ImportFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportFile")
             .field("meta", &self.meta)
             .field("path", &self.path)

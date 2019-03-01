@@ -121,7 +121,7 @@ impl ReadDelegate {
 }
 
 impl Display for ReadDelegate {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "ReadDelegate for region {}, \
@@ -212,7 +212,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Register(ref delegate) => write!(f, "localreader Task::Register {:?}", delegate),
             Task::Read(ref cmd) => write!(f, "localreader Task::Read {:?}", cmd.request),

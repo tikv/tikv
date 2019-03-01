@@ -13,25 +13,9 @@
 
 #![feature(test)]
 
-extern crate arrow;
-extern crate byteorder;
-extern crate crossbeam;
-extern crate futures;
-extern crate kvproto;
-extern crate num_traits;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate tempdir;
 extern crate test;
-extern crate tipb;
 
-extern crate cop_datatype;
-extern crate test_coprocessor;
-extern crate test_storage;
-extern crate test_util;
-extern crate tikv;
+use tikv;
 
 mod channel;
 mod coprocessor;

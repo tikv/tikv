@@ -14,11 +14,8 @@
 #![recursion_limit = "100"]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 
-extern crate fail;
-extern crate futures;
-extern crate grpcio;
-extern crate kvproto;
-extern crate raft;
+use fail;
+
 #[macro_use]
 extern crate lazy_static;
 #[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
@@ -26,12 +23,9 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 
-extern crate panic_hook;
-extern crate test_coprocessor;
-extern crate test_raftstore;
-extern crate test_storage;
-extern crate test_util;
-extern crate tikv;
+use panic_hook;
+
+use test_util;
 
 #[cfg(not(feature = "no-fail"))]
 mod cases;

@@ -14,12 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-#[cfg(unix)]
-extern crate nix;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     kv,
     slog_kv,
@@ -32,7 +26,7 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
+
 #[macro_use]
 extern crate slog_global;
 

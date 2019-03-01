@@ -61,7 +61,7 @@ impl Tz {
 }
 
 impl fmt::Debug for Tz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Tz::Offset(ref offset) => write!(f, "Tz::Offset({:?})", offset),
             Tz::Name(ref offset) => write!(f, "Tz::Name({:?})", offset),
@@ -71,7 +71,7 @@ impl fmt::Debug for Tz {
 }
 
 impl fmt::Display for Tz {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             // `Display` is not implemented for them, so we use `Debug`.
             Tz::Offset(ref offset) => fmt::Debug::fmt(offset, f),
@@ -219,7 +219,7 @@ impl Offset for TzOffset {
 }
 
 impl fmt::Display for TzOffset {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }

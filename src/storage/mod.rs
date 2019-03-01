@@ -165,7 +165,7 @@ pub enum Command {
 }
 
 impl Display for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Command::Prewrite {
                 ref ctx,
@@ -255,7 +255,7 @@ impl Display for Command {
 }
 
 impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
@@ -1730,7 +1730,7 @@ impl ErrorHeaderKind {
 }
 
 impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_str())
     }
 }

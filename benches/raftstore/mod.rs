@@ -11,14 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// This suite contains benchmarks for several different configurations generated
-/// dynamically. Thus it has `harness = false`.
-extern crate criterion;
-
-extern crate rocksdb;
-extern crate test_raftstore;
-extern crate test_util;
-extern crate tikv;
+use tikv;
 
 use std::fmt;
 
@@ -171,7 +164,7 @@ impl ClusterFactory<NodeCluster> for NodeClusterFactory {
 }
 
 impl fmt::Debug for NodeClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Node")
     }
 }
@@ -186,7 +179,7 @@ impl ClusterFactory<ServerCluster> for ServerClusterFactory {
 }
 
 impl fmt::Debug for ServerClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Server")
     }
 }

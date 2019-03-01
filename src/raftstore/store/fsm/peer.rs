@@ -219,7 +219,7 @@ impl Fsm for PeerFsm {
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     #[inline]
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
