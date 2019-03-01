@@ -26,7 +26,7 @@ pub trait Transport: Send + Clone {
 
 /// Routes message to target region.
 ///
-/// Messages are not guranteed to be delivered by this trait.
+/// Messages are not guaranteed to be delivered by this trait.
 pub trait CasualRouter {
     fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()>;
 }
@@ -38,7 +38,7 @@ pub trait ProposalRouter {
 
 /// Routes message to store FSM.
 ///
-/// Messages are not guranteed to be delivered by this trait.
+/// Messages are not guaranteed to be delivered by this trait.
 pub trait StoreRouter {
     fn send(&self, msg: StoreMsg) -> Result<()>;
 }
