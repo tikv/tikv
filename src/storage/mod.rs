@@ -960,10 +960,11 @@ impl<E: Engine> Storage<E> {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            modifies,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -1224,7 +1225,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
@@ -1249,10 +1250,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
@@ -1274,7 +1276,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
@@ -1306,7 +1308,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
@@ -1333,10 +1335,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();

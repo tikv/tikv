@@ -331,7 +331,10 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::new(AtomicBool::new(false)), together),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::new(AtomicBool::new(false)),
+            together,
+        )),
     );
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {

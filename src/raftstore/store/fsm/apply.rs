@@ -2844,9 +2844,9 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
-            }),
+            })),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         router.schedule_task(1, Msg::Proposal(region_proposal));
@@ -2862,9 +2862,9 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(box move |write: WriteResponse| {
+                Callback::Write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
-                }),
+                })),
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
@@ -2959,9 +2959,9 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
-            }),
+            })),
         );
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         router.schedule_task(2, Msg::Proposal(region_proposal));
@@ -3003,9 +3003,9 @@ mod tests {
                 false,
                 self.entry.get_index(),
                 self.entry.get_term(),
-                Callback::Write(box move |resp: WriteResponse| {
+                Callback::Write(Box::new(move |resp: WriteResponse| {
                     tx.send(resp.response).unwrap();
-                }),
+                })),
             );
             router.schedule_task(
                 region_id,

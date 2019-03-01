@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![recursion_limit = "100"]
-#![feature(box_syntax)]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 
 extern crate fail;

@@ -11,17 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
-
-extern crate futures;
-extern crate grpcio as grpc;
-extern crate kvproto;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate tempdir;
-extern crate tokio_threadpool;
 #[macro_use(
     slog_kv,
     slog_error,

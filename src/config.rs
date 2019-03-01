@@ -983,9 +983,11 @@ macro_rules! readpool_config {
                     .into());
                 }
                 if self.low_concurrency == 0 {
-                    return Err(
-                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
-                    );
+                    return Err(format!(
+                        "readpool.{}.low-concurrency should be > 0",
+                        $display_name
+                    )
+                    .into());
                 }
                 if self.stack_size.0 < ReadableSize::mb(2).0 {
                     return Err(

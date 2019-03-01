@@ -101,7 +101,7 @@ impl GCTask {
                 ref mut callback, ..
             } => callback,
         };
-        mem::replace(callback, box |_| {})
+        mem::replace(callback, Box::new(|_| {}))
     }
 
     pub fn get_label(&self) -> &'static str {
@@ -994,7 +994,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
 
             let res = self.cfg.region_info_provider.seek_region(
                 key.as_encoded(),
-                box |_, role| role == StateRole::Leader,
+                Box::new(|_, role| role == StateRole::Leader),
                 GC_SEEK_REGION_LIMIT,
             );
 

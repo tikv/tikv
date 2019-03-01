@@ -422,26 +422,27 @@ fn region_detail<T: RaftStoreRouter>(
     raft_cmd.set_status_request(status_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
     future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(box e))
+        .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
-            rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
-                if r.response.get_header().has_error() {
-                    let e = r.response.get_header().get_error();
-                    warn!("region_detail got error"; "err" => ?e);
-                    let msg = print_to_string(e);
-                    return Err(Error::Other(msg.into()));
-                }
-                let detail = r.response.take_status_response().take_region_detail();
-                debug!("region_detail got region detail"; "detail" => ?detail);
-                let leader_store_id = detail.get_leader().get_store_id();
-                if leader_store_id != store_id {
-                    let msg = format!("Leader is on store {}", leader_store_id);
-                    return Err(Error::Other(msg.into()));
-                }
-                Ok(detail)
-            })
+            rx.map_err(|e| Error::Other(Box::new(e)))
+                .and_then(move |mut r| {
+                    if r.response.get_header().has_error() {
+                        let e = r.response.get_header().get_error();
+                        warn!("region_detail got error"; "err" => ?e);
+                        let msg = print_to_string(e);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    let detail = r.response.take_status_response().take_region_detail();
+                    debug!("region_detail got region detail"; "detail" => ?detail);
+                    let leader_store_id = detail.get_leader().get_store_id();
+                    if leader_store_id != store_id {
+                        let msg = format!("Leader is on store {}", leader_store_id);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    Ok(detail)
+                })
         })
 }
 
@@ -459,18 +460,19 @@ fn consistency_check<T: RaftStoreRouter>(
     raft_cmd.set_admin_request(admin_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
     future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(box e))
+        .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
-            rx.map_err(|e| Error::Other(box e)).and_then(move |r| {
-                if r.response.get_header().has_error() {
-                    let e = r.response.get_header().get_error();
-                    warn!("consistency-check got error"; "err" => ?e);
-                    let msg = print_to_string(e);
-                    return Err(Error::Other(msg.into()));
-                }
-                Ok(())
-            })
+            rx.map_err(|e| Error::Other(Box::new(e)))
+                .and_then(move |r| {
+                    if r.response.get_header().has_error() {
+                        let e = r.response.get_header().get_error();
+                        warn!("consistency-check got error"; "err" => ?e);
+                        let msg = print_to_string(e);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    Ok(())
+                })
         })
 }

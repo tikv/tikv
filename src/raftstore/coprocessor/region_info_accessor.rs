@@ -156,9 +156,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, box listener.clone());
+        .register_role_observer(1, Box::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, box listener);
+        .register_region_change_observer(1, Box::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -535,11 +535,11 @@ impl RegionInfoProvider for RegionInfoAccessor {
             from: from.to_vec(),
             filter,
             limit,
-            callback: box move |res| {
+            callback: Box::new(move |res| {
                 tx.send(res).unwrap_or_else(|e| {
                     panic!("failed to send seek_region result back to caller: {:?}", e)
                 })
-            },
+            }),
         };
         self.scheduler
             .schedule(msg)

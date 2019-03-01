@@ -787,10 +787,10 @@ fn test_learner_with_slow_snapshot() {
 
     let count = Arc::new(AtomicUsize::new(0));
     let filter = Arc::new(AtomicBool::new(true));
-    let snap_filter = box SnapshotFilter {
+    let snap_filter = Box::new(SnapshotFilter {
         count: Arc::clone(&count),
         filter: Arc::clone(&filter),
-    };
+    });
 
     // New added learner should keep pending until snapshot is applied.
     cluster.sim.wl().add_send_filter(1, snap_filter);

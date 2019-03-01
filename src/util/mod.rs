@@ -465,7 +465,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
-    panic::set_hook(box move |info: &panic::PanicInfo| {
+    panic::set_hook(Box::new(move |info: &panic::PanicInfo| {
         use slog::Drain;
         if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
@@ -513,7 +513,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         } else {
             process::exit(1);
         }
-    })
+    }))
 }
 
 #[inline]

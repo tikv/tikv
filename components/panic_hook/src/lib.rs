@@ -13,8 +13,6 @@
 
 //! A simple panic hook that allows skipping printing stack trace conditionally.
 
-#![feature(box_syntax)]
-
 use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe, PanicInfo};
 use std::sync::{Once, ONCE_INIT};
@@ -31,7 +29,7 @@ thread_local! {
 fn initialize() {
     unsafe {
         DEFAULT_HOOK = Some(Box::into_raw(panic::take_hook()));
-        panic::set_hook(box track_hook);
+        panic::set_hook(Box::new(track_hook));
     }
 }
 
