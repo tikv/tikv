@@ -636,7 +636,7 @@ mod tests {
 
     /// A streaming `RequestHandler` that produces values according a closure.
     struct StreamFromClosure {
-        result_generator: Box<Fn(usize) -> HandlerStreamStepResult + Send>,
+        result_generator: Box<dyn Fn(usize) -> HandlerStreamStepResult + Send>,
         nth: usize,
     }
 

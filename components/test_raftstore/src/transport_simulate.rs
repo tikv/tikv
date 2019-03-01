@@ -83,8 +83,8 @@ pub trait Filter<M>: Send + Sync {
     }
 }
 
-pub type SendFilter = Box<Filter<RaftMessage>>;
-pub type RecvFilter = Box<Filter<StoreMsg>>;
+pub type SendFilter = Box<dyn Filter<RaftMessage>>;
+pub type RecvFilter = Box<dyn Filter<StoreMsg>>;
 
 /// Emits a notification for each given message type that it sees.
 #[allow(dead_code)]
@@ -171,7 +171,7 @@ impl<M> Filter<M> for DelayFilter {
 }
 
 pub struct SimulateTransport<M, C: Channel<M>> {
-    filters: Arc<RwLock<Vec<Box<Filter<M>>>>>,
+    filters: Arc<RwLock<Vec<Box<dyn Filter<M>>>>>,
     ch: Arc<Mutex<C>>,
 }
 
@@ -187,7 +187,7 @@ impl<M, C: Channel<M>> SimulateTransport<M, C> {
         self.filters.wl().clear();
     }
 
-    pub fn add_filter(&mut self, filter: Box<Filter<M>>) {
+    pub fn add_filter(&mut self, filter: Box<dyn Filter<M>>) {
         self.filters.wl().push(filter);
     }
 }
