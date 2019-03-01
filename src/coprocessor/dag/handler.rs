@@ -56,6 +56,7 @@ impl DAGRequestHandler {
     }
 
     fn build_batch_dag<S: Store + 'static>(
+        deadline: Deadline,
         eval_config: EvalConfig,
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
@@ -70,6 +71,7 @@ impl DAGRequestHandler {
             eval_config,
         )?;
         Ok(super::batch_handler::BatchDAGHandler::new(
+            deadline,
             out_most_executor,
             req.take_output_offsets(),
             executor_context,
@@ -111,7 +113,7 @@ impl DAGRequestHandler {
             && super::builder::DAGBuilder::can_build_batch(req.get_executors());
 
         if is_batch {
-            Ok(Self::build_batch_dag(eval_cfg, req, ranges, store)?.into_boxed())
+            Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
         } else {
             Ok(
                 Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
