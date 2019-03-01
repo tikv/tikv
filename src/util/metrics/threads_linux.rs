@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use libc::{self, pid_t};
 use prometheus::core::{Collector, Desc};
-use prometheus::{self, proto, CounterVec, IntGaugeVec, Opts};
+use prometheus::{self, proto, CounterVec, IntCounterVec, IntGaugeVec, Opts};
 
 use procinfo::pid;
 
@@ -32,6 +32,8 @@ struct Metrics {
     cpu_totals: CounterVec,
     io_totals: CounterVec,
     threads_state: IntGaugeVec,
+    voluntary_ctxt_switches: IntCounterVec,
+    nonvoluntary_ctxt_switches: IntCounterVec,
 }
 
 /// A collector to collect threads metrics, including CPU usage
@@ -67,10 +69,29 @@ impl ThreadsCollector {
             Opts::new(
                 "threads_io_bytes_total",
                 "Total number of bytes which threads cause to be fetched from or sent to the storage layer.",
-            ).namespace(ns),
+            ).namespace(ns.clone()),
             &["name", "tid", "io"],
-        ).unwrap();
+        )
+        .unwrap();
         descs.extend(io_totals.desc().into_iter().cloned());
+        let voluntary_ctxt_switches = IntCounterVec::new(
+            Opts::new(
+                "thread_voluntary_context_switches",
+                "Number of thread voluntary context switches.",
+            )
+            .namespace(ns.clone()),
+            &["name", "tid"],
+        )
+        .unwrap();
+        let nonvoluntary_ctxt_switches = IntCounterVec::new(
+            Opts::new(
+                "thread_nonvoluntary_context_switches",
+                "Number of thread nonvoluntary context switches.",
+            )
+            .namespace(ns),
+            &["name", "tid"],
+        )
+        .unwrap();
 
         ThreadsCollector {
             pid,
@@ -79,6 +100,8 @@ impl ThreadsCollector {
                 cpu_totals,
                 io_totals,
                 threads_state,
+                voluntary_ctxt_switches,
+                nonvoluntary_ctxt_switches,
             }),
         }
     }
@@ -143,11 +166,39 @@ impl Collector for ThreadsCollector {
                         write_total.inc_by(write_delta);
                     }
                 }
+
+                if let Ok(status) = pid::status_task(self.pid, tid) {
+                    // Thread voluntary context switches.
+                    let voluntary_ctxt_switches = status.voluntary_ctxt_switches;
+                    let voluntary_total = metrics
+                        .voluntary_ctxt_switches
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .unwrap();
+                    let voluntary_past = voluntary_total.get();
+                    let voluntary_delta = voluntary_ctxt_switches as i64 - voluntary_past;
+                    if voluntary_delta > 0 {
+                        voluntary_total.inc_by(voluntary_delta);
+                    }
+
+                    // Thread nonvoluntary context switches.
+                    let nonvoluntary_ctxt_switches = status.nonvoluntary_ctxt_switches;
+                    let nonvoluntary_total = metrics
+                        .nonvoluntary_ctxt_switches
+                        .get_metric_with_label_values(&[&name, &format!("{}", tid)])
+                        .unwrap();
+                    let nonvoluntary_past = nonvoluntary_total.get();
+                    let nonvoluntary_delta = nonvoluntary_ctxt_switches as i64 - nonvoluntary_past;
+                    if nonvoluntary_delta > 0 {
+                        nonvoluntary_total.inc_by(nonvoluntary_delta);
+                    }
+                }
             }
         }
         let mut mfs = metrics.cpu_totals.collect();
         mfs.extend(metrics.threads_state.collect());
         mfs.extend(metrics.io_totals.collect());
+        mfs.extend(metrics.voluntary_ctxt_switches.collect());
+        mfs.extend(metrics.nonvoluntary_ctxt_switches.collect());
         mfs
     }
 }

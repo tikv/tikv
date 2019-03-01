@@ -26,7 +26,7 @@ use super::executor::{Executor, ExecutorMetrics};
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
     deadline: Deadline,
-    executor: Box<Executor + Send>,
+    executor: Box<dyn Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
 }
@@ -56,6 +56,7 @@ impl DAGRequestHandler {
     }
 
     fn build_batch_dag<S: Store + 'static>(
+        deadline: Deadline,
         eval_config: EvalConfig,
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
@@ -70,6 +71,7 @@ impl DAGRequestHandler {
             eval_config,
         )?;
         Ok(super::batch_handler::BatchDAGHandler::new(
+            deadline,
             out_most_executor,
             req.take_output_offsets(),
             executor_context,
@@ -85,7 +87,7 @@ impl DAGRequestHandler {
         batch_row_limit: usize,
         is_streaming: bool,
         enable_batch_if_possible: bool,
-    ) -> Result<Box<RequestHandler>> {
+    ) -> Result<Box<dyn RequestHandler>> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
@@ -111,7 +113,7 @@ impl DAGRequestHandler {
             && super::builder::DAGBuilder::can_build_batch(req.get_executors());
 
         if is_batch {
-            Ok(Self::build_batch_dag(eval_cfg, req, ranges, store)?.into_boxed())
+            Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
         } else {
             Ok(
                 Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?

@@ -157,7 +157,7 @@ impl<'a> RpnStackNode<'a> {
 pub enum RpnExpressionNode {
     /// Represents a function.
     Fn {
-        func: Box<RpnFunction>,
+        func: Box<dyn RpnFunction>,
         field_type: FieldType,
     },
 
@@ -188,7 +188,7 @@ impl RpnExpressionNode {
     }
 
     #[inline]
-    pub fn fn_func(&self) -> Option<&RpnFunction> {
+    pub fn fn_func(&self) -> Option<&dyn RpnFunction> {
         match self {
             RpnExpressionNode::Fn { ref func, .. } => Some(&*func),
             _ => None,

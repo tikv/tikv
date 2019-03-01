@@ -256,7 +256,7 @@ impl VectorValue {
         &mut self,
         mut raw_datum: &[u8],
         time_zone: Tz,
-        field_type: &FieldTypeAccessor,
+        field_type: &dyn FieldTypeAccessor,
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -323,7 +323,7 @@ impl VectorValue {
         fn decode_date_time_from_uint(
             v: u64,
             time_zone: Tz,
-            field_type: &FieldTypeAccessor,
+            field_type: &dyn FieldTypeAccessor,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
             let time_type = field_type.tp().try_into()?;
@@ -525,7 +525,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &FieldTypeAccessor,
+        field_type: &dyn FieldTypeAccessor,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         use crate::coprocessor::codec::mysql::DecimalEncoder;
