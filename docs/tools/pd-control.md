@@ -732,9 +732,9 @@ logic:  120102
 ### Query the remaining space of the node
 
 ```bash
-» store --jq=".stores[] | {id: .store.id, avaiable: .status.available}"
-{"id":1,"avaiable":"10 GiB"}
-{"id":30,"avaiable":"10 GiB"}
+» store --jq=".stores[] | {id: .store.id, available: .status.available}"
+{"id":1,"available":"10 GiB"}
+{"id":30,"available":"10 GiB"}
 ...
 ```
 
