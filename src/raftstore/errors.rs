@@ -30,10 +30,14 @@ use crate::util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
+/// Describes why a message is discarded.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DiscardReason {
+    /// Channel is disconnected, message can't be delivered.
     Disconnected,
+    /// Message is dropped due to some filter rules, usually in tests.
     Filtered,
+    /// Channel runs out of capacity, message can't be delivered.
     Full,
 }
 
