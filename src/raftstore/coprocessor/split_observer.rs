@@ -79,11 +79,11 @@ impl SplitObserver {
                     Ok(key) => {
                         if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
                             warn!(
-                                "[region {}] key {} is not larger than previous {} at {}, skip.",
-                                region_id,
-                                escape(&key),
-                                escape(last_valid_key.as_ref().unwrap()),
-                                k
+                                "key is not larger than previous, skip.";
+                                "region_id" => region_id,
+                                "key" => log_wrappers::Key(&key),
+                                "previous" => log_wrappers::Key(last_valid_key.as_ref().unwrap()),
+                                "index" => k,
                             );
                             continue;
                         }
@@ -91,7 +91,12 @@ impl SplitObserver {
                         split.set_split_key(key)
                     }
                     Err(e) => {
-                        warn!("[region {}] invalid key at {}, skip: {:?}", region_id, k, e);
+                        warn!(
+                            "invalid key, skip";
+                            "region_id" => region_id,
+                            "index" => k,
+                            "err" => ?e,
+                        );
                         continue;
                     }
                 }
@@ -129,9 +134,9 @@ impl AdminObserver for SplitObserver {
                 let mut request = vec![req.take_split()];
                 if let Err(e) = self.on_split(ctx, &mut request) {
                     error!(
-                        "[region {}] failed to handle split req: {:?}",
-                        ctx.region().get_id(),
-                        e
+                        "failed to handle split req";
+                        "region_id" => ctx.region().get_id(),
+                        "err" => ?e,
                     );
                     return Err(box_err!(e));
                 }
@@ -150,9 +155,9 @@ impl AdminObserver for SplitObserver {
                 let mut requests = req.mut_splits().take_requests().into_vec();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
                     error!(
-                        "[region {}] failed to handle split req: {:?}",
-                        ctx.region().get_id(),
-                        e
+                        "failed to handle split req";
+                        "region_id" => ctx.region().get_id(),
+                        "err" => ?e,
                     );
                     return Err(box_err!(e));
                 }
