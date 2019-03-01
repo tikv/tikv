@@ -183,8 +183,8 @@ impl<C: Sender<Msg>> Runner<C> {
         debug!(
             "executing task";
             "region_id" => region_id,
-            "start_key" => ::log_wrappers::Key(&start_key),
-            "end_key" => ::log_wrappers::Key(&end_key),
+            "start_key" => log_wrappers::Key(&start_key),
+            "end_key" => log_wrappers::Key(&end_key),
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 

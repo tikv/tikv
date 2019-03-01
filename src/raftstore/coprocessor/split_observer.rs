@@ -81,8 +81,8 @@ impl SplitObserver {
                             warn!(
                                 "key is not larger than previous, skip.";
                                 "region_id" => region_id,
-                                "key" => ::log_wrappers::Key(&key),
-                                "previous" => ::log_wrappers::Key(last_valid_key.as_ref().unwrap()),
+                                "key" => log_wrappers::Key(&key),
+                                "previous" => log_wrappers::Key(last_valid_key.as_ref().unwrap()),
                                 "index" => k,
                             );
                             continue;
