@@ -23,8 +23,15 @@ use super::executor::ExecutorMetrics;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::*;
 
+// TODO: The value is chosen according to some very subjective experience, which is not tuned
+// carefully. We need to benchmark to find a best value. Also we may consider accepting this value
+// from TiDB side.
 const BATCH_INITIAL_SIZE: usize = 32;
+
+// TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
 const BATCH_MAX_SIZE: usize = 1024;
+
+// TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
 /// Must be built from DAGRequestHandler.
