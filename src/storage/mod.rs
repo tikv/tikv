@@ -933,6 +933,8 @@ impl<E: Engine> Storage<E> {
             callback(res.map(|key_errs| (key_errs, max_read_ts)))
         };
 
+        self.report_read_ts(&ctx, start_ts, "prewrite");
+
         for m in &mutations {
             let size = m.key().as_encoded().len();
             if size > self.max_key_size {
