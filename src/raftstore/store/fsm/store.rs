@@ -257,8 +257,9 @@ impl<T: Transport, C> PollContext<T, C> {
                 .map(move |_| {
                     if let Err(e) = mb.force_send(StoreMsg::Tick(tick)) {
                         info!(
-                            "failed to schedule store tick {:?}: {:?}, are we shutting down?",
-                            tick, e
+                            "failed to schedule store tick, are we shutting down?";
+                            "tick" => ?tick,
+                            "err" => ?e
                         );
                     }
                 })
@@ -283,16 +284,20 @@ impl<T: Transport, C> PollContext<T, C> {
 
         if !need_gc {
             info!(
-                "[region {}] raft message {:?} is stale, current {:?}, ignore it",
-                region_id, msg_type, cur_epoch
+                "raft message is stale, ignore it";
+                "region_id" => region_id,
+                "current_region_epoch" => ?cur_epoch,
+                "msg_type" => ?msg_type,
             );
             self.raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
 
         info!(
-            "[region {}] raft message {:?} is stale, current {:?}, tell to gc",
-            region_id, msg_type, cur_epoch
+            "raft message is stale, tell to gc";
+            "region_id" => region_id,
+            "current_region_epoch" => ?cur_epoch,
+            "msg_type" => ?msg_type,
         );
 
         let mut gc_msg = RaftMessage::new();
@@ -306,14 +311,19 @@ impl<T: Transport, C> PollContext<T, C> {
             gc_msg.set_is_tombstone(true);
         }
         if let Err(e) = self.trans.send(gc_msg) {
-            error!("[region {}] send gc message failed {:?}", region_id, e);
+            error!(
+                "send gc message failed";
+                "region_id" => region_id,
+                "err" => ?e
+            );
         }
         self.need_flush_trans = true;
     }
 }
 
 struct Store {
-    tag: String,
+    // store id, before start the id is 0.
+    id: u64,
     last_compact_checked_key: Key,
     stopped: bool,
     start_time: Option<Timespec>,
@@ -330,7 +340,7 @@ impl StoreFsm {
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         let fsm = Box::new(StoreFsm {
             store: Store {
-                tag: "".to_owned(),
+                id: 0,
                 last_compact_checked_key: keys::DATA_MIN_KEY.to_vec(),
                 stopped: false,
                 start_time: None,
@@ -370,7 +380,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
             .observe(duration_to_sec(t.elapsed()) as f64);
-        slow_log!(t, "{} handle timeout {:?}", self.fsm.store.tag, tick);
+        slow_log!(t, "[store {}] handle timeout {:?}", self.fsm.store.id, tick);
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg>) {
@@ -379,7 +389,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!("{} handle raft message err: {:?}", self.fsm.store.tag, e);
+                        error!(
+                            "handle raft message failed";
+                            "store_id" => self.fsm.store.id,
+                            "err" => ?e
+                        );
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
@@ -398,11 +412,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn start(&mut self, store: metapb::Store) {
         if self.fsm.store.start_time.is_some() {
             panic!(
-                "{} unable to start again with meta {:?}",
-                self.fsm.store.tag, store
+                "[store {}] unable to start again with meta {:?}",
+                self.fsm.store.id, store
             );
         }
-        self.fsm.store.tag = format!("[store {}]", store.get_id());
+        self.fsm.store.id = store.get_id();
         self.fsm.store.start_time = Some(time::get_time());
         self.register_cleanup_import_sst_tick();
         self.register_compact_check_tick();
@@ -679,7 +693,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
                 tomebstone_count += 1;
-                debug!("region {:?} is tombstone in store {}", region, store_id);
+                debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
                 self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
             }
@@ -700,7 +714,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
                 region,
             )?;
             if local_state.get_state() == PeerState::Merging {
-                info!("region {:?} is merging in store {}", region, store_id);
+                info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
                 peer.set_pending_merge_state(local_state.get_merge_state().to_owned());
             }
@@ -728,7 +742,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
         // schedule applying snapshot after raft writebatch were written.
         for region in applying_regions {
-            info!("region {:?} is applying in store {}", region, store_id);
+            info!("region is applying snapshot"; "region" => ?region, "store_id" => store_id);
             let (tx, mut peer) = PeerFsm::create(
                 store_id,
                 &self.cfg,
@@ -744,14 +758,13 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
 
         info!(
-            "[store {}] starts with {} regions, including {} tombstones, {} applying \
-             regions and {} merging regions, takes {:?}",
-            store_id,
-            total_count,
-            tomebstone_count,
-            applying_count,
-            merging_count,
-            t.elapsed()
+            "start store";
+            "store_id" => store_id,
+            "region_count" => total_count,
+            "tombstone_count" => tomebstone_count,
+            "applying_count" =>  applying_count,
+            "merge_count" => merging_count,
+            "takes" => ?t.elapsed(),
         );
 
         self.clear_stale_data(&meta)?;
@@ -797,10 +810,10 @@ impl<T, C> RaftPollerBuilder<T, C> {
         rocksdb_util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
         info!(
-            "[store {}] cleans up {} ranges garbage data, takes {:?}",
-            self.store.get_id(),
-            ranges.len(),
-            t.elapsed()
+            "cleans up garbage data";
+            "store_id" => self.store.get_id(),
+            "garbage_range_count" => ranges.len(),
+            "takes" => ?t.elapsed()
         );
 
         Ok(())
@@ -1025,7 +1038,7 @@ impl RaftBatchSystem {
         box_try!(workers.local_reader.start_with_timer(reader, timer));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
-            warn!("set thread priority for raftstore failed, error: {:?}", e);
+            warn!("set thread priority for raftstore failed"; "error" => ?e);
         }
         let tag = format!("raftstore-{}", builder.store.get_id());
         let store = builder.store.clone();
@@ -1122,8 +1135,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 }
                 meta.pending_votes.push(msg.to_owned());
                 info!(
-                    "[region {}] doesn't exist yet, wait for it to be split",
-                    region_id
+                    "region doesn't exist yet, wait for it to be split";
+                    "region_id" => region_id
                 );
                 return Ok(true);
             }
@@ -1133,13 +1146,19 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 local_state
             ));
         }
-        debug!("[region {}] tombstone state: {:?}", region_id, local_state);
+        debug!(
+            "region is in tombstone state";
+            "region_id" => region_id,
+            "region_local_state" => ?local_state,
+        );
         let region = local_state.get_region();
         let region_epoch = region.get_region_epoch();
         if local_state.has_merge_state() {
             info!(
-                "[region {}] merged peer [epoch: {:?}] receive a stale message {:?}",
-                region_id, region_epoch, msg_type
+                "merged peer receives a stale message";
+                "region_id" => region_id,
+                "current_region_epoch" => ?region_epoch,
+                "msg_type" => ?msg_type,
             );
 
             let merge_target = if let Some(peer) = util::find_peer(region, from_store_id) {
@@ -1161,9 +1180,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         // The region in this peer is already destroyed
         if util::is_epoch_stale(from_epoch, region_epoch) {
             info!(
-                "[region {}] tombstone peer [epoch: {:?}] \
-                 receive a stale message {:?}",
-                region_id, region_epoch, msg_type,
+                "tombstone peer receives a stale message";
+                "region_id" => region_id,
+                "from_region_epoch" => ?from_epoch,
+                "current_region_epoch" => ?region_epoch,
+                "msg_type" => ?msg_type,
             );
 
             let not_exist = util::find_peer(region, from_store_id).is_none();
@@ -1192,26 +1213,26 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             Ok(()) | Err(TrySendError::Full(_)) => return Ok(()),
             Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) => msg = m,
             e => panic!(
-                "{} [region {}] unexpected redirect error: {:?}",
-                self.fsm.store.tag, region_id, e
+                "[store {}] [region {}] unexpected redirect error: {:?}",
+                self.fsm.store.id, region_id, e
             ),
         }
 
         debug!(
-            "{} [region {}] handle raft message {:?}, from {} to {}",
-            self.fsm.store.tag,
-            region_id,
-            msg.get_message().get_msg_type(),
-            msg.get_from_peer().get_id(),
-            msg.get_to_peer().get_id()
+            "handle raft message";
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
+            "store_id" => self.fsm.store.id,
+            "region_id" => region_id,
+            "msg_type" => ?msg.get_message().get_msg_type(),
         );
 
         if msg.get_to_peer().get_store_id() != self.ctx.store_id() {
             warn!(
-                "[region {}] store not match, to store id {}, mine {}, ignore it",
-                region_id,
-                msg.get_to_peer().get_store_id(),
-                self.ctx.store_id()
+                "store not match, ignore it";
+                "store_id" => self.ctx.store_id(),
+                "to_store_id" => msg.get_to_peer().get_store_id(),
+                "region_id" => region_id,
             );
             self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
             return Ok(());
@@ -1219,8 +1240,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         if !msg.has_region_epoch() {
             error!(
-                "[region {}] missing epoch in raft message, ignore it",
-                region_id
+                "missing epoch in raft message, ignore it";
+                "region_id" => region_id,
             );
             self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return Ok(());
@@ -1256,8 +1277,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !is_initial_msg(msg.get_message()) {
             let msg_type = msg.get_message().get_msg_type();
             debug!(
-                "target peer {:?} doesn't exist, stale message {:?}.",
-                target, msg_type
+                "target peer doesn't exist, stale message";
+                "target_peer" => ?target,
+                "region_id" => region_id,
+                "msg_type" => ?msg_type,
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return Ok(false);
@@ -1271,7 +1294,12 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         {
             let exist_region = &meta.regions[&exist_region_id];
             if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!("msg {:?} is overlapped with region {:?}", msg, exist_region);
+                debug!(
+                    "msg is overlapped with exist region";
+                    "region_id" => exist_region_id,
+                    "msg" => ?msg,
+                    "exist_region" => ?exist_region,
+                );
                 if util::is_first_vote_msg(msg.get_message()) {
                     meta.pending_votes.push(msg.to_owned());
                 }
@@ -1369,16 +1397,16 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.register_compact_check_tick();
         if self.ctx.compact_scheduler.is_busy() {
             debug!(
-                "{} compact worker is busy, check space redundancy next time",
-                self.fsm.store.tag
+                "compact worker is busy, check space redundancy next time";
+                "store_id" => self.fsm.store.id,
             );
             return;
         }
 
         if rocksdb_util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
             debug!(
-                "{} skip compact check when disabled auto compactions.",
-                self.fsm.store.tag
+                "skip compact check when disabled auto compactions";
+                "store_id" => self.fsm.store.id,
             );
             return;
         }
@@ -1391,7 +1419,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let largest_key = {
             let meta = self.ctx.store_meta.lock().unwrap();
             if meta.region_ranges.is_empty() {
-                debug!("{} there is no range need to check", self.fsm.store.tag);
+                debug!(
+                    "there is no range need to check";
+                    "store_id" => self.fsm.store.id
+                );
                 return;
             }
 
@@ -1435,8 +1466,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             })
         {
             error!(
-                "{} failed to schedule space check task: {}",
-                self.fsm.store.tag, e
+                "schedule space check task failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
     }
@@ -1501,7 +1533,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         let task = PdTask::StoreHeartbeat { stats, store_info };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!("{} failed to notify pd: {}", self.fsm.store.tag, e);
+            error!("notify pd failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
+            );
         }
     }
 
@@ -1518,8 +1553,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         let (mut last_region_id, mut keys) = (0, vec![]);
         let schedule_gc_snap = |region_id: u64, snaps| -> Result<()> {
             debug!(
-                "{} schedule snap gc for region {}",
-                self.fsm.store.tag, region_id
+                "schedule snap gc";
+                "store_id" => self.fsm.store.id,
+                "region_id" => region_id,
             );
             let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
@@ -1531,8 +1567,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.
                     info!(
-                        "[region {}] is disconnected, remove snaps {:?}",
-                        region_id, snaps
+                        "region is disconnected, remove snaps";
+                        "region_id" => region_id,
+                        "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
                         let snap = if is_sending {
@@ -1572,7 +1609,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_snap_mgr_gc(&mut self) {
         if let Err(e) = self.handle_snap_mgr_gc() {
-            error!("{} failed to gc snap manager: {:?}", self.fsm.store.tag, e);
+            error!(
+                "handle gc snap failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e
+            );
         }
         self.register_snap_mgr_gc_tick();
     }
@@ -1599,8 +1640,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             };
             if let Err(e) = self.ctx.compact_scheduler.schedule(task) {
                 error!(
-                    "{} failed to schedule compact lock cf task: {:?}",
-                    self.fsm.store.tag, e
+                    "schedule compact lock cf task failed";
+                    "store_id" => self.fsm.store.id,
+                    "err" => ?e,
                 );
             }
         }
@@ -1650,7 +1692,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
         if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
-            error!("{} schedule to delete ssts: {:?}", self.fsm.store.tag, e);
+            error!(
+                "schedule to delete ssts failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
+            );
         }
     }
 
@@ -1681,7 +1727,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         if !delete_ssts.is_empty() {
             let task = CleanupSSTTask::DeleteSST { ssts: delete_ssts };
             if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
-                error!("{} schedule to delete ssts: {:?}", self.fsm.store.tag, e);
+                error!(
+                    "schedule to delete ssts failed";
+                    "store_id" => self.fsm.store.id,
+                    "err" => ?e
+                );
             }
         }
 
@@ -1690,7 +1740,11 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 ssts: validate_ssts,
             };
             if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
-                error!("{} schedule to validate ssts: {:?}", self.fsm.store.tag, e);
+                error!(
+                   "schedule to validate ssts failed";
+                   "store_id" => self.fsm.store.id,
+                   "err" => ?e,
+                );
             }
         }
 
@@ -1735,8 +1789,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             }
         };
         info!(
-            "{} scheduling consistency check for region {}",
-            self.fsm.store.tag, target_region_id
+            "scheduling consistency check for region";
+            "store_id" => self.fsm.store.id,
+            "region_id" => target_region_id,
         );
         self.fsm
             .store
@@ -1756,8 +1811,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     fn on_cleanup_import_sst_tick(&mut self) {
         if let Err(e) = self.on_cleanup_import_sst() {
             error!(
-                "{} failed to cleanup import sst: {:?}",
-                self.fsm.store.tag, e
+                "cleanup import sst failed";
+                "store_id" => self.fsm.store.id,
+                "err" => ?e,
             );
         }
         self.register_cleanup_import_sst_tick();
@@ -1814,8 +1870,7 @@ pub fn new_compaction_listener(ch: RaftRouter) -> CompactionListener {
         let ch = ch.lock().unwrap();
         if let Err(e) = ch.send_control(StoreMsg::CompactedEvent(compacted_event)) {
             error!(
-                "Send compaction finished event to raftstore failed: {:?}",
-                e
+                "send compaction finished event to raftstore failed"; "err" => ?e,
             );
         }
     };
