@@ -17,7 +17,7 @@ use std::{i64, mem, u64};
 use tipb::select;
 
 use super::{Error, Result};
-use coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::mysql::Tz;
 
 /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
 /// truncate error.

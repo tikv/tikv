@@ -19,8 +19,8 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::grpc;
 use chrono::{self, Duration};
-use grpc;
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
 use slog_async::{Async, OverflowStrategy};
@@ -46,7 +46,7 @@ pub fn init_log<D>(
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
-    <D as Drain>::Err: ::std::fmt::Debug,
+    <D as Drain>::Err: std::fmt::Debug,
 {
     let logger = if use_async {
         let drain = Async::new(drain.fuse())
@@ -62,9 +62,9 @@ where
         slog::Logger::root(drain, slog_o!())
     };
 
-    ::slog_global::set_global(logger);
+    slog_global::set_global(logger);
     if init_stdlog {
-        ::slog_global::redirect_std_log(Some(level))?;
+        slog_global::redirect_std_log(Some(level))?;
         grpc::redirect_log();
     }
 
@@ -191,7 +191,7 @@ where
 }
 
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
-fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_timestamp()?;
     write!(
         decorator,
@@ -225,7 +225,7 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
 }
 
 /// Writes log message to decorator. See [log-message](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-message-section)
-fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_msg(decorator: &mut dyn RecordDecorator, record: &Record) -> io::Result<()> {
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
 
@@ -240,7 +240,7 @@ fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result
 
 /// Writes log fields to decorator. See [log-fields](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-fields-section)
 fn write_log_fields(
-    decorator: &mut RecordDecorator,
+    decorator: &mut dyn RecordDecorator,
     record: &Record,
     values: &OwnedKVList,
 ) -> io::Result<()> {
@@ -256,11 +256,11 @@ fn write_log_fields(
 }
 
 struct Serializer<'a> {
-    decorator: &'a mut RecordDecorator,
+    decorator: &'a mut dyn RecordDecorator,
 }
 
 impl<'a> Serializer<'a> {
-    fn new(decorator: &'a mut RecordDecorator) -> Self {
+    fn new(decorator: &'a mut dyn RecordDecorator) -> Self {
         Serializer { decorator }
     }
 
@@ -367,9 +367,9 @@ mod tests {
         );
 
         slog_warn!(logger, "Type";
-            "Counter" => ::std::f64::NAN,
-            "Score" => ::std::f64::INFINITY,
-            "Other" => ::std::f64::NEG_INFINITY
+            "Counter" => std::f64::NAN,
+            "Score" => std::f64::INFINITY,
+            "Other" => std::f64::NEG_INFINITY
         );
 
         let none: Option<u8> = None;

@@ -31,29 +31,28 @@ use rocksdb::{
     WriteBatch, WriteOptions, DB,
 };
 
-use raft::{self, RawNode};
-use raftstore::store::engine::{IterOption, Mutable};
-use raftstore::store::util as raftstore_util;
-use raftstore::store::{
+use crate::raftstore::store::engine::{IterOption, Mutable};
+use crate::raftstore::store::util as raftstore_util;
+use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
-use storage::mvcc::{Lock, LockType, Write, WriteType};
-use storage::types::Key;
-use storage::Iterator as EngineIterator;
-use storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use util::codec::bytes;
-use util::collections::HashSet;
-use util::config::ReadableSize;
-use util::escape;
-use util::properties::MvccProperties;
-use util::rocksdb::get_cf_handle;
-use util::rocksdb::properties::RangeProperties;
-use util::worker::Worker;
+use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
+use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
+use crate::storage::types::Key;
+use crate::storage::Iterator as EngineIterator;
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::util::codec::bytes;
+use crate::util::collections::HashSet;
+use crate::util::config::ReadableSize;
+use crate::util::escape;
+use crate::util::rocksdb_util::get_cf_handle;
+use crate::util::rocksdb_util::properties::{MvccProperties, RangeProperties};
+use crate::util::worker::Worker;
+use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = ::rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = rocksdb::DBIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -66,7 +65,7 @@ quick_error! {
             description(msg)
             display("Not Found {:?}", msg)
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -320,13 +319,13 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
-        info!("Debugger starts manual compact on {:?}.{}", db, cf);
+        info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
         let mut opts = CompactOptions::new();
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact on {:?}.{}", db, cf);
+        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -539,8 +538,10 @@ impl Debugger {
                 let region_id = region_state.get_region().get_id();
                 let old_peers = region_state.mut_region().take_peers();
                 info!(
-                    "region {} change peers from {:?}, to {:?}",
-                    region_id, old_peers, new_peers
+                    "peers changed";
+                    "region_id" => region_id,
+                    "old_peers" => ?old_peers,
+                    "new_peers" => ?new_peers,
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state
@@ -1305,7 +1306,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
     Ok(())
 }
 
-fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let mut fake_region = Region::default();
     fake_region.set_start_key(vec![]);
     fake_region.set_end_key(vec![]);
@@ -1325,7 +1326,7 @@ fn divide_db(db: &DB, parts: usize) -> ::raftstore::Result<Vec<Vec<u8>>> {
     divide_db_cf(db, parts, cf)
 }
 
-fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> ::raftstore::Result<Vec<Vec<u8>>> {
+fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
     let cf = get_cf_handle(db, cf)?;
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
@@ -1393,10 +1394,10 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use raftstore::store::engine::Mutable;
-    use storage::mvcc::{Lock, LockType};
-    use storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use util::rocksdb::{self as rocksdb_util, new_engine_opt, CFOptions};
+    use crate::raftstore::store::engine::Mutable;
+    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::util::rocksdb_util::{self as rocksdb_util, new_engine_opt, CFOptions};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();

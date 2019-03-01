@@ -20,15 +20,17 @@ use std::sync::{Arc, RwLock};
 use super::metrics::*;
 use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
+use crate::raftstore::store::fsm::{RaftRouter, SendCh};
+use crate::raftstore::store::{
+    Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport,
+};
+use crate::raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
+use crate::server::raft_client::RaftClient;
+use crate::server::Result;
+use crate::util::collections::HashSet;
+use crate::util::worker::Scheduler;
+use crate::util::HandyRwLock;
 use raft::SnapshotStatus;
-use raftstore::store::fsm::{RaftRouter, SendCh};
-use raftstore::store::{Callback, Msg as StoreMsg, PeerMsg, ReadTask, SignificantMsg, Transport};
-use raftstore::{Error as RaftStoreError, Result as RaftStoreResult};
-use server::raft_client::RaftClient;
-use server::Result;
-use util::collections::HashSet;
-use util::worker::Scheduler;
-use util::HandyRwLock;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {
@@ -138,7 +140,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .force_send(region_id, PeerMsg::SignificantMsg(msg))
         {
             // TODO: panic here once we can detect system is shutting down reliably.
-            error!("failed to send significant msg {:?}", msg);
+            error!("failed to send significant msg"; "msg" => ?msg);
         }
 
         Ok(())
@@ -216,14 +218,15 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
                 .inc();
             // If we are resolving the address, drop the message here.
             debug!(
-                "store {} address is being resolved, drop msg {:?}",
-                store_id, msg
+                "store address is being resolved, msg dropped";
+                "store_id" => store_id,
+                "message" => ?msg
             );
             self.report_unreachable(msg);
             return;
         }
 
-        debug!("begin to resolve store {} address", store_id);
+        debug!("begin to resolve store address"; "store_id" => store_id);
         RESOLVE_STORE_COUNTER.with_label_values(&["resolve"]).inc();
 
         self.resolving.wl().insert(store_id);
@@ -261,21 +264,21 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             trans.resolving.wl().remove(&store_id);
             if let Err(e) = addr {
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
-                error!("resolve store {} address failed {:?}", store_id, e);
+                error!("resolve store address failed"; "store_id" => store_id, "err" => ?e);
                 trans.report_unreachable(msg);
                 return;
             }
 
             RESOLVE_STORE_COUNTER.with_label_values(&["success"]).inc();
             let addr = addr.unwrap();
-            info!("resolve store {} address ok, addr {}", store_id, addr);
+            info!("resolve store address ok"; "store_id" => store_id, "addr" => %addr);
             trans.raft_client.wl().addrs.insert(store_id, addr.clone());
             trans.write_data(store_id, &addr, msg);
             // There may be no messages in the near future, so flush it immediately.
             trans.raft_client.wl().flush();
         };
         if let Err(e) = self.resolver.resolve(store_id, cb) {
-            error!("resolve store {} address failed {:?}", store_id, e);
+            error!("resolve store address failed"; "store_id" => store_id, "err" => ?e);
             self.resolving.wl().remove(&store_id);
             RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
             self.report_unreachable(msg1);
@@ -287,7 +290,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             return self.send_snapshot_sock(addr, msg);
         }
         if let Err(e) = self.raft_client.wl().send(store_id, addr, msg) {
-            error!("send raft msg err {:?}", e);
+            error!("send raft msg err"; "err" => ?e);
         }
     }
 
@@ -307,8 +310,8 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
-                    "channel is unavaliable, failed to schedule snapshot to {}",
-                    addr
+                    "channel is unavaliable, failed to schedule snapshot";
+                    "to_addr" => addr
                 );
                 cb(Err(box_err!("failed to schedule snapshot")));
             }
@@ -341,8 +344,11 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
         if let Err(e) = self.raft_router.report_unreachable(region_id, to_peer_id) {
             error!(
-                "report peer {} on store {} unreachable for region {} failed {:?}",
-                to_peer_id, store_id, region_id, e
+                "report peer unreachable failed";
+                "region_id" => region_id,
+                "to_store_id" => store_id,
+                "to_peer_id" => to_peer_id,
+                "err" => ?e
             );
         }
     }
@@ -378,8 +384,10 @@ struct SnapshotReporter<T: RaftStoreRouter + 'static> {
 impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
     pub fn report(&self, status: SnapshotStatus) {
         debug!(
-            "send snapshot to {} for {} {:?}",
-            self.to_peer_id, self.region_id, status
+            "send snapshot";
+            "to_peer_id" => self.to_peer_id,
+            "region_id" => self.region_id,
+            "status" => ?status
         );
 
         if status == SnapshotStatus::Failure {
@@ -394,8 +402,11 @@ impl<T: RaftStoreRouter + 'static> SnapshotReporter<T> {
                 .report_snapshot_status(self.region_id, self.to_peer_id, status)
         {
             error!(
-                "report snapshot to peer {} in store {} with region {} err {:?}",
-                self.to_peer_id, self.to_store_id, self.region_id, e
+                "report snapshot to peer failes";
+                "to_peer_id" => self.to_peer_id,
+                "to_store_id" => self.to_store_id,
+                "region_id" => self.region_id,
+                "err" => ?e
             );
         }
     }

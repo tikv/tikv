@@ -22,7 +22,7 @@ use tikv::util::HandyRwLock;
 
 #[test]
 fn test_destory_local_reader() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     // 3 nodes cluster.
     let mut cluster = new_node_cluster(0, 3);
@@ -84,7 +84,7 @@ fn test_destory_local_reader() {
 
 #[test]
 fn test_write_after_destroy() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
@@ -148,14 +148,14 @@ fn test_write_after_destroy() {
     fail::remove(apply_fp);
     let resp = rx1.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
-    ::std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(Duration::from_secs(3));
     must_get_none(&engine_3, b"k5");
     must_region_cleared(&engines_3, &region);
 }
 
 #[test]
 fn test_tick_after_destroy() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     // 3 nodes cluster.
     let mut cluster = new_server_cluster(0, 3);
 

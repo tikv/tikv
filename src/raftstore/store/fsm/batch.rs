@@ -16,15 +16,11 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
-// TODO: remove this
-#![allow(dead_code)]
-
 use super::router::{BasicMailbox, Router};
+use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
-use std::cmp;
 use std::thread::{self, JoinHandle};
-use util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -294,20 +290,30 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
-        let mut pushed = match self.fsm_receiver.recv() {
-            Ok(fsm) => batch.push(fsm),
-            Err(_) => return,
+        let curr_batch_len = batch.len();
+        if batch.control.is_some() || curr_batch_len >= max_size {
+            // Do nothing if there's a pending control fsm or the batch is already full.
+            return;
+        }
+
+        let mut pushed = if curr_batch_len == 0 {
+            // Block if the batch is empty.
+            match self.fsm_receiver.recv() {
+                Ok(fsm) => batch.push(fsm),
+                Err(_) => return,
+            }
+        } else {
+            true
         };
-        let mut tried = 1;
+
         while pushed {
-            if tried < max_size {
+            if batch.len() < max_size {
                 let fsm = match self.fsm_receiver.try_recv() {
                     Ok(fsm) => fsm,
                     Err(TryRecvError::Empty) => return,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-                tried += 1;
             } else {
                 return;
             }
@@ -317,10 +323,10 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
-        let mut batch_size = self.max_batch_size;
-        let mut batch = Batch::with_capacity(batch_size);
-        let mut exhausted_fsms = Vec::with_capacity(batch_size);
-        self.fetch_batch(&mut batch, batch_size);
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+        let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
+
+        self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
             self.handler.begin(batch.len());
             if batch.control.is_some() {
@@ -351,12 +357,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
-            if batch.is_empty() {
-                batch_size = cmp::min(batch_size + 1, self.max_batch_size);
-                self.fetch_batch(&mut batch, batch_size);
-            } else {
-                batch_size = cmp::max(batch_size - 1, 1);
-            }
+            // Fetch batch after every round is finished. It's helpful to protect regions
+            // from becoming hungry if some regions are hot points.
+            self.fetch_batch(&mut batch, self.max_batch_size);
         }
     }
 }
@@ -398,7 +401,7 @@ where
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let mut handler = builder.build();
+            let handler = builder.build();
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
@@ -407,9 +410,7 @@ where
             };
             let t = thread::Builder::new()
                 .name(thd_name!(format!("{}-{}", name_prefix, i)))
-                .spawn(move || {
-                    poller.poll();
-                })
+                .spawn(move || poller.poll())
                 .unwrap();
             self.workers.push(t);
         }
@@ -460,22 +461,32 @@ pub fn create_system<N: Fsm, C: Fsm>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::router::*;
     use super::*;
     use std::borrow::Cow;
     use std::boxed::FnBox;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    struct Runner {
+    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
+
+    pub struct Runner {
         is_stopped: bool,
-        recv: mpsc::Receiver<Box<FnBox(&mut Runner) + Send>>,
+        recv: mpsc::Receiver<Message>,
         mailbox: Option<BasicMailbox<Runner>>,
+        pub dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for Runner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
     }
 
     impl Fsm for Runner {
-        type Message = Box<FnBox(&mut Runner) + Send>;
+        type Message = Message;
 
         fn is_stopped(&self) -> bool {
             self.is_stopped
@@ -491,17 +502,13 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn new_runner(
-        cap: usize,
-    ) -> (
-        mpsc::LooseBoundedSender<Box<FnBox(&mut Runner) + Send>>,
-        Box<Runner>,
-    ) {
+    pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>) {
         let (tx, rx) = mpsc::loose_bounded(cap);
         let fsm = Runner {
             is_stopped: false,
             recv: rx,
             mailbox: None,
+            dropped: Arc::default(),
         };
         (tx, Box::new(fsm))
     }
@@ -513,9 +520,8 @@ mod tests {
         normal: usize,
     }
 
-    struct Handler {
+    pub struct Handler {
         local: HandleMetrics,
-        router: BatchRouter<Runner, Runner>,
         metrics: Arc<Mutex<HandleMetrics>>,
     }
 
@@ -527,7 +533,9 @@ mod tests {
         fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
             self.local.control += 1;
             while let Ok(r) = control.recv.try_recv() {
-                r.call_box((control,));
+                if let Some(r) = r {
+                    r.call_box((control,));
+                }
             }
             Some(0)
         }
@@ -535,7 +543,9 @@ mod tests {
         fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
             self.local.normal += 1;
             while let Ok(r) = normal.recv.try_recv() {
-                r.call_box((normal,));
+                if let Some(r) = r {
+                    r.call_box((normal,));
+                }
             }
             Some(0)
         }
@@ -547,9 +557,16 @@ mod tests {
         }
     }
 
-    struct Builder {
-        router: BatchRouter<Runner, Runner>,
+    pub struct Builder {
         metrics: Arc<Mutex<HandleMetrics>>,
+    }
+
+    impl Builder {
+        pub fn new() -> Builder {
+            Builder {
+                metrics: Arc::default(),
+            }
+        }
     }
 
     impl HandlerBuilder<Runner, Runner> for Builder {
@@ -558,7 +575,6 @@ mod tests {
         fn build(&mut self) -> Handler {
             Handler {
                 local: HandleMetrics::default(),
-                router: self.router.clone(),
                 metrics: self.metrics.clone(),
             }
         }
@@ -568,10 +584,7 @@ mod tests {
     fn test_batch() {
         let (control_tx, control_fsm) = new_runner(10);
         let (router, mut system) = super::create_system(2, 2, control_tx, control_fsm);
-        let builder = Builder {
-            metrics: Arc::default(),
-            router: router.clone(),
-        };
+        let builder = Builder::new();
         let metrics = builder.metrics.clone();
         system.spawn("test".to_owned(), builder);
         let mut expected_metrics = HandleMetrics::default();
@@ -580,21 +593,21 @@ mod tests {
         let tx_ = tx.clone();
         let r = router.clone();
         router
-            .send_control(Box::new(move |_: &mut Runner| {
+            .send_control(Some(Box::new(move |_: &mut Runner| {
                 let (tx, runner) = new_runner(10);
                 let mailbox = BasicMailbox::new(tx, runner);
                 tx_.send(1).unwrap();
                 r.register(1, mailbox);
-            }))
+            })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
         let tx_ = tx.clone();
         router
             .send(
                 1,
-                Box::new(move |_: &mut Runner| {
+                Some(Box::new(move |_: &mut Runner| {
                     tx_.send(2).unwrap();
-                }),
+                })),
             )
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));

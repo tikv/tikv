@@ -1,4 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,28 +13,24 @@
 
 use std::convert::{TryFrom, TryInto};
 
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 
-use coprocessor::codec::datum;
-use coprocessor::codec::mysql::Tz;
-use coprocessor::codec::{Error, Result};
-use util::codec::{bytes, number};
+use super::*;
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{Error, Result};
+use crate::util::codec::{bytes, number};
 
-// TODO: Move these type alias and re-exports into cop_datatype.
-// These types are ensured to be cheap to move. However clone can be expensive.
-pub type Int = i64;
-pub type Real = f64;
-pub type Bytes = Vec<u8>;
-pub use coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
-
-/// An array of datums in the same data type and is column oriented.
+/// A vector value container, a.k.a. column, for all concrete eval types.
 ///
-/// Stores datums of multiple rows of one column.
+/// The inner concrete value is immutable. However it is allowed to push and remove values from
+/// this vector container.
 #[derive(Debug, PartialEq)]
-pub enum BatchColumn {
+pub enum VectorValue {
     Int(Vec<Option<Int>>),
     Real(Vec<Option<Real>>),
     Decimal(Vec<Option<Decimal>>),
+    // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
     Bytes(Vec<Option<Bytes>>),
     DateTime(Vec<Option<DateTime>>),
     Duration(Vec<Option<Duration>>),
@@ -50,56 +46,60 @@ macro_rules! match_self {
     }};
     (INTERNAL $($ref:tt)|+, $self:ident, $var:ident, $expr:expr) => {{
         match $self {
-            BatchColumn::Int($($ref)+ $var) => $expr,
-            BatchColumn::Real($($ref)+ $var) => $expr,
-            BatchColumn::Decimal($($ref)+ $var) => $expr,
-            BatchColumn::Bytes($($ref)+ $var) => $expr,
-            BatchColumn::DateTime($($ref)+ $var) => $expr,
-            BatchColumn::Duration($($ref)+ $var) => $expr,
-            BatchColumn::Json($($ref)+ $var) => $expr,
+            VectorValue::Int($($ref)+ $var) => $expr,
+            VectorValue::Real($($ref)+ $var) => $expr,
+            VectorValue::Decimal($($ref)+ $var) => $expr,
+            VectorValue::Bytes($($ref)+ $var) => $expr,
+            VectorValue::DateTime($($ref)+ $var) => $expr,
+            VectorValue::Duration($($ref)+ $var) => $expr,
+            VectorValue::Json($($ref)+ $var) => $expr,
         }
     }};
 }
 
-#[inline]
-fn clone_vec_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
-    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
-    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
-    // here.
-    let mut new_vec = Vec::with_capacity(vec.capacity());
-    new_vec.extend_from_slice(vec);
-    new_vec
-}
-
-impl Clone for BatchColumn {
+impl Clone for VectorValue {
     #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
-            BatchColumn::Int(ref vec) => BatchColumn::Int(clone_vec_with_capacity(vec)),
-            BatchColumn::Real(ref vec) => BatchColumn::Real(clone_vec_with_capacity(vec)),
-            BatchColumn::Decimal(ref vec) => BatchColumn::Decimal(clone_vec_with_capacity(vec)),
-            BatchColumn::Bytes(ref vec) => BatchColumn::Bytes(clone_vec_with_capacity(vec)),
-            BatchColumn::DateTime(ref vec) => BatchColumn::DateTime(clone_vec_with_capacity(vec)),
-            BatchColumn::Duration(ref vec) => BatchColumn::Duration(clone_vec_with_capacity(vec)),
-            BatchColumn::Json(ref vec) => BatchColumn::Json(clone_vec_with_capacity(vec)),
+            VectorValue::Int(ref vec) => {
+                VectorValue::Int(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Real(ref vec) => {
+                VectorValue::Real(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Decimal(ref vec) => {
+                VectorValue::Decimal(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Bytes(ref vec) => {
+                VectorValue::Bytes(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::DateTime(ref vec) => {
+                VectorValue::DateTime(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Duration(ref vec) => {
+                VectorValue::Duration(crate::util::vec_clone_with_capacity(vec))
+            }
+            VectorValue::Json(ref vec) => {
+                VectorValue::Json(crate::util::vec_clone_with_capacity(vec))
+            }
         }
     }
 }
 
-impl BatchColumn {
-    /// Creates an empty `BatchColumn` according to `eval_tp` and reserves capacity according
+impl VectorValue {
+    /// Creates an empty `VectorValue` according to `eval_tp` and reserves capacity according
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
         match eval_tp {
-            EvalType::Int => BatchColumn::Int(Vec::with_capacity(capacity)),
-            EvalType::Real => BatchColumn::Real(Vec::with_capacity(capacity)),
-            EvalType::Decimal => BatchColumn::Decimal(Vec::with_capacity(capacity)),
-            EvalType::Bytes => BatchColumn::Bytes(Vec::with_capacity(capacity)),
-            EvalType::DateTime => BatchColumn::DateTime(Vec::with_capacity(capacity)),
-            EvalType::Duration => BatchColumn::Duration(Vec::with_capacity(capacity)),
-            EvalType::Json => BatchColumn::Json(Vec::with_capacity(capacity)),
+            EvalType::Int => VectorValue::Int(Vec::with_capacity(capacity)),
+            EvalType::Real => VectorValue::Real(Vec::with_capacity(capacity)),
+            EvalType::Decimal => VectorValue::Decimal(Vec::with_capacity(capacity)),
+            EvalType::Bytes => VectorValue::Bytes(Vec::with_capacity(capacity)),
+            EvalType::DateTime => VectorValue::DateTime(Vec::with_capacity(capacity)),
+            EvalType::Duration => VectorValue::Duration(Vec::with_capacity(capacity)),
+            EvalType::Json => VectorValue::Json(Vec::with_capacity(capacity)),
         }
     }
 
@@ -107,13 +107,13 @@ impl BatchColumn {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
         match self {
-            BatchColumn::Int(_) => EvalType::Int,
-            BatchColumn::Real(_) => EvalType::Real,
-            BatchColumn::Decimal(_) => EvalType::Decimal,
-            BatchColumn::Bytes(_) => EvalType::Bytes,
-            BatchColumn::DateTime(_) => EvalType::DateTime,
-            BatchColumn::Duration(_) => EvalType::Duration,
-            BatchColumn::Json(_) => EvalType::Json,
+            VectorValue::Int(_) => EvalType::Int,
+            VectorValue::Real(_) => EvalType::Real,
+            VectorValue::Decimal(_) => EvalType::Decimal,
+            VectorValue::Bytes(_) => EvalType::Bytes,
+            VectorValue::DateTime(_) => EvalType::DateTime,
+            VectorValue::Duration(_) => EvalType::Duration,
+            VectorValue::Json(_) => EvalType::Json,
         }
     }
 
@@ -175,49 +175,49 @@ impl BatchColumn {
     ///
     /// Panics if `other` does not have the same `EvalType` as `Self`.
     #[inline]
-    pub fn append(&mut self, other: &mut BatchColumn) {
+    pub fn append(&mut self, other: &mut VectorValue) {
         match self {
-            BatchColumn::Int(ref mut self_vec) => match other {
-                BatchColumn::Int(ref mut other_vec) => {
+            VectorValue::Int(ref mut self_vec) => match other {
+                VectorValue::Int(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Int column", other.eval_type()),
+                other => panic!("Cannot append {} to Int vector", other.eval_type()),
             },
-            BatchColumn::Real(ref mut self_vec) => match other {
-                BatchColumn::Real(ref mut other_vec) => {
+            VectorValue::Real(ref mut self_vec) => match other {
+                VectorValue::Real(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Real column", other.eval_type()),
+                other => panic!("Cannot append {} to Real vector", other.eval_type()),
             },
-            BatchColumn::Decimal(ref mut self_vec) => match other {
-                BatchColumn::Decimal(ref mut other_vec) => {
+            VectorValue::Decimal(ref mut self_vec) => match other {
+                VectorValue::Decimal(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Decimal column", other.eval_type()),
+                other => panic!("Cannot append {} to Decimal vector", other.eval_type()),
             },
-            BatchColumn::Bytes(ref mut self_vec) => match other {
-                BatchColumn::Bytes(ref mut other_vec) => {
+            VectorValue::Bytes(ref mut self_vec) => match other {
+                VectorValue::Bytes(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Bytes column", other.eval_type()),
+                other => panic!("Cannot append {} to Bytes vector", other.eval_type()),
             },
-            BatchColumn::DateTime(ref mut self_vec) => match other {
-                BatchColumn::DateTime(ref mut other_vec) => {
+            VectorValue::DateTime(ref mut self_vec) => match other {
+                VectorValue::DateTime(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to DateTime column", other.eval_type()),
+                other => panic!("Cannot append {} to DateTime vector", other.eval_type()),
             },
-            BatchColumn::Duration(ref mut self_vec) => match other {
-                BatchColumn::Duration(ref mut other_vec) => {
+            VectorValue::Duration(ref mut self_vec) => match other {
+                VectorValue::Duration(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Duration column", other.eval_type()),
+                other => panic!("Cannot append {} to Duration vector", other.eval_type()),
             },
-            BatchColumn::Json(ref mut self_vec) => match other {
-                BatchColumn::Json(ref mut other_vec) => {
+            VectorValue::Json(ref mut self_vec) => match other {
+                VectorValue::Json(ref mut other_vec) => {
                     self_vec.append(other_vec);
                 }
-                other => panic!("Cannot append {} to Json column", other.eval_type()),
+                other => panic!("Cannot append {} to Json vector", other.eval_type()),
             },
         }
     }
@@ -238,7 +238,7 @@ impl BatchColumn {
         &mut self,
         mut raw_datum: &[u8],
         time_zone: Tz,
-        field_type: &FieldTypeAccessor,
+        field_type: &dyn FieldTypeAccessor,
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -305,7 +305,7 @@ impl BatchColumn {
         fn decode_date_time_from_uint(
             v: u64,
             time_zone: Tz,
-            field_type: &FieldTypeAccessor,
+            field_type: &dyn FieldTypeAccessor,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
             let time_type = field_type.tp().try_into()?;
@@ -332,7 +332,7 @@ impl BatchColumn {
         raw_datum = &raw_datum[1..];
 
         match self {
-            BatchColumn::Int(ref mut vec) => match flag {
+            VectorValue::Int(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 datum::INT_FLAG => vec.push(Some(decode_int(&mut raw_datum)?)),
                 datum::UINT_FLAG => vec.push(Some(decode_uint(&mut raw_datum)? as i64)),
@@ -340,12 +340,12 @@ impl BatchColumn {
                 datum::VAR_UINT_FLAG => vec.push(Some(decode_var_uint(&mut raw_datum)? as i64)),
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Int column",
+                        "Unsupported datum flag {} for Int vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::Real(ref mut vec) => match flag {
+            VectorValue::Real(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In both index and record, it's flag is `FLOAT`. See TiDB's `encode()`.
                 datum::FLOAT_FLAG => {
@@ -357,23 +357,23 @@ impl BatchColumn {
                 }
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Real column",
+                        "Unsupported datum flag {} for Real vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::Decimal(ref mut vec) => match flag {
+            VectorValue::Decimal(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In both index and record, it's flag is `DECIMAL`. See TiDB's `encode()`.
                 datum::DECIMAL_FLAG => vec.push(Some(decode_decimal(&mut raw_datum)?)),
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Decimal column",
+                        "Unsupported datum flag {} for Decimal vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::Bytes(ref mut vec) => match flag {
+            VectorValue::Bytes(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In index, it's flag is `BYTES`. See TiDB's `encode()`.
                 datum::BYTES_FLAG => vec.push(Some(decode_bytes(&mut raw_datum)?)),
@@ -381,12 +381,12 @@ impl BatchColumn {
                 datum::COMPACT_BYTES_FLAG => vec.push(Some(decode_compact_bytes(&mut raw_datum)?)),
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Bytes column",
+                        "Unsupported datum flag {} for Bytes vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::DateTime(ref mut vec) => match flag {
+            VectorValue::DateTime(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In index, it's flag is `UINT`. See TiDB's `encode()`.
                 datum::UINT_FLAG => {
@@ -402,12 +402,12 @@ impl BatchColumn {
                 }
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for DateTime column",
+                        "Unsupported datum flag {} for DateTime vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::Duration(ref mut vec) => match flag {
+            VectorValue::Duration(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In index, it's flag is `DURATION`. See TiDB's `encode()`.
                 datum::DURATION_FLAG => {
@@ -423,18 +423,18 @@ impl BatchColumn {
                 }
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Duration column",
+                        "Unsupported datum flag {} for Duration vector",
                         flag
                     )));
                 }
             },
-            BatchColumn::Json(ref mut vec) => match flag {
+            VectorValue::Json(ref mut vec) => match flag {
                 datum::NIL_FLAG => vec.push(None),
                 // In both index and record, it's flag is `JSON`. See TiDB's `encode()`.
                 datum::JSON_FLAG => vec.push(Some(decode_json(&mut raw_datum)?)),
                 flag => {
                     return Err(Error::InvalidDataType(format!(
-                        "Unsupported datum flag {} for Json column",
+                        "Unsupported datum flag {} for Json vector",
                         flag
                     )));
                 }
@@ -443,39 +443,186 @@ impl BatchColumn {
 
         Ok(())
     }
+
+    /// Returns maximum encoded size in binary format.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
+        match self {
+            VectorValue::Int(ref vec) => Ok(vec.len() * 9),
+
+            // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
+            // this function only calculates a maximum encoded size (for constructing buffers), not
+            // actual encoded size.
+            VectorValue::Real(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Decimal(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            // FIXME: We don't need approximate size. Maximum size is enough (so
+                            // that we don't need to iterate each value).
+                            size += 1 /* FLAG */ + v.approximate_encoded_size();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::Bytes(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::DateTime(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Duration(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Json(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + v.binary_len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+        }
+    }
+
+    /// Encodes a single element into binary format.
+    // FIXME: Use BufferWriter.
+    pub fn encode(
+        &self,
+        row_index: usize,
+        field_type: &dyn FieldTypeAccessor,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::coprocessor::codec::mysql::DecimalEncoder;
+        use crate::coprocessor::codec::mysql::JsonEncoder;
+        use crate::util::codec::bytes::BytesEncoder;
+        use crate::util::codec::number::NumberEncoder;
+
+        match self {
+            VectorValue::Int(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        // Always encode to INT / UINT instead of VAR INT to be efficient.
+                        if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                            output.push(datum::UINT_FLAG);
+                            output.encode_u64(val as u64)?;
+                        } else {
+                            output.push(datum::INT_FLAG);
+                            output.encode_i64(val)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Real(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::FLOAT_FLAG);
+                        output.encode_f64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Decimal(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::DECIMAL_FLAG);
+                        let (prec, frac) = val.prec_and_frac();
+                        output.encode_decimal(val, prec, frac)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Bytes(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::COMPACT_BYTES_FLAG);
+                        output.encode_compact_bytes(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::DateTime(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::UINT_FLAG);
+                        output.encode_u64(val.to_packed_u64())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Duration(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::DURATION_FLAG);
+                        output.encode_i64(val.to_nanos())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Json(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::JSON_FLAG);
+                        output.encode_json(val)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 macro_rules! impl_as_slice {
-    ($ty:tt, $name:ident, $mut_name:ident) => {
-        impl BatchColumn {
-            /// Extracts a slice containing the entire values of the column
-            /// in specific type.
+    ($ty:tt, $name:ident) => {
+        impl VectorValue {
+            /// Extracts a slice of values in specified concrete type from current column.
             ///
             /// # Panics
             ///
-            /// Panics if current column is does not match the type.
+            /// Panics if the current column does not match the type.
             #[inline]
             pub fn $name(&self) -> &[Option<$ty>] {
                 match self {
-                    BatchColumn::$ty(ref vec) => vec.as_slice(),
-                    other => panic!(
-                        "Cannot call `{}` over a {} column",
-                        stringify!($name),
-                        other.eval_type()
-                    ),
-                }
-            }
-
-            /// Extracts a mutable slice containing the entire values of the column
-            /// in specific type.
-            ///
-            /// # Panics
-            ///
-            /// Panics if current column is does not match the type.
-            #[inline]
-            pub fn $mut_name(&mut self) -> &mut [Option<$ty>] {
-                match self {
-                    BatchColumn::$ty(ref mut vec) => vec.as_mut_slice(),
+                    VectorValue::$ty(ref vec) => vec.as_slice(),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($name),
@@ -485,42 +632,37 @@ macro_rules! impl_as_slice {
             }
         }
 
-        impl AsRef<[Option<$ty>]> for BatchColumn {
+        impl AsRef<[Option<$ty>]> for VectorValue {
             #[inline]
             fn as_ref(&self) -> &[Option<$ty>] {
                 self.$name()
             }
         }
 
-        impl AsMut<[Option<$ty>]> for BatchColumn {
-            #[inline]
-            fn as_mut(&mut self) -> &mut [Option<$ty>] {
-                self.$mut_name()
-            }
-        }
+        // `AsMut` is not implemented intentionally.
     };
 }
 
-impl_as_slice! { Int, as_int_slice, as_mut_int_slice }
-impl_as_slice! { Real, as_real_slice, as_mut_real_slice }
-impl_as_slice! { Decimal, as_decimal_slice, as_mut_decimal_slice }
-impl_as_slice! { Bytes, as_bytes_slice, as_mut_bytes_slice }
-impl_as_slice! { DateTime, as_date_time_slice, as_mut_date_time_slice }
-impl_as_slice! { Duration, as_duration_slice, as_mut_duration_slice }
-impl_as_slice! { Json, as_json_slice, as_mut_json_slice }
+impl_as_slice! { Int, as_int_slice }
+impl_as_slice! { Real, as_real_slice }
+impl_as_slice! { Decimal, as_decimal_slice }
+impl_as_slice! { Bytes, as_bytes_slice }
+impl_as_slice! { DateTime, as_date_time_slice }
+impl_as_slice! { Duration, as_duration_slice }
+impl_as_slice! { Json, as_json_slice }
 
 macro_rules! impl_push {
     ($ty:tt, $name:ident) => {
-        impl BatchColumn {
-            /// Pushes a value into the column in specific type.
+        impl VectorValue {
+            /// Pushes a value in specified concrete type into current column.
             ///
             /// # Panics
             ///
-            /// Panics if current column does not match the type.
+            /// Panics if the current column does not match the type.
             #[inline]
             pub fn $name(&mut self, v: Option<$ty>) {
                 match self {
-                    BatchColumn::$ty(ref mut vec) => vec.push(v),
+                    VectorValue::$ty(ref mut vec) => vec.push(v),
                     other => panic!(
                         "Cannot call `{}` over to a {} column",
                         stringify!($name),
@@ -542,24 +684,24 @@ impl_push! { Json, push_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
-        impl<'a> From<&'a [Option<$ty>]> for BatchColumn {
+        impl<'a> From<&'a [Option<$ty>]> for VectorValue {
             #[inline]
-            fn from(s: &'a [Option<$ty>]) -> BatchColumn {
-                BatchColumn::$ty(s.to_vec())
+            fn from(s: &'a [Option<$ty>]) -> VectorValue {
+                VectorValue::$ty(s.to_vec())
             }
         }
 
-        impl<'a> From<&'a mut [Option<$ty>]> for BatchColumn {
+        impl<'a> From<&'a mut [Option<$ty>]> for VectorValue {
             #[inline]
-            fn from(s: &'a mut [Option<$ty>]) -> BatchColumn {
-                BatchColumn::$ty(s.to_vec())
+            fn from(s: &'a mut [Option<$ty>]) -> VectorValue {
+                VectorValue::$ty(s.to_vec())
             }
         }
 
-        impl From<Vec<Option<$ty>>> for BatchColumn {
+        impl From<Vec<Option<$ty>>> for VectorValue {
             #[inline]
-            fn from(s: Vec<Option<$ty>>) -> BatchColumn {
-                BatchColumn::$ty(s)
+            fn from(s: Vec<Option<$ty>>) -> VectorValue {
+                VectorValue::$ty(s)
             }
         }
     };
@@ -579,38 +721,31 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        let mut column = BatchColumn::with_capacity(0, EvalType::Bytes);
+        let mut column = VectorValue::with_capacity(0, EvalType::Bytes);
         assert_eq!(column.eval_type(), EvalType::Bytes);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 0);
         assert!(column.is_empty());
         assert_eq!(column.as_bytes_slice(), &[]);
-        assert_eq!(column.as_mut_bytes_slice(), &mut []);
 
         column.push_bytes(None);
         assert_eq!(column.len(), 1);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
         assert_eq!(column.as_bytes_slice(), &[None]);
-        assert_eq!(column.as_mut_bytes_slice(), &mut [None]);
 
         column.push_bytes(Some(vec![1, 2, 3]));
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 0);
         assert!(!column.is_empty());
         assert_eq!(column.as_bytes_slice(), &[None, Some(vec![1, 2, 3])]);
-        assert_eq!(
-            column.as_mut_bytes_slice(),
-            &mut [None, Some(vec![1, 2, 3])]
-        );
 
-        let mut column = BatchColumn::with_capacity(3, EvalType::Real);
+        let mut column = VectorValue::with_capacity(3, EvalType::Real);
         assert_eq!(column.eval_type(), EvalType::Real);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
         assert!(column.is_empty());
         assert_eq!(column.as_real_slice(), &[]);
-        assert_eq!(column.as_mut_real_slice(), &mut []);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -619,7 +754,6 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0)]);
-        assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0)]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -628,7 +762,6 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
-        assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -637,10 +770,6 @@ mod tests {
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5)]);
-        assert_eq!(
-            column.as_mut_real_slice(),
-            &mut [Some(1.0), None, Some(4.5)]
-        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -649,22 +778,6 @@ mod tests {
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5), None]);
-        assert_eq!(
-            column.as_mut_real_slice(),
-            &mut [Some(1.0), None, Some(4.5), None]
-        );
-        assert_eq!(column.clone().capacity(), column.capacity());
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
-
-        column.as_mut_real_slice()[2] = None;
-        assert_eq!(column.len(), 4);
-        assert!(column.capacity() > 3);
-        assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None, None, None]);
-        assert_eq!(
-            column.as_mut_real_slice(),
-            &mut [Some(1.0), None, None, None]
-        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -673,26 +786,15 @@ mod tests {
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
         assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
-        assert_eq!(column.as_mut_real_slice(), &mut [Some(1.0), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
-        column.as_mut_real_slice()[0] = Some(3.7);
-        assert_eq!(column.len(), 2);
-        assert!(column.capacity() > 3);
-        assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(3.7), None]);
-        assert_eq!(column.as_mut_real_slice(), &mut [Some(3.7), None]);
-        assert_eq!(column.clone().capacity(), column.capacity());
-        assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
-
-        let mut column = BatchColumn::with_capacity(10, EvalType::DateTime);
+        let column = VectorValue::with_capacity(10, EvalType::DateTime);
         assert_eq!(column.eval_type(), EvalType::DateTime);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 10);
         assert!(column.is_empty());
         assert_eq!(column.as_date_time_slice(), &[]);
-        assert_eq!(column.as_mut_date_time_slice(), &mut []);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(
             column.clone().as_date_time_slice(),
@@ -702,7 +804,7 @@ mod tests {
 
     #[test]
     fn test_retain_by_index() {
-        let mut column = BatchColumn::with_capacity(3, EvalType::Real);
+        let mut column = VectorValue::with_capacity(3, EvalType::Real);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
         column.retain_by_index(|_| true);
@@ -758,8 +860,8 @@ mod tests {
 
     #[test]
     fn test_append() {
-        let mut column1 = BatchColumn::with_capacity(0, EvalType::Real);
-        let mut column2 = BatchColumn::with_capacity(3, EvalType::Real);
+        let mut column1 = VectorValue::with_capacity(0, EvalType::Real);
+        let mut column2 = VectorValue::with_capacity(3, EvalType::Real);
 
         column1.append(&mut column2);
         assert_eq!(column1.len(), 0);
@@ -805,12 +907,12 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Some(1.0)];
-        let column = BatchColumn::from(slice);
+        let column = VectorValue::from(slice);
         assert_eq!(column.len(), 2);
         assert_eq!(column.as_real_slice(), slice);
 
         let vec = slice.to_vec();
-        let column = BatchColumn::from(vec);
+        let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);
         assert_eq!(column.as_real_slice(), slice);
     }
@@ -818,21 +920,21 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use super::*;
 
     #[bench]
     fn bench_push_datum_int(b: &mut test::Bencher) {
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
-        let mut column = BatchColumn::with_capacity(1000, EvalType::Int);
+        let mut column = VectorValue::with_capacity(1000, EvalType::Int);
 
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -856,16 +958,16 @@ mod benches {
     /// Bench performance of naively decoding multiple datums (without pushing into a vector).
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::coprocessor::codec::table;
+        use crate::coprocessor::dag::expr::EvalContext;
         use cop_datatype::FieldTypeTp;
-        use coprocessor::codec::datum::{Datum, DatumEncoder};
-        use coprocessor::codec::table;
-        use coprocessor::dag::expr::EvalContext;
 
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
         let col_info = {
-            let mut col_info = ::tipb::schema::ColumnInfo::new();
+            let mut col_info = tipb::schema::ColumnInfo::new();
             col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
             col_info
         };
@@ -900,7 +1002,7 @@ mod benches {
     fn bench_retain(b: &mut test::Bencher) {
         use rand;
 
-        let mut column = BatchColumn::with_capacity(1000, EvalType::Int);
+        let mut column = VectorValue::with_capacity(1000, EvalType::Int);
         for _ in 0..1000 {
             column.push_int(Some(rand::random()));
         }

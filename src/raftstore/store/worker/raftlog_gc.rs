@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::engine::Iterable;
-use raftstore::store::keys;
-use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use util::worker::Runnable;
+use crate::raftstore::store::engine::Iterable;
+use crate::raftstore::store::keys;
+use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use crate::util::worker::Runnable;
 
 use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
@@ -46,7 +46,7 @@ impl Display for Task {
 quick_error! {
     #[derive(Debug)]
     enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -141,16 +141,16 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb_util::new_engine;
     use std::sync::mpsc;
     use std::time::Duration;
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+        let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
 
         let (tx, rx) = mpsc::channel();

@@ -23,11 +23,11 @@ use tipb::schema::ColumnInfo;
 //use super::datum::DatumDecoder;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
-use coprocessor::dag::expr::EvalContext;
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
-use util::collections::{HashMap, HashSet};
-use util::escape;
+use crate::coprocessor::dag::expr::EvalContext;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -209,7 +209,7 @@ pub fn decode_index_key(
 }
 
 /// `unflatten` converts a raw datum to a column datum.
-fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &FieldTypeAccessor) -> Result<Datum> {
+fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor) -> Result<Datum> {
     if let Datum::Null = datum {
         return Ok(datum);
     }
@@ -425,8 +425,8 @@ mod tests {
 
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use util::collections::{HashMap, HashSet};
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::util::collections::{HashMap, HashSet};
 
     use super::*;
 

@@ -11,21 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use util::collections::HashSet;
 
+use crate::grpc::{
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    Result as GrpcResult,
+};
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
-use grpc::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Result as GrpcResult,
-};
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
@@ -34,9 +34,9 @@ use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use util::security::SecurityManager;
-use util::timer::GLOBAL_TIMER_HANDLE;
-use util::{Either, HandyRwLock};
+use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
+use crate::util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,
@@ -48,7 +48,7 @@ pub struct Inner {
     pub client: PdClient,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
-    on_reconnect: Option<Box<Fn() + Sync + Send + 'static>>,
+    on_reconnect: Option<Box<dyn Fn() + Sync + Send + 'static>>,
 
     last_update: Instant,
 }
@@ -81,7 +81,7 @@ impl Stream for HeartbeatReceiver {
                 receiver = recv.take();
             }
             if receiver.is_some() {
-                info!("heartbeat receiver is refreshed.");
+                info!("heartbeat receiver is refreshed");
                 self.receiver = receiver;
             } else {
                 inner.hb_receiver = Either::Right(task::current());
@@ -138,7 +138,7 @@ impl LeaderClient {
         )
     }
 
-    pub fn on_reconnect(&self, f: Box<Fn() + Sync + Send + 'static>) {
+    pub fn on_reconnect(&self, f: Box<dyn Fn() + Sync + Send + 'static>) {
         let mut inner = self.inner.wl();
         inner.on_reconnect = Some(f);
     }
@@ -184,7 +184,7 @@ impl LeaderClient {
         {
             let mut inner = self.inner.wl();
             let (tx, rx) = client.region_heartbeat().unwrap();
-            warn!("heartbeat sender and receiver are stale, refreshing..");
+            warn!("heartbeat sender and receiver are stale, refreshing ...");
 
             // Try to cancel an unused heartbeat sender.
             if let Either::Left(Some(ref mut r)) = inner.hb_sender {
@@ -203,7 +203,7 @@ impl LeaderClient {
                 on_reconnect();
             }
         }
-        warn!("updating PD client done, spent {:?}", start.elapsed());
+        warn!("updating PD client done"; "spend" => ?start.elapsed());
         Ok(())
     }
 }
@@ -230,8 +230,8 @@ where
     Resp: Send + 'static,
     F: FnMut(&RwLock<Inner>, Req) -> PdFuture<Resp> + Send + 'static,
 {
-    fn reconnect_if_needed(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
-        debug!("reconnect remains: {}", self.reconnect_count);
+    fn reconnect_if_needed(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
+        debug!("reconnecting ..."; "remain" => self.reconnect_count);
 
         if self.request_sent < MAX_REQUEST_COUNT {
             return Box::new(ok(self));
@@ -241,7 +241,7 @@ where
         self.reconnect_count -= 1;
 
         // FIXME: should not block the core.
-        warn!("updating PD client, block the tokio core");
+        info!("updating PD client, block the tokio core");
         match self.client.reconnect() {
             Ok(_) => {
                 self.request_sent = 0;
@@ -256,7 +256,7 @@ where
         }
     }
 
-    fn send_and_receive(mut self) -> Box<Future<Item = Self, Error = Self> + Send> {
+    fn send_and_receive(mut self) -> Box<dyn Future<Item = Self, Error = Self> + Send> {
         self.request_sent += 1;
         debug!("request sent: {}", self.request_sent);
         let r = self.req.clone();
@@ -295,7 +295,7 @@ where
             // Error::Incompatible is returned by response header from PD, no need to retry
             Err(Error::Incompatible) => true,
             Err(err) => {
-                error!("request failed: {:?}, retry", err);
+                error!("request failed, retry"; "err" => ?err);
                 false
             }
         }
@@ -335,9 +335,9 @@ where
                 return Ok(r);
             }
             Err(e) => {
-                error!("fail to request: {:?}", e);
+                error!("request failed"; "err" => ?e);
                 if let Err(e) = client.reconnect() {
-                    error!("fail to reconnect: {:?}", e);
+                    error!("reconnect failed"; "err" => ?e);
                 }
             }
         }
@@ -365,7 +365,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD endpoint {} failed to respond: {:?}", ep, e);
+                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };
@@ -393,7 +393,7 @@ pub fn validate_endpoints(
     match members {
         Some(members) => {
             let (client, members) = try_connect_leader(Arc::clone(&env), security_mgr, &members)?;
-            info!("All PD endpoints are consistent: {:?}", cfg.endpoints);
+            info!("all PD endpoints are consistent"; "endpoints" => ?cfg.endpoints);
             Ok((client, members))
         }
         _ => Err(box_err!("PD cluster failed to respond")),
@@ -405,7 +405,7 @@ fn connect(
     security_mgr: &SecurityManager,
     addr: &str,
 ) -> Result<(PdClient, GetMembersResponse)> {
-    info!("connecting to PD endpoint: {:?}", addr);
+    info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
         .trim_left_matches("http://")
         .trim_left_matches("https://");
@@ -452,7 +452,7 @@ pub fn try_connect_leader(
                     }
                 }
                 Err(e) => {
-                    error!("failed to connect to {}, {:?}", ep, e);
+                    error!("connect failed"; "endpoints" => ep, "err" => ?e);
                     continue;
                 }
             }
@@ -464,7 +464,7 @@ pub fn try_connect_leader(
         let leader = resp.get_leader().clone();
         for ep in leader.get_client_urls() {
             if let Ok((client, _)) = connect(Arc::clone(&env), security_mgr, ep.as_str()) {
-                info!("connected to PD leader {:?}", ep);
+                info!("connected to PD leader"; "endpoints" => ep);
                 return Ok((client, resp));
             }
         }
@@ -473,16 +473,18 @@ pub fn try_connect_leader(
     Err(box_err!("failed to connect to {:?}", members))
 }
 
+/// Convert a PD protobuf error to an `Error`.
 pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
     if !header.has_error() {
         return Ok(());
     }
-    // TODO: translate more error types
     let err = header.get_error();
     match err.get_field_type() {
         ErrorType::ALREADY_BOOTSTRAPPED => Err(Error::ClusterBootstrapped(header.get_cluster_id())),
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
         ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
-        _ => Err(box_err!(err.get_message())),
+        ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
+        ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
+        ErrorType::OK => Ok(()),
     }
 }

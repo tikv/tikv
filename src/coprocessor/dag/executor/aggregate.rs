@@ -14,13 +14,13 @@
 use std::cmp::Ordering;
 use tipb::expression::ExprType;
 
-use coprocessor::codec::mysql::Decimal;
-use coprocessor::codec::Datum;
-use coprocessor::Result;
+use crate::coprocessor::codec::mysql::Decimal;
+use crate::coprocessor::codec::Datum;
+use crate::coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
-pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
+pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
     match tp {
         ExprType::Agg_BitAnd => Ok(box AggBitAnd {
             c: 0xffffffffffffffff,
@@ -300,7 +300,7 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;
     use std::{i64, u64};

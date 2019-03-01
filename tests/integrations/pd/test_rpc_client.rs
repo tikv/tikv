@@ -16,9 +16,9 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
+use crate::grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
-use grpc::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -93,7 +93,7 @@ fn test_rpc_client() {
         .unwrap();
     assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
 
-    let tmp_stores = client.get_all_stores().unwrap();
+    let tmp_stores = client.get_all_stores(false).unwrap();
     assert_eq!(tmp_stores.len(), 1);
     assert_eq!(tmp_stores[0], store);
 
@@ -155,6 +155,62 @@ fn test_rpc_client() {
 }
 
 #[test]
+fn test_get_tombstone_stores() {
+    let eps_count = 1;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let client = new_client(eps.clone(), None);
+
+    let mut all_stores = vec![];
+    let store_id = client.alloc_id().unwrap();
+    let mut store = metapb::Store::new();
+    store.set_id(store_id);
+    let region_id = client.alloc_id().unwrap();
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    client
+        .bootstrap_cluster(store.clone(), region.clone())
+        .unwrap();
+
+    all_stores.push(store.clone());
+    assert_eq!(client.is_cluster_bootstrapped().unwrap(), true);
+    let s = client.get_all_stores(false).unwrap();
+    assert_eq!(s, all_stores);
+
+    // Add tombstone store.
+    let mut store99 = metapb::Store::new();
+    store99.set_id(99);
+    store99.set_state(metapb::StoreState::Tombstone);
+    server.default_handler().add_store(store99.clone());
+
+    // do not include tombstone.
+    let s = client.get_all_stores(true).unwrap();
+    assert_eq!(s, all_stores);
+
+    all_stores.push(store99.clone());
+    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    // include tombstone, there should be 2 stores.
+    let mut s = client.get_all_stores(false).unwrap();
+    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    assert_eq!(s, all_stores);
+
+    // Add another tombstone store.
+    let mut store199 = store99.clone();
+    store199.set_id(199);
+    server.default_handler().add_store(store199.clone());
+
+    all_stores.push(store199.clone());
+    all_stores.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    let mut s = client.get_all_stores(false).unwrap();
+    s.sort_by(|a, b| a.get_id().cmp(&b.get_id()));
+    assert_eq!(s, all_stores);
+
+    client.get_store(store_id).unwrap();
+    client.get_store(99).unwrap_err();
+    client.get_store(199).unwrap_err();
+}
+
+#[test]
 fn test_reboot() {
     let eps_count = 1;
     let server = MockServer::with_case(eps_count, Arc::new(AlreadyBootstrapped));
@@ -203,11 +259,11 @@ fn test_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap();
     };
-    test_retry(async);
+    test_retry(r#async);
 }
 
 #[test]
@@ -232,11 +288,11 @@ fn test_not_retry<F: Fn(&RpcClient)>(func: F) {
 
 #[test]
 fn test_not_retry_async() {
-    let async = |client: &RpcClient| {
+    let r#async = |client: &RpcClient| {
         let region = client.get_region_by_id(1);
         region.wait().unwrap_err();
     };
-    test_not_retry(async);
+    test_not_retry(r#async);
 }
 
 #[test]

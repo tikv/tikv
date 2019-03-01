@@ -194,7 +194,7 @@ impl fmt::Debug for ServerClusterFactory {
 fn main() {
     tikv::util::config::check_max_open_fds(4096).unwrap();
 
-    let mut criterion = Criterion::default().sample_size(10);
+    let mut criterion = Criterion::default().configure_from_args().sample_size(10);
     bench_raft_cluster(&mut criterion, NodeClusterFactory {});
     bench_raft_cluster(&mut criterion, ServerClusterFactory {});
 

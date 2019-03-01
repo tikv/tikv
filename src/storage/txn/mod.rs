@@ -23,32 +23,32 @@ pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
-use util::escape;
+use crate::util::escape;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: ::storage::engine::Error) {
+        Engine(err: crate::storage::engine::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        Codec(err: ::util::codec::Error) {
+        Codec(err: crate::util::codec::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        ProtoBuf(err: ::protobuf::error::ProtobufError) {
+        ProtoBuf(err: protobuf::error::ProtobufError) {
             from()
             cause(err)
             description(err.description())
         }
-        Mvcc(err: ::storage::mvcc::Error) {
+        Mvcc(err: crate::storage::mvcc::Error) {
             from()
             cause(err)
             description(err.description())
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -108,4 +108,4 @@ impl Error {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;

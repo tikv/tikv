@@ -13,11 +13,12 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::mvcc::{
+use crate::storage::metrics::*;
+use crate::storage::mvcc::{
     BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
 };
-use storage::mvcc::{Error as MvccError, MvccReader};
-use storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
@@ -159,6 +160,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         if let Some(ref l) = lower_bound {
             if let Some(b) = self.snapshot.lower_bound() {
                 if !b.is_empty() && l.as_encoded().as_slice() < b {
+                    REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
                         start: Some(l.as_encoded().clone()),
                         end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
@@ -171,6 +173,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         if let Some(ref u) = upper_bound {
             if let Some(b) = self.snapshot.upper_bound() {
                 if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
+                    REQUEST_EXCEED_BOUND.inc();
                     return Err(Error::InvalidReqRange {
                         start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
                         end: Some(u.as_encoded().clone()),
@@ -215,11 +218,11 @@ impl<S: Snapshot> Scanner for StoreScanner<S> {
 
 /// A Store that reads on fixtures.
 pub struct FixtureStore {
-    data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+    data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
 }
 
 impl FixtureStore {
-    pub fn new(data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+    pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
@@ -300,7 +303,7 @@ impl Store for FixtureStore {
 
 /// A Scanner that scans on fixtures.
 pub struct FixtureStoreScanner {
-    data: ::std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
 }
 
 impl Scanner for FixtureStoreScanner {
@@ -325,15 +328,17 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use raftstore::store::engine::IterOption;
-    use storage::engine::{Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode};
-    use storage::mvcc::Error as MvccError;
-    use storage::mvcc::MvccTxn;
-    use storage::{
+    use crate::raftstore::store::engine::IterOption;
+    use crate::storage::engine::{
+        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+    };
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::{
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -947,13 +952,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
-    use storage::{Key, Statistics};
+    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

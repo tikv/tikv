@@ -14,8 +14,8 @@
 use std::error::Error;
 use std::result::Result;
 
-use raftstore::coprocessor::config::SPLIT_SIZE_MB;
-use util::config::{ReadableDuration, ReadableSize};
+use crate::raftstore::coprocessor::config::SPLIT_SIZE_MB;
+use crate::util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -47,7 +47,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<Error>> {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("import.num_threads can not be 0".into());
         }

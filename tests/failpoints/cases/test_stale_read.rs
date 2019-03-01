@@ -23,7 +23,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
 
 fn stale_read_during_splitting(right_derive: bool) {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
@@ -224,16 +224,16 @@ fn test_node_stale_read_during_splitting_right_derive() {
 
 #[test]
 fn test_stale_read_during_merging() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
 
     let count = 3;
     let mut cluster = new_node_cluster(0, count);
     configure_for_merge(&mut cluster);
-    let lease = configure_for_lease_read(&mut cluster, None, None);
+    let election_timeout = configure_for_lease_read(&mut cluster, None, None);
     cluster.cfg.raft_store.right_derive_when_split = false;
     cluster.cfg.raft_store.pd_heartbeat_tick_interval =
         cluster.cfg.raft_store.raft_base_tick_interval.clone();
-    debug!("max leader lease: {:?}", lease);
+    debug!("max leader lease: {:?}", election_timeout);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
@@ -273,11 +273,16 @@ fn test_stale_read_during_merging() {
     cluster.must_transfer_leader(region1000.get_id(), leader1000.clone());
     assert_ne!(leader1.get_store_id(), leader1000.get_store_id());
 
-    //             Merge into
-    // region1000 ------------> region1,
+    // Sleeps an election timeout. The new leader needs enough time to gather
+    // all followers progress, in cause the merge request is reject by the
+    // log gap too large (min_progress == 0).
+    thread::sleep(election_timeout);
+
+    //             merge into
+    // region1000 ------------> region1
     cluster.try_merge(region1000.get_id(), region1.get_id());
 
-    // Pause the apply worker other than peer 4.
+    // Pause the apply workers except for the peer 4.
     let apply_commit_merge = "apply_before_commit_merge_except_1_4";
     fail::cfg(apply_commit_merge, "pause").unwrap();
 

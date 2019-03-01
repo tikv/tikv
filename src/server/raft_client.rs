@@ -17,22 +17,23 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::load_statistics::ThreadLoad;
+use super::metrics::*;
+use super::{Config, Result};
+use crate::grpc::{
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+};
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::mpsc::batch::{self, Sender as BatchSender};
+use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
-use grpc::{ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
-use tokio::runtime::Runtime;
-use tokio::timer::Delay;
-
-use super::load_statistics::ThreadLoad;
-use super::metrics::*;
-use super::{Config, Result};
-use util::collections::{HashMap, HashMapEntry};
-use util::mpsc::batch::{self, Sender as BatchSender};
-use util::security::SecurityManager;
+use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
 const MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -55,7 +56,7 @@ impl Conn {
         security_mgr: &SecurityManager,
         store_id: u64,
     ) -> Conn {
-        info!("server: new connection with tikv endpoint: {}", addr);
+        info!("server: new connection with tikv endpoint"; "addr" => addr);
 
         let cb = ChannelBuilder::new(env)
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
@@ -91,7 +92,7 @@ impl Conn {
                 match r {
                     Ok(_) => {
                         info!("batch_raft RPC finished success");
-                        box future::ok(()) as Box<Future<Item = (), Error = GrpcError> + Send>
+                        box future::ok(()) as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
                         if status == RpcStatusCode::Unimplemented =>
@@ -116,13 +117,13 @@ impl Conn {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
-                                Err(ref e) => error!("raft RPC finished fail: {}", e),
+                                Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
                         })
                     }
                     Err(e) => {
-                        error!("batch_raft RPC finished fail: {}", e);
+                        error!("batch_raft RPC finished fail"; "err" => ?e);
                         box future::err(e)
                     }
                 }
@@ -135,7 +136,7 @@ impl Conn {
                     REPORT_FAILURE_MSG_COUNTER
                         .with_label_values(&["unreachable", &*store_id.to_string()])
                         .inc();
-                    warn!("batch_raft/raft RPC to {} finally fail: {:?}", addr, e);
+                    warn!("batch_raft/raft RPC finally fail"; "to_addr" => addr, "err" => ?e);
                 })
                 .map(|_| ()),
         );
@@ -158,8 +159,9 @@ pub struct RaftClient {
     // To access CPU load of gRPC threads.
     grpc_thread_load: Arc<ThreadLoad>,
     // When message senders want to delay the notification to the gRPC client,
-    // it can put a tokio::timer::Delay to the runtime.
-    async_runtime: Arc<Runtime>,
+    // it can put a tokio_timer::Delay to the runtime.
+    stats_pool: tokio_threadpool::Sender,
+    timer: Handle,
 }
 
 impl RaftClient {
@@ -168,7 +170,7 @@ impl RaftClient {
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
         grpc_thread_load: Arc<ThreadLoad>,
-        async_runtime: Arc<Runtime>,
+        stats_pool: tokio_threadpool::Sender,
     ) -> RaftClient {
         RaftClient {
             env,
@@ -177,7 +179,8 @@ impl RaftClient {
             cfg,
             security_mgr,
             grpc_thread_load,
-            async_runtime,
+            stats_pool,
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         }
     }
 
@@ -227,8 +230,9 @@ impl RaftClient {
                     continue;
                 }
                 let wait = self.cfg.heavy_load_wait_duration.0;
-                self.async_runtime.executor().spawn(
-                    Delay::new(Instant::now() + wait)
+                let _ = self.stats_pool.spawn(
+                    self.timer
+                        .delay(Instant::now() + wait)
                         .map_err(|_| error!("RaftClient delay flush error"))
                         .inspect(move |_| notifier.notify()),
                 );

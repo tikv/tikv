@@ -35,34 +35,34 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use pd::{PdClient, PdTask};
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::mpsc::{self, LooseBoundedSender, Receiver};
-use util::time::duration_to_sec;
-use util::worker::{Scheduler, Stopped};
-use util::{escape, is_zero_duration};
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
+use crate::util::time::duration_to_sec;
+use crate::util::worker::{Scheduler, Stopped};
+use crate::util::{escape, is_zero_duration};
 
-use raftstore::coprocessor::RegionChangeEvent;
-use raftstore::store::cmd_resp::{bind_term, new_error};
-use raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
-use raftstore::store::fsm::store::{PollContext, StoreMeta};
-use raftstore::store::fsm::{
+use crate::raftstore::coprocessor::RegionChangeEvent;
+use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
+use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
+use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
     RegionProposal,
 };
-use raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use raftstore::store::metrics::*;
-use raftstore::store::msg::Callback;
-use raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
-use raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
-use raftstore::store::transport::Transport;
-use raftstore::store::util::KeysInfoFormatter;
-use raftstore::store::worker::{
+use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
+use crate::raftstore::store::metrics::*;
+use crate::raftstore::store::msg::Callback;
+use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
+use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
+use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::util::KeysInfoFormatter;
+use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use raftstore::store::Engines;
-use raftstore::store::{
+use crate::raftstore::store::Engines;
+use crate::raftstore::store::{
     util, Config, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
 };
 
@@ -125,9 +125,9 @@ impl PeerFsm {
         };
 
         info!(
-            "[region {}] create peer with id {}",
-            region.get_id(),
-            meta_peer.get_id(),
+            "create peer";
+            "region_id" => region.get_id(),
+            "peer_id" => meta_peer.get_id(),
         );
         let (tx, rx) = mpsc::loose_bounded(cfg.notify_capacity);
         Ok((
@@ -155,9 +155,9 @@ impl PeerFsm {
     ) -> Result<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)> {
         // We will remove tombstone key when apply snapshot
         info!(
-            "[region {}] replicate peer with id {}",
-            region_id,
-            peer.get_id()
+            "replicate peer";
+            "region_id" => region_id,
+            "peer_id" => peer.get_id(),
         );
 
         let mut region = metapb::Region::new();
@@ -252,7 +252,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
-                        error!("{} handle raft message err: {:?}", self.fsm.peer.tag, e);
+                        error!(
+                            "handle raft message err";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "err" => %e,
+                        );
                     }
                 }
                 PeerMsg::RaftCmd {
@@ -283,9 +288,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     ..
                 } => {
                     info!(
-                        "{} on split with {}",
-                        self.fsm.peer.tag,
-                        KeysInfoFormatter(&split_keys)
+                        "on split";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "split_keys" => %KeysInfoFormatter(&split_keys),
                     );
                     self.on_prepare_split_region(region_epoch, split_keys, callback);
                 }
@@ -399,8 +405,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut drainer = pending_apply.results.drain(..);
         while let Some(res) = drainer.next() {
             debug!(
-                "{} resume handling apply result {:?}",
-                self.fsm.peer.tag, res
+                "resume handling apply result";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "res" => ?res,
             );
             self.on_apply_res(res);
             // So meet another `CommitMerge` apply result needed to wait.
@@ -423,16 +431,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     Ok(s) => s,
                     Err(e) => {
                         error!(
-                            "{} failed to load snapshot for {}: {:?}",
-                            self.fsm.peer.tag, key, e
+                            "failed to load snapshot";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "snapshot" => ?key,
+                            "err" => %e,
                         );
                         continue;
                     }
                 };
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!(
-                        "{} snap file {} has been compacted, delete.",
-                        self.fsm.peer.tag, key
+                        "deleting compacted snap file";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "snap_file" => %key,
                     );
                     self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                 } else if let Ok(meta) = s.meta() {
@@ -440,8 +453,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         Ok(m) => m,
                         Err(e) => {
                             error!(
-                                "{} failed to load snapshot for {}: {:?}",
-                                self.fsm.peer.tag, key, e
+                                "failed to load snapshot";
+                                "region_id" => self.fsm.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "snapshot" => ?key,
+                                "err" => %e,
                             );
                             continue;
                         }
@@ -449,8 +465,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed > self.ctx.cfg.snap_gc_timeout.0 {
                             info!(
-                                "{} snap file {} has been expired, delete.",
-                                self.fsm.peer.tag, key
+                                "deleting expired snap file";
+                                "region_id" => self.fsm.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "snap_file" => %key,
                             );
                             self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
                         }
@@ -460,15 +478,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 && (key.idx < compacted_idx || key.idx == compacted_idx && !is_applying_snap)
             {
                 info!(
-                    "{} snap file {} has been applied, delete.",
-                    self.fsm.peer.tag, key
+                    "deleting applied snap file";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "snap_file" => %key,
                 );
                 let a = match self.ctx.snap_mgr.get_snapshot_for_applying(&key) {
                     Ok(a) => a,
                     Err(e) => {
                         error!(
-                            "{} failed to load snapshot for {}: {:?}",
-                            self.fsm.peer.tag, key, e
+                            "failed to load snapshot";
+                            "region_id" => self.fsm.region_id(),
+                            "peer_id" => self.fsm.peer_id(),
+                            "snap_file" => %key,
+                            "err" => %e,
                         );
                         continue;
                     }
@@ -503,15 +526,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             None => {
                 // If to_peer is gone, ignore this snapshot status
                 warn!(
-                    "{} peer {} not found, ignore snapshot status {:?}",
-                    self.fsm.peer.tag, to_peer_id, status
+                    "peer not found, ignore snapshot status";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "to_peer_id" => to_peer_id,
+                    "status" => ?status,
                 );
                 return;
             }
         };
         info!(
-            "{} report snapshot status {:?} {:?}",
-            self.fsm.peer.tag, to_peer, status
+            "report snapshot status";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "to" => ?to_peer,
+            "status" => ?status,
         );
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
@@ -573,7 +602,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
-                error!("{} failed to get mailbox for {:?}", self.fsm.peer.tag, tick);
+                error!(
+                    "failed to get mailbox";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "tick" => ?tick,
+                );
                 return;
             }
         };
@@ -590,8 +624,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
                 if let Err(e) = mb.force_send(PeerMsg::Tick(region_id, tick)) {
                     info!(
-                        "[region {}] {} failed to schedule peer tick {:?}: {:?}",
-                        region_id, peer_id, tick, e
+                        "failed to schedule peer tick";
+                        "region_id" => region_id,
+                        "peer_id" => peer_id,
+                        "tick" => ?tick,
+                        "err" => %e,
                     );
                 }
             })
@@ -635,7 +672,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_apply_res(&mut self, res: ApplyTaskRes) {
         match res {
             ApplyTaskRes::Apply(mut res) => {
-                debug!("{} async apply finish: {:?}", self.fsm.peer.tag, res);
+                debug!(
+                    "async apply finish";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "res" => ?res,
+                );
                 if let Some(ready_to_merge) =
                     self.on_ready_result(res.merged, &mut res.exec_res, &res.metrics)
                 {
@@ -666,11 +708,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_raft_message(&mut self, mut msg: RaftMessage) -> Result<()> {
         debug!(
-            "{} handle raft message {:?}, from {} to {}",
-            self.fsm.peer.tag,
-            msg.get_message().get_msg_type(),
-            msg.get_from_peer().get_id(),
-            msg.get_to_peer().get_id()
+            "handle raft message";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "message_type" => ?msg.get_message().get_msg_type(),
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
         );
 
         if !self.validate_raft_msg(&msg) {
@@ -722,23 +765,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     // return false means the message is invalid, and can be ignored.
     fn validate_raft_msg(&mut self, msg: &RaftMessage) -> bool {
         let region_id = msg.get_region_id();
-        let from = msg.get_from_peer();
         let to = msg.get_to_peer();
-
-        debug!(
-            "[region {}] handle raft message {:?}, from {} to {}",
-            region_id,
-            msg.get_message().get_msg_type(),
-            from.get_id(),
-            to.get_id()
-        );
 
         if to.get_store_id() != self.store_id() {
             warn!(
-                "[region {}] store not match, to store id {}, mine {}, ignore it",
-                region_id,
-                to.get_store_id(),
-                self.store_id()
+                "store not match, ignore it";
+                "region_id" => region_id,
+                "to_store_id" => to.get_store_id(),
+                "my_store_id" => self.store_id(),
             );
             self.ctx.raft_metrics.message_dropped.mismatch_store_id += 1;
             return false;
@@ -746,8 +780,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if !msg.has_region_epoch() {
             error!(
-                "[region {}] missing epoch in raft message, ignore it",
-                region_id
+                "missing epoch in raft message, ignore it";
+                "region_id" => region_id,
             );
             self.ctx.raft_metrics.message_dropped.mismatch_region_epoch += 1;
             return false;
@@ -798,10 +832,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let target = msg.get_to_peer();
         if target.get_id() < self.fsm.peer.peer_id() {
             info!(
-                "{} target peer id {} is less than {}, msg maybe stale.",
-                self.fsm.peer.tag,
-                target.get_id(),
-                self.fsm.peer.peer_id()
+                "target peer id is smaller, msg maybe stale";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_peer" => ?target,
             );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             true
@@ -809,8 +843,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             match self.fsm.peer.maybe_destroy() {
                 Some(job) => {
                     info!(
-                        "{} is stale as received a larger peer {:?}, destroying.",
-                        self.fsm.peer.tag, target
+                        "target peer id is larger, destroying self";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "target_peer" => ?target,
                     );
                     if self.handle_destroy_peer(job) {
                         if let Err(e) = self
@@ -819,8 +855,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                             .send_control(StoreMsg::RaftMessage(msg.clone()))
                         {
                             info!(
-                                "{} failed to send back store message {:?}, are we shutting down?",
-                                self.fsm.peer.tag, e
+                                "failed to send back store message, are we shutting down?";
+                                "region_id" => self.fsm.region_id(),
+                                "peer_id" => self.fsm.peer_id(),
+                                "err" => %e,
                             );
                         }
                     }
@@ -853,11 +891,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .map(|r| r.get_region_epoch())
         }) {
             info!(
-                "{} checking target {} epoch: {:?}, msg target epoch: {:?}",
-                self.fsm.peer.tag,
-                target_region_id,
-                epoch,
-                merge_target.get_region_epoch(),
+                "checking merge epoch";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => target_region_id,
+                "epoch" => ?epoch,
+                "target_epoch" => ?merge_target.get_region_epoch(),
             );
             // The target peer will move on, namely, it will apply a snapshot generated after merge,
             // so destroy source peer.
@@ -876,8 +915,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
         {
             debug!(
-                "{} check target region {} local state {:?}",
-                self.fsm.peer.tag, target_region_id, state
+                "check target region local state";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => target_region_id,
+                "state" => ?state,
             );
             if state.get_state() == PeerState::Tombstone
                 && state.get_region().get_region_epoch().get_conf_ver()
@@ -889,8 +931,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         info!(
-            "{} no replica of region {} exist, check pd.",
-            self.fsm.peer.tag, target_region_id
+            "no replica of target region exist, check pd.";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "target_region_id" => target_region_id,
         );
         // We can't know whether the peer is destroyed or not for sure locally, ask
         // pd for help.
@@ -906,8 +950,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
             error!(
-                "{} failed to validate target peer {:?}: {}",
-                self.fsm.peer.tag, target_peer, e
+                "failed to validate target peer";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_peer" => ?target_peer,
+                "err" => %e,
             );
         }
         Ok(false)
@@ -920,15 +967,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if self.fsm.peer.peer != *msg.get_to_peer() {
-            info!("{} receive stale gc message, ignore.", self.fsm.peer.tag);
+            info!(
+                "receive stale gc message, ignore.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             self.ctx.raft_metrics.message_dropped.stale_msg += 1;
             return;
         }
         // TODO: ask pd to guarantee we are stale now.
         info!(
-            "{} peer {:?} receives gc message, trying to remove",
-            self.fsm.peer.tag,
-            msg.get_to_peer()
+            "receives gc message, trying to remove";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "to_peer" => ?msg.get_to_peer(),
         );
         match self.fsm.peer.maybe_destroy() {
             None => self.ctx.raft_metrics.message_dropped.applying_snap += 1,
@@ -959,10 +1011,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .all(|p| p.get_id() != peer_id)
         {
             info!(
-                "{} {:?} doesn't contain peer {:?}, skip.",
-                self.fsm.peer.tag,
-                snap_region,
-                msg.get_to_peer()
+                "snapshot doesn't contain to peer, skip";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "snap" => ?snap_region,
+                "to_peer" => ?msg.get_to_peer(),
             );
             self.ctx.raft_metrics.message_dropped.region_no_peer += 1;
             return Ok(Some(key));
@@ -971,7 +1024,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
         if meta.regions[&self.region_id()] != *self.region() {
             if !self.fsm.peer.is_initialized() {
-                info!("{} stale delegate detected, skip.", self.fsm.peer.tag);
+                info!(
+                    "stale delegate detected, skip.";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
                 return Ok(Some(key));
             } else {
                 panic!(
@@ -992,8 +1049,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .map(|r| r.to_owned());
         if let Some(exist_region) = r {
             info!(
-                "{} region overlapped {:?}, {:?}",
-                self.fsm.peer.tag, exist_region, snap_region
+                "region overlapped";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "exist" => ?exist_region,
+                "snap" => ?snap_region,
             );
             // In some extreme case, it may happen that a new snapshot is received whereas a snapshot is still in applying
             // if the snapshot under applying is generated before merge and the new snapshot is generated after merge,
@@ -1013,8 +1073,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                region.get_id() != snap_region.get_id()
             {
                 info!(
-                    "{} pending region overlapped {:?}, {:?}",
-                    self.fsm.peer.tag, region, snap_region
+                    "pending region overlapped";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "region" => ?region,
+                    "snap" => ?snap_region,
                 );
                 self.ctx.raft_metrics.message_dropped.region_overlap += 1;
                 return Ok(Some(key));
@@ -1024,10 +1087,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // Check it to avoid epoch moves backward.
             if util::is_epoch_stale(snap_region.get_region_epoch(), r) {
                 info!(
-                    "{} snapshot epoch is stale, drop: {:?} < {:?}",
-                    self.fsm.peer.tag,
-                    snap_region.get_region_epoch(),
-                    r
+                    "snapshot epoch is stale, drop";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "snap" => ?snap_region.get_region_epoch(),
+                    "region" => ?r,
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg += 1;
                 return Ok(Some(key));
@@ -1051,9 +1115,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if job.async_remove {
             info!(
-                "[region {}] {} is destroyed asynchronously",
-                job.region_id,
-                job.peer.get_id()
+                "peer is destroyed asynchronously";
+                "region_id" => job.region_id,
+                "peer_id" => job.peer.get_id(),
             );
             false
         } else {
@@ -1064,8 +1128,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn destroy_peer(&mut self, merged_by_target: bool) {
         info!(
-            "{} starts destroy [merged_by_target: {}]",
-            self.fsm.peer.tag, merged_by_target
+            "starts destroy";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "merged_by_target" => merged_by_target,
         );
         let region_id = self.region_id();
         // We can't destroy a peer which is applying snapshot.
@@ -1081,8 +1147,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .is_err()
         {
             info!(
-                "{} unable to destroy read delegate, are we shutting down?",
-                self.fsm.peer.tag
+                "unable to destroy read delegate, are we shutting down?";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
             );
         }
         self.ctx
@@ -1096,7 +1163,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         );
         let task = PdTask::DestroyPeer { region_id };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!("{} failed to notify pd: {}", self.fsm.peer.tag, e);
+            error!(
+                "failed to notify pd";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
         }
         let is_initialized = self.fsm.peer.is_initialized();
         if let Err(e) = self.fsm.peer.destroy(self.ctx, merged_by_target) {
@@ -1179,9 +1251,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.is_leader() {
             // Notify pd immediately.
             info!(
-                "{} notify pd with change peer region {:?}",
-                self.fsm.peer.tag,
-                self.fsm.peer.region()
+                "notify pd with change peer region";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
@@ -1218,8 +1291,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.mut_store().compact_to(task.end_idx);
         if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!(
-                "{} failed to schedule compact task: {}",
-                self.fsm.peer.tag, e
+                "failed to schedule compact task";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
             );
         }
     }
@@ -1240,9 +1315,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.peer.heartbeat_pd(self.ctx);
             // Notify pd immediately to let it update the region meta.
             info!(
-                "{} notify pd with split count {}",
-                self.fsm.peer.tag,
-                regions.len()
+                "notify pd with split";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "split_count" => regions.len(),
             );
             // Now pd only uses ReportBatchSplit for history operation show,
             // so we send it independently here.
@@ -1250,7 +1326,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 regions: regions.to_vec(),
             };
             if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                error!("{} failed to notify pd: {}", self.fsm.peer.tag, e);
+                error!(
+                    "failed to notify pd";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => %e,
+                );
             }
         }
 
@@ -1276,8 +1357,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
             // Insert new regions and validation
             info!(
-                "[region {}] insert new region {:?}",
-                new_region_id, new_region
+                "insert new region";
+                "region_id" => new_region_id,
+                "region" => ?new_region,
             );
             if let Some(r) = meta.regions.get(&new_region_id) {
                 // Suppose a new node is added by conf change and the snapshot comes slowly.
@@ -1383,8 +1465,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // exist_epoch < expect_epoch
             if util::is_epoch_stale(exist_epoch, expect_epoch) {
                 info!(
-                    "{} target region still not catch up: {:?} vs {:?}, skip.",
-                    self.fsm.peer.tag, target_region, r
+                    "target region still not catch up, skip.";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region" => ?target_region,
+                    "exist_region" => ?r,
                 );
                 return Ok(false);
             }
@@ -1395,22 +1480,32 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
             Err(e) => {
                 error!(
-                    "{} failed to load region state of {}, ignore: {}",
-                    self.fsm.peer.tag, region_id, e
+                    "failed to load region state, ignore";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "err" => %e,
+                    "target_region_id" => region_id,
                 );
                 return Ok(false);
             }
             Ok(None) => {
                 info!(
-                    "{} seems to merge into a new replica of region {}, let's wait.",
-                    self.fsm.peer.tag, region_id
+                    "seems to merge into a new replica of region, let's wait.";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region_id" => region_id,
                 );
                 return Ok(false);
             }
             Ok(Some(state)) => state,
         };
         if state.get_state() != PeerState::Tombstone {
-            info!("{} wait for region {} split.", self.fsm.peer.tag, region_id);
+            info!(
+                "wait for region split";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => region_id,
+            );
             return Ok(false);
         }
 
@@ -1419,8 +1514,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             < target_region.get_region_epoch().get_conf_ver()
         {
             info!(
-                "{} seems to merge into a new replica of region {}, let's wait.",
-                self.fsm.peer.tag, region_id
+                "seems to merge into a new replica of region, let's wait.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_region_id" => region_id,
             );
             return Ok(false);
         }
@@ -1511,8 +1608,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.register_merge_check_tick();
         if let Err(e) = self.schedule_merge() {
             info!(
-                "{} failed to schedule merge, rollback: {:?}",
-                self.fsm.peer.tag, e
+                "failed to schedule merge, rollback";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
             );
             self.rollback_merge();
         }
@@ -1615,10 +1714,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.size_diff_hint = self.ctx.cfg.region_split_check_diff.0;
         if self.fsm.peer.is_leader() {
             info!(
-                "{} notify pd with merge {:?} into {:?}",
-                self.fsm.peer.tag,
-                source,
-                self.fsm.peer.region()
+                "notify pd with merge";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "source_region" => ?source,
+                "target_region" => ?self.fsm.peer.region(),
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
@@ -1691,8 +1791,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if self.fsm.peer.is_leader() {
             info!(
-                "{} notify pd with rollback merge {}",
-                self.fsm.peer.tag, commit
+                "notify pd with rollback merge";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "commit_index" => commit,
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
@@ -1713,9 +1815,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if !stale {
             info!(
-                "{} merge to {:?} finish.",
-                self.fsm.peer.tag,
-                self.fsm.peer.pending_merge_state.as_ref().unwrap().target
+                "merge finished.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_region" => ?self.fsm.peer.pending_merge_state.as_ref().unwrap().target,
             );
             self.destroy_peer(true);
         } else {
@@ -1725,8 +1828,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_stale_merge(&mut self) {
         info!(
-            "{} successful merge to {:?} can't be continued, try to gc stale peer.",
-            self.fsm.peer.tag, self.fsm.peer.pending_merge_state
+            "successful merge can't be continued, try to gc stale peer.";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "merge_state" => ?self.fsm.peer.pending_merge_state,
         );
         if let Some(job) = self.fsm.peer.maybe_destroy() {
             self.handle_destroy_peer(job);
@@ -1738,20 +1843,28 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region = apply_result.region;
 
         info!(
-            "{} snapshot for region {:?} is applied",
-            self.fsm.peer.tag, region
+            "snapshot is applied";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "region" => ?region,
         );
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
         debug!(
-            "{} ranges {:?} prev_region {:?}",
-            self.fsm.peer.tag, meta.region_ranges, prev_region
+            "check snapshot range";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "ranges" => ?meta.region_ranges,
+            "prev_region" => ?prev_region,
         );
         let initialized = !prev_region.get_peers().is_empty();
         if initialized {
             info!(
-                "{} region changed from {:?} -> {:?} after applying snapshot",
-                self.fsm.peer.tag, prev_region, region
+                "region changed after applying snapshot";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "prev_region" => ?prev_region,
+                "region" => ?region,
             );
             let prev = meta.region_ranges.remove(&enc_end_key(&prev_region));
             if prev != Some(region.get_id()) {
@@ -1927,7 +2040,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::StaleEpoch(msg, mut new_regions)) => {
+            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -1936,8 +2049,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if let Some(sibling_region) = sibling_region {
                     new_regions.push(sibling_region);
                 }
-                self.ctx.raft_metrics.invalid_proposal.stale_epoch += 1;
-                Err(Error::StaleEpoch(msg, new_regions))
+                self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
+                Err(Error::EpochNotMatch(msg, new_regions))
             }
             Err(e) => Err(e),
             Ok(()) => Ok(None),
@@ -1951,7 +2064,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 return;
             }
             Err(e) => {
-                debug!("{} failed to propose {:?}: {:?}", self.fsm.peer.tag, msg, e);
+                debug!(
+                    "failed to propose";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "message" => ?msg,
+                    "err" => %e,
+                );
                 cb.invoke_with_response(new_error(e));
                 return;
             }
@@ -1965,8 +2084,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if let Err(e) = self.check_merge_proposal(&mut msg) {
             warn!(
-                "{} failed to propose merge: {:?}: {}",
-                self.fsm.peer.tag, msg, e
+                "failed to propose merge";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "message" => ?msg,
+                "err" => %e,
             );
             cb.invoke_with_response(new_error(e));
             return;
@@ -2150,8 +2272,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let task = SplitCheckTask::new(self.fsm.peer.region().clone(), true, CheckPolicy::SCAN);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
-                "{} failed to schedule split check: {}",
-                self.fsm.peer.tag, e
+                "failed to schedule split check";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
             );
         }
         self.fsm.peer.size_diff_hint = 0;
@@ -2178,8 +2302,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         };
         if let Err(Stopped(t)) = self.ctx.pd_scheduler.schedule(task) {
             error!(
-                "{} failed to notify pd to split: Stopped",
-                self.fsm.peer.tag
+                "failed to notify pd to split: Stopped";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
             );
             match t {
                 PdTask::AskBatchSplit { callback, .. } => {
@@ -2196,12 +2321,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         split_keys: &[Vec<u8>],
     ) -> Result<()> {
         if split_keys.is_empty() {
-            error!("{} no split key is specified.", self.fsm.peer.tag);
+            error!(
+                "no split key is specified.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return Err(box_err!("{} no split key is specified.", self.fsm.peer.tag));
         }
         for key in split_keys {
             if key.is_empty() {
-                error!("{} split key should not be empty!!!", self.fsm.peer.tag);
+                error!(
+                    "split key should not be empty!!!";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
                 return Err(box_err!(
                     "{} split key should not be empty",
                     self.fsm.peer.tag
@@ -2210,7 +2343,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
-            info!("{} is not leader, skip.", self.fsm.peer.tag);
+            info!(
+                "not leader, skip.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return Err(Error::NotLeader(
                 self.region_id(),
                 self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()),
@@ -2225,12 +2362,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // to the latest value of the peer, and then send to PD.
         if latest_epoch.get_version() != epoch.get_version() {
             info!(
-                "{} epoch changed {:?} != {:?}, retry later",
-                self.fsm.peer.tag,
-                region.get_region_epoch(),
-                epoch
+                "epoch changed, retry later";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "prev_epoch" => ?region.get_region_epoch(),
+                "epoch" => ?epoch,
             );
-            return Err(Error::StaleEpoch(
+            return Err(Error::EpochNotMatch(
                 format!(
                     "{} epoch changed {:?} != {:?}, retry later",
                     self.fsm.peer.tag, latest_epoch, epoch
@@ -2263,21 +2401,31 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     ) {
         if !self.fsm.peer.is_leader() {
             // region on this store is no longer leader, skipped.
-            warn!("{} is not leader, skip.", self.fsm.peer.tag);
+            warn!(
+                "not leader, skip";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return;
         }
 
         let region = self.fsm.peer.region();
         if util::is_epoch_stale(region_epoch, region.get_region_epoch()) {
-            warn!("{} receive a stale halfsplit message", self.fsm.peer.tag);
+            warn!(
+                "receive a stale halfsplit message";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+            );
             return;
         }
 
         let task = SplitCheckTask::new(region.clone(), false, policy);
         if let Err(e) = self.ctx.split_check_scheduler.schedule(task) {
             error!(
-                "{} failed to schedule split check: {}",
-                self.fsm.peer.tag, e
+                "failed to schedule split check";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
             );
         }
     }
@@ -2331,8 +2479,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             StaleState::Valid => (),
             StaleState::LeaderMissing => {
                 warn!(
-                    "{} leader missing longer than abnormal_leader_missing_duration {:?}",
-                    self.fsm.peer.tag, self.ctx.cfg.abnormal_leader_missing_duration.0,
+                    "leader missing longer than abnormal_leader_missing_duration";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
                 );
                 self.ctx
                     .raft_metrics
@@ -2344,9 +2494,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             StaleState::ToValidate => {
                 // for peer B in case 1 above
                 warn!(
-                    "{} leader missing longer than max_leader_missing_duration {:?}. \
-                     To check with pd whether it's still valid",
-                    self.fsm.peer.tag, self.ctx.cfg.max_leader_missing_duration.0,
+                    "leader missing longer than max_leader_missing_duration. \
+                     To check with pd whether it's still valid";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "expect" => %self.ctx.cfg.max_leader_missing_duration,
                 );
                 let task = PdTask::ValidatePeer {
                     peer: self.fsm.peer.peer.clone(),
@@ -2354,7 +2506,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     merge_source: None,
                 };
                 if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-                    error!("{} failed to notify pd: {}", self.fsm.peer.tag, e)
+                    error!(
+                        "failed to notify pd";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "err" => %e,
+                    )
                 }
             }
         }
@@ -2372,9 +2529,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
         let task = ConsistencyCheckTask::compute_hash(region, index, snap);
-        info!("{} schedule {}", self.fsm.peer.tag, task);
+        info!(
+            "schedule compute hash task";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "task" => %task,
+        );
         if let Err(e) = self.ctx.consistency_check_scheduler.schedule(task) {
-            error!("{} schedule failed: {:?}", self.fsm.peer.tag, e);
+            error!(
+                "schedule failed";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
         }
     }
 
@@ -2402,7 +2569,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         let task = CleanupSSTTask::DeleteSST { ssts };
         if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {
-            error!("{} schedule to delete ssts: {:?}", self.fsm.peer.tag, e);
+            error!(
+                "schedule to delete ssts";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
         }
     }
 
@@ -2413,16 +2585,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .with_label_values(&["verify", "miss"])
                 .inc();
             warn!(
-                "{} has scheduled a new hash: {} > {}, skip.",
-                self.fsm.peer.tag, self.fsm.peer.consistency_state.index, expected_index
+                "has scheduled a new hash, skip.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "index" => self.fsm.peer.consistency_state.index,
+                "expected_index" => expected_index,
             );
             return false;
         }
         if self.fsm.peer.consistency_state.index == expected_index {
             if self.fsm.peer.consistency_state.hash.is_empty() {
                 warn!(
-                    "{} duplicated consistency check detected, skip.",
-                    self.fsm.peer.tag
+                    "duplicated consistency check detected, skip.";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
                 );
                 return false;
             }
@@ -2436,8 +2612,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 );
             }
             info!(
-                "{} consistency check at {} pass.",
-                self.fsm.peer.tag, self.fsm.peer.consistency_state.index
+                "consistency check pass.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "index" => self.fsm.peer.consistency_state.index
             );
             REGION_HASH_COUNTER_VEC
                 .with_label_values(&["verify", "matched"])
@@ -2454,14 +2632,19 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .with_label_values(&["verify", "miss"])
                 .inc();
             warn!(
-                "{} hash belongs to index {}, but we want {}, skip.",
-                self.fsm.peer.tag, self.fsm.peer.consistency_state.index, expected_index
+                "hash belongs to wrong index, skip.";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "index" => self.fsm.peer.consistency_state.index,
+                "expected_index" => expected_index,
             );
         }
 
         info!(
-            "{} save hash of {} for consistency check later.",
-            self.fsm.peer.tag, expected_index
+            "save hash for consistency check later.";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+            "index" => expected_index,
         );
         self.fsm.peer.consistency_state.index = expected_index;
         self.fsm.peer.consistency_state.hash = expected_hash;

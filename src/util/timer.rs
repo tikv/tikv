@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::time::{monotonic_raw_now, Instant};
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::{mpsc, Arc};
@@ -19,7 +20,6 @@ use std::time::Duration;
 use time::Timespec;
 use tokio_executor::park::ParkThread;
 use tokio_timer::{self, clock::Clock, clock::Now, timer::Handle, Delay};
-use util::time::{monotonic_raw_now, Instant};
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -118,7 +118,7 @@ struct TimeZero {
     ///
     /// Note that `zero` doesn't have to be related to `steady_time_point`, as what's
     /// observed here is elapsed time instead of time point.
-    zero: ::std::time::Instant,
+    zero: std::time::Instant,
     /// A base time point.
     ///
     /// The source of time point should grow steady.
@@ -140,7 +140,7 @@ pub struct SteadyClock {
 lazy_static! {
     static ref STEADY_CLOCK: SteadyClock = SteadyClock {
         zero: Arc::new(TimeZero {
-            zero: ::std::time::Instant::now(),
+            zero: std::time::Instant::now(),
             steady_time_point: monotonic_raw_now(),
         }),
     };
@@ -155,7 +155,7 @@ impl Default for SteadyClock {
 
 impl Now for SteadyClock {
     #[inline]
-    fn now(&self) -> ::std::time::Instant {
+    fn now(&self) -> std::time::Instant {
         let n = monotonic_raw_now();
         let dur = Instant::elapsed_duration(n, self.zero.steady_time_point);
         self.zero.zero + dur
@@ -213,10 +213,10 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {
@@ -324,7 +324,7 @@ mod tests {
     fn test_global_timer() {
         let handle = super::GLOBAL_TIMER_HANDLE.clone();
         let delay =
-            handle.delay(::std::time::Instant::now() + ::std::time::Duration::from_millis(100));
+            handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
         delay.wait().unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));

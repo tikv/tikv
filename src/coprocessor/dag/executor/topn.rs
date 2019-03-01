@@ -19,9 +19,9 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
@@ -60,7 +60,7 @@ pub struct TopNExecutor {
     iter: Option<IntoIter<Row>>,
     eval_ctx: Option<EvalContext>,
     eval_warnings: Option<EvalWarnings>,
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     limit: usize,
     first_collect: bool,
 }
@@ -69,7 +69,7 @@ impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
@@ -146,7 +146,7 @@ impl Executor for TopNExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+            if let Some(topn_warnings) = self.eval_warnings.take() {
                 warnings.merge(topn_warnings);
             }
             Some(warnings)
@@ -172,13 +172,13 @@ pub mod tests {
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::table::{self, RowColsDict};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::executor::OriginCols;
-    use util::codec::number::NumberEncoder;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::table::{self, RowColsDict};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::executor::OriginCols;
+    use crate::util::codec::number::NumberEncoder;
+    use crate::util::collections::HashMap;
 
-    use storage::SnapshotStore;
+    use crate::storage::SnapshotStore;
 
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;

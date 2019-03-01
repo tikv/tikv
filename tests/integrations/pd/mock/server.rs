@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use futures::{Future, Sink, Stream};
-use grpc::{
+use crate::grpc::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
+use futures::{Future, Sink, Stream};
 use tikv::pd::Error as PdError;
 use tikv::util::security::*;
 
@@ -39,6 +39,10 @@ impl Server<Service> {
         let eps = vec![("127.0.0.1".to_owned(), 0); eps_count];
         let case = Option::None::<Arc<Service>>;
         Self::with_configuration(&mgr, eps, case)
+    }
+
+    pub fn default_handler(&self) -> &Service {
+        &self.mocker.default_handler
     }
 }
 
@@ -112,7 +116,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
 fn hijack_unary<F, R, C: PdMocker>(mock: &mut PdMock<C>, ctx: RpcContext, sink: UnarySink<R>, f: F)
 where
     R: Send + 'static,
-    F: Fn(&PdMocker) -> Option<Result<R>>,
+    F: Fn(&dyn PdMocker) -> Option<Result<R>>,
 {
     let resp = mock
         .case

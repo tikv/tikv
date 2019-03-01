@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate kvproto;
+mod backward;
+mod forward;
+mod util;
 
-pub use kvproto::*;
+pub use self::backward::{BackwardScanner, BackwardScannerBuilder};
+pub use self::forward::{ForwardScanner, ForwardScannerBuilder};

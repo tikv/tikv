@@ -44,20 +44,20 @@ pub fn initial_logger(config: &TiKvConfig) {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
+            fatal!("failed to initialize log: {}", e);
         });
     } else {
         let drainer =
             logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
                 fatal!(
-                    "failed to initialize log with file {:?}: {:?}",
+                    "failed to initialize log with file {}: {}",
                     config.log_file,
                     e
                 );
             });
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
+            fatal!("failed to initialize log: {}", e);
         });
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
@@ -66,7 +66,7 @@ pub fn initial_logger(config: &TiKvConfig) {
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
@@ -118,11 +118,11 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
+                    None => fatal!("invalid label: {}", s),
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
+                    fatal!("invalid label: {}", s);
                 }
                 labels.insert(key, value);
             })
@@ -139,5 +139,9 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
+    }
+
+    if let Some(metrics_addr) = matches.value_of("metrics-addr") {
+        config.metric.address = metrics_addr.to_owned()
     }
 }

@@ -50,7 +50,7 @@ pub fn run_prometheus(
                 metric_familys,
             );
             if let Err(e) = res {
-                error!("fail to push metrics: {}", e);
+                error!("fail to push metrics"; "err" => ?e);
             }
 
             thread::sleep(interval);
@@ -66,7 +66,7 @@ pub fn dump() -> String {
     let metric_familys = prometheus::gather();
     for mf in metric_familys {
         if let Err(e) = encoder.encode(&[mf], &mut buffer) {
-            warn!("prometheus encoding error: {:?}", e);
+            warn!("prometheus encoding error"; "err" => ?e);
         }
     }
     String::from_utf8(buffer).unwrap()

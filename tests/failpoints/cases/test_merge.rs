@@ -33,7 +33,7 @@ use tikv::util::HandyRwLock;
 /// Test if merge is rollback as expected.
 #[test]
 fn test_node_merge_rollback() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -120,7 +120,7 @@ fn test_node_merge_rollback() {
 /// Test if merge is still working when restart a cluster during merge.
 #[test]
 fn test_node_merge_restart() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();
@@ -220,7 +220,7 @@ fn test_node_merge_restart() {
 /// Test if merging state will be removed after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -279,7 +279,7 @@ fn test_node_merge_multiple_snapshots_together() {
 // }
 
 fn test_node_merge_multiple_snapshots(together: bool) {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);

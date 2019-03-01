@@ -62,6 +62,7 @@ extern crate num;
 extern crate num_traits;
 #[macro_use]
 extern crate prometheus;
+#[cfg(target_os = "linux")]
 extern crate procinfo;
 extern crate prometheus_static_metric;
 extern crate protobuf;
@@ -84,6 +85,7 @@ extern crate serde_json;
     slog_warn,
     slog_info,
     slog_debug,
+    slog_crit,
     slog_log,
     slog_record,
     slog_b,
@@ -103,7 +105,6 @@ extern crate test;
 extern crate tikv_alloc;
 extern crate time;
 extern crate tipb;
-extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_executor;
 extern crate tokio_timer;
@@ -140,4 +141,4 @@ pub mod raftstore;
 pub mod server;
 pub mod storage;
 
-pub use storage::Storage;
+pub use crate::storage::Storage;

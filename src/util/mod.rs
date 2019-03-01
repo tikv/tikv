@@ -36,7 +36,7 @@ pub mod io_limiter;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb;
+pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -45,8 +45,15 @@ pub mod timer;
 pub mod transport;
 pub mod worker;
 
-pub use self::rocksdb::properties;
-pub use self::rocksdb::stats as rocksdb_stats;
+static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);
+
+pub fn panic_when_key_exceed_bound() -> bool {
+    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::SeqCst)
+}
+
+pub fn set_panic_when_key_exceed_bound(flag: bool) {
+    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::SeqCst);
+}
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
@@ -461,7 +468,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     let orig_hook = panic::take_hook();
     panic::set_hook(box move |info: &panic::PanicInfo| {
         use slog::Drain;
-        if ::slog_global::borrow_global().is_enabled(::slog::Level::Error) {
+        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
                 Some(s) => *s,
                 None => match info.payload().downcast_ref::<String>() {
@@ -474,13 +481,11 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             let loc = info
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
-            let bt = ::backtrace::Backtrace::new();
-            error!(
-                "thread '{}' panicked '{}' at {:?}\n{:?}",
-                name,
-                msg,
-                loc.unwrap_or_else(|| "<unknown>".to_owned()),
-                bt
+            let bt = backtrace::Backtrace::new();
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
             );
         } else {
             orig_hook(info);
@@ -489,7 +494,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one with a
         // terminal logger.
-        if let Some(level) = ::log::max_log_level().to_log_level() {
+        if let Some(level) = log::max_log_level().to_log_level() {
             let drainer = logger::term_drainer();
             let _ = logger::init_log(
                 drainer,
@@ -512,6 +517,16 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     })
 }
 
+#[inline]
+pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
+    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
+    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
+    // here.
+    let mut new_vec = Vec::with_capacity(vec.capacity());
+    new_vec.extend_from_slice(vec);
+    new_vec
+}
+
 /// Checks environment variables that affect TiKV.
 pub fn check_environment_variables() {
     if cfg!(unix) && env::var("TZ").is_err() {
@@ -521,14 +536,16 @@ pub fn check_environment_variables() {
 
     if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
         info!(
-            "environment variable `GRPC_POLL_STRATEGY` is present, {}",
-            var
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
         );
     }
 
     for proxy in &["http_proxy", "https_proxy"] {
         if let Ok(var) = env::var(proxy) {
-            info!("environment variable `{}` is present, `{}`", proxy, var);
+            info!("environment variable is present";
+                *proxy => var
+            );
         }
     }
 }
@@ -703,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = ::panic_hook::recover_safe(|| {
+        let res = panic_hook::recover_safe(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });

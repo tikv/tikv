@@ -1,10 +1,12 @@
 [package]
 name = "log_wrappers"
 version = "0.0.1"
+edition = "2018"
 publish = false
 
 [dependencies]
 slog = "2.3"
 slog-term = "2.4"
 hex = "0.3"
-kvproto = { path = "../kvproto" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tikv_alloc = { path = "../tikv_alloc" }

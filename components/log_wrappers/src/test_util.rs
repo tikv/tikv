@@ -29,15 +29,15 @@ impl SyncLoggerBuffer {
 
     /// Builds a `slog::Logger` over this buffer which uses compact format and always output `TIME`
     /// in the time field.
-    pub fn build_logger(&self) -> ::slog::Logger {
+    pub fn build_logger(&self) -> slog::Logger {
         use slog::Drain;
 
-        let decorator = ::slog_term::PlainDecorator::new(self.clone());
-        let drain = ::slog_term::CompactFormat::new(decorator)
-            .use_custom_timestamp(|w: &mut io::Write| w.write(b"TIME").map(|_| ()))
+        let decorator = slog_term::PlainDecorator::new(self.clone());
+        let drain = slog_term::CompactFormat::new(decorator)
+            .use_custom_timestamp(|w: &mut dyn io::Write| w.write(b"TIME").map(|_| ()))
             .build();
         let drain = sync::Mutex::new(drain).fuse();
-        ::slog::Logger::root(drain, o!())
+        slog::Logger::root(drain, o!())
     }
 
     fn lock(&self) -> sync::MutexGuard<Vec<u8>> {

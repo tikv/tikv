@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::Result;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
@@ -25,7 +25,7 @@ pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
@@ -33,7 +33,7 @@ impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -102,9 +102,9 @@ mod tests {
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::datum::Datum;
-    use storage::SnapshotStore;
-    use util::codec::number::NumberEncoder;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::storage::SnapshotStore;
+    use crate::util::codec::number::NumberEncoder;
 
     use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
