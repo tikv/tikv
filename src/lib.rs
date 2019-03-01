@@ -14,7 +14,6 @@
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "200"]
-#![feature(label_break_value)]
 #![feature(fnbox)]
 #![feature(alloc)]
 #![feature(slice_patterns)]

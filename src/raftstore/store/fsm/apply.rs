@@ -2387,11 +2387,7 @@ impl ApplyFsm {
             ctx.timer = Some(SlowTimer::new());
         }
         let apply_index = self.delegate.apply_state.get_applied_index();
-        'check: {
-            if apply_index >= catch_up_logs.merge.get_commit() {
-                break 'check;
-            }
-
+        if apply_index < catch_up_logs.merge.get_commit() {
             let entries =
                 self.delegate
                     .load_entries_for_merge(ctx, &catch_up_logs.merge, apply_index);
