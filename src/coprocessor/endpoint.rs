@@ -435,56 +435,6 @@ impl<E: Engine> Endpoint<E> {
             })
     }
 
-    /*
-    /// Handle a stream request and run on the read pool. Returns a stream producing each
-    /// result, which must be a `Response` and will never fail. If there are errors during
-    /// handling, they will be embedded in the `Response`.
-    fn handle_stream_request(
-        &self,
-        req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let (tx, rx) = mpsc::channel::<coppb::Response>(self.stream_channel_size);
-        let engine = self.engine.clone();
-        let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = box Tracker::new(req_ctx);
-
-        let tx1 = tx.clone();
-        let result = self.read_pool.future_execute(priority, move |ctxd| {
-            tracker.attach_ctxd(ctxd);
-
-            Self::handle_stream_request_impl(engine, tracker, handler_builder)
-                .or_else(|e| Ok::<_, mpsc::SendError<_>>(make_error_response(e)))
-                // Although returning `Ok()` from `or_else` will continue the stream,
-                // our stream has already ended when error is returned.
-                // Thus the stream will not continue any more even after we converting errors
-                // into a response.
-                .forward(tx1)
-        });
-
-        match result {
-            Err(_) => {
-                stream::once::<_, mpsc::SendError<_>>(Ok(make_error_response(Error::Full)))
-                    .forward(tx)
-                    .then(|_| {
-                        // ignore sink send failures
-                        Ok::<_, ()>(())
-                    })
-                    // Should not be blocked, since the channel is large enough to hold 1 value.
-                    .wait()
-                    .unwrap();
-            }
-            Ok(cpu_future) => {
-                // Keep running stream producer
-                cpu_future.forget();
-            }
-        }
-
-        rx
-    }
-    */
-
     /// Parses and handles a stream request. Returns a stream that produce each result in a
     /// `Response` and will never fail. If there are errors during parsing or handling, they will
     /// be converted into a `Response` as the only stream item.
