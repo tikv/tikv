@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(clippy::blacklisted_name)]
+
 #[macro_use]
 extern crate criterion;
 
@@ -73,7 +75,7 @@ fn bench_table_scan_primary_key(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }
@@ -365,7 +367,7 @@ fn bench_table_scan_point_range(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }
@@ -407,7 +409,7 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }
@@ -464,7 +466,7 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }
@@ -554,7 +556,7 @@ fn bench_normal_index_scan_primary_key(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }
@@ -603,7 +605,7 @@ fn bench_normal_index_scan_index(c: &mut Criterion) {
             store
                 .insert_into(&table)
                 .set(&table["id"], Datum::I64(i))
-                .set(&table["foo"], Datum::I64(0xDEADBEEF))
+                .set(&table["foo"], Datum::I64(0xDEAD_BEEF))
                 .execute();
             store.commit();
         }

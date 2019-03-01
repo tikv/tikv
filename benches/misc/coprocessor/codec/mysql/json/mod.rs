@@ -13,6 +13,7 @@
 
 use serde_json;
 
+use std::borrow::ToOwned;
 use std::io;
 use std::io::prelude::*;
 use std::process::{Command, Stdio};
@@ -61,7 +62,7 @@ pub fn load_test_jsons() -> io::Result<Vec<String>> {
     download_and_extract_file(url).map(|raw: String| {
         raw.split('\n')
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_owned())
+            .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
     })
 }

@@ -127,6 +127,7 @@ impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
 }
 
 /// A basic struct for a round of polling.
+#[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
     control: Option<Box<C>>,

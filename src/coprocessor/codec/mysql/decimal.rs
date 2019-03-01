@@ -13,6 +13,7 @@
 
 use byteorder::WriteBytesExt;
 use num;
+use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -2304,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::approx_constant)]
+    #[allow(clippy::approx_constant, clippy::excessive_precision)]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),
@@ -2641,7 +2642,7 @@ mod tests {
                 .unwrap();
             let shifted = dec.shift_with_word_buf_len(shift, word_buf_len);
             let res = shifted.map(|d| d.to_string());
-            assert_eq!(res, exp.map(|s| s.to_owned()));
+            assert_eq!(res, exp.map(ToOwned::to_owned));
         }
     }
 

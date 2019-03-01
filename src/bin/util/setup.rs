@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::ToOwned;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -108,7 +109,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
-        config.pd.endpoints = endpoints.map(|e| e.to_owned()).collect();
+        config.pd.endpoints = endpoints.map(ToOwned::to_owned).collect();
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {

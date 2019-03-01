@@ -473,7 +473,7 @@ mod tests {
     fn test_ok_case_zero_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, exp: Datum) {
         match expr_build(ctx, sig, &[]) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
@@ -481,15 +481,14 @@ mod tests {
         let children = &[datum_expr(arg)];
         match expr_build(ctx, sig, children) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
     fn test_err_case_one_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg: Datum) {
         let children = &[datum_expr(arg)];
-        match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(got, Datum::Null),
-            Err(_) => assert!(true),
+        if let Ok(got) = expr_build(ctx, sig, children) {
+            assert_eq!(got, Datum::Null);
         }
     }
 
@@ -503,15 +502,14 @@ mod tests {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
         match expr_build(ctx, sig, children) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
     fn test_err_case_two_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg1: Datum, arg2: Datum) {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
-        match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(got, Datum::Null),
-            Err(_) => assert!(true),
+        if let Ok(got) = expr_build(ctx, sig, children) {
+            assert_eq!(got, Datum::Null);
         }
     }
 

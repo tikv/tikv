@@ -30,11 +30,13 @@ extern crate vlog;
 
 mod util;
 
+use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
+use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -94,7 +96,7 @@ fn new_debug_executor(
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
-                .map(|p| p.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
             let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
@@ -592,7 +594,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        let cfs = cfs.into_iter().map(|s| s.to_owned()).collect();
+        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect();
         let mut req = RegionSizeRequest::new();
         req.set_cfs(RepeatedField::from_vec(cfs));
         req.set_region_id(region);
@@ -1857,10 +1859,10 @@ fn main() {
         let regions = matches
             .values_of("regions")
             .unwrap()
-            .map(|r| r.parse())
+            .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let mut cfg = PdConfig::default();
         cfg.endpoints = pd_urls;
         if let Err(e) = cfg.validate() {
@@ -1888,10 +1890,10 @@ fn main() {
             let regions = matches
                 .values_of("regions")
                 .unwrap()
-                .map(|r| r.parse())
+                .map(str::parse)
                 .collect::<Result<Vec<_>, _>>()
                 .expect("parse regions fail");
-            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
             let mut cfg = PdConfig::default();
             v1!(
                 "Recover regions: {:?}, pd: {:?}, read_only: {}",
@@ -1909,7 +1911,7 @@ fn main() {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
-                ids.map(|r| r.parse())
+                ids.map(str::parse)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
@@ -1919,7 +1921,7 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
         let mut pd_cfg = PdConfig::default();
-        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.recreate_region(mgr, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
@@ -2203,7 +2205,7 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
 
 fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut args: Vec<String> = match cmd.values_of("") {
-        Some(v) => v.map(|x| x.to_owned()).collect(),
+        Some(v) => v.map(ToOwned::to_owned).collect(),
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
