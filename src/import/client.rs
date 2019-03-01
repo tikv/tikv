@@ -112,7 +112,7 @@ impl Client {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -120,7 +120,7 @@ impl Client {
             let future = match client.switch_mode_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("switch mode failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -140,7 +140,7 @@ impl Client {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -148,7 +148,7 @@ impl Client {
             let future = match client.compact_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("compact failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };

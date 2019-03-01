@@ -26,7 +26,7 @@ where
 {
     let err = make_rpc_error(Error::from(error));
     ctx.spawn(sink.fail(err).map_err(|e| {
-        warn!("send rpc error: {:?}", e);
+        warn!("send rpc failed"; "err" => %e);
     }));
 }
 
@@ -46,6 +46,6 @@ macro_rules! send_rpc_response {
                 $sink.fail(make_rpc_error(e))
             }
         };
-        res.map_err(|e| warn!("send rpc response: {:?}", e))
+        res.map_err(|e| warn!("send rpc response"; "err" => %e))
     }};
 }
