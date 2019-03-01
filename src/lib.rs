@@ -14,12 +14,9 @@
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "200"]
-#![feature(fnbox)]
-#![feature(alloc)]
-#![feature(slice_patterns)]
-#![feature(integer_atomics)]
-#![feature(proc_macro_hygiene)]
 #![feature(cell_update)]
+#![feature(fnbox)]
+#![feature(proc_macro_hygiene)]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
