@@ -714,12 +714,11 @@ mod tests {
             None,
             None,
         );
-        let resp = cop
+        assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
             .unwrap()
             .wait()
-            .unwrap();
-        assert_eq!(resp.get_other_error(), OUTDATED_ERROR_MSG);
+            .is_err());
     }
 
     #[test]
