@@ -76,7 +76,7 @@ pub fn init_log_for_test() {
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
 
-    // Collects following targes.
+    // Collects following targets.
     const ENABLED_TARGETS: &[&str] = &[
         "tikv::",
         "tests::",
