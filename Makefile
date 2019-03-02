@@ -133,3 +133,103 @@ clean:
 
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" -- --nocapture
+
+
+
+# The below x- targets are temporary, for experimenting with new profiles,
+# specifically in pursuit of compile time speedups.
+#
+# re https://github.com/tikv/tikv/issues/4189
+#
+# The idea here is that there are more "profiles" than just "dev" and "release".
+# In particular, there is an optimized dev profile, here "dev-opt". The below
+# profiles are intentionally named differently from the stock cargo 'dev'
+# and 'release' profiles to avoid confusion, but eventually we might expect
+# e.g. dev-opt to become the 'release' and 'bench' profiles, and 'dev-opt'
+# to become the 'dev' and perhaps 'test' profiles; with the _real_ release
+# profile being created with a config file.
+#
+# They can be invoked as:
+#
+#     $ make x-build-dev-nopt   # A typical dev profile
+#                               #   (fast build / slow run)
+#     $ make x-build-dev-opt    # An optimized dev profile
+#                               #   (slow build / fast run)
+#     $ make x-build-prod       # A release build
+#                               #   (slowest build / fastest run)
+#
+# Shortcuts for the first two are
+#
+#     $ make x-build
+#     $ make x-build-opt
+#
+# The below rules all rely on using a .cargo/config file to override various
+# profiles. Within those config files we'll experiment with compile-time
+# optimizations which can't be done with Cargo.toml alone.
+#
+# Eventually, we'll merge as much of the configs into Cargo.toml as possible,
+# and merge the below commands into the rest of the makefile.
+#
+# None of the build profiles has debuginfo on by default because it increases
+# the build time by ~20%. The easiest way to build with debuginfo is by setting
+# the DEBUG makefile variable,
+#
+#     $ make x-build DEBUG=1
+#
+# To pass extra arguments to cargo you can set CARGO_ARGS,
+#
+#     $ make x-build CARGO_ARGS="--all"
+
+DEV_OPT_CONFIG=etc/cargo.config.dev-opt
+DEV_NOPT_CONFIG=etc/cargo.config.dev-nopt
+PROD_CONFIG=etc/cargo.config.prod
+
+ifneq ($(DEBUG),)
+# FIXME: Set debuginfo with cargo config env vars, not rustflags
+export X_RUSTFLAGS:=-Cdebuginfo=2
+endif
+
+export X_CARGO_ARGS:=${CARGO_ARGS}
+
+x-build-dev-opt:
+	X_CARGO_CMD=build \
+	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
+	X_CARGO_RELEASE=1 \
+	X_CARGO_CONFIG_FILE="${DEV_OPT_CONFIG}" \
+	bash etc/run-cargo.sh
+
+x-build-dev-nopt:
+	X_CARGO_CMD=build \
+	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
+	X_CARGO_RELEASE=0 \
+	X_CARGO_CONFIG_FILE="${DEV_NOPT_CONFIG}" \
+	bash etc/run-cargo.sh
+
+# This is a profile for _actual releases_. Devs should almost never be using
+# this. It is a very slow build, and only a bit faster.
+x-build-prod:
+	X_CARGO_CMD=build \
+	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
+	X_CARGO_RELEASE=1 \
+	X_CARGO_CONFIG_FILE="${PROD_CONFIG}" \
+	bash etc/run-cargo.sh
+
+x-build: x-build-dev-nopt
+
+x-build-opt: x-build-dev-opt
+
+# Devs might want to use the config files but not the makefiles.
+# These are rules to put each config file in place.
+
+x-dev-opt-config:
+	mkdir -p .cargo && cp -b "${DEV_OPT_CONFIG}" .cargo/config
+
+x-dev-nopt-config:
+	mkdir -p .cargo && cp -b "${DEV_NOPT_CONFIG}" .cargo/config
+
+x-prod-config:
+	mkdir -p .cargo && cp -b "${PROD_CONFIG}" .cargo/config
+
+x-clean:
+	-rm -r .cargo
+	cargo clean
