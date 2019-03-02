@@ -11,9 +11,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod reader;
-mod scanner;
-pub use self::reader::MvccReader;
-pub use self::scanner::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
+pub mod interface;

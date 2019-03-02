@@ -149,7 +149,6 @@ impl SSTInfo {
         let path = info.file_path();
         let mut f = env.new_sequential_file(path.to_str().unwrap(), EnvOptions::new())?;
         f.read_to_end(&mut data)?;
-        assert_eq!(data.len(), info.file_size() as usize);
 
         // This range doesn't contain the data prefix, like the region range.
         let mut range = Range::new();
@@ -166,6 +165,8 @@ impl SSTInfo {
 
 pub struct SSTWriter {
     env: Arc<Env>,
+    // we need to preserve base env for reading raw file while env is an encrypted env
+    base_env: Option<Arc<Env>>,
     default: SstFileWriter,
     default_entries: u64,
     write: SstFileWriter,
@@ -176,7 +177,9 @@ impl SSTWriter {
     pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig) -> Result<SSTWriter> {
         // Using a memory environment to generate SST in memory
         let mut env = Arc::new(Env::new_mem());
+        let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
+            base_env = Some(Arc::clone(&env));
             env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
 
@@ -197,6 +200,7 @@ impl SSTWriter {
 
         Ok(SSTWriter {
             env,
+            base_env,
             default,
             default_entries: 0,
             write,
@@ -225,11 +229,19 @@ impl SSTWriter {
         let mut infos = Vec::new();
         if self.default_entries > 0 {
             let info = self.default.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_DEFAULT)?);
+            infos.push(SSTInfo::new(
+                Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
+                info,
+                CF_DEFAULT,
+            )?);
         }
         if self.write_entries > 0 {
             let info = self.write.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_WRITE)?);
+            infos.push(SSTInfo::new(
+                Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
+                info,
+                CF_WRITE,
+            )?);
         }
         Ok(infos)
     }

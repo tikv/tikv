@@ -98,7 +98,7 @@ impl<Client: ImportClient> RangeContext<Client> {
         self.region = match self.client.get_region(key) {
             Ok(region) => Some(region),
             Err(e) => {
-                error!("get region: {:?}", e);
+                error!("get region failed"; "err" => %e);
                 None
             }
         }
