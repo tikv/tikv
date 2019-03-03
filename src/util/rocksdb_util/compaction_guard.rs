@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::raftstore::store::keys::{data_end_key, origin_key};
@@ -19,19 +20,20 @@ use rocksdb::CompactionGuard;
 
 pub struct RegionCompactionGuard<R: RegionInfoProvider> {
     initialized: AtomicBool,
-    region_info_provider: Option<R>,
+    region_info_provider: RefCell<Option<R>>,
 }
 
 impl<R: RegionInfoProvider> RegionCompactionGuard<R> {
     pub fn new() -> Self {
         Self {
             initialized: AtomicBool::new(false),
-            region_info_provider: None,
+            region_info_provider: RefCell::new(None),
         }
     }
 
-    pub fn set_region_info_provider(&mut self, region_info_provider: R) {
-        self.region_info_provider = Some(region_info_provider);
+    pub fn set_region_info_provider(&self, region_info_provider: R) {
+        self.region_info_provider
+            .replace(Some(region_info_provider));
         self.initialized.store(true, Ordering::SeqCst);
     }
 }
@@ -39,8 +41,9 @@ impl<R: RegionInfoProvider> RegionCompactionGuard<R> {
 impl<R: RegionInfoProvider> CompactionGuard for RegionCompactionGuard<R> {
     fn get_guards_in_range(&self, start: &[u8], end: &[u8]) -> Vec<Vec<u8>> {
         if self.initialized.load(Ordering::SeqCst) {
-            let regions = self
-                .region_info_provider
+            let provider = self.region_info_provider.borrow();
+
+            let regions = provider
                 .as_ref()
                 .unwrap()
                 .get_regions_in_range(origin_key(start), origin_key(end))

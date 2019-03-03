@@ -82,8 +82,6 @@ use tikv::util::time::Monitor;
 use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
 
-use rocksdb::CompactionGuard;
-
 const RESERVED_OPEN_FDS: u64 = 1000;
 
 fn check_system_config(config: &TiKvConfig) {
@@ -192,12 +190,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
     }
     let mut kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let mut region_compaction_guard =
-        Arc::new(Box::new(RegionCompactionGuard::<RegionInfoAccessor>::new()));
+    let region_compaction_guard = Arc::new(RegionCompactionGuard::<RegionInfoAccessor>::new());
     for cf_opts in &mut kv_cfs_opts {
         if cf_opts.cf == CF_WRITE || cf_opts.cf == CF_DEFAULT {
             let compaction_guard = Arc::clone(&region_compaction_guard);
-            cf_opts.options.set_compaction_guard(compaction_guard);
+            cf_opts
+                .options
+                .set_compaction_guard(compaction_guard)
+                .unwrap();
         }
     }
     let kv_engine = Arc::new(
