@@ -74,15 +74,15 @@ use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
-use tikv::storage::{
-    self, AutoGCConfig, RegionInfoProvider, CF_DEFAULT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
-};
+use tikv::storage::{self, AutoGCConfig, CF_DEFAULT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb_util::compaction_guard::RegionCompactionGuard;
 use tikv::util::rocksdb_util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::{self, SecurityManager};
 use tikv::util::time::Monitor;
 use tikv::util::worker::{Builder, FutureWorker};
 use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
+
+use rocksdb::CompactionGuard;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -196,9 +196,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::new(Box::new(RegionCompactionGuard::<RegionInfoAccessor>::new()));
     for cf_opts in &mut kv_cfs_opts {
         if cf_opts.cf == CF_WRITE || cf_opts.cf == CF_DEFAULT {
-            cf_opts
-                .options
-                .set_compaction_guard(Arc::clone(&region_compaction_guard));
+            let compaction_guard = Arc::clone(&region_compaction_guard);
+            cf_opts.options.set_compaction_guard(compaction_guard);
         }
     }
     let kv_engine = Arc::new(
