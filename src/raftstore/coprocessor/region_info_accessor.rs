@@ -450,7 +450,7 @@ impl RegionCollector {
     ) {
         let mut regions = vec![];
         let start_key = data_key(&start);
-        let end_key = data_key(&end);
+        let end_key = data_end_key(&end);
         for (_, region_id) in self
             .region_ranges
             .range((Excluded(start_key), Excluded(end_key)))

@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::raftstore::store::keys::{data_end_key, origin_key};
+use crate::raftstore::store::keys::{data_end_key, origin_key, validate_data_key};
 use crate::storage::engine::RegionInfoProvider;
 use rocksdb::CompactionGuard;
 
@@ -43,10 +43,21 @@ impl<R: RegionInfoProvider> CompactionGuard for RegionCompactionGuard<R> {
         if self.initialized.load(Ordering::SeqCst) {
             let provider = self.region_info_provider.borrow();
 
+            let s = if !start.is_empty() && validate_data_key(start) {
+                origin_key(start)
+            } else {
+                &[]
+            };
+            let e = if !start.is_empty() && validate_data_key(end) {
+                origin_key(end)
+            } else {
+                &[]
+            };
+
             let regions = provider
                 .as_ref()
                 .unwrap()
-                .get_regions_in_range(origin_key(start), origin_key(end))
+                .get_regions_in_range(s, e)
                 .unwrap_or_else(|e| panic!("fail to get regions in range, err: {:?}", e));
             let mut guards = Vec::with_capacity(regions.len());
             for region in regions {
