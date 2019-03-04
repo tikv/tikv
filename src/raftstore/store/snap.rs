@@ -391,14 +391,14 @@ impl Snap {
                     return Err(e);
                 }
                 warn!(
-                    "failed to load existent snapshot meta when try to build {}: {:?}",
-                    s.path(),
-                    e
+                    "failed to load existent snapshot meta when try to build snapshot";
+                    "snapshot" => %s.path(),
+                    "err" => ?e,
                 );
                 if !retry_delete_snapshot(deleter, key, &s) {
                     warn!(
-                        "failed to delete snapshot {} because it's already registered elsewhere",
-                        s.path()
+                        "failed to delete snapshot because it's already registered elsewhere";
+                        "snapshot" => %s.path(),
                     );
                     return Err(e);
                 }
@@ -699,16 +699,17 @@ impl Snap {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
-                        "[region {}] file {} is corrupted, will rebuild: {:?}",
-                        region.get_id(),
-                        self.path(),
-                        e
+                        "snapshot is corrupted, will rebuild";
+                        "region_id" => region.get_id(),
+                        "snapshot" => %self.path(),
+                        "err" => ?e,
                     );
                     if !retry_delete_snapshot(deleter, &self.key, self) {
                         error!(
-                            "[region {}] failed to delete corrupted snapshot because it's \
-                             already registered elsewhere",
-                            self.path()
+                            "failed to delete corrupted snapshot because it's \
+                             already registered elsewhere";
+                            "region_id" => region.get_id(),
+                            "snapshot" => %self.path(),
                         );
                         return Err(e);
                     }
@@ -755,12 +756,12 @@ impl Snap {
                 .with_label_values(&[cf])
                 .observe(cf_size as f64);
             info!(
-                "[region {}] scan snapshot {}, cf {}, key count {}, size {}",
-                region.get_id(),
-                self.path(),
-                cf,
-                cf_key_count,
-                cf_size
+                "scan snapshot of one cf";
+                "region_id" => region.get_id(),
+                "snapshot" => self.path(),
+                "cf" => cf,
+                "key_count" => cf_key_count,
+                "size" => cf_size,
             );
         }
 
@@ -873,12 +874,12 @@ impl Snapshot for Snap {
 
         SNAPSHOT_BUILD_TIME_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
         info!(
-            "[region {}] scan snapshot {}, size {}, key count {}, takes {:?}",
-            region.get_id(),
-            self.path(),
-            total_size,
-            stat.kv_count,
-            t.elapsed()
+            "scan snapshot";
+            "region_id" => region.get_id(),
+            "snapshot" => self.path(),
+            "key_count" => stat.kv_count,
+            "size" => total_size,
+            "takes" => ?t.elapsed(),
         );
 
         Ok(())
@@ -896,7 +897,10 @@ impl Snapshot for Snap {
     }
 
     fn delete(&self) {
-        debug!("deleting {}", self.path());
+        debug!(
+            "deleting snapshot file";
+            "snapshot" => %self.path(),
+        );
         for cf_file in &self.cf_files {
             delete_file_if_exist(&cf_file.clone_path).unwrap();
             if self.hold_tmp_files {
@@ -921,7 +925,10 @@ impl Snapshot for Snap {
     }
 
     fn save(&mut self) -> io::Result<()> {
-        debug!("saving to {}", self.path());
+        debug!(
+            "saving to snapshot file";
+            "snapshot" => %self.path(),
+        );
         for cf_file in &mut self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty cf file.
@@ -1126,7 +1133,10 @@ struct SnapManagerCore {
 fn notify_stats(ch: Option<&SendCh>) {
     if let Some(ch) = ch {
         if let Err(e) = ch.try_send(Msg::StoreMsg(StoreMsg::SnapshotStats)) {
-            error!("notify snapshot stats failed {:?}", e)
+            error!(
+                "failed to notify snapshot stats";
+                "err" => ?e,
+            )
         }
     }
 }
@@ -1186,7 +1196,11 @@ impl SnapManager {
             .filter_map(|p| {
                 let p = match p {
                     Err(e) => {
-                        error!("failed to list content of {}: {:?}", core.base, e);
+                        error!(
+                            "failed to list content of directory";
+                            "directory" => %core.base,
+                            "err" => ?e,
+                        );
                         return None;
                     }
                     Ok(p) => p,
@@ -1211,7 +1225,10 @@ impl SnapManager {
                     },
                 );
                 if numbers.len() != 3 {
-                    error!("failed to parse snapkey from {}", name);
+                    error!(
+                        "failed to parse snapkey";
+                        "snap_key" => %name,
+                    );
                     return None;
                 }
                 let snap_key = SnapKey::new(numbers[0], numbers[1], numbers[2]);
@@ -1337,12 +1354,19 @@ impl SnapManager {
     }
 
     pub fn register(&self, key: SnapKey, entry: SnapEntry) {
-        debug!("register [key: {}, entry: {:?}]", key, entry);
+        debug!(
+            "register snapshot";
+            "key" => %key,
+            "entry" => ?entry,
+        );
         let mut core = self.core.wl();
         match core.registry.entry(key) {
             Entry::Occupied(mut e) => {
                 if e.get().contains(&entry) {
-                    warn!("{} is registered more than 1 time!!!", e.key());
+                    warn!(
+                        "snap key is registered more than once!";
+                        "key" => %e.key(),
+                    );
                     return;
                 }
                 e.get_mut().push(entry);
@@ -1356,7 +1380,11 @@ impl SnapManager {
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
-        debug!("deregister [key: {}, entry: {:?}]", key, entry);
+        debug!(
+            "deregister snapshot";
+            "key" => %key,
+            "entry" => ?entry,
+        );
         let mut need_clean = false;
         let mut handled = false;
         let mut core = self.core.wl();
@@ -1373,7 +1401,11 @@ impl SnapManager {
             notify_stats(self.ch.as_ref());
             return;
         }
-        warn!("stale deregister key: {} {:?}", key, entry);
+        warn!(
+            "stale deregister snapshot";
+            "key" => %key,
+            "entry" => ?entry,
+        );
     }
 
     pub fn stats(&self) -> SnapStats {
@@ -1410,16 +1442,18 @@ impl SnapshotDeleter for SnapManager {
             if let Some(e) = core.registry.get(key) {
                 if e.len() > 1 {
                     info!(
-                        "skip to delete {} since it's registered more than 1, registered \
-                         entries {:?}",
-                        snap.path(),
-                        e
+                        "skip to delete snapshot since it's registered more than once";
+                        "snapshot" => %snap.path(),
+                        "registered_entries" => ?e,
                     );
                     return false;
                 }
             }
         } else if core.registry.contains_key(key) {
-            info!("skip to delete {} since it's registered", snap.path());
+            info!(
+                "skip to delete snapshot since it's registered";
+                "snapshot" => %snap.path(),
+            );
             return false;
         }
         snap.delete();
