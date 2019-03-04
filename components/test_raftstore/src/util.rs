@@ -482,7 +482,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: RaftRouter,
+    router: RaftRouter,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -492,9 +492,10 @@ pub fn create_test_engine(
         None => {
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
-            let tx = Mutex::new(tx);
+            let router = Mutex::new(router);
             let cmpacted_handler = box move |event| {
-                tx.lock()
+                router
+                    .lock()
                     .unwrap()
                     .send_control(StoreMsg::CompactedEvent(event))
                     .unwrap();

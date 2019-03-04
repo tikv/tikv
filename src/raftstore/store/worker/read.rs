@@ -224,7 +224,7 @@ pub struct LocalReader<C: ProposalRouter> {
     // region id -> ReadDelegate
     delegates: HashMap<u64, ReadDelegate>,
     // A channel to raftstore.
-    ch: C,
+    router: C,
     tag: String,
 }
 
@@ -249,7 +249,7 @@ impl LocalReader<RaftRouter> {
             delegates,
             store_id,
             kv_engine: builder.engines.kv.clone(),
-            ch: builder.router.clone(),
+            router: builder.router.clone(),
             metrics: Default::default(),
             tag: format!("[store {}]", store_id),
         }
@@ -267,7 +267,7 @@ impl<C: ProposalRouter> LocalReader<C> {
         debug!("localreader redirects command"; "tag" => &self.tag, "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::new();
-        match self.ch.send(cmd) {
+        match self.router.send(cmd) {
             Ok(()) => return,
             Err(TrySendError::Full(c)) => {
                 self.metrics.borrow_mut().rejected_by_channel_full += 1;
@@ -608,7 +608,7 @@ mod tests {
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_id,
-            ch,
+            router: ch,
             kv_engine: Arc::new(db),
             delegates: HashMap::default(),
             metrics: Default::default(),

@@ -38,7 +38,7 @@ impl fmt::Display for Task {
 
 pub struct Runner<C, S> {
     store_id: u64,
-    store_ch: S,
+    store_router: S,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
 }
@@ -46,13 +46,13 @@ pub struct Runner<C, S> {
 impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     pub fn new(
         store_id: u64,
-        store_ch: S,
+        store_router: S,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
     ) -> Runner<C, S> {
         Runner {
             store_id,
-            store_ch,
+            store_router,
             importer,
             pd_client,
         }
@@ -97,7 +97,7 @@ impl<C: PdClient, S: StoreRouter> Runner<C, S> {
         // peer, which may ingest the stale SST before it is
         // destroyed.
         let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
-        if let Err(e) = self.store_ch.send(msg) {
+        if let Err(e) = self.store_router.send(msg) {
             error!("send validate sst result failed"; "err" => %e);
         }
     }

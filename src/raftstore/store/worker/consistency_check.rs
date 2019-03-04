@@ -55,12 +55,12 @@ impl Display for Task {
 }
 
 pub struct Runner<C: CasualRouter> {
-    ch: C,
+    router: C,
 }
 
 impl<C: CasualRouter> Runner<C> {
-    pub fn new(ch: C) -> Runner<C> {
-        Runner { ch }
+    pub fn new(router: C) -> Runner<C> {
+        Runner { router }
     }
 
     /// Computes the hash of the Region.
@@ -129,7 +129,7 @@ impl<C: CasualRouter> Runner<C> {
             index,
             hash: checksum,
         };
-        if let Err(e) = self.ch.send(region_id, msg) {
+        if let Err(e) = self.router.send(region_id, msg) {
             warn!(
                 "failed to send hash compute result";
                 "region_id" => region_id,

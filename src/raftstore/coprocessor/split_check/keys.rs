@@ -91,7 +91,7 @@ pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
-    ch: Mutex<C>,
+    router: Mutex<C>,
 }
 
 impl<C: CasualRouter> KeysCheckObserver<C> {
@@ -99,13 +99,13 @@ impl<C: CasualRouter> KeysCheckObserver<C> {
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
-        ch: C,
+        router: C,
     ) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             region_max_keys,
             split_keys,
             batch_split_limit,
-            ch: Mutex::new(ch),
+            router: Mutex::new(router),
         }
     }
 }
@@ -142,7 +142,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
         };
 
         let res = CasualMessage::RegionApproximateKeys { keys: region_keys };
-        if let Err(e) = self.ch.lock().unwrap().send(region_id, res) {
+        if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
             warn!(
                 "failed to send approximate region keys";
                 "region_id" => region_id,

@@ -156,15 +156,15 @@ impl Display for Task {
 
 pub struct Runner<S> {
     engine: Arc<DB>,
-    ch: S,
+    router: S,
     coprocessor: Arc<CoprocessorHost>,
 }
 
 impl<S: CasualRouter> Runner<S> {
-    pub fn new(engine: Arc<DB>, ch: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
         Runner {
             engine,
-            ch,
+            router,
             coprocessor,
         }
     }
@@ -229,7 +229,7 @@ impl<S: CasualRouter> Runner<S> {
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
             let msg = new_split_region(region_epoch, split_keys);
-            let res = self.ch.send(region_id, msg);
+            let res = self.router.send(region_id, msg);
             if let Err(e) = res {
                 warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
             }
