@@ -61,7 +61,7 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 ctl:
-	@cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
@@ -69,9 +69,10 @@ run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
-	@cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+
 
 unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
