@@ -273,7 +273,7 @@ fn test_node_merge_slow_split_left() {
     test_node_merge_slow_split(false);
 }
 
-// Test if a merge handled properly when there is a unfinishing slow split before merge.
+// Test if a merge handled properly when there is a unfinished slow split before merge.
 fn test_node_merge_slow_split(is_right_derive: bool) {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
@@ -333,10 +333,6 @@ fn test_node_merge_slow_split(is_right_derive: bool) {
 
     cluster.must_put(b"k0", b"v0");
     cluster.clear_send_filters();
-    // once store 3 is not isolated anymore
-    // the message from other peer of new generated region may update `pending_cross_snap` epoch improperly,
-    // and left region will get a message with merge target then check `pengding_cross_snap` and may destory itself.
-    // And now, the right1 region has catched up logs and to merge already destroyed left region which causes a panic.
     must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 }
 
@@ -414,7 +410,7 @@ fn test_node_merge_dist_isolation() {
     must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
 }
 
-/// Similiar to `test_node_merge_dist_isolation`, but make the isolated store
+/// Similar to `test_node_merge_dist_isolation`, but make the isolated store
 /// way behind others so others have to send it a snapshot.
 #[test]
 fn test_node_merge_brain_split() {
@@ -448,6 +444,10 @@ fn test_node_merge_brain_split() {
     must_get_equal(&cluster.get_engine(3), b"k21", b"v21");
 
     cluster.add_send_filter(IsolationFilterFactory::new(3));
+    // So cluster becomes:
+    //  left region: 1(leader) 2 I 3
+    // right region: 1(leader) 2 I 3
+    // I means isolation.
     pd_client.must_merge(left.get_id(), right.get_id());
 
     for i in 0..100 {
@@ -461,6 +461,7 @@ fn test_node_merge_brain_split() {
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k40", b"v5");
 
+    // Make sure the two regions are already merged on store 3.
     let state_key = keys::region_state_key(left.get_id());
     let state: RegionLocalState = cluster
         .get_engine(3)
