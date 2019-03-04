@@ -460,9 +460,8 @@ impl PeerStorage {
         let apply_state = init_apply_state(&engines.kv, region)?;
         if raft_state.get_last_index() < apply_state.get_applied_index() {
             panic!(
-                "[region {}] {} unexpected raft log index: last_index {} < applied_index {}",
-                region.get_id(),
-                peer_id,
+                "{} unexpected raft log index: last_index {} < applied_index {}",
+                tag,
                 raft_state.get_last_index(),
                 apply_state.get_applied_index()
             );
@@ -741,12 +740,7 @@ impl PeerStorage {
         }
 
         if SnapState::Relax != *snap_state {
-            panic!(
-                "[region {}] {} unexpected state: {:?}",
-                self.region.get_id(),
-                self.peer_id,
-                *snap_state
-            );
+            panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
         if *tried_cnt >= MAX_SNAP_TRY_CNT {
@@ -989,11 +983,7 @@ impl PeerStorage {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
                     // TODO: cleanup region and treat it as tombstone.
-                    panic!(
-                        "[region {}] {} applying snapshot failed",
-                        self.region.get_id(),
-                        self.peer_id
-                    );
+                    panic!("{} applying snapshot failed", self.tag,);
                 } else {
                     return true;
                 }
