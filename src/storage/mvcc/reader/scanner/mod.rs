@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,19 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
-use std::result::Result as StdResult;
+mod backward;
+mod forward;
+mod util;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Other(err: Box<dyn StdError + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("{}", err)
-        }
-    }
-}
-
-pub type Result<T> = StdResult<T, Error>;
+pub use self::backward::{BackwardScanner, BackwardScannerBuilder};
+pub use self::forward::{ForwardScanner, ForwardScannerBuilder};
