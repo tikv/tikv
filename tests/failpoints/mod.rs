@@ -14,18 +14,12 @@
 #![recursion_limit = "100"]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 
-use fail;
-
 #[macro_use]
 extern crate lazy_static;
 #[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-
-use panic_hook;
-
-use test_util;
 
 #[cfg(not(feature = "no-fail"))]
 mod cases;

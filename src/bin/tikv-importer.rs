@@ -14,8 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-use serde_json;
-
 #[macro_use(
     slog_kv,
     slog_error,
@@ -26,7 +24,6 @@ use serde_json;
     slog_record_static
 )]
 extern crate slog;
-
 #[macro_use]
 extern crate slog_global;
 

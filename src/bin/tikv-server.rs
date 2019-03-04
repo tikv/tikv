@@ -26,7 +26,6 @@
     slog_record_static
 )]
 extern crate slog;
-
 #[macro_use]
 extern crate slog_global;
 

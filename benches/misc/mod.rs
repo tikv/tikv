@@ -15,8 +15,6 @@
 
 extern crate test;
 
-use tikv;
-
 mod channel;
 mod coprocessor;
 mod raftkv;

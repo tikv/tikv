@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv;
-
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
@@ -185,7 +183,7 @@ impl fmt::Debug for ServerClusterFactory {
 }
 
 fn main() {
-    tikv::util::config::check_max_open_fds(4096).unwrap();
+    ::tikv::util::config::check_max_open_fds(4096).unwrap();
 
     let mut criterion = Criterion::default().configure_from_args().sample_size(10);
     bench_raft_cluster(&mut criterion, NodeClusterFactory {});

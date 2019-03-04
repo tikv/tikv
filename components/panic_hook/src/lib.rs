@@ -19,7 +19,7 @@ use std::sync::{Once, ONCE_INIT};
 
 static INIT: Once = ONCE_INIT;
 // store the default panic hook defined in std.
-static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo) + 'static + Sync + Send)> = None;
+static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo<'_>) + 'static + Sync + Send)> = None;
 
 thread_local! {
     static MUTED: RefCell<bool> = RefCell::new(false)
@@ -45,7 +45,7 @@ pub fn unmute() {
 }
 
 /// Print the stacktrace according to the static MUTED.
-fn track_hook(p: &PanicInfo) {
+fn track_hook(p: &PanicInfo<'_>) {
     MUTED.with(|m| {
         if *m.borrow() {
             return;

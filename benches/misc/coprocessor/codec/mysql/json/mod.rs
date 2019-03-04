@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde_json;
-
 use std::borrow::ToOwned;
 use std::io;
 use std::io::prelude::*;
@@ -96,7 +94,7 @@ fn bench_encode_text(b: &mut Bencher) {
     b.iter(|| {
         for j in &jsons {
             buf.clear();
-            serde_json::to_writer(&mut buf, j).unwrap();
+            ::serde_json::to_writer(&mut buf, j).unwrap();
         }
     });
 }

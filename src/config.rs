@@ -1347,7 +1347,7 @@ impl TiKvConfig {
             .and_then(|mut f| {
                 let mut s = String::new();
                 f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
+                let c = ::toml::from_str(&s)?;
                 Ok(c)
             })
             .unwrap_or_else(|e| {
@@ -1359,7 +1359,7 @@ impl TiKvConfig {
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = ::toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;

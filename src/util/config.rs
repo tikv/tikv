@@ -706,17 +706,23 @@ mod check_kernel {
     pub fn check_kernel() -> Vec<ConfigError> {
         let params: Vec<(&str, i64, Box<Checker>)> = vec![
             // Check net.core.somaxconn.
-            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| {
-                got >= expect
-            }),
+            (
+                "/proc/sys/net/core/somaxconn",
+                32768,
+                Box::new(|got, expect| got >= expect),
+            ),
             // Check net.ipv4.tcp_syncookies.
-            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| {
-                got == expect
-            }),
+            (
+                "/proc/sys/net/ipv4/tcp_syncookies",
+                0,
+                Box::new(|got, expect| got == expect),
+            ),
             // Check vm.swappiness.
-            ("/proc/sys/vm/swappiness", 0, box |got, expect| {
-                got == expect
-            }),
+            (
+                "/proc/sys/vm/swappiness",
+                0,
+                Box::new(|got, expect| got == expect),
+            ),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -807,7 +813,7 @@ mod check_data_dir {
             Ok(path) => format!("{}", path.display()),
             Err(_) => String::from(fsname),
         };
-        let dev = device.trim_left_matches("/dev/");
+        let dev = device.trim_start_matches("/dev/");
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
