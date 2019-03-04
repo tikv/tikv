@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
+use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::{atomic, Arc};
@@ -24,7 +25,9 @@ use kvproto::raft_cmdpb::{
     self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
     TransferLeaderRequest, TransferLeaderResponse,
 };
-use kvproto::raft_serverpb::{MergeState, PeerState, RaftApplyState, RaftMessage};
+use kvproto::raft_serverpb::{
+    MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
+};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use rocksdb::rocksdb_options::WriteOptions;
@@ -38,6 +41,7 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
+use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
@@ -487,6 +491,7 @@ impl Peer {
         Ok(())
     }
 
+    #[inline]
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
     }
@@ -514,7 +519,7 @@ impl Peer {
         self.mut_store().set_region(region.clone());
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
-        // becomeing a leader.
+        // becoming a leader.
         self.maybe_update_read_progress(local_reader, progress);
 
         if !self.pending_remove {
@@ -522,22 +527,27 @@ impl Peer {
         }
     }
 
+    #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
     }
 
+    #[inline]
     pub fn get_raft_status(&self) -> raft::Status {
         self.raft_group.status()
     }
 
+    #[inline]
     pub fn leader_id(&self) -> u64 {
         self.raft_group.raft.leader_id
     }
 
+    #[inline]
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
     }
 
+    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
@@ -560,7 +570,12 @@ impl Peer {
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
     #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
-        self.raft_group.get_snap().is_some()
+        self.get_pending_snapshot().is_some()
+    }
+
+    #[inline]
+    pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
+        self.raft_group.get_snap()
     }
 
     fn add_ready_metric(&self, ready: &Ready, metrics: &mut RaftReadyMetrics) {
@@ -887,14 +902,53 @@ impl Peer {
                 });
         }
 
-        if self.has_pending_snapshot() && !self.ready_to_handle_pending_snap() {
-            debug!(
-                "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
-                self.tag,
-                self.get_store().applied_index(),
-                self.last_applying_idx
-            );
-            return;
+        if let Some(snap) = self.get_pending_snapshot() {
+            if !self.ready_to_handle_pending_snap() {
+                debug!(
+                    "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
+                    self.tag,
+                    self.get_store().applied_index(),
+                    self.last_applying_idx,
+                );
+                return;
+            }
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data
+                .merge_from_bytes(snap.get_data())
+                .unwrap_or_else(|e| {
+                    warn!("{} snap data err {:?}", self.tag, e);
+                });
+            let region = snap_data.take_region();
+
+            let meta = ctx.store_meta.lock().unwrap();
+            // Region's range changes if and only if epoch version change. So if the snapshot's
+            // version is not larger than now, we can make sure there is no overlap.
+            if region.get_region_epoch().get_version()
+                > meta.regions[&region.get_id()]
+                    .get_region_epoch()
+                    .get_version()
+            {
+                // For merge process, when applying snapshot or create new peer the stale source
+                // peer is destroyed asynchronously. So here checks whether there is any overlap, if
+                // so, wait and do not handle raft ready.
+                if let Some(r) = meta
+                    .region_ranges
+                    .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
+                    .map(|(_, &region_id)| &meta.regions[&region_id])
+                    .take_while(|r| enc_start_key(r) < enc_end_key(&region))
+                    .find(|r| r.get_id() != region.get_id())
+                {
+                    info!(
+                        "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
+                        self.tag,
+                        self.get_store().applied_index(),
+                        self.last_applying_idx,
+                        r,
+                    );
+                    return;
+                }
+            }
         }
 
         if !self

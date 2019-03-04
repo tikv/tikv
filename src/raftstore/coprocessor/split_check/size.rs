@@ -141,8 +141,9 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
             Ok(size) => size,
             Err(e) => {
                 warn!(
-                    "[region {}] failed to get approximate stat: {}",
-                    region_id, e
+                    "failed to get approximate stat";
+                    "region_id" => region_id,
+                    "err" => %e,
                 );
                 // Need to check size.
                 host.add_checker(Box::new(Checker::new(
@@ -159,18 +160,19 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         let res = CasualMessage::RegionApproximateSize { size: region_size };
         if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
             warn!(
-                "[region {}] failed to send approximate region size: {}",
-                region_id, e
+                "failed to send approximate region size";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
 
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
         if region_size >= self.region_max_size {
             info!(
-                "[region {}] approximate size {} >= {}, need to do split check",
-                region.get_id(),
-                region_size,
-                self.region_max_size
+                "approximate size over threshold, need to do split check";
+                "region_id" => region.get_id(),
+                "size" => region_size,
+                "threshold" => self.region_max_size,
             );
             // when meet large region use approximate way to produce split keys
             if region_size >= self.region_max_size * self.split_limit * 2 {
@@ -186,10 +188,10 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         } else {
             // Does not need to check size.
             debug!(
-                "[region {}] approximate size {} < {}, does not need to do split check",
-                region.get_id(),
-                region_size,
-                self.region_max_size
+                "approximate size less than threshold, does not need to do split check";
+                "region_id" => region.get_id(),
+                "size" => region_size,
+                "threshold" => self.region_max_size,
             );
         }
     }
