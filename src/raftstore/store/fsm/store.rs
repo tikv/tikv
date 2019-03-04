@@ -50,7 +50,9 @@ use crate::import::SSTImporter;
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
 use crate::raftstore::store::fsm::metrics::*;
-use crate::raftstore::store::fsm::peer::{new_admin_request, PeerFsm, PeerFsmDelegate};
+use crate::raftstore::store::fsm::peer::{
+    maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
+};
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
     BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
@@ -81,19 +83,25 @@ pub struct StoreInfo {
 }
 
 pub struct StoreMeta {
-    // region end key -> region id
+    /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
-    // region_id -> region
+    /// region_id -> region
     pub regions: HashMap<u64, Region>,
-    // A marker used to indicate if the peer of a region is going to apply a snapshot
-    // with different range.
-    // It assumes that when a peer is going to accept snapshot, it can never
-    // catch up by normal log replication.
-    pub pending_cross_snap: HashMap<u64, RegionEpoch>,
+    /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
+    /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
     pub pending_votes: RingQueue<RaftMessage>,
-    // the regions with pending snapshots.
+    /// The regions with pending snapshots.
     pub pending_snapshot_regions: Vec<Region>,
-    // source_region_id -> (version, BiLock).
+    /// A marker used to indicate the peer of a Region has received a merge target message and waits to be destroyed.
+    /// target_region_id -> (source_region_id -> merge_target_epoch)
+    pub pending_merge_targets: HashMap<u64, HashMap<u64, RegionEpoch>>,
+    /// An inverse mapping of `pending_merge_targets` used to let source peer help target peer to clean up related entry.
+    /// source_region_id -> target_region_id
+    pub targets_map: HashMap<u64, u64>,
+    /// In raftstore, the execute order of `PrepareMerge` and `CommitMerge` is not certain because of the messages
+    /// belongs two regions. To make them in order, `PrepareMerge` will set this structure and `CommitMerge` will retry
+    /// later if there is no related lock.
+    /// source_region_id -> (version, BiLock).
     pub merge_locks: HashMap<u64, (u64, Option<Arc<AtomicBool>>)>,
 }
 
@@ -102,9 +110,10 @@ impl StoreMeta {
         StoreMeta {
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
-            pending_cross_snap: HashMap::default(),
             pending_votes: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
+            pending_merge_targets: HashMap::default(),
+            targets_map: HashMap::default(),
             merge_locks: HashMap::default(),
         }
     }
@@ -500,6 +509,9 @@ pub struct RaftPoller<T: 'static, C: 'static> {
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
     fn handle_raft_ready(&mut self, peers: &mut [Box<PeerFsm>]) {
+        // Only enable the fail point when the store id is equal to 3, which is
+        // the id of slow store in tests.
+        fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if !self.pending_proposals.is_empty() {
             for prop in self.pending_proposals.drain(..) {
                 self.poll_ctx
@@ -731,7 +743,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let kv_engine = Arc::clone(&self.engines.kv);
         let store_id = self.store.get_id();
         let mut total_count = 0;
-        let mut tomebstone_count = 0;
+        let mut tombstone_count = 0;
         let mut applying_count = 0;
         let mut region_peers = vec![];
 
@@ -752,7 +764,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             let local_state = protobuf::parse_from_bytes::<RegionLocalState>(value)?;
             let region = local_state.get_region();
             if local_state.get_state() == PeerState::Tombstone {
-                tomebstone_count += 1;
+                tombstone_count += 1;
                 debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
                 self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
                 return Ok(true);
@@ -821,7 +833,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             "start store";
             "store_id" => store_id,
             "region_count" => total_count,
-            "tombstone_count" => tomebstone_count,
+            "tombstone_count" => tombstone_count,
             "applying_count" =>  applying_count,
             "merge_count" => merging_count,
             "takes" => ?t.elapsed(),
@@ -1348,40 +1360,61 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return Ok(false);
         }
 
-        let start_key = data_key(msg.get_start_key());
-        if let Some((_, exist_region_id)) = meta
-            .region_ranges
-            .range((Excluded(start_key), Unbounded::<Key>))
-            .next()
-        {
-            let exist_region = &meta.regions[&exist_region_id];
-            if enc_start_key(exist_region) < data_end_key(msg.get_end_key()) {
-                debug!(
-                    "msg is overlapped with exist region";
-                    "region_id" => exist_region_id,
-                    "msg" => ?msg,
-                    "exist_region" => ?exist_region,
-                );
-                if util::is_first_vote_msg(msg.get_message()) {
-                    meta.pending_votes.push(msg.to_owned());
-                }
-                self.ctx.raft_metrics.message_dropped.region_overlap += 1;
-
-                // Make sure the range of region from msg is covered by existing regions.
-                // If so, means that the region may be generated by some kinds of split
-                // and merge by catching logs. So there is no need to accept a snapshot.
-                if !is_range_covered(
-                    &meta.region_ranges,
-                    |id: u64| &meta.regions[&id],
-                    data_key(msg.get_start_key()),
-                    data_end_key(msg.get_end_key()),
-                ) {
-                    meta.pending_cross_snap
-                        .insert(region_id, msg.get_region_epoch().to_owned());
-                }
-
-                return Ok(false);
+        let mut regions_to_destroy = vec![];
+        for (_, id) in meta.region_ranges.range((
+            Excluded(data_key(msg.get_start_key())),
+            Unbounded::<Vec<u8>>,
+        )) {
+            let exist_region = &meta.regions[&id];
+            if enc_start_key(exist_region) >= data_end_key(msg.get_end_key()) {
+                break;
             }
+
+            debug!(
+                "msg is overlapped with exist region";
+                "region_id" => region_id,
+                "msg" => ?msg,
+                "exist_region" => ?exist_region,
+            );
+            if util::is_first_vote_msg(msg.get_message()) {
+                meta.pending_votes.push(msg.to_owned());
+            }
+
+            // Make sure the range of region from msg is covered by existing regions.
+            // If so, means that the region may be generated by some kinds of split
+            // and merge by catching logs. So there is no need to accept a snapshot.
+            if !is_range_covered(
+                &meta.region_ranges,
+                |id: u64| &meta.regions[&id],
+                data_key(msg.get_start_key()),
+                data_end_key(msg.get_end_key()),
+            ) {
+                if maybe_destroy_source(
+                    meta,
+                    region_id,
+                    exist_region.get_id(),
+                    msg.get_region_epoch().to_owned(),
+                ) {
+                    regions_to_destroy.push(exist_region.get_id());
+                    continue;
+                }
+            }
+            self.ctx.raft_metrics.message_dropped.region_overlap += 1;
+            return Ok(false);
+        }
+
+        for id in regions_to_destroy {
+            self.ctx
+                .router
+                .force_send(
+                    id,
+                    PeerMsg::MergeResult {
+                        region_id: id,
+                        target: target.clone(),
+                        stale: true,
+                    },
+                )
+                .unwrap();
         }
 
         // New created peers should know it's learner or not.
