@@ -108,10 +108,10 @@ lazy_static! {
         &["from", "res"]
     )
     .unwrap();
-    pub static ref KV_MAX_READ_TS_FETCH_UPDATE_RETRY_HISTOGRAM: Histogram = register_int_counter!(
+    pub static ref KV_MAX_READ_TS_FETCH_UPDATE_RETRY_HISTOGRAM: Histogram = register_histogram!(
         "tikv_storage_max_read_ts_fetch_update_retry",
         "Statics of max read ts fetch_update retry times",
-        linear_buckets(1, 1, 15).unwrap()
+        linear_buckets(1.0, 1.0, 15).unwrap()
     )
     .unwrap();
     pub static ref KV_GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
