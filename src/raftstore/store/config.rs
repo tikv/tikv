@@ -115,7 +115,7 @@ pub struct Config {
 
     /// Max log gap allowed to propose merge.
     pub merge_max_log_gap: u64,
-    /// Interval to repropose merge.
+    /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
     pub use_delete_range: bool,
