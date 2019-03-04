@@ -51,6 +51,45 @@ impl Default for RpnRuntimeContext {
     }
 }
 
+/// A structure for holding argument values and type information of arguments and return values.
+///
+/// It can simplify function signatures without losing performance where only argument values are
+/// needed in most cases.
+///
+/// NOTE: This structure must be very fast to copy because it will be passed by value directly
+/// (i.e. Copy), instead of by reference, for **EACH** function invocation.
+#[derive(Clone, Copy)]
+pub struct RpnFnCallPayload<'a> {
+    raw_args: &'a [RpnStackNode<'a>],
+    ret_field_type: &'a FieldType,
+}
+
+impl<'a> RpnFnCallPayload<'a> {
+    /// The number of arguments.
+    #[inline]
+    pub fn args_len(&'a self) -> usize {
+        self.raw_args.len()
+    }
+
+    /// Gets the raw argument at specific position.
+    #[inline]
+    pub fn raw_arg_at(&'a self, position: usize) -> &'a RpnStackNode {
+        &self.raw_args[position]
+    }
+
+    /// Gets the field type of the argument at specific position.
+    #[inline]
+    pub fn field_type_at(&'a self, position: usize) -> &'a FieldType {
+        self.raw_args[position].field_type()
+    }
+
+    /// Gets the field type of the return value.
+    #[inline]
+    pub fn return_field_type(&'a self) -> &'a FieldType {
+        self.ret_field_type
+    }
+}
+
 /// Represents a vector value node in the RPN stack.
 ///
 /// It can be either an owned node or a reference node.
@@ -233,7 +272,6 @@ impl RpnExpressionNodeVec {
     pub fn build_from_def(def: Expr, time_zone: Tz) -> Self {
         let mut expr_nodes = Vec::new();
         Self::append_rpn_nodes_recursively(def, time_zone, &mut expr_nodes);
-        expr_nodes.reverse();
         RpnExpressionNodeVec(expr_nodes)
     }
 
@@ -245,7 +283,6 @@ impl RpnExpressionNodeVec {
         // Related columns must be decoded before calling this function!
     ) -> RpnStackNode<'a> {
         let mut stack = Vec::with_capacity(self.0.len());
-        let mut args = Vec::with_capacity(10);
         for node in &self.0 {
             match node {
                 RpnExpressionNode::Constant {
@@ -271,15 +308,19 @@ impl RpnExpressionNodeVec {
                     ref func,
                     ref field_type,
                 } => {
-                    let args_len = func.args_len();
-                    // pop `args_len` args from stack.
-                    args.clear();
-                    // TODO: Evaluate from left to right or right to left?
-                    // Currently we are evaluating from right to left!
-                    for _ in 0..args_len {
-                        args.push(stack.pop().unwrap());
-                    }
-                    let ret = func.eval(rows, context, args.as_slice());
+                    // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
+                    // `[A, B, C, Foo]`.
+                    // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
+                    // as the last several elements. We will directly use the last N (N = number of
+                    // arguments) elements in the stack as function arguments.
+                    let stack_slice_begin = stack.len() - func.args_len();
+                    let stack_slice = &stack[stack_slice_begin..];
+                    let call_info = RpnFnCallPayload {
+                        raw_args: stack_slice,
+                        ret_field_type: field_type,
+                    };
+                    let ret = func.eval(rows, context, call_info);
+                    stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Owned(Box::new(ret)),
                         field_type,
@@ -319,6 +360,42 @@ impl RpnExpressionNodeVec {
         }
     }
 
+    /// Transforms eval tree nodes into RPN nodes.
+    ///
+    /// Suppose that we have a function call:
+    ///
+    /// ```ignore
+    /// A(B, C(E, F, G), D)
+    /// ```
+    ///
+    /// The eval tree looks like:
+    ///
+    /// ```ignore
+    ///           +---+
+    ///           | A |
+    ///           +---+
+    ///             |
+    ///   +-------------------+
+    ///   |         |         |
+    /// +---+     +---+     +---+
+    /// | B |     | C |     | D |
+    /// +---+     +---+     +---+
+    ///             |
+    ///      +-------------+
+    ///      |      |      |
+    ///    +---+  +---+  +---+
+    ///    | E |  | F |  | G |
+    ///    +---+  +---+  +---+
+    /// ```
+    ///
+    /// We need to transform the tree into RPN nodes:
+    ///
+    /// ```ignore
+    /// B E F G C D A
+    /// ```
+    ///
+    /// The transform process is very much like a post-order traversal. This function does it
+    /// recursively.
     fn append_rpn_nodes_recursively(
         mut def: Expr,
         time_zone: Tz,
@@ -465,20 +542,20 @@ impl RpnExpressionNodeVec {
             ExprType::ScalarFunc => {
                 let func = super::map_pb_sig_to_rpn_func(def.get_sig()).unwrap();
                 let args = def.take_children().into_vec();
-                // FIXME: Don't use assert_eq
+                // FIXME: Don't use assert_eq.
                 assert_eq!(func.args_len(), args.len());
-                rpn_nodes.push(RpnExpressionNode::Fn { func, field_type });
                 for arg in args {
                     Self::append_rpn_nodes_recursively(arg, time_zone, rpn_nodes);
                 }
+                rpn_nodes.push(RpnExpressionNode::Fn { func, field_type });
             }
             ExprType::ColumnRef => {
                 let offset = number::decode_i64(&mut def.get_val()).unwrap() as usize;
                 rpn_nodes.push(RpnExpressionNode::TableColumnRef { offset, field_type });
             }
-            // FIXME: Return error.
-            _ => panic!(),
+            // FIXME: We should return error instead of panic to handle invalid requests.
             // expr_type => Err(box_err!("Unsupported expression type {:?}", expr_type)),
+            _ => panic!(),
         }
     }
 }
@@ -530,12 +607,12 @@ mod tests {
 
         assert_eq!(rpn_nodes.len(), 3);
         assert_eq!(rpn_nodes[0].field_type().tp(), FieldTypeTp::LongLong);
+        assert_eq!(rpn_nodes[0].table_column_ref_offset().unwrap(), 1);
+        assert_eq!(rpn_nodes[1].field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(
-            rpn_nodes[0].constant_value().unwrap().as_int().unwrap(),
+            rpn_nodes[1].constant_value().unwrap().as_int().unwrap(),
             123
         );
-        assert_eq!(rpn_nodes[1].field_type().tp(), FieldTypeTp::LongLong);
-        assert_eq!(rpn_nodes[1].table_column_ref_offset().unwrap(), 1);
         assert_eq!(rpn_nodes[2].field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(rpn_nodes[2].fn_func().unwrap().name(), "RpnFnGTInt");
 

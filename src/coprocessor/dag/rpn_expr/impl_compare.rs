@@ -11,9 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tipb::expression::FieldType;
-
-use super::types::RpnRuntimeContext;
+use super::types::{RpnFnCallPayload, RpnRuntimeContext};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnEQReal;
@@ -25,9 +23,8 @@ impl RpnFnEQReal {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<f64>,
-        _: &FieldType,
         arg1: &Option<f64>,
     ) -> Option<i64> {
         // FIXME: It really should be a `Result<Option<f64>>`.
@@ -48,9 +45,8 @@ impl RpnFnEQInt {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
-        _: &FieldType,
         arg1: &Option<i64>,
     ) -> Option<i64> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
@@ -70,9 +66,8 @@ impl RpnFnGTInt {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
-        _: &FieldType,
         arg1: &Option<i64>,
     ) -> Option<i64> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
@@ -92,9 +87,8 @@ impl RpnFnLTInt {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
-        _: &FieldType,
         arg1: &Option<i64>,
     ) -> Option<i64> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.

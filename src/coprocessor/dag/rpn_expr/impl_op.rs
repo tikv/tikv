@@ -11,9 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tipb::expression::FieldType;
-
-use super::types::RpnRuntimeContext;
+use super::types::{RpnFnCallPayload, RpnRuntimeContext};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnLogicalAnd;
@@ -24,9 +22,8 @@ impl RpnFnLogicalAnd {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
-        _: &FieldType,
         arg1: &Option<i64>,
     ) -> Option<i64> {
         // Intentionally not merging `None` and `Some(0)` conditions to be clear.
@@ -54,9 +51,8 @@ impl RpnFnLogicalOr {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
-        _: &FieldType,
         arg1: &Option<i64>,
     ) -> Option<i64> {
         // Intentionally not merging `None` and `Some(0)` conditions to be clear.

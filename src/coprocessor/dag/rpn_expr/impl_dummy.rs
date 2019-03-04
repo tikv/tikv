@@ -13,9 +13,7 @@
 
 //! For demo purpose.
 
-use tipb::expression::FieldType;
-
-use super::types::RpnRuntimeContext;
+use super::types::{RpnFnCallPayload, RpnRuntimeContext};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnDummy0ArgFunc;
@@ -24,7 +22,7 @@ impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut RpnRuntimeContext) -> Option<i64> {
+    fn call(_ctx: &mut RpnRuntimeContext, _payload: RpnFnCallPayload) -> Option<i64> {
         Some(7)
     }
 }
@@ -36,7 +34,11 @@ impl_template_fn! { 1 arg @ RpnFnDummy1ArgFunc }
 
 impl RpnFnDummy1ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut RpnRuntimeContext, _: &FieldType, _: &Option<i64>) -> Option<i64> {
+    fn call(
+        _ctx: &mut RpnRuntimeContext,
+        _payload: RpnFnCallPayload,
+        _: &Option<i64>,
+    ) -> Option<i64> {
         Some(5)
     }
 }
@@ -50,9 +52,8 @@ impl RpnFnDummy2ArgFunc {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         _: &Option<i64>,
-        _: &FieldType,
         _: &Option<f64>,
     ) -> Option<f64> {
         Some(11.0)
@@ -68,11 +69,9 @@ impl RpnFnDummy3ArgFunc {
     #[inline(always)]
     fn call(
         _ctx: &mut RpnRuntimeContext,
-        _: &FieldType,
+        _payload: RpnFnCallPayload,
         _: &Option<i64>,
-        _: &FieldType,
         _: &Option<f64>,
-        _: &FieldType,
         _: &Option<i64>,
     ) -> Option<f64> {
         Some(13.5)
