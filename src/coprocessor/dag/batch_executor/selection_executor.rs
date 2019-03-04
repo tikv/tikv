@@ -31,18 +31,22 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
 }
 
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
-    pub fn new(context: BatchExecutorContext, src: Src, conditions: Vec<Expr>) -> Result<Self> {
+    pub fn new(context: BatchExecutorContext, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let referred_columns = {
             let mut ref_visitor = ExprColumnRefVisitor::new(context.columns_info.len());
-            ref_visitor.batch_visit(&conditions)?;
+            ref_visitor.batch_visit(&conditions_def)?;
             ref_visitor.column_offsets()
         };
 
         let rt_context = RpnRuntimeContext::new(context.config);
-        let conditions = conditions
-            .into_iter()
-            .map(|def| RpnExpressionNodeVec::build_from_def(def, context.config.tz))
-            .collect();
+
+        let mut conditions = Vec::with_capacity(conditions_def.len());
+        for def in conditions_def {
+            conditions.push(RpnExpressionNodeVec::build_from_def(
+                def,
+                context.config.tz,
+            )?);
+        }
 
         Ok(Self {
             context,

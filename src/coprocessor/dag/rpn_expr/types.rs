@@ -20,6 +20,7 @@ use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
+use crate::coprocessor::{Error, Result};
 
 /// Runtime context for evaluating RPN expressions.
 #[derive(Debug)]
@@ -106,25 +107,18 @@ pub enum RpnStackNodeVectorValue<'a> {
     Ref(&'a VectorValue),
 }
 
-impl<'a> RpnStackNodeVectorValue<'a> {
+impl<'a> AsRef<VectorValue> for RpnStackNodeVectorValue<'a> {
     #[inline]
-    pub fn borrow(&'a self) -> &'a VectorValue {
+    fn as_ref(&self) -> &VectorValue {
         match self {
             RpnStackNodeVectorValue::Owned(ref value) => &value,
             RpnStackNodeVectorValue::Ref(ref value) => *value,
         }
     }
-
-    #[inline]
-    pub fn as_vector_like(&'a self) -> VectorLikeValueRef {
-        match self {
-            RpnStackNodeVectorValue::Owned(ref value) => value.as_vector_like(),
-            RpnStackNodeVectorValue::Ref(ref value) => value.as_vector_like(),
-        }
-    }
 }
 
-/// Type for each node in the RPN evaluation stack.
+/// A type for each node in the RPN evaluation stack. It can be one of a scalar value node or a
+/// vector value node. The vector value node can be either an owned vector value or a reference.
 pub enum RpnStackNode<'a> {
     /// Represents a scalar value. Comes from a constant node in expression list.
     Scalar {
@@ -140,6 +134,7 @@ pub enum RpnStackNode<'a> {
 }
 
 impl<'a> RpnStackNode<'a> {
+    /// Gets the field type.
     #[inline]
     pub fn field_type(&self) -> &FieldType {
         match self {
@@ -148,32 +143,34 @@ impl<'a> RpnStackNode<'a> {
         }
     }
 
-    // TODO: Maybe returning Option<T> is better.
-
+    /// Borrows the inner scalar value for `Scalar` variant.
     #[inline]
-    pub fn scalar_value(&self) -> &ScalarValue {
+    pub fn scalar_value(&self) -> Option<&ScalarValue> {
         match self {
-            RpnStackNode::Scalar { ref value, .. } => *value,
-            RpnStackNode::Vector { .. } => panic!(),
+            RpnStackNode::Scalar { ref value, .. } => Some(*value),
+            RpnStackNode::Vector { .. } => None,
         }
     }
 
+    /// Borrows the inner vector value for `Vector` variant.
     #[inline]
-    pub fn vector_value(&self) -> &VectorValue {
+    pub fn vector_value(&self) -> Option<&VectorValue> {
         match self {
-            RpnStackNode::Scalar { .. } => panic!(),
-            RpnStackNode::Vector { ref value, .. } => value.borrow(),
+            RpnStackNode::Scalar { .. } => None,
+            RpnStackNode::Vector { ref value, .. } => Some(value.as_ref()),
         }
     }
 
+    /// Borrows the inner scalar or vector value as a vector like value.
     #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef {
         match self {
             RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
+            RpnStackNode::Vector { ref value, .. } => value.as_ref().as_vector_like(),
         }
     }
 
+    /// Whether this is a `Scalar` variant.
     #[inline]
     pub fn is_scalar(&self) -> bool {
         match self {
@@ -182,6 +179,7 @@ impl<'a> RpnStackNode<'a> {
         }
     }
 
+    /// Whether this is a `Vector` variant.
     #[inline]
     pub fn is_vector(&self) -> bool {
         match self {
@@ -191,7 +189,7 @@ impl<'a> RpnStackNode<'a> {
     }
 }
 
-/// Type for each node in the RPN expression list.
+/// A type for each node in the RPN expression list.
 #[derive(Debug)]
 pub enum RpnExpressionNode {
     /// Represents a function.
@@ -212,11 +210,13 @@ pub enum RpnExpressionNode {
 
         // Although we can know `ColumnInfo` according to `offset` and columns info in scan
         // executors, its type is `ColumnInfo` instead of `FieldType`..
+        // Maybe we can remove this field in future.
         field_type: FieldType,
     },
 }
 
 impl RpnExpressionNode {
+    /// Gets the field type.
     #[inline]
     pub fn field_type(&self) -> &FieldType {
         match self {
@@ -226,6 +226,7 @@ impl RpnExpressionNode {
         }
     }
 
+    /// Borrows the function instance for `Fn` variant.
     #[inline]
     pub fn fn_func(&self) -> Option<&dyn RpnFunction> {
         match self {
@@ -234,6 +235,7 @@ impl RpnExpressionNode {
         }
     }
 
+    /// Borrows the constant value for `Constant` variant.
     #[inline]
     pub fn constant_value(&self) -> Option<&ScalarValue> {
         match self {
@@ -242,6 +244,7 @@ impl RpnExpressionNode {
         }
     }
 
+    /// Gets the column offset for `TableColumnRef` variant.
     #[inline]
     pub fn table_column_ref_offset(&self) -> Option<usize> {
         match self {
@@ -251,6 +254,7 @@ impl RpnExpressionNode {
     }
 }
 
+/// An RPN expression node list which represents an expression in Reverse Polish notation.
 #[derive(Debug)]
 pub struct RpnExpressionNodeVec(Vec<RpnExpressionNode>);
 
@@ -269,18 +273,24 @@ impl std::ops::DerefMut for RpnExpressionNodeVec {
 }
 
 impl RpnExpressionNodeVec {
-    pub fn build_from_def(def: Expr, time_zone: Tz) -> Self {
+    /// Builds the RPN expression node list from an expression definition tree.
+    // TODO: Deprecate it in Coprocessor V2 DAG interface.
+    pub fn build_from_def(def: Expr, time_zone: Tz) -> Result<Self> {
         let mut expr_nodes = Vec::new();
-        Self::append_rpn_nodes_recursively(def, time_zone, &mut expr_nodes);
-        RpnExpressionNodeVec(expr_nodes)
+        Self::append_rpn_nodes_recursively(def, time_zone, &mut expr_nodes)?;
+        Ok(RpnExpressionNodeVec(expr_nodes))
     }
 
+    /// Evaluates the expression into a vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if referenced columns are not decoded.
     pub fn eval<'a>(
         &'a self,
         context: &mut RpnRuntimeContext,
         rows: usize,
         columns: &'a LazyBatchColumnVec,
-        // Related columns must be decoded before calling this function!
     ) -> RpnStackNode<'a> {
         let mut stack = Vec::with_capacity(self.0.len());
         for node in &self.0 {
@@ -333,7 +343,13 @@ impl RpnExpressionNodeVec {
         stack.into_iter().next().unwrap()
     }
 
-    /// Useful in selection executor
+    /// Evaluates the expression into a boolean vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if referenced columns are not decoded.
+    ///
+    /// Panics if the boolean vector output buffer is not large enough to contain all values.
     pub fn eval_as_mysql_bools(
         &self,
         context: &mut RpnRuntimeContext,
@@ -353,7 +369,7 @@ impl RpnExpressionNodeVec {
                 }
             }
             RpnStackNode::Vector { value, .. } => {
-                let vec_ref = value.borrow();
+                let vec_ref = value.as_ref();
                 assert_eq!(vec_ref.len(), rows);
                 vec_ref.eval_as_mysql_bools(outputs);
             }
@@ -400,14 +416,14 @@ impl RpnExpressionNodeVec {
         mut def: Expr,
         time_zone: Tz,
         rpn_nodes: &mut Vec<RpnExpressionNode>,
-    ) {
+    ) -> Result<()> {
         use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
         use crate::util::codec::number;
         use std::convert::{TryFrom, TryInto};
 
         let field_type = def.take_field_type();
-        let eval_type = EvalType::try_from(field_type.tp()).unwrap();
-        // FIXME: Don't use `unwrap()`.
+        let eval_type =
+            EvalType::try_from(field_type.tp()).map_err(|e| Error::Other(box_err!(e)))?;
 
         match def.get_tp() {
             ExprType::Null => {
@@ -423,140 +439,238 @@ impl RpnExpressionNodeVec {
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::Int64 => {
                 let scalar_value = match eval_type {
                     EvalType::Int => {
-                        // FIXME: Don't use `unwrap()`.
-                        let value = number::decode_i64(&mut def.get_val()).unwrap();
+                        let value = number::decode_i64(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Int(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::Uint64 => {
                 let scalar_value = match eval_type {
                     EvalType::Int => {
-                        // FIXME: Don't use `unwrap()`.
-                        let value = number::decode_u64(&mut def.get_val()).unwrap();
+                        let value = number::decode_u64(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Int(Some(value as i64))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::String | ExprType::Bytes => {
                 let scalar_value = match eval_type {
                     EvalType::Bytes => ScalarValue::Bytes(Some(def.take_val())),
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::Float32 | ExprType::Float64 => {
                 let scalar_value = match eval_type {
                     EvalType::Real => {
-                        // FIXME: Don't use `unwrap()`.
-                        let value = number::decode_f64(&mut def.get_val()).unwrap();
+                        let value = number::decode_f64(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Real(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::MysqlTime => {
                 let scalar_value = match eval_type {
                     EvalType::DateTime => {
-                        let v = number::decode_u64(&mut def.get_val()).unwrap();
+                        let v = number::decode_u64(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         let fsp = field_type.decimal() as i8;
-                        // FIXME: Don't use `unwrap()`.
                         let value = Time::from_packed_u64(
                             v,
                             field_type.tp().try_into().unwrap(),
                             fsp,
                             time_zone,
                         )
-                        .unwrap();
+                        .map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;;
                         ScalarValue::DateTime(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::MysqlDuration => {
                 let scalar_value = match eval_type {
                     EvalType::Duration => {
-                        let n = number::decode_i64(&mut def.get_val()).unwrap();
-                        let value = Duration::from_nanos(n, MAX_FSP).unwrap();
+                        let n = number::decode_i64(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
+                        let value = Duration::from_nanos(n, MAX_FSP).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Duration(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::MysqlDecimal => {
                 let scalar_value = match eval_type {
                     EvalType::Decimal => {
-                        let value = Decimal::decode(&mut def.get_val()).unwrap();
+                        let value = Decimal::decode(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Decimal(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::MysqlJson => {
                 let scalar_value = match eval_type {
                     EvalType::Json => {
-                        let value = Json::decode(&mut def.get_val()).unwrap();
+                        let value = Json::decode(&mut def.get_val()).map_err(|_| {
+                            Error::Other(box_err!(
+                                "Unable to decode {:?} from the request",
+                                eval_type
+                            ))
+                        })?;
                         ScalarValue::Json(Some(value))
                     }
-                    _ => panic!(),
+                    t => {
+                        return Err(box_err!(
+                            "Unexpected eval type {:?} for ExprType {:?}",
+                            t,
+                            def.get_tp()
+                        ));
+                    }
                 };
                 rpn_nodes.push(RpnExpressionNode::Constant {
                     value: scalar_value,
                     field_type,
-                })
+                });
             }
             ExprType::ScalarFunc => {
                 let func = super::map_pb_sig_to_rpn_func(def.get_sig()).unwrap();
                 let args = def.take_children().into_vec();
-                // FIXME: Don't use assert_eq.
-                assert_eq!(func.args_len(), args.len());
+                if func.args_len() != args.len() {
+                    return Err(box_err!(
+                        "Unexpected arguments, expect {}, received {}",
+                        func.args_len(),
+                        args.len()
+                    ));
+                }
                 for arg in args {
-                    Self::append_rpn_nodes_recursively(arg, time_zone, rpn_nodes);
+                    Self::append_rpn_nodes_recursively(arg, time_zone, rpn_nodes)?;
                 }
                 rpn_nodes.push(RpnExpressionNode::Fn { func, field_type });
             }
             ExprType::ColumnRef => {
-                let offset = number::decode_i64(&mut def.get_val()).unwrap() as usize;
+                let offset = number::decode_i64(&mut def.get_val()).map_err(|_| {
+                    Error::Other(box_err!(
+                        "Unable to decode column reference offset from the request"
+                    ))
+                })? as usize;
                 rpn_nodes.push(RpnExpressionNode::TableColumnRef { offset, field_type });
             }
-            // FIXME: We should return error instead of panic to handle invalid requests.
-            // expr_type => Err(box_err!("Unsupported expression type {:?}", expr_type)),
-            _ => panic!(),
+            t => return Err(box_err!("Unexpected ExprType {:?}", t)),
         }
+
+        Ok(())
     }
 }
 
@@ -603,7 +717,7 @@ mod tests {
     #[test]
     fn test_build_from_def() {
         let expr = new_gt_int_def(1, 123);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
 
         assert_eq!(rpn_nodes.len(), 3);
         assert_eq!(rpn_nodes[0].field_type().tp(), FieldTypeTp::LongLong);
@@ -622,7 +736,7 @@ mod tests {
     #[test]
     fn test_eval() {
         let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
 
         let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
         col.mut_decoded().push_int(Some(1));
@@ -639,7 +753,7 @@ mod tests {
         let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols);
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(
-            ret.vector_value().as_int_slice(),
+            ret.vector_value().unwrap().as_int_slice(),
             &[
                 Some(0),
                 None,
@@ -656,7 +770,7 @@ mod tests {
     #[bench]
     fn bench_eval_100(b: &mut test::Bencher) {
         let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
 
         let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
         for i in 0..100 {
@@ -678,7 +792,7 @@ mod tests {
     #[bench]
     fn bench_eval_1000(b: &mut test::Bencher) {
         let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc());
+        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
 
         let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1000, EvalType::Int);
         for i in 0..1000 {

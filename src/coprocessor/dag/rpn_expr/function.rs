@@ -59,6 +59,9 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
 pub struct Helper;
 
 impl Helper {
+    /// Evaluates a function without argument to produce a vector value.
+    ///
+    /// The function will be called multiple times to fill the vector.
     #[inline(always)]
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
@@ -79,6 +82,9 @@ impl Helper {
         Ret::into_vector_value(result)
     }
 
+    /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
+    ///
+    /// The function will be called multiple times to fill the vector.
     #[inline(always)]
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
@@ -95,12 +101,12 @@ impl Helper {
 
         let mut result = Vec::with_capacity(rows);
         if payload.raw_arg_at(0).is_scalar() {
-            let v = Arg0::borrow_scalar_value(payload.raw_arg_at(0).scalar_value());
+            let v = Arg0::borrow_scalar_value(payload.raw_arg_at(0).scalar_value().unwrap());
             for _ in 0..rows {
                 result.push(f(context, payload, v));
             }
         } else {
-            let v = Arg0::borrow_vector_value(payload.raw_arg_at(0).vector_value());
+            let v = Arg0::borrow_vector_value(payload.raw_arg_at(0).vector_value().unwrap());
             assert_eq!(rows, v.len());
             for i in 0..rows {
                 result.push(f(context, payload, &v[i]));
@@ -109,6 +115,9 @@ impl Helper {
         Ret::into_vector_value(result)
     }
 
+    /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
+    ///
+    /// The function will be called multiple times to fill the vector.
     #[inline(always)]
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
@@ -131,8 +140,8 @@ impl Helper {
                     f,
                     context,
                     payload,
-                    payload.raw_arg_at(0).scalar_value(),
-                    payload.raw_arg_at(1).scalar_value(),
+                    payload.raw_arg_at(0).scalar_value().unwrap(),
+                    payload.raw_arg_at(1).scalar_value().unwrap(),
                 )
             } else {
                 Self::eval_2_args_scalar_vector(
@@ -140,8 +149,8 @@ impl Helper {
                     f,
                     context,
                     payload,
-                    payload.raw_arg_at(0).scalar_value(),
-                    payload.raw_arg_at(1).vector_value(),
+                    payload.raw_arg_at(0).scalar_value().unwrap(),
+                    payload.raw_arg_at(1).vector_value().unwrap(),
                 )
             }
         } else {
@@ -151,8 +160,8 @@ impl Helper {
                     f,
                     context,
                     payload,
-                    payload.raw_arg_at(0).vector_value(),
-                    payload.raw_arg_at(1).scalar_value(),
+                    payload.raw_arg_at(0).vector_value().unwrap(),
+                    payload.raw_arg_at(1).scalar_value().unwrap(),
                 )
             } else {
                 Self::eval_2_args_vector_vector(
@@ -160,8 +169,8 @@ impl Helper {
                     f,
                     context,
                     payload,
-                    payload.raw_arg_at(0).vector_value(),
-                    payload.raw_arg_at(1).vector_value(),
+                    payload.raw_arg_at(0).vector_value().unwrap(),
+                    payload.raw_arg_at(1).vector_value().unwrap(),
                 )
             }
         }
@@ -267,6 +276,10 @@ impl Helper {
         Ret::into_vector_value(result)
     }
 
+    /// Evaluates a function with 3 scalar or vector arguments to produce a vector value.
+    ///
+    /// The function will be called multiple times to fill the vector. For each function call,
+    /// there will be one indirection to support both scalar and vector arguments.
     #[inline(always)]
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
@@ -294,7 +307,10 @@ impl Helper {
     }
 }
 
-#[doc(hidden)]
+/// Implements `RpnFunction` automatically for structure that accepts 0, 1, 2 or 3 arguments.
+///
+/// The structure must have a `call` member function accepting corresponding number of scalar
+/// arguments.
 #[macro_export]
 macro_rules! impl_template_fn {
     (0 arg @ $name:ident) => {
