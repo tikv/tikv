@@ -3303,11 +3303,7 @@ mod tests {
             ("", "", -1),
             ("BaR", "foobArbar", -1),
             ("bar", "foobArbar", 6),
-            (
-                "好世",
-                "你好世界",
-                3
-            ),
+            ("好世", "你好世界", 3),
         ];
 
         for (substr, s, exp) in cases {
