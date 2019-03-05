@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::sync::atomic::{self, AtomicU64};
+//use std::sync::atomic::{self, AtomicU64};
 use std::sync::{Arc, RwLock};
 
-use super::metrics::*;
+//use super::metrics::*;
 use raft::StateRole;
 
 use crate::raftstore::coprocessor::{
@@ -97,7 +97,7 @@ impl RegionChangeObserver for LeaderChangeObserver {
 }
 
 // region_id -> (epoch_version, max_read_ts)
-type TsMap = HashMap<(u64, u64), Arc<AtomicU64>>;
+type TsMap = HashMap<u64, Arc<RwLock<(u64, u64)>>>;
 
 #[derive(Clone)]
 pub struct MvccInspector {
@@ -144,43 +144,35 @@ impl MvccInspector {
     //            .unwrap();
     //    }
 
-    pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64, from: &str) {
+    pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64, _from: &str) {
         if ts == u64::max_value() {
             return;
         }
-        let mut times = 0;
-        let prev = self
-            .lock_entry(region_id, version)
-            .fetch_update(
-                |saved_ts| {
-                    times += 1;
-                    Some(::std::cmp::max(saved_ts, ts))
-                },
-                atomic::Ordering::SeqCst,
-                atomic::Ordering::SeqCst,
-            )
-            .unwrap();
-        KV_MAX_READ_TS_UPDATE_COUNTER
-            .with_label_values(&[from, if prev >= ts { "fail" } else { "success" }])
-            .inc();
-        KV_MAX_READ_TS_FETCH_UPDATE_RETRY_HISTOGRAM.observe(times as f64);
+        let entry = self.get_entry(region_id);
+        let mut lock = entry.wl();
+        if lock.0 < version {
+            lock.0 = version
+        }
+        if lock.1 < ts {
+            lock.1 = ts;
+        }
     }
 
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
-        let entry = self.lock_entry(region_id, version);
-        let res = entry.load(atomic::Ordering::SeqCst);
-        KV_PREWRITE_MAX_READ_TS_RES_COUNTER
-            .with_label_values(&[if res == 0 { "invalid" } else { "valid" }])
-            .inc();
-        res
+        let entry = self.get_entry(region_id);
+        let lock = entry.rl();
+        if lock.0 == version {
+            return lock.1;
+        }
+        0
     }
 
-    fn lock_entry(&self, region_id: u64, version: u64) -> Arc<AtomicU64> {
-        if let Some(entry) = self.max_read_ts_map.rl().get(&(region_id, version)) {
+    fn get_entry(&self, region_id: u64) -> Arc<RwLock<(u64, u64)>> {
+        if let Some(entry) = self.max_read_ts_map.rl().get(&region_id) {
             return entry.clone();
         }
         let mut map = self.max_read_ts_map.wl();
-        map.entry((region_id, version)).or_default().clone()
+        map.entry(region_id).or_default().clone()
     }
 }
 
