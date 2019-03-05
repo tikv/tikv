@@ -17,9 +17,10 @@ use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
+use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::rocksdb_util::properties::MvccProperties;
+use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use kvproto::kvrpcpb::IsolationLevel;
-use std::u64;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -77,9 +78,9 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         if self.key_only {
-            return Ok(vec![]);
+            return Ok(Some(vec![]));
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -89,14 +90,14 @@ impl<S: Snapshot> MvccReader<S> {
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
             match cursor.get(&k, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
+                None => None,
+                Some(v) => Some(v.to_vec()),
             }
         } else {
             self.statistics.data.get += 1;
             match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
+                None => None,
+                Some(v) => Some(v),
             }
         };
 
@@ -205,7 +206,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(ts);
         }
 
-        if ts == u64::MAX && key.to_raw()? == lock.primary {
+        if ts == std::u64::MAX && key.to_raw()? == lock.primary {
             // when ts==u64::MAX(which means to get latest committed version for
             // primary key),and current key is the primary key, returns the latest
             // commit version's value
@@ -234,7 +235,32 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 return Ok(write.short_value.take());
             }
-            return self.load_data(key, write.start_ts).map(Some);
+            match self.load_data(key, write.start_ts)? {
+                None => {
+                    CRITICAL_ERROR
+                        .with_label_values(&["default value not found"])
+                        .inc();
+                    if panic_when_unexpected_key_or_data() {
+                        set_panic_mark();
+                        panic!(
+                            "default value not found for key {}, write: {:?}",
+                            hex::encode_upper(&key.to_raw()?),
+                            write
+                        );
+                    } else {
+                        error!(
+                            "default value not found";
+                            "key" => log_wrappers::Key(&key.to_raw()?),
+                            "write" => ?write,
+                        );
+                        return Err(Error::DefaultNotFound {
+                            key: key.to_raw()?,
+                            write: write.clone(),
+                        });
+                    }
+                }
+                Some(v) => return Ok(Some(v)),
+            }
         }
         Ok(None)
     }
