@@ -109,9 +109,9 @@ fn pre_start(cfg: &TiKvConfig) {
     check_system_config(&cfg);
     check_environment_variables();
 
-    if cfg.panic_when_key_exceed_bound {
+    if cfg.panic_when_unexpected_key_or_data {
         info!("panic-when-key-exceed-bound is on");
-        tikv_util::set_panic_when_key_exceed_bound(true);
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
     }
 }
 

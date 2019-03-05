@@ -72,6 +72,10 @@ quick_error! {
             description("already exists")
             display("key {:?} already exists", escape(key))
         }
+        DefaultNotFound { key: Vec<u8>, write: Write } {
+            description("write cf corresponding value not found in default cf")
+            display("default not found: key:{:?}, write:{:?}, maybe read truncated/dropped table data?", escape(key), write)
+        }
         KeyVersion {description("bad format key(version)")}
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
@@ -123,6 +127,10 @@ impl Error {
                 primary: primary.to_owned(),
             }),
             Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
+            Error::DefaultNotFound { ref key, ref write } => Some(Error::DefaultNotFound {
+                key: key.to_owned(),
+                write: write.clone(),
+            }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
             Error::Io(_) | Error::Other(_) => None,
