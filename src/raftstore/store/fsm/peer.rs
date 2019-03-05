@@ -63,7 +63,8 @@ use crate::raftstore::store::worker::{
 };
 use crate::raftstore::store::Engines;
 use crate::raftstore::store::{
-    util, Config, PeerMsg, PeerTick, SignificantMsg, SnapKey, SnapshotDeleter, StoreMsg,
+    util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
+    SnapshotDeleter, StoreMsg,
 };
 
 pub struct DestroyPeerJob {
@@ -86,9 +87,8 @@ impl Drop for PeerFsm {
         self.peer.stop();
         while let Ok(msg) = self.receiver.try_recv() {
             let callback = match msg {
-                PeerMsg::RaftCmd { callback, .. } | PeerMsg::SplitRegion { callback, .. } => {
-                    callback
-                }
+                PeerMsg::RaftCommand(cmd) => cmd.callback,
+                PeerMsg::CasualMessage(CasualMessage::SplitRegion { callback, .. }) => callback,
                 _ => continue,
             };
 
@@ -260,20 +260,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         );
                     }
                 }
-                PeerMsg::RaftCmd {
-                    send_time,
-                    request,
-                    callback,
-                } => {
+                PeerMsg::RaftCommand(cmd) => {
                     self.ctx
                         .raft_metrics
                         .propose
                         .request_wait_time
-                        .observe(duration_to_sec(send_time.elapsed()) as f64);
-                    self.propose_raft_command(request, callback)
+                        .observe(duration_to_sec(cmd.send_time.elapsed()) as f64);
+                    self.propose_raft_command(cmd.request, cmd.callback)
                 }
-                PeerMsg::Tick(_, tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes { res, .. } => {
+                PeerMsg::Tick(tick) => self.on_tick(tick),
+                PeerMsg::ApplyRes { res } => {
                     if let Some(state) = self.fsm.peer.pending_merge_apply_result.as_mut() {
                         state.results.push(res);
                         continue;
@@ -281,50 +277,54 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.on_apply_res(res);
                 }
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
-                PeerMsg::SplitRegion {
-                    region_epoch,
-                    split_keys,
-                    callback,
-                    ..
-                } => {
-                    info!(
-                        "on split";
-                        "region_id" => self.fsm.region_id(),
-                        "peer_id" => self.fsm.peer_id(),
-                        "split_keys" => %KeysInfoFormatter(&split_keys),
-                    );
-                    self.on_prepare_split_region(region_epoch, split_keys, callback);
-                }
-                PeerMsg::ComputeHashResult { index, hash, .. } => {
-                    self.on_hash_computed(index, hash);
-                }
-                PeerMsg::RegionApproximateSize { size, .. } => {
-                    self.on_approximate_region_size(size);
-                }
-                PeerMsg::RegionApproximateKeys { keys, .. } => {
-                    self.on_approximate_region_keys(keys);
-                }
-                PeerMsg::CompactionDeclinedBytes { bytes, .. } => {
-                    self.on_compaction_declined_bytes(bytes);
-                }
-                PeerMsg::HalfSplitRegion {
-                    region_epoch,
-                    policy,
-                    ..
-                } => {
-                    self.on_schedule_half_split_region(&region_epoch, policy);
-                }
-                PeerMsg::MergeResult { target, stale, .. } => {
-                    self.on_merge_result(target, stale);
-                }
-                PeerMsg::GcSnap { snaps, .. } => {
-                    self.on_gc_snap(snaps);
-                }
-                PeerMsg::ClearRegionSize(_) => {
-                    self.on_clear_region_size();
-                }
-                PeerMsg::Start(_) => self.start(),
-                PeerMsg::Noop(_) => {}
+                PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
+                PeerMsg::Start => self.start(),
+                PeerMsg::Noop => {}
+            }
+        }
+    }
+
+    fn on_casual_msg(&mut self, msg: CasualMessage) {
+        match msg {
+            CasualMessage::SplitRegion {
+                region_epoch,
+                split_keys,
+                callback,
+            } => {
+                info!(
+                    "on split";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "split_keys" => %KeysInfoFormatter(&split_keys),
+                );
+                self.on_prepare_split_region(region_epoch, split_keys, callback);
+            }
+            CasualMessage::ComputeHashResult { index, hash } => {
+                self.on_hash_computed(index, hash);
+            }
+            CasualMessage::RegionApproximateSize { size } => {
+                self.on_approximate_region_size(size);
+            }
+            CasualMessage::RegionApproximateKeys { keys } => {
+                self.on_approximate_region_keys(keys);
+            }
+            CasualMessage::CompactionDeclinedBytes { bytes } => {
+                self.on_compaction_declined_bytes(bytes);
+            }
+            CasualMessage::HalfSplitRegion {
+                region_epoch,
+                policy,
+            } => {
+                self.on_schedule_half_split_region(&region_epoch, policy);
+            }
+            CasualMessage::MergeResult { target, stale } => {
+                self.on_merge_result(target, stale);
+            }
+            CasualMessage::GcSnap { snaps } => {
+                self.on_gc_snap(snaps);
+            }
+            CasualMessage::ClearRegionSize => {
+                self.on_clear_region_size();
             }
         }
     }
@@ -375,7 +375,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // Send an empty message to target peer to make sure it will check `ready_to_merge`
             self.ctx
                 .router
-                .force_send(target_region_id, PeerMsg::Noop(target_region_id))
+                .force_send(target_region_id, PeerMsg::Noop)
                 .unwrap();
         } else if exist_version > version {
             meta.merge_locks
@@ -622,7 +622,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     peer_id == 1 && tick == PeerTick::RaftLogGc,
                     |_| unreachable!()
                 );
-                if let Err(e) = mb.force_send(PeerMsg::Tick(region_id, tick)) {
+                if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                     info!(
                         "failed to schedule peer tick";
                         "region_id" => region_id,
@@ -1142,11 +1142,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     region_id,
-                    PeerMsg::MergeResult {
-                        region_id,
+                    PeerMsg::CasualMessage(CasualMessage::MergeResult {
                         target: self.fsm.peer.peer.clone(),
                         stale: true,
-                    },
+                    }),
                 )
                 .unwrap();
         }
@@ -1487,7 +1486,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.ctx.router.register(new_region_id, mailbox);
             self.ctx
                 .router
-                .force_send(new_region_id, PeerMsg::Start(new_region_id))
+                .force_send(new_region_id, PeerMsg::Start)
                 .unwrap();
 
             if !campaigned {
@@ -1641,13 +1640,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .router
             .force_send(
                 target_id,
-                PeerMsg::RaftCmd {
-                    send_time: Instant::now(),
-                    request,
-                    callback: Callback::None,
-                },
+                PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
             )
-            .map_err(|e| Error::Transport(e.into()))
+            .map_err(|_| Error::RegionNotFound(target_id))
     }
 
     fn rollback_merge(&mut self) {
@@ -1792,11 +1787,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .router
             .send(
                 source.get_id(),
-                PeerMsg::MergeResult {
-                    region_id: source.get_id(),
+                PeerMsg::CasualMessage(CasualMessage::MergeResult {
                     target: self.fsm.peer.peer.clone(),
                     stale: false,
-                },
+                }),
             )
             .unwrap();
         None

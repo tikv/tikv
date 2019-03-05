@@ -248,13 +248,13 @@ mod tests {
     use super::super::{Config, Result};
     use crate::coprocessor;
     use crate::raftstore::store::transport::Transport;
-    use crate::raftstore::store::Msg as StoreMsg;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
     use crate::server::readpool::{self, ReadPool};
     use crate::storage::TestStorageBuilder;
     use crate::util::security::SecurityConfig;
     use crate::util::worker::FutureWorker;
+    use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
 
     #[derive(Clone)]
@@ -284,18 +284,23 @@ mod tests {
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
-        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
         fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
+            Ok(())
+        }
+
+        fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
             Ok(())
         }
     }

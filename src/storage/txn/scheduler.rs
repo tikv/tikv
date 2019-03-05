@@ -143,7 +143,7 @@ impl TaskContext {
 pub struct Scheduler<E: Engine> {
     engine: E,
 
-    // cid -> Task
+    /// cid -> Task
     pending_tasks: HashMap<u64, Task>,
 
     // cid -> TaskContext
@@ -159,7 +159,7 @@ pub struct Scheduler<E: Engine> {
     latches: Latches,
 
     // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
+    /// speed of recent write requests.
     sched_pending_write_threshold: usize,
 
     // worker pool
