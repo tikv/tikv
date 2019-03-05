@@ -258,7 +258,7 @@ fn test_incompatible_server_auto_split_region() {
 #[derive(Clone)]
 struct EraseHeartbeatCommit;
 
-impl Filter<RaftMessage> for EraseHeartbeatCommit {
+impl Filter for EraseHeartbeatCommit {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         for msg in msgs {
             if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {

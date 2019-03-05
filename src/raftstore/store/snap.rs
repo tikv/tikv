@@ -37,10 +37,9 @@ use rocksdb::{
 
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
-use crate::raftstore::store::fsm::SendCh;
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
-use crate::raftstore::store::{Msg, StoreMsg};
+use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
@@ -1123,9 +1122,9 @@ struct SnapManagerCore {
     snap_size: Arc<AtomicU64>,
 }
 
-fn notify_stats(ch: Option<&SendCh>) {
+fn notify_stats(ch: Option<&RaftRouter>) {
     if let Some(ch) = ch {
-        if let Err(e) = ch.try_send(Msg::StoreMsg(StoreMsg::SnapshotStats)) {
+        if let Err(e) = ch.send_control(StoreMsg::SnapshotStats) {
             error!("notify snapshot stats failed {:?}", e)
         }
     }
@@ -1136,14 +1135,14 @@ fn notify_stats(ch: Option<&SendCh>) {
 pub struct SnapManager {
     // directory to store snapfile.
     core: Arc<RwLock<SnapManagerCore>>,
-    ch: Option<SendCh>,
+    router: Option<RaftRouter>,
     limiter: Option<Arc<IOLimiter>>,
     max_total_size: u64,
 }
 
 impl SnapManager {
-    pub fn new<T: Into<String>>(path: T, ch: Option<SendCh>) -> SnapManager {
-        SnapManagerBuilder::default().build(path, ch)
+    pub fn new<T: Into<String>>(path: T, router: Option<RaftRouter>) -> SnapManager {
+        SnapManagerBuilder::default().build(path, router)
     }
 
     pub fn init(&self) -> io::Result<()> {
@@ -1352,7 +1351,7 @@ impl SnapManager {
             }
         }
 
-        notify_stats(self.ch.as_ref());
+        notify_stats(self.router.as_ref());
     }
 
     pub fn deregister(&self, key: &SnapKey, entry: &SnapEntry) {
@@ -1370,7 +1369,7 @@ impl SnapManager {
             core.registry.remove(key);
         }
         if handled {
-            notify_stats(self.ch.as_ref());
+            notify_stats(self.router.as_ref());
             return;
         }
         warn!("stale deregister key: {} {:?}", key, entry);
@@ -1442,7 +1441,7 @@ impl SnapManagerBuilder {
         self.max_total_size = bytes;
         self
     }
-    pub fn build<T: Into<String>>(&self, path: T, ch: Option<SendCh>) -> SnapManager {
+    pub fn build<T: Into<String>>(&self, path: T, router: Option<RaftRouter>) -> SnapManager {
         let limiter = if self.max_write_bytes_per_sec > 0 {
             Some(Arc::new(IOLimiter::new(self.max_write_bytes_per_sec)))
         } else {
@@ -1459,7 +1458,7 @@ impl SnapManagerBuilder {
                 registry: map![],
                 snap_size: Arc::new(AtomicU64::new(0)),
             })),
-            ch,
+            router,
             limiter,
             max_total_size,
         }
