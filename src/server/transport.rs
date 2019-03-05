@@ -120,7 +120,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         let cmd = RaftCommand::new(req, cb);
         if ReadTask::acceptable(&cmd.request) {
             self.local_reader_ch
-                .schedule(ReadTask::Read(cmd))
+                .schedule(ReadTask::read(cmd))
                 .map_err(|e| box_err!(e))
         } else {
             let region_id = cmd.request.get_header().get_region_id();

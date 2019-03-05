@@ -182,6 +182,11 @@ impl Task {
         Task::Destroy(region_id)
     }
 
+    #[inline]
+    pub fn read(cmd: RaftCommand) -> Task {
+        Task::Read(cmd)
+    }
+
     /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
     /// Returns `true`, it can be saftly sent to localreader,
     /// Returns `false`, it must not be sent to localreader.
@@ -634,7 +639,7 @@ mod tests {
         rx: &Receiver<RaftCommand>,
         cmd: RaftCmdRequest,
     ) {
-        let task = Task::Read(RaftCommand::new(
+        let task = Task::read(RaftCommand::new(
             cmd.clone(),
             Callback::Read(Box::new(|resp| {
                 panic!("unexpected invoke, {:?}", resp);
@@ -719,7 +724,7 @@ mod tests {
 
         // Let's read.
         let region = region1.clone();
-        let task = Task::Read(RaftCommand::new(
+        let task = Task::read(RaftCommand::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let snap = resp.snapshot.unwrap();
@@ -742,7 +747,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_store_id(store_id + 1);
-        let task = Task::Read(RaftCommand::new(
+        let task = Task::read(RaftCommand::new(
             cmd_store_id,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();
@@ -759,7 +764,7 @@ mod tests {
             .mut_header()
             .mut_peer()
             .set_id(leader2.get_id() + 1);
-        let task = Task::Read(RaftCommand::new(
+        let task = Task::read(RaftCommand::new(
             cmd_peer_id,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 assert!(
@@ -781,7 +786,7 @@ mod tests {
         // Term mismatch.
         let mut cmd_term = cmd.clone();
         cmd_term.mut_header().set_term(term6 - 2);
-        let task = Task::Read(RaftCommand::new(
+        let task = Task::read(RaftCommand::new(
             cmd_term,
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();
@@ -811,8 +816,8 @@ mod tests {
         );
 
         // Channel full.
-        let task1 = Task::Read(RaftCommand::new(cmd.clone(), Callback::None));
-        let task_full = Task::Read(RaftCommand::new(
+        let task1 = Task::read(RaftCommand::new(cmd.clone(), Callback::None));
+        let task_full = Task::read(RaftCommand::new(
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let err = resp.response.get_header().get_error();
@@ -839,7 +844,7 @@ mod tests {
         let mut batch = vec![
             Task::update(1, Progress::term(term6 + 3)),
             Task::update(1, Progress::applied_index_term(term6 + 3)),
-            Task::Read(msg),
+            Task::read(msg),
         ];
         reader.run_batch(&mut batch);
         assert_eq!(
