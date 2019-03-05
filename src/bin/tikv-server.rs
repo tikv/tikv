@@ -14,11 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate hyper;
-extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate rocksdb;
@@ -40,10 +35,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
