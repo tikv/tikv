@@ -37,7 +37,6 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
-use crate::storage::CF_RAFT;
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
@@ -940,8 +939,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(state) = self
             .ctx
             .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &state_key)?
+            .raft
+            .get_msg::<RegionLocalState>(&state_key)?
         {
             debug!(
                 "check target region local state";
@@ -1542,7 +1541,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let state_key = keys::region_state_key(region_id);
-        let state: RegionLocalState = match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key) {
+        let state: RegionLocalState = match self.ctx.engines.raft.get_msg(&state_key) {
             Err(e) => {
                 error!(
                     "failed to load region state, ignore";

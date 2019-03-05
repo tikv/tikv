@@ -32,8 +32,8 @@ use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use crate::storage::CF_RAFT;
+use crate::util;
 use crate::util::worker::Scheduler;
-use crate::util::{self, rocksdb_util};
 
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -313,35 +313,8 @@ impl InvokeContext {
     }
 
     #[inline]
-    pub fn save_snapshot_raft_state_to(
-        &self,
-        snapshot_index: u64,
-        kv_engine: &DB,
-        kv_wb: &mut WriteBatch,
-    ) -> Result<()> {
-        let mut snapshot_raft_state = self.raft_state.clone();
-        snapshot_raft_state
-            .mut_hard_state()
-            .set_commit(snapshot_index);
-        snapshot_raft_state.set_last_index(snapshot_index);
-
-        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
-        kv_wb.put_msg_cf(
-            handle,
-            &keys::snapshot_raft_state_key(self.region_id),
-            &snapshot_raft_state,
-        )?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
-        kv_wb.put_msg_cf(
-            handle,
-            &keys::apply_state_key(self.region_id),
-            &self.apply_state,
-        )?;
+    pub fn save_apply_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
+        raft_wb.put_msg(&keys::apply_state_key(self.region_id), &self.apply_state)?;
         Ok(())
     }
 }
@@ -364,9 +337,9 @@ pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalSta
     })
 }
 
-pub fn init_apply_state(kv_engine: &DB, region: &Region) -> Result<RaftApplyState> {
+pub fn init_apply_state(raft_engine: &DB, region: &Region) -> Result<RaftApplyState> {
     Ok(
-        match kv_engine.get_msg_cf(CF_RAFT, &keys::apply_state_key(region.get_id()))? {
+        match raft_engine.get_msg(&keys::apply_state_key(region.get_id()))? {
             Some(s) => s,
             None => {
                 let mut apply_state = RaftApplyState::new();
@@ -1077,9 +1050,7 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
-            0
-        } else {
+        if !raft::is_empty_snap(&ready.snapshot) {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
@@ -1088,8 +1059,6 @@ impl PeerStorage {
                 &ready_ctx.raft_wb(),
             )?;
             fail_point!("raft_after_apply_snap");
-
-            last_index(&ctx.raft_state)
         };
 
         if ready.must_sync {
@@ -1110,22 +1079,11 @@ impl PeerStorage {
 
         if ctx.raft_state != self.raft_state {
             ctx.save_raft_state_to(ready_ctx.raft_wb_mut())?;
-            if snapshot_index > 0 {
-                // in case of restart happen when we just write region state to Applying,
-                // but not write raft_local_state to raft rocksdb in time.
-                // we write raft state to default rocksdb, with last index set to snap index,
-                // in case of recv raft log after snapshot.
-                ctx.save_snapshot_raft_state_to(
-                    snapshot_index,
-                    &self.engines.kv,
-                    &mut ready_ctx.kv_wb_mut(),
-                )?;
-            }
         }
 
         // only when apply snapshot
         if ctx.apply_state != self.apply_state {
-            ctx.save_apply_state_to(&self.engines.kv, &mut ready_ctx.kv_wb_mut())?;
+            ctx.save_apply_state_to(ready_ctx.kv_wb_mut())?;
         }
 
         Ok(ctx)
@@ -1296,8 +1254,8 @@ pub fn clear_meta(
 
 pub fn do_snapshot(
     mgr: SnapManager,
-    raft_db: &DB,
-    snap: &DbSnapshot,
+    raft_snap: &DbSnapshot,
+    kv_snap: &DbSnapshot,
     region_id: u64,
 ) -> raft::Result<Snapshot> {
     debug!(
@@ -1305,22 +1263,21 @@ pub fn do_snapshot(
         "region_id" => region_id,
     );
 
-    let apply_state: RaftApplyState =
-        match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
-            None => {
-                return Err(storage_error(format!(
-                    "could not load raft state of region {}",
-                    region_id
-                )));
-            }
-            Some(state) => state,
-        };
+    let apply_state: RaftApplyState = match raft_snap.get_msg(&keys::apply_state_key(region_id))? {
+        None => {
+            return Err(storage_error(format!(
+                "could not load raft state of region {}",
+                region_id
+            )));
+        }
+        Some(state) => state,
+    };
 
     let idx = apply_state.get_applied_index();
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_db.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
+        match raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
             None => {
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
@@ -1336,8 +1293,8 @@ pub fn do_snapshot(
     mgr.register(key.clone(), SnapEntry::Generating);
     defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
-    let state: RegionLocalState = snap
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
+    let state: RegionLocalState = raft_snap
+        .get_msg(&keys::region_state_key(key.region_id))
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),
@@ -1359,13 +1316,13 @@ pub fn do_snapshot(
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key, snap)?;
+    let mut s = mgr.get_snapshot_for_building(&key, kv_snap)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
-        snap,
+        kv_snap,
         state.get_region(),
         &mut snap_data,
         &mut stat,
@@ -1413,8 +1370,8 @@ pub fn write_initial_apply_state<T: Mutable>(
 }
 
 pub fn write_peer_state<T: Mutable>(
-    kv_engine: &DB,
-    kv_wb: &T,
+    _kv_engine: &DB, // TODO: remove it
+    raft_wb: &T,
     region: &metapb::Region,
     state: PeerState,
     merge_state: Option<MergeState>,
@@ -1427,13 +1384,12 @@ pub fn write_peer_state<T: Mutable>(
         region_state.set_merge_state(state);
     }
 
-    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
         "writing merge state";
         "region_id" => region_id,
         "state" => ?region_state,
     );
-    kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
+    raft_wb.put_msg(&keys::region_state_key(region_id), &region_state)?;
     Ok(())
 }
 
@@ -1638,7 +1594,6 @@ mod tests {
         ents: &[Entry],
     ) -> PeerStorage {
         let mut store = new_storage(sched, path);
-        let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
@@ -1650,10 +1605,8 @@ mod tests {
             .set_term(ents[0].get_term());
         ctx.apply_state
             .set_applied_index(ents.last().unwrap().get_index());
-        ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
-            .unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
-        store.engines.kv.write(kv_wb).unwrap();
+        ctx.save_apply_state_to(&mut ready_ctx.raft_wb).unwrap();
+        store.engines.raft.write(ready_ctx.raft_wb).expect("");
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1721,8 +1674,8 @@ mod tests {
         );
         store
             .engines
-            .kv
-            .scan_cf(CF_RAFT, &meta_start, &meta_end, false, |_, _| {
+            .raft
+            .scan(&meta_start, &meta_end, false, |_, _| {
                 count += 1;
                 Ok(true)
             })
@@ -1732,15 +1685,6 @@ mod tests {
             keys::region_raft_prefix(region_id),
             keys::region_raft_prefix(region_id + 1),
         );
-        store
-            .engines
-            .kv
-            .scan_cf(CF_RAFT, &raft_start, &raft_end, false, |_, _| {
-                count += 1;
-                Ok(true)
-            })
-            .unwrap();
-
         store
             .engines
             .raft
@@ -1869,10 +1813,9 @@ mod tests {
                 panic!("#{}: want {:?}, got {:?}", i, werr, res);
             }
             if res.is_ok() {
-                let mut kv_wb = WriteBatch::new();
-                ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
-                    .unwrap();
-                store.engines.kv.write(kv_wb).unwrap();
+                let mut raft_wb = WriteBatch::new();
+                ctx.save_apply_state_to(&mut raft_wb).unwrap();
+                store.engines.raft.write(raft_wb).expect("");
             }
         }
     }
@@ -1920,7 +1863,6 @@ mod tests {
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let mut ctx = InvokeContext::new(&s);
-        let mut kv_wb = WriteBatch::new();
         let mut ready_ctx = ReadyContext::default();
         s.append(
             &mut ctx,
@@ -1935,17 +1877,16 @@ mod tests {
         ctx.raft_state.set_last_index(7);
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
-        s.engines.kv.write(kv_wb).unwrap();
+        ctx.save_apply_state_to(&mut ready_ctx.raft_wb).unwrap();
         s.engines.raft.write(ready_ctx.raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
         let term = s.term(7).unwrap();
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
-        kv_wb = WriteBatch::new();
-        ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
-        s.engines.kv.write(kv_wb).unwrap();
+        ready_ctx.raft_wb = WriteBatch::new();
+        ctx.save_apply_state_to(&mut ready_ctx.raft_wb).unwrap();
+        s.engines.raft.write(ready_ctx.raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();

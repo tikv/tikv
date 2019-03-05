@@ -96,6 +96,13 @@ pub fn raft_state_key(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_STATE_SUFFIX)
 }
 
+/// A key for RaftLocalState
+///
+/// In v2.x we need to write a RaftLocalState among with RegionLocalState to
+/// the kv engine when we receive a snapshot.
+///
+/// Now, it is deprecated, only used for upgrading.
+#[doc(hidden)]
 pub fn snapshot_raft_state_key(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, SNAPSHOT_RAFT_STATE_SUFFIX)
 }

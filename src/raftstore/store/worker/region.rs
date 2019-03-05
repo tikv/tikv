@@ -22,7 +22,7 @@ use std::u64;
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
+use rocksdb::WriteBatch;
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
@@ -34,7 +34,6 @@ use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
-use crate::storage::CF_RAFT;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
 use crate::util::timer::Timer;
@@ -226,13 +225,13 @@ impl SnapContext {
     /// Generates the snapshot of the Region.
     fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
         // do we need to check leader here?
-        let raft_engine = Arc::clone(&self.engines.raft);
-        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
+        let raw_raft_snap = Snapshot::new(Arc::clone(&self.engines.raft));
+        let raw_kv_snap = Snapshot::new(Arc::clone(&self.engines.kv));
 
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raft_engine,
-            &raw_snap,
+            &raw_raft_snap,
+            &raw_kv_snap,
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -274,7 +273,7 @@ impl SnapContext {
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
         let mut region_state: RegionLocalState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &region_key)) {
+            match box_try!(self.engines.raft.get_msg(&region_key)) {
                 Some(state) => state,
                 None => {
                     return Err(box_err!(
@@ -299,16 +298,15 @@ impl SnapContext {
         check_abort(&abort)?;
 
         let state_key = keys::apply_state_key(region_id);
-        let apply_state: RaftApplyState =
-            match box_try!(self.engines.kv.get_msg_cf(CF_RAFT, &state_key)) {
-                Some(state) => state,
-                None => {
-                    return Err(box_err!(
-                        "failed to get raftstate from {}",
-                        escape(&state_key)
-                    ));
-                }
-            };
+        let apply_state: RaftApplyState = match box_try!(self.engines.raft.get_msg(&state_key)) {
+            Some(state) => state,
+            None => {
+                return Err(box_err!(
+                    "failed to get raftstate from {}",
+                    escape(&state_key)
+                ));
+            }
+        };
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
@@ -332,10 +330,8 @@ impl SnapContext {
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT));
-        box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
-        box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
+        box_try!(wb.put_msg(&region_key, &region_state));
+        self.engines.raft.write(wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -661,8 +657,8 @@ mod tests {
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::raftstore::store::{keys, SnapKey, SnapManager};
+    use crate::storage::{self, CF_DEFAULT};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
@@ -755,24 +751,31 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = vec![
-            rocksdb_util::CFOptions::new("default", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("write", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("lock", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("raft", cf_opts.clone()),
+        let kv_cfs_opts = vec![
+            rocksdb_util::CFOptions::new(storage::CF_DEFAULT, cf_opts.clone()),
+            rocksdb_util::CFOptions::new(storage::CF_WRITE, cf_opts.clone()),
+            rocksdb_util::CFOptions::new(storage::CF_LOCK, cf_opts.clone()),
         ];
-        let db =
-            get_test_db_for_regions(&temp_dir, None, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
+        let raft_cfs_opt = rocksdb_util::CFOptions::new(storage::CF_DEFAULT, cf_opts.clone());
+        let engines = get_test_db_for_regions(
+            &temp_dir,
+            None,
+            Some(raft_cfs_opt),
+            None,
+            Some(kv_cfs_opts),
+            &[1, 2, 3, 4, 5, 6],
+        )
+        .unwrap();
 
-        for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
+        for cf_name in engines.kv.cf_names() {
+            let cf = engines.kv.cf_handle(cf_name).unwrap();
             for i in 0..6 {
-                db.put_cf(cf, &[i], &[i]).unwrap();
-                db.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
-                db.flush_cf(cf, true).unwrap();
+                engines.kv.put_cf(cf, &[i], &[i]).unwrap();
+                engines.kv.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
+                engines.kv.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+                    rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
                     u64::from(i) + 1
                 );
             }
@@ -782,13 +785,7 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(
-            Engines::new(Arc::clone(&db), Arc::clone(&db)),
-            mgr,
-            0,
-            true,
-            Duration::from_secs(0),
-        );
+        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -813,15 +810,15 @@ mod tests {
 
             // set applying state
             let wb = WriteBatch::new();
-            let handle = db.cf_handle(CF_RAFT).unwrap();
             let region_key = keys::region_state_key(id);
-            let mut region_state = db
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+            let mut region_state = engines
+                .raft
+                .get_msg::<RegionLocalState>(&region_key)
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
-            wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            db.write(wb).unwrap();
+            wb.put_msg(&region_key, &region_state).unwrap();
+            engines.raft.write(wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
@@ -836,8 +833,9 @@ mod tests {
             let region_key = keys::region_state_key(id);
             loop {
                 thread::sleep(Duration::from_millis(100));
-                if db
-                    .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                if engines
+                    .raft
+                    .get_msg::<RegionLocalState>(&region_key)
                     .unwrap()
                     .unwrap()
                     .get_state()
@@ -847,19 +845,19 @@ mod tests {
                 }
             }
         };
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
+        let cf = engines.kv.cf_handle(CF_DEFAULT).unwrap();
 
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             6
         );
 
         // compact all files to the bottomest level
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocksdb_util::compact_files_in_range(&engines.kv, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             0
         );
 
@@ -869,7 +867,7 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             2
         );
 
@@ -877,31 +875,31 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             4
         );
 
         // compact all files to the bottomest level
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocksdb_util::compact_files_in_range(&engines.kv, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             0
         );
 
@@ -911,21 +909,21 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             4
         );
 
         // make sure have checked pending applies
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocksdb_util::compact_files_in_range(&engines.kv, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocksdb_util::get_cf_num_files_at_level(&engines.kv, cf, 0).unwrap(),
             2
         );
     }

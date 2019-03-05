@@ -34,7 +34,7 @@ use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::Result;
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::rocksdb_util::{self, CompactedEvent, CompactionListener};
@@ -1116,11 +1116,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         // Check if the target peer is tomebtone.
         let state_key = keys::region_state_key(region_id);
-        let local_state: RegionLocalState =
-            match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
-                Some(state) => state,
-                None => return Ok(false),
-            };
+        let local_state: RegionLocalState = match self.ctx.engines.raft.get_msg(&state_key)? {
+            Some(state) => state,
+            None => return Ok(false),
+        };
 
         if local_state.get_state() != PeerState::Tombstone {
             // Maybe split, but not registered yet.
