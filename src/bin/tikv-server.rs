@@ -14,11 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate hyper;
-extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate rocksdb;
@@ -40,10 +35,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
@@ -67,7 +58,7 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::fsm::{self, SendCh};
+use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
@@ -150,7 +141,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Initialize raftstore channels.
     let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
-    let store_sendch = SendCh::new(router.clone(), "raftstore");
 
     // Create Local Reader.
     let local_reader = Builder::new("local-reader")
@@ -159,8 +149,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let local_ch = local_reader.scheduler();
 
     // Create router.
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), router.clone(), local_ch);
-    let compaction_listener = new_compaction_listener(router);
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+    let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
@@ -228,7 +218,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
-            Some(store_sendch),
+            Some(router.clone()),
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
@@ -263,7 +253,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut node = Node::new(system, &server_cfg, &cfg.raft_store, pd_client.clone());
 
     // Create CoprocessorHost.
-    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
+    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
 
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);

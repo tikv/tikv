@@ -761,7 +761,7 @@ fn test_learner_with_slow_snapshot() {
         filter: Arc<AtomicBool>,
     }
 
-    impl Filter<RaftMessage> for SnapshotFilter {
+    impl Filter for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
             let count = msgs
                 .iter()
