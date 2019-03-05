@@ -3305,7 +3305,6 @@ mod tests {
             ("bar", "foobArbar", 6),
             ("好世", "你好世界", 3),
         ];
-
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
             let s = Datum::Bytes(s.as_bytes().to_vec());
