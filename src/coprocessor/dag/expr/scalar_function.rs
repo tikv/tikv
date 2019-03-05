@@ -136,6 +136,7 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
+            | ScalarFuncSig::Instr
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
@@ -837,6 +838,7 @@ dispatch_call! {
 
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
+        Instr => instr,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1170,6 +1172,7 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::Instr,
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
