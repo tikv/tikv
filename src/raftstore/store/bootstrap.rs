@@ -73,7 +73,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let raft_wb = WriteBatch::new();
     raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
     raft_wb.put_msg(&keys::region_state_key(region.get_id()), &state)?;
-    write_initial_apply_state(&engines.raft, &raft_wb, region.get_id())?;
+    write_initial_apply_state(&raft_wb, region.get_id())?;
     write_initial_raft_state(&raft_wb, region.get_id())?;
     engines.raft.write(raft_wb)?;
     engines.raft.sync_wal()?;

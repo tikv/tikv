@@ -455,8 +455,8 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines.raft, region));
-            let apply_state = box_try!(init_apply_state(&self.engines.raft, region));
+            let raft_state = box_try!(init_raft_state(&self.engines, region));
+            let apply_state = box_try!(init_apply_state(&self.engines, region));
             if raft_state.get_last_index() < apply_state.get_applied_index() {
                 return Err(Error::Other("last index < applied index".into()));
             }
@@ -629,7 +629,7 @@ impl Debugger {
         if box_try!(raft.get_msg::<RaftApplyState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftApplyState".into()));
         }
-        box_try!(write_initial_apply_state(raft, &raft_wb, region_id));
+        box_try!(write_initial_apply_state(&raft_wb, region_id));
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
@@ -1300,13 +1300,7 @@ fn set_region_tombstone(
         return Err(box_err!("The peer is still in target peers"));
     }
 
-    box_try!(write_peer_state(
-        &engines.raft,
-        wb,
-        &region,
-        PeerState::Tombstone,
-        None
-    ));
+    box_try!(write_peer_state(wb, &region, PeerState::Tombstone, None));
     Ok(())
 }
 
