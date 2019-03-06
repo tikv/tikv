@@ -37,7 +37,7 @@ pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, PeerMsg, PeerTick, RaftCommand, ReadCallback, ReadResponse,
+    Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
     SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick,
     WriteCallback, WriteResponse,
 };

@@ -501,6 +501,26 @@ impl Peer {
         self.get_store().region()
     }
 
+    pub fn uptodate(&self) -> bool {
+        if self.is_leader() {
+            let status = self.raft_group.status();
+            let last_index = self.raft_group.raft.raft_log.last_index();
+            let progresses = status.progress.iter().chain(&status.learner_progress);
+            for (&id, progress) in progresses {
+                if id == self.peer.get_id() {
+                    continue;
+                }
+                if progress.matched != last_index {
+                    return false;
+                }
+            }
+            self.get_store().applied_index() == last_index
+        } else {
+            self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+        }
+    }
+
     /// Set the region of a peer.
     ///
     /// This will update the region of the peer, caller must ensure the region
@@ -877,9 +897,12 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    pub fn handle_raft_ready_append<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+    ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
-            return;
+            return None;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -889,7 +912,7 @@ impl Peer {
                 "{} still applying snapshot, skip further handling.",
                 self.tag
             );
-            return;
+            return None;
         }
 
         if !self.pending_messages.is_empty() {
@@ -910,7 +933,7 @@ impl Peer {
                     self.get_store().applied_index(),
                     self.last_applying_idx,
                 );
-                return;
+                return None;
             }
 
             let mut snap_data = RaftSnapshotData::new();
@@ -946,7 +969,7 @@ impl Peer {
                         self.last_applying_idx,
                         r,
                     );
-                    return;
+                    return None;
                 }
             }
         }
@@ -955,7 +978,7 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return None;
         }
 
         debug!("{} handle raft ready", self.tag);
@@ -988,7 +1011,7 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        Some((ready, invoke_ctx))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(

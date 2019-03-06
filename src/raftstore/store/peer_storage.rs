@@ -230,6 +230,11 @@ impl EntryCache {
             self.cache.shrink_to_fit();
         }
     }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
 }
 
 #[derive(Default)]
@@ -838,6 +843,11 @@ impl PeerStorage {
 
     pub fn compact_to(&mut self, idx: u64) {
         self.cache.compact_to(idx);
+    }
+
+    #[inline]
+    pub fn is_cache_empty(&self) -> bool {
+        self.cache.is_empty()
     }
 
     pub fn maybe_gc_cache(&mut self, replicated_idx: u64, apply_idx: u64) {
