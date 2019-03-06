@@ -18,6 +18,7 @@ extern crate kvproto as lib_kvproto;
 #[macro_use]
 extern crate slog;
 extern crate slog_term;
+extern crate tikv_alloc;
 
 pub mod test_util;
 
@@ -35,7 +36,7 @@ impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
         &self,
         _record: &::slog::Record,
         key: slog::Key,
-        serializer: &mut slog::Serializer,
+        serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{}", self.0))
     }
@@ -55,7 +56,7 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
         &self,
         _record: &::slog::Record,
         key: slog::Key,
-        serializer: &mut slog::Serializer,
+        serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{:?}", self.0))
     }
@@ -96,7 +97,7 @@ impl<'a> slog::Value for Key<'a> {
         &self,
         _record: &::slog::Record,
         key: slog::Key,
-        serializer: &mut slog::Serializer,
+        serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{}", hex::encode_upper(self.0)))
     }
@@ -121,7 +122,7 @@ pub mod kvproto {
                 &self,
                 _record: &::slog::Record,
                 key: slog::Key,
-                serializer: &mut slog::Serializer,
+                serializer: &mut dyn slog::Serializer,
             ) -> slog::Result {
                 serializer.emit_arguments(
                     key,
@@ -173,7 +174,7 @@ pub mod kvproto {
                 &self,
                 _record: &::slog::Record,
                 key: slog::Key,
-                serializer: &mut slog::Serializer,
+                serializer: &mut dyn slog::Serializer,
             ) -> slog::Result {
                 serializer.emit_arguments(
                     key,

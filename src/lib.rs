@@ -85,6 +85,7 @@ extern crate serde_json;
     slog_warn,
     slog_info,
     slog_debug,
+    slog_crit,
     slog_log,
     slog_record,
     slog_b,
@@ -104,7 +105,6 @@ extern crate test;
 extern crate tikv_alloc;
 extern crate time;
 extern crate tipb;
-extern crate tokio;
 extern crate tokio_core;
 extern crate tokio_executor;
 extern crate tokio_timer;

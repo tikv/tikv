@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
 
-    type BoxError = Box<error::Error + Send + Sync>;
+    type BoxError = Box<dyn error::Error + Send + Sync>;
 
     pub fn expect_val<T>(v: T, x: result::Result<T, BoxError>)
     where

@@ -49,11 +49,11 @@ pub enum SeekRegionResult {
     Ended,
 }
 
-pub type ReadCallback = Box<FnBox(ReadResponse) + Send>;
-pub type WriteCallback = Box<FnBox(WriteResponse) + Send>;
+pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
+pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
 
-pub type SeekRegionCallback = Box<FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<Fn(&metapb::Region, StateRole) -> bool + Send>;
+pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
+pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -167,18 +167,12 @@ pub enum SignificantMsg {
     Unreachable { region_id: u64, to_peer_id: u64 },
 }
 
-pub enum PeerMsg {
-    // For notify.
-    RaftMessage(RaftMessage),
-
-    RaftCmd {
-        send_time: Instant,
-        request: RaftCmdRequest,
-        callback: Callback,
-    },
-
+/// Message that will be sent to a peer.
+///
+/// These messages are not significant and can be dropped occasionally.
+pub enum CasualMessage {
+    /// Split the target region into several partitions.
     SplitRegion {
-        region_id: u64,
         region_epoch: RegionEpoch,
         // It's an encoded key.
         // TODO: support meta key.
@@ -186,154 +180,144 @@ pub enum PeerMsg {
         callback: Callback,
     },
 
-    // For consistency check
+    /// Hash result of ComputeHash command.
     ComputeHashResult {
-        region_id: u64,
         index: u64,
         hash: Vec<u8>,
     },
 
-    // For region size
+    /// Approximate size of target region.
     RegionApproximateSize {
-        region_id: u64,
         size: u64,
     },
 
-    // For region keys
+    /// Approximate key count of target region.
     RegionApproximateKeys {
-        region_id: u64,
         keys: u64,
     },
     CompactionDeclinedBytes {
-        region_id: u64,
         bytes: u64,
     },
+    /// Half split the target region.
     HalfSplitRegion {
-        region_id: u64,
         region_epoch: RegionEpoch,
         policy: CheckPolicy,
     },
+    /// Result of querying pd whether a region is merged.
     MergeResult {
-        region_id: u64,
         target: metapb::Peer,
         stale: bool,
     },
+    /// Remove snapshot files in `snaps`.
     GcSnap {
-        region_id: u64,
         snaps: Vec<(SnapKey, bool)>,
     },
-    ClearRegionSize(u64),
-    Tick(u64, PeerTick),
+    /// Clear region size cache.
+    ClearRegionSize,
+}
+
+impl fmt::Debug for CasualMessage {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CasualMessage::ComputeHashResult { index, ref hash } => write!(
+                fmt,
+                "ComputeHashResult [index: {}, hash: {}]",
+                index,
+                escape(hash)
+            ),
+            CasualMessage::SplitRegion { ref split_keys, .. } => {
+                write!(fmt, "Split region with {}", KeysInfoFormatter(&split_keys))
+            }
+            CasualMessage::RegionApproximateSize { size } => {
+                write!(fmt, "Region's approximate size [size: {:?}]", size)
+            }
+            CasualMessage::RegionApproximateKeys { keys } => {
+                write!(fmt, "Region's approximate keys [keys: {:?}]", keys)
+            }
+            CasualMessage::CompactionDeclinedBytes { bytes } => {
+                write!(fmt, "compaction declined bytes {}", bytes)
+            }
+            CasualMessage::HalfSplitRegion { .. } => write!(fmt, "Half Split"),
+            CasualMessage::MergeResult { target, stale } => write! {
+                fmt,
+                "target: {:?}, successful: {}",
+                target, stale
+            },
+            CasualMessage::GcSnap { ref snaps } => write! {
+                fmt,
+                "gc snaps {:?}",
+                snaps
+            },
+            CasualMessage::ClearRegionSize => write! {
+                fmt,
+                "clear region size"
+            },
+        }
+    }
+}
+
+/// Raft command is the command that is expected to be proposed by the
+/// leader of the target raft group.
+#[derive(Debug)]
+pub struct RaftCommand {
+    pub send_time: Instant,
+    pub request: RaftCmdRequest,
+    pub callback: Callback,
+}
+
+impl RaftCommand {
+    #[inline]
+    pub fn new(request: RaftCmdRequest, callback: Callback) -> RaftCommand {
+        RaftCommand {
+            request,
+            callback,
+            send_time: Instant::now(),
+        }
+    }
+}
+
+/// Message that can be sent to a peer.
+pub enum PeerMsg {
+    /// Raft message is the message sent between raft nodes in the same
+    /// raft group. Messages need to be redirected to raftstore if target
+    /// peer doesn't exist.
+    RaftMessage(RaftMessage),
+    /// Raft command is the command that is expected to be proposed by the
+    /// leader of the target raft group. If it's failed to be sent, callback
+    /// usually needs to be called before dropping in case of resource leak.
+    RaftCommand(RaftCommand),
+    /// Tick is periodical task. If target peer doesn't exist there is a potential
+    /// that the raft node will not work anymore.
+    Tick(PeerTick),
+    /// Result of applying committed entries. The message can't be lost.
+    ApplyRes { res: ApplyTaskRes },
+    /// Message that can't be lost but rarely created. If they are lost, real bad
+    /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
-    Start(u64),
-    ApplyRes {
-        region_id: u64,
-        res: ApplyTaskRes,
-    },
-    Noop(u64),
+    /// Start the FSM.
+    Start,
+    /// A message only used to notify a peer.
+    Noop,
+    /// Message that is not important and can be dropped occasionally.
+    CasualMessage(CasualMessage),
 }
 
 impl fmt::Debug for PeerMsg {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
-            PeerMsg::RaftCmd { .. } => write!(fmt, "Raft Command"),
-            PeerMsg::ComputeHashResult {
-                region_id,
-                index,
-                ref hash,
-            } => write!(
+            PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
+            PeerMsg::Tick(tick) => write! {
                 fmt,
-                "ComputeHashResult [region_id: {}, index: {}, hash: {}]",
-                region_id,
-                index,
-                escape(hash)
-            ),
-            PeerMsg::SplitRegion {
-                region_id,
-                ref split_keys,
-                ..
-            } => write!(
-                fmt,
-                "Split region {} with {}",
-                region_id,
-                KeysInfoFormatter(&split_keys)
-            ),
-            PeerMsg::RegionApproximateSize { region_id, size } => write!(
-                fmt,
-                "Region's approximate size [region_id: {}, size: {:?}]",
-                region_id, size
-            ),
-            PeerMsg::RegionApproximateKeys { region_id, keys } => write!(
-                fmt,
-                "Region's approximate keys [region_id: {}, keys: {:?}]",
-                region_id, keys
-            ),
-            PeerMsg::CompactionDeclinedBytes { region_id, bytes } => write!(
-                fmt,
-                "[region {}] compaction declined bytes {}",
-                region_id, bytes
-            ),
-            PeerMsg::HalfSplitRegion { ref region_id, .. } => {
-                write!(fmt, "Half Split region {}", region_id)
-            }
-            PeerMsg::MergeResult {
-                region_id,
-                target,
-                stale,
-            } => write! {
-                fmt,
-                "[reigon {}] target: {:?}, successful: {}",
-                region_id, target, stale
-            },
-            PeerMsg::GcSnap {
-                region_id,
-                ref snaps,
-            } => write! {
-                fmt,
-                "[region {}] gc snaps {:?}",
-                region_id, snaps
-            },
-            PeerMsg::ClearRegionSize(region_id) => write! {
-                fmt,
-                "[region {}] clear region size",
-                region_id
-            },
-            PeerMsg::Tick(region_id, tick) => write! {
-                fmt,
-                "[region {}] {:?}",
-                region_id,
+                "{:?}",
                 tick
             },
             PeerMsg::SignificantMsg(msg) => write!(fmt, "{:?}", msg),
-            PeerMsg::ApplyRes { region_id, res } => {
-                write!(fmt, "[region {}] ApplyRes {:?}", region_id, res)
-            }
-            PeerMsg::Start(region_id) => write!(fmt, "[region {}] Startup", region_id),
-            PeerMsg::Noop(region_id) => write!(fmt, "[region {}] Noop", region_id),
+            PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
+            PeerMsg::Start => write!(fmt, "Startup"),
+            PeerMsg::Noop => write!(fmt, "Noop"),
+            PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
         }
-    }
-}
-
-impl Msg {
-    pub fn new_raft_cmd(request: RaftCmdRequest, callback: Callback) -> Msg {
-        Msg::PeerMsg(PeerMsg::RaftCmd {
-            send_time: Instant::now(),
-            request,
-            callback,
-        })
-    }
-
-    pub fn new_half_split_region(
-        region_id: u64,
-        region_epoch: RegionEpoch,
-        policy: CheckPolicy,
-    ) -> Msg {
-        Msg::PeerMsg(PeerMsg::HalfSplitRegion {
-            region_id,
-            region_epoch,
-            policy,
-        })
     }
 }
 

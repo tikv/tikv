@@ -20,7 +20,7 @@ use crate::coprocessor::Result;
 
 use super::super::expr::{eval_arith, EvalContext};
 
-pub fn build_aggr_func(tp: ExprType) -> Result<Box<AggrFunc>> {
+pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
     match tp {
         ExprType::Agg_BitAnd => Ok(box AggBitAnd {
             c: 0xffffffffffffffff,

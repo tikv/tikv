@@ -61,7 +61,7 @@ impl AggFuncExpr {
     }
 }
 
-impl AggrFunc {
+impl dyn AggrFunc {
     fn update_with_expr(
         &mut self,
         ctx: &mut EvalContext,
@@ -80,7 +80,7 @@ struct AggExecutor {
     executed: bool,
     ctx: EvalContext,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
@@ -89,7 +89,7 @@ impl AggExecutor {
         group_by: Vec<Expr>,
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<AggExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -143,7 +143,7 @@ impl AggExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
+            warnings.merge(&mut self.ctx.take_warnings());
             Some(warnings)
         } else {
             Some(self.ctx.take_warnings())
@@ -159,7 +159,7 @@ impl AggExecutor {
 // and updates all the values in group_key_aggrs, then returns a result.
 pub struct HashAggExecutor {
     inner: AggExecutor,
-    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
+    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<dyn AggrFunc>>>,
     cursor: usize,
 }
 
@@ -167,7 +167,7 @@ impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<HashAggExecutor> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
@@ -315,7 +315,7 @@ impl Executor for StreamAggExecutor {
 pub struct StreamAggExecutor {
     inner: AggExecutor,
     // save partial agg result
-    agg_funcs: Vec<Box<AggrFunc>>,
+    agg_funcs: Vec<Box<dyn AggrFunc>>,
     cur_group_row: Vec<Datum>,
     next_group_row: Vec<Datum>,
     count: i64,
@@ -325,7 +325,7 @@ pub struct StreamAggExecutor {
 impl StreamAggExecutor {
     pub fn new(
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
     ) -> Result<StreamAggExecutor> {
         let group_bys = meta.take_group_by().into_vec();

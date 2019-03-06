@@ -107,11 +107,12 @@ impl Client {
 
     pub fn switch_cluster(&self, req: &SwitchModeRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -119,7 +120,7 @@ impl Client {
             let future = match client.switch_mode_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("switch mode failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -134,11 +135,12 @@ impl Client {
 
     pub fn compact_cluster(&self, req: &CompactRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -146,7 +148,7 @@ impl Client {
             let future = match client.compact_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("compact failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };

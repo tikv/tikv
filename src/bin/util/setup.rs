@@ -140,4 +140,8 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
     }
+
+    if let Some(metrics_addr) = matches.value_of("metrics-addr") {
+        config.metric.address = metrics_addr.to_owned()
+    }
 }
