@@ -54,7 +54,7 @@ impl<Client: ImportClient> ImportJob<Client> {
 
     pub fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start", self.tag);
+        info!("start"; "tag" => %self.tag);
 
         // Before importing data, we need to help to balance data in the cluster.
         let job = PrepareJob::new(
@@ -75,11 +75,11 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("{} takes {:?}", self.tag, start.elapsed());
+                info!("import engine"; "tag" => %self.tag, "takes" => ?start.elapsed());
                 Ok(())
             }
             Err(e) => {
-                error!("{}: {:?}", self.tag, e);
+                error!("import engine failed"; "tag" => %self.tag, "err" => %e);
                 Err(e)
             }
         }
@@ -148,7 +148,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
     fn run(&self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start {:?}", self.tag, self.range);
+        info!("start"; "tag" => %self.tag, "range" => ?self.range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -158,7 +158,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
             let (tx, rx) = mpsc::sync_channel(self.cfg.num_import_sst_jobs);
             let handles = self.run_import_threads(rx);
             if let Err(e) = self.run_import_stream(tx) {
-                error!("{} import stream: {:?}", self.tag, e);
+                error!("import stream"; "tag" => %self.tag, "err" => %e);
                 continue;
             }
             for h in handles {
@@ -175,16 +175,13 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
             let range_count = self.finished_ranges.lock().unwrap().len();
             info!(
-                "{} import {} ranges takes {:?}",
-                self.tag,
-                range_count,
-                start.elapsed(),
+                "import"; "tag" => %self.tag, "range_count" => %range_count, "takes" => ?start.elapsed(),
             );
 
             return Ok(());
         }
 
-        error!("{} run out of time", self.tag);
+        error!("run out of time"; "tag" => %self.tag);
         Err(Error::ImportJobFailed(self.tag.clone()))
     }
 
@@ -258,7 +255,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
     fn run(&mut self) -> Result<()> {
         let start = Instant::now();
-        info!("{} start {:?}", self.tag, self.sst);
+        info!("start"; "tag" => %self.tag, "sst" => ?self.sst);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -271,12 +268,12 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                     if self.sst.inside_region(&region) {
                         region
                     } else {
-                        warn!("{} outside of {:?}", self.tag, region);
+                        warn!("sst out of region range"; "tag" => %self.tag, "region" => ?region);
                         return Err(Error::ImportSSTJobFailed(self.tag.clone()));
                     }
                 }
                 Err(e) => {
-                    warn!("{}: {:?}", self.tag, e);
+                    warn!("get region failed"; "tag" => %self.tag, "err" => %e);
                     continue;
                 }
             };
@@ -284,7 +281,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             for _ in 0..MAX_RETRY_TIMES {
                 match self.import(region) {
                     Ok(_) => {
-                        info!("{} takes {:?}", self.tag, start.elapsed());
+                        info!("import sst"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(());
                     }
                     Err(Error::UpdateRegion(new_region)) => {
@@ -296,12 +293,12 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             }
         }
 
-        error!("{} run out of time", self.tag);
+        error!("run out of time"; "tag" => %self.tag);
         Err(Error::ImportSSTJobFailed(self.tag.clone()))
     }
 
     fn import(&mut self, mut region: RegionInfo) -> Result<()> {
-        info!("{} import to {:?}", self.tag, region);
+        info!("start import sst"; "tag" => %self.tag, "region" => ?region);
 
         // Update SST meta for this region.
         {
@@ -336,7 +333,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                         )))
                     }
                     None => {
-                        warn!("{} epoch not match {:?}", self.tag, current_region);
+                        warn!("epoch not match"; "tag" => %self.tag, "new_regions" => ?current_regions);
                         Err(Error::EpochNotMatch(current_regions))
                     }
                 }
@@ -351,10 +348,10 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             let store_id = peer.get_store_id();
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
-                    info!("{} upload to store {}", self.tag, store_id);
+                    info!("upload"; "tag" => %self.tag, "store" => %store_id);
                 }
                 Err(e) => {
-                    warn!("{} upload to store {}: {:?}", self.tag, store_id, e);
+                    warn!("upload failed"; "tag" => %self.tag, "store" => %store_id, "err" => %e);
                     return Err(e);
                 }
             }
@@ -386,11 +383,11 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
         match res {
             Ok(_) => {
-                info!("{} ingest to store {}", self.tag, store_id);
+                info!("ingest"; "tag" => %self.tag, "store" => %store_id);
                 Ok(())
             }
             Err(e) => {
-                warn!("{} ingest to store {}: {:?}", self.tag, store_id, e);
+                warn!("ingest failed"; "tag" => %self.tag, "store" => %store_id, "err" => %e);
                 Err(e)
             }
         }

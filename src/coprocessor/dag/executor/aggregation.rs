@@ -143,7 +143,7 @@ impl AggExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
+            warnings.merge(&mut self.ctx.take_warnings());
             Some(warnings)
         } else {
             Some(self.ctx.take_warnings())

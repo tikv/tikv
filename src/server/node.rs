@@ -21,7 +21,7 @@ use super::Result;
 use crate::import::SSTImporter;
 use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
-use crate::raftstore::store::fsm::{RaftBatchSystem, SendCh};
+use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use crate::raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager, Transport,
 };
@@ -189,8 +189,8 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_sendch(&self) -> SendCh {
-        SendCh::new(self.system.router(), "raftstore")
+    pub fn get_router(&self) -> RaftRouter {
+        self.system.router()
     }
 
     // check store, return store id for the engine.

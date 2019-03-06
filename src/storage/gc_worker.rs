@@ -33,10 +33,10 @@ use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::pd::PdClient;
 use crate::raftstore::store::keys;
-use crate::raftstore::store::msg::{Msg as RaftStoreMsg, StoreMsg};
+use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::{delete_all_in_range_cf, find_peer};
 use crate::raftstore::store::SeekRegionResult;
-use crate::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
+use crate::server::transport::ServerRaftStoreRouter;
 use crate::util::rocksdb_util::get_cf_handle;
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
@@ -366,10 +366,10 @@ impl<E: Engine> GCRunner<E> {
 
         if let Some(router) = self.raft_store_router.as_ref() {
             router
-                .send(RaftStoreMsg::StoreMsg(StoreMsg::ClearRegionSizeInRange {
+                .send_store(StoreMsg::ClearRegionSizeInRange {
                     start_key: start_key.as_encoded().to_vec(),
                     end_key: end_key.as_encoded().to_vec(),
-                }))
+                })
                 .unwrap_or_else(|e| {
                     // Warn and ignore it.
                     warn!(
