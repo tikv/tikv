@@ -18,6 +18,7 @@ use tipb::executor::{self, ExecType};
 
 use crate::storage::Store;
 
+use super::batch_executor::interface::*;
 use super::executor::{
     Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
@@ -35,6 +36,24 @@ use crate::coprocessor::*;
 pub struct DAGBuilder;
 
 impl DAGBuilder {
+    /// Given a list of executor descriptors and returns whether all executor descriptors can
+    /// be used to build batch executors.
+    pub fn can_build_batch(_exec_descriptors: &[executor::Executor]) -> bool {
+        // Currently no batch executors, so always returns false.
+        false
+    }
+
+    // Note: `S` is `'static` because we have trait objects `Executor`.
+    pub fn build_batch<S: Store + 'static>(
+        _executor_descriptors: Vec<executor::Executor>,
+        _store: S,
+        _ranges: Vec<KeyRange>,
+        _eval_config: EvalConfig,
+    ) -> Result<(Box<dyn BatchExecutor>, BatchExecutorContext)> {
+        // Currently no batch executors and this function should never be called, so unreachable.
+        unreachable!()
+    }
+
     /// Builds a normal executor pipeline.
     ///
     /// Normal executors iterate rows one by one.
