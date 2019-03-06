@@ -912,16 +912,19 @@ impl ScalarFunc {
         let arg0: Cow<'a, [u8]> = try_opt!(self.children[0].eval_string(ctx, row));
         let s: &str = box_try!(::std::str::from_utf8(&arg0));
         if s.is_empty() {
-            return Ok(Some(-1));
+            return Ok(Some(0));
         }
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let res: &str = box_try!(::std::str::from_utf8(&arg1));
         if res.is_empty() {
-            return Ok(Some(-1));
+            return Ok(Some(0));
         }
         match s.find(res) {
-            Some(x) => Ok(Some(x as i64)),
-            None => Ok(Some(-1)),
+            Some(x) => {
+                let s = x+1;
+                Ok(Some(s as i64))
+            },
+            None => Ok(Some(0)),
         }
     }
 }
@@ -3294,16 +3297,16 @@ mod tests {
     #[test]
     fn test_instr() {
         let cases: Vec<(&str, &str, i64)> = vec![
-            ("f", "foobArbar", 0),
-            ("o", "foobArbar", 1),
-            ("0", "foobArbar", -1),
-            ("A", "foobArbar", 4),
-            ("r", "foobArbar", 5),
-            (" ", "foobArbar", -1),
-            ("", "", -1),
-            ("BaR", "foobArbar", -1),
-            ("bar", "foobArbar", 6),
-            ("好世", "你好世界", 3),
+            ("f", "foobArbar", 1),
+            ("o", "foobArbar", 2),
+            ("0", "foobArbar", 0),
+            ("A", "foobArbar", 5),
+            ("r", "foobArbar", 6),
+            (" ", "foobArbar", 0),
+            ("", "", 0),
+            ("BaR", "foobArbar", 0),
+            ("bar", "foobArbar", 7),
+            ("好世", "你好世界", 4),
         ];
         for (substr, s, exp) in cases {
             let substr = Datum::Bytes(substr.as_bytes().to_vec());
