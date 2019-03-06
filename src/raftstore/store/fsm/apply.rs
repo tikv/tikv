@@ -195,7 +195,8 @@ pub enum ExecResult {
     ComputeHash {
         region: Region,
         index: u64,
-        snap: Snapshot,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
     },
     VerifyHash {
         index: u64,
@@ -2010,7 +2011,8 @@ impl ApplyDelegate {
                 // open files in rocksdb.
                 // TODO: figure out another way to do consistency check without snapshot
                 // or short life snapshot.
-                snap: Snapshot::new(Arc::clone(&ctx.engines.kv)),
+                raft_snap: Snapshot::new(Arc::clone(&ctx.engines.raft)),
+                kv_snap: Snapshot::new(Arc::clone(&ctx.engines.kv)),
             }),
         ))
     }

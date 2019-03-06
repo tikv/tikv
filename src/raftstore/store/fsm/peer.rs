@@ -1995,8 +1995,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::ComputeHash {
                     region,
                     index,
-                    snap,
-                } => self.on_ready_compute_hash(region, index, snap),
+                    raft_snap,
+                    kv_snap,
+                } => self.on_ready_compute_hash(region, index, raft_snap, kv_snap),
                 ExecResult::VerifyHash { index, hash } => self.on_ready_verify_hash(index, hash),
                 ExecResult::DeleteRange { .. } => {
                     // TODO: clean user properties?
@@ -2594,9 +2595,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 }
 
 impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
-    fn on_ready_compute_hash(&mut self, region: metapb::Region, index: u64, snap: EngineSnapshot) {
+    fn on_ready_compute_hash(
+        &mut self,
+        region: metapb::Region,
+        index: u64,
+        raft_snap: EngineSnapshot,
+        kv_snap: EngineSnapshot,
+    ) {
         self.fsm.peer.consistency_state.last_check_time = Instant::now();
-        let task = ConsistencyCheckTask::compute_hash(region, index, snap);
+        let task = ConsistencyCheckTask::compute_hash(region, index, raft_snap, kv_snap);
         info!(
             "schedule compute hash task";
             "region_id" => self.fsm.region_id(),
