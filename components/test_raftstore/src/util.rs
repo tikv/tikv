@@ -29,7 +29,7 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::store::fsm::SendCh;
+use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
@@ -482,7 +482,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: SendCh,
+    router: RaftRouter,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -492,11 +492,12 @@ pub fn create_test_engine(
         None => {
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
-            let tx = Mutex::new(tx);
+            let router = Mutex::new(router);
             let cmpacted_handler = box move |event| {
-                tx.lock()
+                router
+                    .lock()
                     .unwrap()
-                    .send(Msg::StoreMsg(StoreMsg::CompactedEvent(event)))
+                    .send_control(StoreMsg::CompactedEvent(event))
                     .unwrap();
             };
             kv_db_opt.add_event_listener(CompactionListener::new(

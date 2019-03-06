@@ -42,7 +42,6 @@ pub mod sys;
 pub mod threadpool;
 pub mod time;
 pub mod timer;
-pub mod transport;
 pub mod worker;
 
 static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);

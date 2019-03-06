@@ -35,11 +35,11 @@ pub use self::bootstrap::{
 };
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
-pub use self::fsm::{new_compaction_listener, DestroyPeerJob, StoreInfo};
+pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, Msg, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback,
-    SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback,
-    WriteResponse,
+    Callback, CasualMessage, PeerMsg, PeerTick, RaftCommand, ReadCallback, ReadResponse,
+    SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick,
+    WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
@@ -54,7 +54,7 @@ pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
-pub use self::transport::Transport;
+pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::Engines;
 pub use self::worker::{KeyEntry, ReadTask};
 
