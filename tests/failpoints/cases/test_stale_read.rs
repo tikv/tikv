@@ -60,7 +60,7 @@ fn stale_read_during_splitting(right_derive: bool) {
     let apply_split = "apply_before_split_1_3";
     fail::cfg(apply_split, "pause").unwrap();
 
-    // Split the frist region.
+    // Split the first region.
     cluster.split_region(&region1, key2, Callback::Write(Box::new(move |_| {})));
 
     // Sleep for a while.
