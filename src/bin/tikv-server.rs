@@ -197,7 +197,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
             storage::ReadPoolContext::new(pd_sender.clone())
         });
-    let mvcc_inspector = storage::MvccInspector::new();
+    let mvcc_inspector = storage::MvccInspector::new(Arc::clone(&pd_client));
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,

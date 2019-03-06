@@ -493,7 +493,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            MvccInspector::new(),
+            MvccInspector::new_mock(),
         )
     }
 }

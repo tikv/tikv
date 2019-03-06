@@ -694,7 +694,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         // a normal request
         let handler_builder =
@@ -737,7 +742,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            MvccInspector::new(),
+            MvccInspector::new_mock(),
             read_pool,
         );
 
@@ -772,7 +777,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         let mut req = coppb::Request::new();
         req.set_tp(9999);
@@ -791,7 +801,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         let mut req = coppb::Request::new();
         req.set_tp(REQ_TYPE_DAG);
@@ -817,7 +832,12 @@ mod tests {
             },
             || ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         let (tx, rx) = mpsc::channel();
 
@@ -862,7 +882,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         let handler_builder =
             box |_, _: &_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
@@ -881,7 +906,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         // Fail immediately
         let handler_builder = box |_, _: &_| {
@@ -926,7 +956,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         let handler_builder = box |_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed());
         let resp_vec = cop
@@ -946,7 +981,12 @@ mod tests {
         let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
             ReadPoolContext::new(pd_worker.scheduler())
         });
-        let cop = Endpoint::new(&Config::default(), engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(
+            &Config::default(),
+            engine,
+            MvccInspector::new_mock(),
+            read_pool,
+        );
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -1038,7 +1078,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            MvccInspector::new(),
+            MvccInspector::new_mock(),
             read_pool,
         );
 
@@ -1092,7 +1132,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::new(&config, engine, MvccInspector::new(), read_pool);
+        let cop = Endpoint::new(&config, engine, MvccInspector::new_mock(), read_pool);
 
         let (tx, rx) = std::sync::mpsc::channel();
 

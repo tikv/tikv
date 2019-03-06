@@ -335,7 +335,7 @@ mod tests {
         let cop = coprocessor::Endpoint::new(
             &cfg,
             storage.get_engine(),
-            MvccInspector::new(),
+            MvccInspector::new_mock(),
             cop_read_pool,
         );
 
