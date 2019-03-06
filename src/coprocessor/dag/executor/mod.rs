@@ -408,7 +408,7 @@ pub mod tests {
         cis: Vec<ColumnInfo>,
         raw_data: &[Vec<Datum>],
         key_ranges: Option<Vec<KeyRange>>,
-    ) -> Box<Executor + Send> {
+    ) -> Box<dyn Executor + Send> {
         let table_data = gen_table_data(tid, &cis, raw_data);
         let mut test_store = TestStore::new(&table_data);
 
