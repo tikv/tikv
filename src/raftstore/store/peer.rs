@@ -266,7 +266,7 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
 
-    /// This peer is destroyed asynchronously.
+    /// Whether this peer is destroyed asynchronously.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
     pending_messages: Vec<eraftpb::Message>,
@@ -277,7 +277,7 @@ pub struct Peer {
     pub recent_added_peer: RecentAddedPeer,
 
     /// An inaccurate difference in region size since last reset.
-    /// It is used to decide whether need to check split.
+    /// It is used to decide whether split check is needed.
     pub size_diff_hint: u64,
     /// The count of deleted keys since last reset.
     delete_keys_hint: u64,
