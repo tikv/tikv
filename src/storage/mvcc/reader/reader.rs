@@ -89,16 +89,12 @@ impl<S: Snapshot> MvccReader<S> {
 
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
-                None => None,
-                Some(v) => Some(v.to_vec()),
-            }
+            cursor
+                .get(&k, &mut self.statistics.data)?
+                .map(|v| v.to_vec())
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
-                None => None,
-                Some(v) => Some(v),
-            }
+            self.snapshot.get(&k)?
         };
 
         self.statistics.data.processed += 1;
