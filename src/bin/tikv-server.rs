@@ -166,21 +166,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
-    // Create kv engine, storage.
-    let mut kv_db_opts = cfg.rocksdb.build_opt();
-    kv_db_opts.add_event_listener(compaction_listener);
-    if encrypted_env.is_some() {
-        kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
-    }
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let mut kv_engine =
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-
     // Create raft engine.
     let mut raft_db_opts = cfg.raftdb.build_opt();
-    if encrypted_env.is_some() {
-        raft_db_opts.set_env(encrypted_env.unwrap());
+    if let Some(ref ec) = encrypted_env {
+        raft_db_opts.set_env(ec.clone());
     }
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
     let raft_engine = rocksdb_util::new_engine_opt(
@@ -190,9 +179,26 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
-    // Upgrading from v2.x to v3.x.
-    // FIXME: remove raft CF options from kv_cfs_opts.
-    tikv::raftstore::store::maybe_upgrade_from_2_to_3(&mut kv_engine, &raft_engine);
+    // Create kv engine, storage.
+    let mut kv_db_opts = cfg.rocksdb.build_opt();
+    kv_db_opts.add_event_listener(compaction_listener);
+    if let Some(ec) = encrypted_env {
+        kv_db_opts.set_env(ec);
+    }
+
+    // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+        &raft_engine,
+        db_path.to_str().unwrap(),
+        kv_db_opts.clone(),
+        &cfg.rocksdb,
+    );
+
+    // Create kv engine, storage.
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+    let kv_engine =
+        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
 

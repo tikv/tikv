@@ -20,7 +20,7 @@ use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
 use crate::raftstore::store::engine::{IterOption, Peekable};
-use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 
 use crate::util::escape;
@@ -184,7 +184,6 @@ impl TestEngineBuilder {
                 CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
                 _ => CFOptions::new(*cf, rocksdb::ColumnFamilyOptions::new()),
             })
             .collect();

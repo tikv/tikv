@@ -26,12 +26,12 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{Writable, WriteBatch, WriteOptions, DB};
+use rocksdb::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
 
+use crate::config;
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
-use crate::storage::CF_RAFT;
 use crate::util;
 use crate::util::worker::Scheduler;
 
@@ -1390,11 +1390,15 @@ pub fn write_peer_state<T: Mutable>(
 /// For backward compatiblity, it needs to check whether there are any
 /// meta data in the raft cf of the kv engine, if there are, it moves them
 /// into raft engine.
-pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
-    let start_key = keys::LOCAL_MIN_KEY;
-    let end_key = keys::LOCAL_MAX_KEY;
-    if kv_engine
-        .cf_names()
+pub fn maybe_upgrade_from_2_to_3(
+    raft_engine: &DB,
+    kv_path: &str,
+    kv_db_opts: DBOptions,
+    kv_cfg: &config::DbConfig,
+) {
+    use crate::storage::CF_RAFT;
+    if DB::list_column_families(&kv_db_opts, kv_path)
+        .unwrap()
         .into_iter()
         .find(|cf| *cf == CF_RAFT)
         .is_none()
@@ -1402,9 +1406,17 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
         // We have upgraded from v2.x to v3.0.
         return;
     }
-
     info!("start upgrading from v2.x to v3.x");
     let t = Instant::now();
+
+    // Create v2.0.x kv engine.
+    let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
+    let mut kv_engine = util::rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)
+        .unwrap_or_else(|s| panic!("failed to create kv engine: {}", s));
+
+    let start_key = keys::LOCAL_MIN_KEY;
+    let end_key = keys::LOCAL_MAX_KEY;
+
     // Move meta data from kv engine to raft engine.
     let upgrade_wb = WriteBatch::new();
     // Cleanup meta data in kv engine.

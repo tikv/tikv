@@ -36,7 +36,7 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
+    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
@@ -494,6 +494,8 @@ impl LockCfConfig {
     }
 }
 
+// Deprecated since v3.x.
+#[doc(hidden)]
 cf_config!(RaftCfConfig);
 
 impl Default for RaftCfConfig {
@@ -610,8 +612,12 @@ pub struct DbConfig {
     pub defaultcf: DefaultCfConfig,
     pub writecf: WriteCfConfig,
     pub lockcf: LockCfConfig,
-    pub raftcf: RaftCfConfig,
     pub titan: TitanDBConfig,
+
+    // Deprecated since v3.x.
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    pub raftcf: RaftCfConfig,
 }
 
 impl Default for DbConfig {
@@ -643,8 +649,10 @@ impl Default for DbConfig {
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
             lockcf: LockCfConfig::default(),
-            raftcf: RaftCfConfig::default(),
             titan: TitanDBConfig::default(),
+
+            // Deprecated since v3.x.
+            raftcf: RaftCfConfig::default(),
         }
     }
 }
@@ -698,6 +706,17 @@ impl DbConfig {
     }
 
     pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+        ]
+    }
+
+    // Build cf options for v2.x. which has a RAFT cf in kv engine.
+    #[doc(hidden)]
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions> {
+        use crate::storage::CF_RAFT;
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
