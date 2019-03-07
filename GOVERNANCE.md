@@ -7,7 +7,7 @@ Depending on the status of your current organization, the process for becoming a
 1. Express interest to the senior maintainers that your organization is interested in becoming a
   maintainer. Becoming a maintainer generally means that you are going to be spending substantial
   time (>25%) on TiKV for the foreseeable future. You are expected to have domain expertise and be extremely
-  proficient in C++. Ultimately your goal is to become a senior maintainer that will represent your
+  proficient in Rust. Ultimately your goal is to become a senior maintainer that will represent your
   organization.
 2. We will expect you to start contributing increasingly complicated PRs, under the guidance
   of the existing senior maintainers.
