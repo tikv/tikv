@@ -471,6 +471,7 @@ impl Debugger {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                peer_id,
                 tag.clone(),
             ));
 
