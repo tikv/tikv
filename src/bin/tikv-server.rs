@@ -492,6 +492,7 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
     // Do some prepare works before start.
     pre_start(&config);
 
