@@ -57,7 +57,7 @@ quick_error! {
             description("evaluation failed")
             display("{}", s)
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())

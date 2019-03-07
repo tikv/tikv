@@ -283,7 +283,7 @@ pub struct PeerStorage {
 
 fn storage_error<E>(error: E) -> raft::Error
 where
-    E: Into<Box<error::Error + Send + Sync>>,
+    E: Into<Box<dyn error::Error + Send + Sync>>,
 {
     raft::Error::Store(StorageError::Other(error.into()))
 }

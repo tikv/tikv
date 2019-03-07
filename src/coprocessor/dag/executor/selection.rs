@@ -25,7 +25,7 @@ pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
@@ -33,7 +33,7 @@ impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -79,7 +79,7 @@ impl Executor for SelectionExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
+            warnings.merge(&mut self.ctx.take_warnings());
             Some(warnings)
         } else {
             Some(self.ctx.take_warnings())
