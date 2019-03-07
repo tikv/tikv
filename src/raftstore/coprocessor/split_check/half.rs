@@ -125,7 +125,6 @@ mod tests {
     use crate::util::rocksdb_util::{
         new_engine_opt, properties::SizePropertiesCollectorFactory, CFOptions,
     };
-    use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
@@ -155,13 +154,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0005

@@ -73,6 +73,8 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+
+    // TODO: Use static metrics.
     pub static ref COPR_GET_OR_SCAN_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_get_or_scan_count",
         "Total number of rocksdb query of get or scan count",

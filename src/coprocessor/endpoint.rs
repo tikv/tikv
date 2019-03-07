@@ -142,6 +142,8 @@ impl<E: Engine> Endpoint<E> {
                         store,
                         req_ctx.deadline,
                         batch_row_limit,
+                        is_streaming,
+                        true,
                     )
                 };
             }

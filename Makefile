@@ -61,7 +61,7 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 ctl:
-	@cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
@@ -69,7 +69,7 @@ run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
-	@cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 
@@ -104,6 +104,7 @@ test:
 		cargo test --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash etc/check-bins-for-jemalloc.sh
+	bash etc/check-sse4_2.sh
 
 bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture

@@ -17,8 +17,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use crate::raftstore::store::msg::Msg;
-use crate::util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::CasualRouter;
 
 use super::*;
 
@@ -131,10 +130,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + 'static>(
-        cfg: Config,
-        ch: RetryableSendCh<Msg, C>,
-    ) -> CoprocessorHost {
+    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,
