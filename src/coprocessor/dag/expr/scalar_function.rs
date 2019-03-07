@@ -413,7 +413,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
-            | ScalarFuncSig::Instr
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::IsIPv4Compat

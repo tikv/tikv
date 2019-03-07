@@ -921,9 +921,9 @@ impl ScalarFunc {
         }
         match s.find(res) {
             Some(x) => {
-                let s = x+1;
+                let s = x + 1;
                 Ok(Some(s as i64))
-            },
+            }
             None => Ok(Some(0)),
         }
     }
