@@ -18,7 +18,7 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::engine::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value, CF_DEFAULT};
 
 use super::util::CheckLockResult;
 use super::ScannerConfig;
@@ -57,9 +57,9 @@ impl<S: Snapshot> BackwardScanner<S> {
     ) -> BackwardScanner<S> {
         BackwardScanner {
             cfg,
-            statistics: Statistics::default(),
             lock_cursor,
             write_cursor,
+            statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
         }
@@ -371,7 +371,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        self.default_cursor = Some(self.cfg.create_default_cursor()?);
+        self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
         Ok(())
     }
 }
@@ -382,6 +382,7 @@ mod tests {
     use super::*;
     use crate::storage::mvcc::tests::*;
     use crate::storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::Scanner;
 
     use kvproto::kvrpcpb::Context;
 
@@ -473,7 +474,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                             ^
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((
                 Key::from_raw(&[10 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
@@ -504,7 +505,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                   ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -538,7 +539,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                         ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((
                 Key::from_raw(&[8 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
@@ -576,7 +577,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //             ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -611,7 +612,7 @@ mod tests {
         //   4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -621,7 +622,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
 
         // Scan end.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, 0);
         assert_eq!(statistics.write.seek, 0);
@@ -669,7 +670,7 @@ mod tests {
         //   b_1 b_0 c_8
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -681,7 +682,7 @@ mod tests {
         // Use N/2 prev and reach out of bound:
         //   b_1 b_0 c_8
         // ^cursor
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -689,7 +690,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2) as usize);
 
         // Cursor remains invalid, so nothing should happen.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -739,7 +740,7 @@ mod tests {
         //   b_2 b_1 b_0 c_8
         //           ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value_c".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -752,7 +753,7 @@ mod tests {
         //   b_2 b_1 b_0 c_8
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), b"value_b".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -762,7 +763,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2 + 1) as usize);
 
         // Cursor remains invalid, so nothing should happen.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -806,7 +807,7 @@ mod tests {
         //   b_2 b_1 c_1
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -823,7 +824,7 @@ mod tests {
         //   b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![1u8].to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -833,7 +834,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (SEEK_BOUND / 2) as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -877,7 +878,7 @@ mod tests {
         //   b_5 b_4 b_3 b_2 b_1 c_1
         //                   ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -900,7 +901,7 @@ mod tests {
         //   b_5 b_4 b_3 b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![1u8])),
         );
         let statistics = scanner.take_statistics();
@@ -910,7 +911,7 @@ mod tests {
         assert_eq!(statistics.write.prev, SEEK_BOUND as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -956,7 +957,7 @@ mod tests {
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
         //                                             ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -982,7 +983,7 @@ mod tests {
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![(REVERSE_SEEK_BOUND + 1) as u8])),
         );
         let statistics = scanner.take_statistics();
@@ -995,7 +996,7 @@ mod tests {
         );
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -1031,14 +1032,14 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
@@ -1046,14 +1047,14 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
@@ -1061,14 +1062,14 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
         let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
@@ -1076,30 +1077,30 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
     }
 
     #[test]
@@ -1138,7 +1139,7 @@ mod tests {
             .range(None, Some(k))
             .build()
             .unwrap();
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 255);
         assert_eq!(statistics.write.prev, 1);

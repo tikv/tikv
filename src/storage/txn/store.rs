@@ -67,7 +67,7 @@ pub struct SnapshotStore<S: Snapshot> {
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
-    type Scanner = StoreScanner<S>;
+    type Scanner = MvccScanner<S>;
 
     #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
@@ -110,7 +110,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         key_only: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-    ) -> Result<StoreScanner<S>> {
+    ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
@@ -120,7 +120,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .build()?;
 
-        Ok(StoreScanner { scanner })
+        Ok(scanner)
     }
 }
 
@@ -168,23 +168,6 @@ impl<S: Snapshot> SnapshotStore<S> {
         }
 
         Ok(())
-    }
-}
-
-pub struct StoreScanner<S: Snapshot> {
-    scanner: MvccScanner<S>,
-}
-
-impl<S: Snapshot> Scanner for StoreScanner<S> {
-    #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        // TODO: Verify that these branches can be optimized away in `scan()`.
-        Ok(self.scanner.read_next()?)
-    }
-
-    #[inline]
-    fn take_statistics(&mut self) -> Statistics {
-        self.scanner.take_statistics()
     }
 }
 

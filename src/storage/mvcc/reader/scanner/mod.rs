@@ -18,8 +18,8 @@ mod util;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value,CfName, CF_DEFAULT, CF_LOCK, CF_WRITE,Scanner as StoreScanner};
+use crate::storage::txn::Result as TxnResult;
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
@@ -88,24 +88,9 @@ impl<S: Snapshot> ScannerBuilder<S> {
     }
 
     /// Build `ForwardScanner` from the current configuration.
-    pub fn build(self) -> Result<Scanner<S>> {
-        let lock_cursor_builder = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache);
-
-        let write_cursor_builder = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache);
-
-        let (lock_cursor, write_cursor) = if self.desc {
-            let lock_cursor = lock_cursor_builder.scan_mode(ScanMode::Backward).build()?;
-            let write_cursor = write_cursor_builder.scan_mode(ScanMode::Backward).build()?;
-            (lock_cursor, write_cursor)
-        } else {
-            let write_cursor = write_cursor_builder.build()?;
-            let lock_cursor = lock_cursor_builder.build()?;
-            (lock_cursor, write_cursor)
-        };
+    pub fn build(mut self) -> Result<Scanner<S>> {
+        let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
+        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
         if self.desc {
             Ok(Scanner::Backward(BackwardScanner::new(
                 self.0,
@@ -127,16 +112,15 @@ pub enum Scanner<S: Snapshot> {
     Backward(BackwardScanner<S>),
 }
 
-impl<S: Snapshot> Scanner<S> {
-    pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
-        match self {
+impl <S:Snapshot> StoreScanner for Scanner<S> {
+    fn next(&mut self)->TxnResult<Option<(Key, Value)>> {
+         match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
-
-    /// Take out and reset the statistics collected so far.
-    pub fn take_statistics(&mut self) -> Statistics {
+     /// Take out and reset the statistics collected so far.
+    fn take_statistics(&mut self)->Statistics {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
@@ -151,7 +135,7 @@ pub struct ScannerConfig<S: Snapshot> {
     isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
-    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// is used in initial seek(or `lower_bound` in initial backward seek) as well. They will be consumed after `default_cursor` is being
     /// created.
     lower_bound: Option<Key>,
     upper_bound: Option<Key>,
@@ -174,16 +158,28 @@ impl<S: Snapshot> ScannerConfig<S> {
         }
     }
 
-    /// Create the default cursor.
     #[inline]
-    fn create_default_cursor(&mut self) -> Result<Cursor<S::Iter>> {
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .range(self.lower_bound.take(), self.upper_bound.take())
-            .fill_cache(self.fill_cache);
+    fn scan_mode(&self) -> ScanMode {
         if self.desc {
-            Ok(cursor.scan_mode(ScanMode::Backward).build()?)
+            ScanMode::Backward
         } else {
-            Ok(cursor.build()?)
+            ScanMode::Forward
         }
+    }
+
+    /// Create the cursor.
+    #[inline]
+    fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
+        let (lower, upper) = if cf == CF_DEFAULT {
+            (self.lower_bound.take(), self.upper_bound.take())
+        } else {
+            (self.lower_bound.clone(), self.upper_bound.clone())
+        };
+        let cursor = CursorBuilder::new(&self.snapshot, cf)
+            .range(lower, upper)
+            .fill_cache(self.fill_cache)
+            .scan_mode(self.scan_mode())
+            .build()?;
+        Ok(cursor)
     }
 }
