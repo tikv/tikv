@@ -120,8 +120,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundWithFracInt
             | ScalarFuncSig::RoundWithFracReal
             | ScalarFuncSig::DateFormatSig
-            | ScalarFuncSig::AddDatetimeAndDuration
-            | ScalarFuncSig::AddDatetimeAndString
             | ScalarFuncSig::SHA2
             | ScalarFuncSig::TruncateInt
             | ScalarFuncSig::WeekWithMode
@@ -133,7 +131,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubstringBinary2Args
             | ScalarFuncSig::DateDiff
             | ScalarFuncSig::AddDurationAndDuration
-            | ScalarFuncSig::AddDurationAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::Instr
@@ -461,12 +458,9 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDateStringDecimal
             | ScalarFuncSig::SubDateStringInt
             | ScalarFuncSig::SubDateStringString
-            | ScalarFuncSig::SubDatetimeAndDuration
-            | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
-            | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::SubTimeStringNull
             | ScalarFuncSig::SysDateWithFsp
@@ -1005,7 +999,6 @@ dispatch_call! {
         AddDatetimeAndDuration => add_datetime_and_duration,
         AddDatetimeAndString => add_datetime_and_string,
         AddTimeDateTimeNull => add_time_datetime_null,
-
         IfNullTime => if_null_time,
         IfTime => if_time,
 
@@ -1154,8 +1147,6 @@ mod tests {
                     ScalarFuncSig::BitOrSig,
                     ScalarFuncSig::BitXorSig,
                     ScalarFuncSig::DateFormatSig,
-                    ScalarFuncSig::AddDatetimeAndDuration,
-                    ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::LeftShift,
                     ScalarFuncSig::RightShift,
                     ScalarFuncSig::Pow,
@@ -1544,12 +1535,9 @@ mod tests {
             ScalarFuncSig::SubDateStringDecimal,
             ScalarFuncSig::SubDateStringInt,
             ScalarFuncSig::SubDateStringString,
-            ScalarFuncSig::SubDatetimeAndDuration,
-            ScalarFuncSig::SubDatetimeAndString,
             ScalarFuncSig::SubDurationAndString,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
-            ScalarFuncSig::SubTimeDateTimeNull,
             ScalarFuncSig::SubTimeDurationNull,
             ScalarFuncSig::SubTimeStringNull,
             ScalarFuncSig::SysDateWithFsp,
