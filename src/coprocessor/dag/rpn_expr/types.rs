@@ -277,7 +277,12 @@ impl RpnExpressionNodeVec {
     // TODO: Deprecate it in Coprocessor V2 DAG interface.
     pub fn build_from_def(def: Expr, time_zone: Tz) -> Result<Self> {
         let mut expr_nodes = Vec::new();
-        Self::append_rpn_nodes_recursively(def, time_zone, &mut expr_nodes)?;
+        Self::append_rpn_nodes_recursively(
+            def,
+            time_zone,
+            &mut expr_nodes,
+            super::map_pb_sig_to_rpn_func,
+        )?;
         Ok(RpnExpressionNodeVec(expr_nodes))
     }
 
@@ -412,11 +417,18 @@ impl RpnExpressionNodeVec {
     ///
     /// The transform process is very much like a post-order traversal. This function does it
     /// recursively.
-    fn append_rpn_nodes_recursively(
+    fn append_rpn_nodes_recursively<F>(
         mut def: Expr,
         time_zone: Tz,
         rpn_nodes: &mut Vec<RpnExpressionNode>,
-    ) -> Result<()> {
+        fn_mapper: F,
+    ) -> Result<()>
+    where
+        F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    {
+        // TODO: We should check whether node types match the function signature. Otherwise there
+        // will be panics when the expression is evaluated.
+
         use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
         use crate::util::codec::number;
         use std::convert::{TryFrom, TryInto};
@@ -539,18 +551,14 @@ impl RpnExpressionNodeVec {
                             ))
                         })?;
                         let fsp = field_type.decimal() as i8;
-                        let value = Time::from_packed_u64(
-                            v,
-                            field_type.tp().try_into().unwrap(),
-                            fsp,
-                            time_zone,
-                        )
-                        .map_err(|_| {
-                            Error::Other(box_err!(
-                                "Unable to decode {:?} from the request",
-                                eval_type
-                            ))
-                        })?;;
+                        let value =
+                            Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+                                .map_err(|_| {
+                                Error::Other(box_err!(
+                                    "Unable to decode {:?} from the request",
+                                    eval_type
+                                ))
+                            })?;;
                         ScalarValue::DateTime(Some(value))
                     }
                     t => {
@@ -645,7 +653,8 @@ impl RpnExpressionNodeVec {
                 });
             }
             ExprType::ScalarFunc => {
-                let func = super::map_pb_sig_to_rpn_func(def.get_sig()).unwrap();
+                // Map pb func to `RpnFunction`.
+                let func = fn_mapper(def.get_sig())?;
                 let args = def.take_children().into_vec();
                 if func.args_len() != args.len() {
                     return Err(box_err!(
@@ -655,7 +664,7 @@ impl RpnExpressionNodeVec {
                     ));
                 }
                 for arg in args {
-                    Self::append_rpn_nodes_recursively(arg, time_zone, rpn_nodes)?;
+                    Self::append_rpn_nodes_recursively(arg, time_zone, rpn_nodes, fn_mapper)?;
                 }
                 rpn_nodes.push(RpnExpressionNode::Fn { func, field_type });
             }
@@ -682,6 +691,333 @@ mod tests {
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
+
+    /// An RPN function for test. It accepts 1 int argument, returns the value in float.
+    #[derive(Debug, Clone, Copy)]
+    struct FnA;
+
+    impl_template_fn! { 1 arg @ FnA }
+
+    impl FnA {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut RpnRuntimeContext,
+            _payload: RpnFnCallPayload,
+            v: &Option<i64>,
+        ) -> Option<f64> {
+            v.map(|v| v as f64)
+        }
+    }
+
+    /// An RPN function for test. It accepts 2 float arguments, returns their sum in int.
+    #[derive(Debug, Clone, Copy)]
+    struct FnB;
+
+    impl_template_fn! { 2 arg @ FnB }
+
+    impl FnB {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut RpnRuntimeContext,
+            _payload: RpnFnCallPayload,
+            v1: &Option<f64>,
+            v2: &Option<f64>,
+        ) -> Option<i64> {
+            if v1.is_none() || v2.is_none() {
+                return None;
+            }
+            Some((v1.as_ref().unwrap() + v2.as_ref().unwrap()) as i64)
+        }
+    }
+
+    /// An RPN function for test. It accepts 3 int arguments, returns their sum in int.
+    #[derive(Debug, Clone, Copy)]
+    struct FnC;
+
+    impl_template_fn! { 3 arg @ FnC }
+
+    impl FnC {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut RpnRuntimeContext,
+            _payload: RpnFnCallPayload,
+            v1: &Option<i64>,
+            v2: &Option<i64>,
+            v3: &Option<i64>,
+        ) -> Option<i64> {
+            if v1.is_none() || v2.is_none() || v3.is_none() {
+                return None;
+            }
+            Some(v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap())
+        }
+    }
+
+    /// An RPN function for test. It accepts 3 float arguments, returns their sum in float.
+    #[derive(Debug, Clone, Copy)]
+    struct FnD;
+
+    impl_template_fn! { 3 arg @ FnD }
+
+    impl FnD {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut RpnRuntimeContext,
+            _payload: RpnFnCallPayload,
+            v1: &Option<f64>,
+            v2: &Option<f64>,
+            v3: &Option<f64>,
+        ) -> Option<f64> {
+            if v1.is_none() || v2.is_none() || v3.is_none() {
+                return None;
+            }
+            Some(v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap())
+        }
+    }
+
+    /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
+    /// cannot be modified by us in tests to support FnA ~ FnD. So let's just hard code some
+    /// substitute.
+    fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+        // FnA: CastIntAsInt
+        // FnB: CastIntAsReal
+        // FnC: CastIntAsString
+        // FnD: CastIntAsDecimal
+        match value {
+            ScalarFuncSig::CastIntAsInt => Ok(Box::new(FnA)),
+            ScalarFuncSig::CastIntAsReal => Ok(Box::new(FnB)),
+            ScalarFuncSig::CastIntAsString => Ok(Box::new(FnC)),
+            ScalarFuncSig::CastIntAsDecimal => Ok(Box::new(FnD)),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_append_rpn_nodes_recursively() {
+        use crate::util::codec::number::NumberEncoder;
+
+        // Input:
+        // FnD(a, FnA(FnC(b, c, d)), FnA(FnB(e, f))
+        //
+        // Tree:
+        //           FnD
+        // +----------+----------+
+        // a         FnA        FnA
+        //            |          |
+        //           FnC        FnB
+        //        +---+---+      +---+
+        //        b   c   d      e   f
+        //
+        // RPN:
+        // a b c d FnC FnA e f FnB FnA FnD
+
+        let node_fn_a_1 = {
+            // node b
+            let mut node_b = Expr::new();
+            node_b.set_tp(ExprType::Int64);
+            node_b
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_b.mut_val().encode_i64(7).unwrap();
+
+            // node c
+            let mut node_c = Expr::new();
+            node_c.set_tp(ExprType::Int64);
+            node_c
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_c.mut_val().encode_i64(3).unwrap();
+
+            // node d
+            let mut node_d = Expr::new();
+            node_d.set_tp(ExprType::Int64);
+            node_d
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_d.mut_val().encode_i64(11).unwrap();
+
+            // FnC
+            let mut node_fn_c = Expr::new();
+            node_fn_c.set_tp(ExprType::ScalarFunc);
+            node_fn_c.set_sig(ScalarFuncSig::CastIntAsString);
+            node_fn_c
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_fn_c.mut_children().push(node_b);
+            node_fn_c.mut_children().push(node_c);
+            node_fn_c.mut_children().push(node_d);
+
+            // FnA
+            let mut node_fn_a = Expr::new();
+            node_fn_a.set_tp(ExprType::ScalarFunc);
+            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
+            node_fn_a
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::Double);
+            node_fn_a.mut_children().push(node_fn_c);
+            node_fn_a
+        };
+
+        let node_fn_a_2 = {
+            // node e
+            let mut node_e = Expr::new();
+            node_e.set_tp(ExprType::Float64);
+            node_e
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::Double);
+            node_e.mut_val().encode_f64(-1.5).unwrap();
+
+            // node f
+            let mut node_f = Expr::new();
+            node_f.set_tp(ExprType::Float64);
+            node_f
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::Double);
+            node_f.mut_val().encode_f64(100.12).unwrap();
+
+            // FnB
+            let mut node_fn_b = Expr::new();
+            node_fn_b.set_tp(ExprType::ScalarFunc);
+            node_fn_b.set_sig(ScalarFuncSig::CastIntAsReal);
+            node_fn_b
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong);
+            node_fn_b.mut_children().push(node_e);
+            node_fn_b.mut_children().push(node_f);
+
+            // FnA
+            let mut node_fn_a = Expr::new();
+            node_fn_a.set_tp(ExprType::ScalarFunc);
+            node_fn_a.set_sig(ScalarFuncSig::CastIntAsInt);
+            node_fn_a
+                .mut_field_type()
+                .as_mut_accessor()
+                .set_tp(FieldTypeTp::Double);
+            node_fn_a.mut_children().push(node_fn_b);
+            node_fn_a
+        };
+
+        // node a (NULL)
+        let mut node_a = Expr::new();
+        node_a.set_tp(ExprType::Null);
+        node_a
+            .mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Double);
+
+        // FnD
+        let mut node_fn_d = Expr::new();
+        node_fn_d.set_tp(ExprType::ScalarFunc);
+        node_fn_d.set_sig(ScalarFuncSig::CastIntAsDecimal);
+        node_fn_d
+            .mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Double);
+        node_fn_d.mut_children().push(node_a);
+        node_fn_d.mut_children().push(node_fn_a_1);
+        node_fn_d.mut_children().push(node_fn_a_2);
+
+        let mut vec = vec![];
+        RpnExpressionNodeVec::append_rpn_nodes_recursively(
+            node_fn_d,
+            Tz::utc(),
+            &mut vec,
+            fn_mapper,
+        )
+        .unwrap();
+
+        let mut it = vec.into_iter();
+
+        // node a
+        assert!(it
+            .next()
+            .unwrap()
+            .constant_value()
+            .unwrap()
+            .as_real()
+            .is_none());
+
+        // node b
+        assert_eq!(
+            it.next()
+                .unwrap()
+                .constant_value()
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            7
+        );
+
+        // node c
+        assert_eq!(
+            it.next()
+                .unwrap()
+                .constant_value()
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            3
+        );
+
+        // node d
+        assert_eq!(
+            it.next()
+                .unwrap()
+                .constant_value()
+                .unwrap()
+                .as_int()
+                .unwrap(),
+            11
+        );
+
+        // FnC
+        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnC");
+
+        // FnA
+        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnA");
+
+        // node e
+        assert_eq!(
+            it.next()
+                .unwrap()
+                .constant_value()
+                .unwrap()
+                .as_real()
+                .unwrap(),
+            -1.5
+        );
+
+        // node f
+        assert_eq!(
+            it.next()
+                .unwrap()
+                .constant_value()
+                .unwrap()
+                .as_real()
+                .unwrap(),
+            100.12
+        );
+
+        // FnB
+        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnB");
+
+        // FnA
+        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnA");
+
+        // FnD
+        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnD");
+
+        // Finish
+        assert!(it.next().is_none())
+    }
 
     fn new_gt_int_def(offset: usize, val: u64) -> Expr {
         // GTInt(ColumnRef(offset), Uint64(val))
@@ -765,49 +1101,5 @@ mod tests {
                 Some(1)
             ]
         );
-    }
-
-    #[bench]
-    fn bench_eval_100(b: &mut test::Bencher) {
-        let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
-
-        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
-        for i in 0..100 {
-            col.mut_decoded().push_int(Some(i));
-        }
-
-        let cols = LazyBatchColumnVec::from(vec![col]);
-        let mut ctx = RpnRuntimeContext::default();
-        b.iter(|| {
-            let ret = rpn_nodes.eval(
-                test::black_box(&mut ctx),
-                cols.rows_len(),
-                test::black_box(&cols),
-            );
-            test::black_box(ret);
-        });
-    }
-
-    #[bench]
-    fn bench_eval_1000(b: &mut test::Bencher) {
-        let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
-
-        let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1000, EvalType::Int);
-        for i in 0..1000 {
-            col.mut_decoded().push_int(Some(i));
-        }
-
-        let cols = LazyBatchColumnVec::from(vec![col]);
-        let mut ctx = RpnRuntimeContext::default();
-        b.iter(|| {
-            let ret = rpn_nodes.eval(
-                test::black_box(&mut ctx),
-                cols.rows_len(),
-                test::black_box(&cols),
-            );
-            test::black_box(ret);
-        });
     }
 }
