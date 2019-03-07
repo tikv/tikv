@@ -103,7 +103,7 @@ pub struct Cluster<T: Simulator> {
     leaders: HashMap<u64, metapb::Peer>,
     count: usize,
 
-    paths: Vec<TempDir>,
+    pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
     pub engines: HashMap<u64, Engines>,
 
@@ -136,7 +136,7 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self) {
+    pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let path = TempDir::new("test_cluster").unwrap();
             let kv_db_opt = self.cfg.rocksdb.build_opt();

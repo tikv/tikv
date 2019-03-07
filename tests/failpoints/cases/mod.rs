@@ -20,3 +20,4 @@ mod test_split_region;
 mod test_stale_peer;
 mod test_stale_read;
 mod test_storage;
+mod test_upgrade;
