@@ -145,19 +145,19 @@ impl<S: Snapshot> Scanner<S> {
 }
 
 pub struct ScannerConfig<S: Snapshot> {
-    pub snapshot: S,
-    pub fill_cache: bool,
-    pub omit_value: bool,
-    pub isolation_level: IsolationLevel,
+    snapshot: S,
+    fill_cache: bool,
+    omit_value: bool,
+    isolation_level: IsolationLevel,
 
     /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
     /// is used in initial seek as well. They will be consumed after `default_cursor` is being
     /// created.
-    pub lower_bound: Option<Key>,
-    pub upper_bound: Option<Key>,
+    lower_bound: Option<Key>,
+    upper_bound: Option<Key>,
 
-    pub ts: u64,
-    pub desc: bool,
+    ts: u64,
+    desc: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {

@@ -15,12 +15,14 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use super::util::CheckLockResult;
-use super::ScannerConfig;
 use crate::storage::engine::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+
+use super::util::CheckLockResult;
+use super::ScannerConfig;
+
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
 // the write cf's iterator's direction inside RocksDB, and the next user key
