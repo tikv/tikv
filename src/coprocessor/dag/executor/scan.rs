@@ -20,6 +20,8 @@ use crate::storage::{Key, Store};
 use kvproto::coprocessor::KeyRange;
 use tipb::schema::ColumnInfo;
 
+// an InnerExecutor is used in ScanExecutor,
+// hold the different logics between table scan and index scan
 pub trait InnerExecutor {
     fn decode_row(
         &self,
@@ -27,12 +29,17 @@ pub trait InnerExecutor {
         value: Vec<u8>,
         columns: Arc<Vec<ColumnInfo>>,
     ) -> Result<Option<Row>>;
+    // checks if the key range represents a point.
     fn is_point(&self, range: &KeyRange) -> bool;
+
+    // indicate which scan it will perform, Table or Index, this will pass to Scanner.
     fn scan_on(&self) -> ScanOn;
+
+    // indicate whether the scan is a key only scan.
     fn key_only(&self) -> bool;
 }
 
-// executor for table scan and index scan
+// Executor for table scan and index scan
 pub struct ScanExecutor<S: Store, T: InnerExecutor> {
     store: S,
     desc: bool,
