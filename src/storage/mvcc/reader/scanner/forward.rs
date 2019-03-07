@@ -18,11 +18,10 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::engine::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::CF_DEFAULT;
-use crate::storage::{Cursor, CursorBuilder, Key, Lock, Snapshot, Statistics, Value};
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
 use super::util::CheckLockResult;
-
+use super::ScannerConfig;
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
@@ -30,58 +29,32 @@ use super::util::CheckLockResult;
 ///
 /// Use `ScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-
-    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `lower_bound`
-    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
-    /// created.
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-
-    ts: u64,
-
+    cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
-
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
-
     /// Is iteration started
     is_started: bool,
-
     statistics: Statistics,
 }
 
 impl<S: Snapshot> ForwardScanner<S> {
     pub fn new(
-        snapshot: S,
-        fill_cache: bool,
-        omit_value: bool,
-        isolation_level: IsolationLevel,
-        lower_bound: Option<Key>,
-        upper_bound: Option<Key>,
-        ts: u64,
+        cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> Self {
-        Self {
-            snapshot,
-            fill_cache,
-            omit_value,
-            isolation_level,
-            lower_bound,
-            upper_bound,
-            ts,
+    ) -> ForwardScanner<S> {
+        ForwardScanner {
+            cfg,
+            statistics: Statistics::default(),
             lock_cursor,
             write_cursor,
             default_cursor: None,
             is_started: false,
-            statistics: Statistics::default(),
         }
     }
+
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
@@ -90,14 +63,14 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            if self.lower_bound.is_some() {
+            if self.cfg.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
                 self.write_cursor.seek(
-                    self.lower_bound.as_ref().unwrap(),
+                    self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
                 self.lock_cursor.seek(
-                    self.lower_bound.as_ref().unwrap(),
+                    self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
@@ -187,7 +160,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
             // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
             // we need to change it to a most recently available one.
-            let mut get_ts = self.ts;
+            let mut get_ts = self.cfg.ts;
 
             // `met_next_user_key` stores whether the write cursor has been already pointing to
             // the next user key. If so, we don't need to compare it again when trying to step
@@ -195,14 +168,14 @@ impl<S: Snapshot> ForwardScanner<S> {
             let mut met_next_user_key = false;
 
             if has_lock {
-                match self.isolation_level {
+                match self.cfg.isolation_level {
                     IsolationLevel::SI => {
                         // Only needs to check lock in SI
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
@@ -235,7 +208,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.ts`. This function
+    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts`. This function
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
     fn get(
@@ -329,7 +302,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// The implementation is the same as `PointGetter::load_data_by_write`.
     #[inline]
     fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.omit_value {
+        if self.cfg.omit_value {
             return Ok(vec![]);
         }
         match write.short_value {
@@ -395,11 +368,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .range(self.lower_bound.take(), self.upper_bound.take())
-            .fill_cache(self.fill_cache)
-            .build()?;
-        self.default_cursor = Some(cursor);
+        self.default_cursor = Some(self.cfg.create_default_cursor()?);
         Ok(())
     }
 }

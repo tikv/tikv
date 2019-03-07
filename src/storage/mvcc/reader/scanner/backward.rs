@@ -15,14 +15,12 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
+use super::util::CheckLockResult;
+use super::ScannerConfig;
 use crate::storage::engine::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::CF_DEFAULT;
-use crate::storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
-
-use super::util::CheckLockResult;
-
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
 // the write cf's iterator's direction inside RocksDB, and the next user key
@@ -39,56 +37,29 @@ const REVERSE_SEEK_BOUND: u64 = 16;
 ///
 /// Use `ScannerBuilder` to build `BackwardScanner`.
 pub struct BackwardScanner<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-
-    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
-    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
-    /// created.
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-
-    ts: u64,
-
+    cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
-
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
-
     /// Is iteration started
     is_started: bool,
-
     statistics: Statistics,
 }
 
 impl<S: Snapshot> BackwardScanner<S> {
     pub fn new(
-        snapshot: S,
-        fill_cache: bool,
-        omit_value: bool,
-        isolation_level: IsolationLevel,
-        lower_bound: Option<Key>,
-        upper_bound: Option<Key>,
-        ts: u64,
+        cfg: ScannerConfig<S>,
         lock_cursor: Cursor<S::Iter>,
         write_cursor: Cursor<S::Iter>,
-    ) -> Self {
+    ) -> BackwardScanner<S> {
         BackwardScanner {
-            snapshot,
-            fill_cache,
-            omit_value,
-            isolation_level,
-            lower_bound,
-            upper_bound,
-            ts,
+            cfg,
+            statistics: Statistics::default(),
             lock_cursor,
             write_cursor,
             default_cursor: None,
             is_started: false,
-            statistics: Statistics::default(),
         }
     }
 
@@ -100,18 +71,18 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            if self.upper_bound.is_some() {
+            if self.cfg.upper_bound.is_some() {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
                 // timestamp suffix, so currently it is not safe to change write_cursor's
                 // reverse_seek to seek_for_prev. However in future, once we have different types
                 // for them, this can be done safely.
                 self.write_cursor.reverse_seek(
-                    self.upper_bound.as_ref().unwrap(),
+                    self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
                 self.lock_cursor.reverse_seek(
-                    self.upper_bound.as_ref().unwrap(),
+                    self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
@@ -166,17 +137,17 @@ impl<S: Snapshot> BackwardScanner<S> {
             };
 
             let mut result = Ok(None);
-            let mut get_ts = self.ts;
+            let mut get_ts = self.cfg.ts;
             let mut met_prev_user_key = false;
 
             if has_lock {
-                match self.isolation_level {
+                match self.cfg.isolation_level {
                     IsolationLevel::SI => {
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
@@ -202,7 +173,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.ts` in reverse order.
+    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.
     /// This function requires that the write cursor is currently pointing to the earliest version
     /// of `user_key`.
     #[inline]
@@ -337,7 +308,7 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// The implementation is similar to `PointGetter::load_data_by_write`.
     #[inline]
     fn reverse_load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.omit_value {
+        if self.cfg.omit_value {
             return Ok(vec![]);
         }
         match write.short_value {
@@ -398,12 +369,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .range(self.lower_bound.take(), self.upper_bound.take())
-            .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::Backward)
-            .build()?;
-        self.default_cursor = Some(cursor);
+        self.default_cursor = Some(self.cfg.create_default_cursor()?);
         Ok(())
     }
 }

@@ -18,37 +18,32 @@ mod util;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
-use crate::storage::{CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
-use crate::storage::{CF_LOCK, CF_WRITE};
+use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value};
+use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
 
 /// `Scanner` factory.
-pub struct ScannerBuilder<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-    ts: u64,
-    desc: bool,
+pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
+
+impl<S: Snapshot> std::ops::Deref for ScannerBuilder<S> {
+    type Target = ScannerConfig<S>;
+    fn deref<'a>(&'a self) -> &'a ScannerConfig<S> {
+        &self.0
+    }
+}
+
+impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
+    fn deref_mut<'a>(&'a mut self) -> &'a mut ScannerConfig<S> {
+        &mut self.0
+    }
 }
 
 impl<S: Snapshot> ScannerBuilder<S> {
-    /// Initialize a new `Scanner`
+    /// Initialize a new `ScannerBuilder`
     pub fn new(snapshot: S, ts: u64, desc: bool) -> Self {
-        Self {
-            snapshot,
-            fill_cache: true,
-            omit_value: false,
-            isolation_level: IsolationLevel::SI,
-            lower_bound: None,
-            upper_bound: None,
-            ts,
-            desc,
-        }
+        Self(ScannerConfig::new(snapshot, ts, desc))
     }
 
     /// Set whether or not read operations should fill the cache.
@@ -101,31 +96,25 @@ impl<S: Snapshot> ScannerBuilder<S> {
         let write_cursor_builder = CursorBuilder::new(&self.snapshot, CF_WRITE)
             .range(self.lower_bound.clone(), self.upper_bound.clone())
             .fill_cache(self.fill_cache);
-        if self.desc {
+
+        let (lock_cursor, write_cursor) = if self.desc {
             let lock_cursor = lock_cursor_builder.scan_mode(ScanMode::Backward).build()?;
             let write_cursor = write_cursor_builder.scan_mode(ScanMode::Backward).build()?;
+            (lock_cursor, write_cursor)
+        } else {
+            let write_cursor = write_cursor_builder.build()?;
+            let lock_cursor = lock_cursor_builder.build()?;
+            (lock_cursor, write_cursor)
+        };
+        if self.desc {
             Ok(Scanner::Backward(BackwardScanner::new(
-                self.snapshot,
-                self.fill_cache,
-                self.omit_value,
-                self.isolation_level,
-                self.lower_bound,
-                self.upper_bound,
-                self.ts,
+                self.0,
                 lock_cursor,
                 write_cursor,
             )))
         } else {
-            let write_cursor = write_cursor_builder.build()?;
-            let lock_cursor = lock_cursor_builder.build()?;
             Ok(Scanner::Forward(ForwardScanner::new(
-                self.snapshot,
-                self.fill_cache,
-                self.omit_value,
-                self.isolation_level,
-                self.lower_bound,
-                self.upper_bound,
-                self.ts,
+                self.0,
                 lock_cursor,
                 write_cursor,
             )))
@@ -151,6 +140,50 @@ impl<S: Snapshot> Scanner<S> {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
+        }
+    }
+}
+
+pub struct ScannerConfig<S: Snapshot> {
+    pub snapshot: S,
+    pub fill_cache: bool,
+    pub omit_value: bool,
+    pub isolation_level: IsolationLevel,
+
+    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
+    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
+    /// created.
+    pub lower_bound: Option<Key>,
+    pub upper_bound: Option<Key>,
+
+    pub ts: u64,
+    pub desc: bool,
+}
+
+impl<S: Snapshot> ScannerConfig<S> {
+    fn new(snapshot: S, ts: u64, desc: bool) -> Self {
+        Self {
+            snapshot,
+            fill_cache: true,
+            omit_value: false,
+            isolation_level: IsolationLevel::SI,
+            lower_bound: None,
+            upper_bound: None,
+            ts,
+            desc,
+        }
+    }
+
+    /// Create the default cursor.
+    #[inline]
+    fn create_default_cursor(&mut self) -> Result<Cursor<S::Iter>> {
+        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
+            .range(self.lower_bound.take(), self.upper_bound.take())
+            .fill_cache(self.fill_cache);
+        if self.desc {
+            Ok(cursor.scan_mode(ScanMode::Backward).build()?)
+        } else {
+            Ok(cursor.build()?)
         }
     }
 }
