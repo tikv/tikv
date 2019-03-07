@@ -54,10 +54,10 @@ pub use self::engine::{
     TestEngineBuilder,
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
-pub use self::mvcc::Scanner as StoreScanner;
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 

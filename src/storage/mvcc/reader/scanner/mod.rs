@@ -18,8 +18,11 @@ mod util;
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, CursorBuilder, Key, ScanMode, Snapshot, Statistics, Value,CfName, CF_DEFAULT, CF_LOCK, CF_WRITE,Scanner as StoreScanner};
 use crate::storage::txn::Result as TxnResult;
+use crate::storage::{
+    CfName, Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
+    Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
@@ -112,15 +115,15 @@ pub enum Scanner<S: Snapshot> {
     Backward(BackwardScanner<S>),
 }
 
-impl <S:Snapshot> StoreScanner for Scanner<S> {
-    fn next(&mut self)->TxnResult<Option<(Key, Value)>> {
-         match self {
+impl<S: Snapshot> StoreScanner for Scanner<S> {
+    fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
+        match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
-     /// Take out and reset the statistics collected so far.
-    fn take_statistics(&mut self)->Statistics {
+    /// Take out and reset the statistics collected so far.
+    fn take_statistics(&mut self) -> Statistics {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
