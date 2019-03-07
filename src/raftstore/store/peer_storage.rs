@@ -1454,9 +1454,9 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
     info!("start upgrading from v2.x to v3.x");
     let t = Instant::now();
     // Move meta data from kv engine to raft engine.
-    let upgrade_wb = WriteBatch::new();
+    let upgrade_raft_wb = WriteBatch::new();
     // Cleanup meta data in kv engine.
-    let cleanup_wb = WriteBatch::new();
+    let cleanup_kv_wb = WriteBatch::new();
 
     // For meta data in the default CF.
     //
@@ -1479,8 +1479,8 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                 panic!("unexpect key {:?} when upgrading from v2.x to v3.0", key);
             }
 
-            upgrade_wb.put(key, value)?;
-            cleanup_wb.delete(key)?;
+            upgrade_raft_wb.put(key, value)?;
+            cleanup_kv_wb.delete(key)?;
             Ok(true)
         })
         .unwrap();
@@ -1495,7 +1495,8 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
             if let Ok((region_id, suffix)) = keys::decode_region_raft_key(key) {
                 if suffix == keys::APPLY_STATE_SUFFIX {
                     // apply_state_key
-                    upgrade_wb.put(key, value)?;
+                    upgrade_raft_wb.put(key, value)?;
+                    info!("upgrading apply state"; "region_id" => region_id, "value" => ?value);
                     return Ok(true);
                 } else if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
                     // snapshot_raft_state_key
@@ -1504,8 +1505,9 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                     // in case of restart happen when we just write region state
                     // to Applying, but not write raft_local_state to
                     // raft engine in time.
+                    let raft_state_key = keys::raft_state_key(region_id);
                     let raft_state = raft_engine
-                        .get_msg(key)
+                        .get_msg(&raft_state_key)
                         .unwrap_or_else(|e| {
                             panic!(
                                 "[region {}] failed to get RaftLocalState from raft engine, \
@@ -1533,26 +1535,38 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                     // snapshot_raft_state.last_index = snapshot_index.
                     // After restart, we need check last_index.
                     if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-                        upgrade_wb.put(key, value)?;
+                        upgrade_raft_wb.put(&raft_state_key, value)?;
+                        info!(
+                            "upgrading snapshot raft state";
+                            "region_id" => region_id,
+                            "snapshot_raft_state" => ?snapshot_raft_state,
+                            "raft_state" => ?raft_state
+                        );
                     }
                     return Ok(true);
                 }
-            } else if let Ok((_, suffix)) = keys::decode_region_meta_key(key) {
-                if suffix != keys::REGION_STATE_SUFFIX {
-                    upgrade_wb.put(key, value)?;
+            } else if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
+                if suffix == keys::REGION_STATE_SUFFIX {
+                    upgrade_raft_wb.put(key, value)?;
+                    info!("upgrading region state"; "region_id" => region_id, "value" => ?value);
                     return Ok(true);
                 }
             }
-            panic!("unexpect key {:?} when upgrading from v2.x to v3.0", key,);
+            panic!("unexpect key {:?} when upgrading from v2.x to v3.0", key);
         })
         .unwrap();
 
     let mut sync_opt = WriteOptions::new();
     sync_opt.set_sync(true);
-    raft_engine.write_opt(upgrade_wb, &sync_opt).unwrap();
-    kv_engine.write_opt(cleanup_wb, &sync_opt).unwrap();
+
+    fail_point!("upgrade_2_3_before_update_raft", |_| {});
+    raft_engine.write_opt(upgrade_raft_wb, &sync_opt).unwrap();
+
+    fail_point!("upgrade_2_3_before_update_kv", |_| {});
+    kv_engine.write_opt(cleanup_kv_wb, &sync_opt).unwrap();
 
     // Drop the raft cf.
+    fail_point!("upgrade_2_3_before_drop_raft_cf", |_| {});
     kv_engine.drop_cf(CF_RAFT).unwrap();
 
     info!(
