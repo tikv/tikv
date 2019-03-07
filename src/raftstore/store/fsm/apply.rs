@@ -485,8 +485,8 @@ pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
 /// Calls the callback of `cmd` when it can not be processed further.
 fn notify_stale_command(tag: &str, term: u64, mut cmd: PendingCmd) {
     info!(
-        "{} command at [index: {}, term: {}] is stale, skip",
-        tag, cmd.index, cmd.term
+        "command is stable, skip";
+        "tag" => tag, "index" => cmd.index, "term" => cmd.term
     );
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
@@ -686,9 +686,8 @@ impl ApplyDelegate {
                 // Msg::CatchUpLogs may have arrived before Msg::Apply.
                 if expect_index > entry.get_index() && self.is_merging {
                     info!(
-                        "{} skip log at {} as it's already applied.",
-                        self.tag,
-                        entry.get_index()
+                        "skip log as it's already applied";
+                        "tag" => &self.tag, "index" => entry.get_index()
                     );
                     continue;
                 }
@@ -865,7 +864,7 @@ impl ApplyDelegate {
             return exec_result;
         }
 
-        debug!("{} applied command at log index {}", self.tag, index);
+        debug!("applied command"; "tag" => &self.tag, "index" => index);
 
         // TODO: if we have exec_result, maybe we should return this callback too. Outer
         // store will call it after handing exec result.
@@ -902,8 +901,10 @@ impl ApplyDelegate {
                 // clear dirty values.
                 ctx.wb_mut().rollback_to_save_point().unwrap();
                 match e {
-                    Error::EpochNotMatch(..) => debug!("{} epoch not match err: {:?}", self.tag, e),
-                    _ => error!("{} execute raft command err: {:?}", self.tag, e),
+                    Error::EpochNotMatch(..) => {
+                        debug!("epoch not match"; "tag" => &self.tag, "err" => ?e);
+                    }
+                    _ => error!("execute raft command"; "tag" => &self.tag, "err" => ?e),
                 }
                 (cmd_resp::new_error(e), ApplyResult::None)
             }
@@ -1003,11 +1004,10 @@ impl ApplyDelegate {
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
-                "{} execute admin command {:?} at [term: {}, index: {}]",
-                self.tag,
-                request,
-                ctx.exec_ctx.as_ref().unwrap().term,
-                ctx.exec_ctx.as_ref().unwrap().index,
+                "execute admin command {:?}", request;
+                "tag" => &self.tag,
+                "term" => ctx.exec_ctx.as_ref().unwrap().term,
+                "index" => ctx.exec_ctx.as_ref().unwrap().index,
             );
         }
 
@@ -1060,7 +1060,7 @@ impl ApplyDelegate {
                 // It's also safe to skip them here, because a restart must have happened,
                 // hence there is no callback to be called.
                 CmdType::Snap | CmdType::Get => {
-                    warn!("{} skip readonly command: {:?}", self.tag, req);
+                    warn!("skip readonly command: {:?}", req; "tag" => &self.tag);
                     continue;
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -1249,7 +1249,7 @@ impl ApplyDelegate {
         let sst = req.get_ingest_sst().get_sst();
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
-            error!("ingest {:?} to region {:?}: {:?}", sst, self.region, e);
+            error!("ingest {:?} to region {:?}", sst, self.region; "err" => ?e);
             // This file is not valid, we can delete it here.
             let _ = ctx.importer.delete(sst);
             return Err(e);
@@ -1292,10 +1292,10 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         info!(
-            "{} exec ConfChange {:?}, epoch: {:?}",
-            self.tag,
-            util::conf_change_type_str(change_type),
-            region.get_region_epoch()
+            "exec ConfChange with epoch: {:?}",
+            region.get_region_epoch();
+            "tag" => &self.tag,
+            "type" => util::conf_change_type_str(change_type)
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -1322,8 +1322,8 @@ impl ApplyDelegate {
                     exists = true;
                     if !p.get_is_learner() || p.get_id() != peer.get_id() {
                         error!(
-                            "{} can't add duplicated peer {:?} to region {:?}",
-                            self.tag, peer, self.region
+                            "can't add duplicated peer {:?} to region {:?}",
+                            peer, self.region; "tag" => &self.tag
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1343,8 +1343,8 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "success"])
                     .inc();
                 info!(
-                    "{} add peer {:?} to region {:?}",
-                    self.tag, peer, self.region
+                    "add peer {:?} to region {:?}",
+                    peer, self.region; "tag" => &self.tag
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1356,8 +1356,8 @@ impl ApplyDelegate {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
-                            "{} remove unmatched peer: expect: {:?}, get {:?}, ignore",
-                            self.tag, peer, p
+                            "remove unmatched peer: expect: {:?}, get {:?}, ignore",
+                            peer, p; "tag" => &self.tag
                         );
                         return Err(box_err!(
                             "remove unmatched peer: expect: {:?}, get {:?}, ignore",
@@ -1373,8 +1373,8 @@ impl ApplyDelegate {
                     }
                 } else {
                     error!(
-                        "{} remove missing peer {:?} from region {:?}",
-                        self.tag, peer, self.region
+                        "remove missing peer {:?} from region {:?}",
+                        peer, self.region; "tag" => &self.tag,
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1387,10 +1387,8 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
                 info!(
-                    "{} remove {} from region:{:?}",
-                    self.tag,
-                    peer.get_id(),
-                    self.region
+                    "remove {} from region:{:?}",
+                    peer.get_id(), self.region; "tag" => &self.tag
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1400,8 +1398,8 @@ impl ApplyDelegate {
 
                 if util::find_peer(&region, store_id).is_some() {
                     error!(
-                        "{} can't add duplicated learner {:?} to region {:?}",
-                        self.tag, peer, self.region
+                        "can't add duplicated learner {:?} to region {:?}",
+                        peer, self.region; "tag" => &self.tag
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1415,8 +1413,8 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "success"])
                     .inc();
                 info!(
-                    "{} add learner {:?} to region {:?}",
-                    self.tag, peer, self.region
+                    "add learner {:?} to region {:?}",
+                    peer, self.region; "tag" => &self.tag
                 );
             }
         }
@@ -1450,8 +1448,8 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         info!(
-            "{} split is deprecated, redirect to use batch split.",
-            self.tag
+            "split is deprecated, redirect to use batch split.";
+            "tag" => &self.tag
         );
         let split = req.get_split().to_owned();
         let mut admin_req = AdminRequest::new();
@@ -1516,7 +1514,7 @@ impl ApplyDelegate {
 
         util::check_key_in_region(keys.back().unwrap(), &self.region)?;
 
-        info!("{} split region {:?} with {:?}", self.tag, derived, keys);
+        info!("split region {:?} with {:?}", derived, keys; "tag" => &self.tag);
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
         // Note that the split requests only contain ids for new regions, so we need
@@ -1717,8 +1715,8 @@ impl ApplyDelegate {
                 );
             }
             info!(
-                "{} is asking source region {} delegate to stop.",
-                self.tag, source_region_id
+                "asking source region {} delegate to stop.", source_region_id;
+                "tag" => &self.tag
             );
 
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
@@ -1736,13 +1734,12 @@ impl ApplyDelegate {
         }
 
         info!(
-            "{} execute CommitMerge for region {:?} commit {} entries count {} at [term: {}, index: {}]",
-            self.tag,
-            source_region,
-            merge.get_commit(),
-            merge.get_entries().len(),
-            ctx.exec_ctx.as_ref().unwrap().term,
-            ctx.exec_ctx.as_ref().unwrap().index,
+            "execute CommitMerge for region {:?}", source_region;
+            "tag" => &self.tag,
+            "commit" => merge.get_commit(),
+            "entries" => merge.get_entries().len(),
+            "term" => ctx.exec_ctx.as_ref().unwrap().term,
+            "index" => ctx.exec_ctx.as_ref().unwrap().index
         );
 
         self.ready_source_region_id = 0;
@@ -1879,15 +1876,17 @@ impl ApplyDelegate {
         let first_index = peer_storage::first_index(apply_state);
         if compact_index <= first_index {
             debug!(
-                "{} compact index {} <= first index {}, no need to compact",
-                self.tag, compact_index, first_index
+                "compact index <= first index, no need to compact";
+                "tag" => &self.tag,
+                "compact_index" => compact_index,
+                "first_index" => first_index,
             );
             return Ok((resp, ApplyResult::None));
         }
         if self.is_merging {
             info!(
-                "{} is in merging mode, skip compact {}",
-                self.tag, compact_index
+                "in merging mode, skip compact";
+                "tag" => &self.tag, "compact_index" => compact_index
             );
             return Ok((resp, ApplyResult::None));
         }
@@ -1896,9 +1895,8 @@ impl ApplyDelegate {
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!(
-                "{} compact term missing in {:?}, skip.",
-                self.tag,
-                req.get_compact_log()
+                "compact term missing in {:?}, skip.", req.get_compact_log();
+                "tag" => &self.tag
             );
             // old format compact log command, safe to ignore.
             return Err(box_err!(
@@ -2233,8 +2231,8 @@ impl ApplyFsm {
     /// Handles peer registration. When a peer is created, it will register an apply delegate.
     fn handle_registration(&mut self, reg: Registration) {
         info!(
-            "{} re-register to apply delegates at term {}",
-            self.delegate.tag, reg.term
+            "re-register to apply delegates";
+            "tag" => &self.delegate.tag, "term" => reg.term
         );
         assert_eq!(self.delegate.id, reg.id);
         self.delegate.term = reg.term;
@@ -2302,7 +2300,7 @@ impl ApplyFsm {
             // Flush before destroying to avoid reordering messages.
             ctx.flush();
         }
-        info!("{} remove from apply delegates", self.delegate.tag);
+        info!("remove from apply delegates"; "tag" => &self.delegate.tag);
         self.delegate.destroy(ctx);
     }
 
@@ -2365,7 +2363,7 @@ impl ApplyFsm {
                 false
             }
             None => {
-                info!("{} all pending logs are applied.", self.delegate.tag);
+                info!("all pending logs are applied."; "tag" => &self.delegate.tag);
                 if let Some(catch_up_logs) = state.catch_up_logs {
                     // There is a merge cascade, need to notify the source peer.
                     ctx.write_to_db();
@@ -2424,7 +2422,7 @@ impl ApplyFsm {
         catch_up_logs
             .ready_to_merge
             .store(region_id, Ordering::SeqCst);
-        info!("{} logs are all applied now.", self.delegate.tag);
+        info!("logs are all applied now."; "tag" => &self.delegate.tag);
         let _ = catch_up_logs
             .target_mailbox
             .force_send(Msg::LogsUpToDate(region_id));
@@ -2621,8 +2619,8 @@ impl ApplyRouter {
                 Msg::Registration(reg) => reg,
                 Msg::Proposal(props) => {
                     info!(
-                        "[region {}] target region is not found, drop proposals.",
-                        region_id
+                        "target region is not found, drop proposals.";
+                        "region_id" => region_id
                     );
                     for p in props.props {
                         let cmd = PendingCmd::new(p.index, p.term, p.cb);
@@ -2632,8 +2630,8 @@ impl ApplyRouter {
                 }
                 Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
                     info!(
-                        "[region {}] target region is not found, drop messages.",
-                        region_id
+                        "target region is not found, drop messages.";
+                        "region_id" => region_id
                     );
                     return;
                 }
