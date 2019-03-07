@@ -13,13 +13,12 @@
 
 use crate::raftstore::store::engine::IterOption;
 use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
-use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::rocksdb_util::properties::MvccProperties;
-use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -233,27 +232,7 @@ impl<S: Snapshot> MvccReader<S> {
             }
             match self.load_data(key, write.start_ts)? {
                 None => {
-                    CRITICAL_ERROR
-                        .with_label_values(&["default value not found"])
-                        .inc();
-                    if panic_when_unexpected_key_or_data() {
-                        set_panic_mark();
-                        panic!(
-                            "default value not found for key {}, write: {:?}",
-                            hex::encode_upper(&key.to_raw()?),
-                            write
-                        );
-                    } else {
-                        error!(
-                            "default value not found";
-                            "key" => log_wrappers::Key(&key.to_raw()?),
-                            "write" => ?write,
-                        );
-                        return Err(Error::DefaultNotFound {
-                            key: key.to_raw()?,
-                            write: write.clone(),
-                        });
-                    }
+                    return Err(default_not_found_error(key.to_raw()?, write, "get"));
                 }
                 Some(v) => return Ok(Some(v)),
             }

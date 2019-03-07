@@ -23,7 +23,10 @@ pub use self::reader::{BackwardScanner, BackwardScannerBuilder};
 pub use self::reader::{ForwardScanner, ForwardScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+
 use crate::util::escape;
+use crate::util::metrics::CRITICAL_ERROR;
+use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use std::error;
 use std::io;
 
@@ -139,6 +142,29 @@ impl Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error {
+    CRITICAL_ERROR
+        .with_label_values(&["default value not found"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!(
+            "default value not found for key {:?}, write: {:?} when {}",
+            hex::encode_upper(&key),
+            write,
+            hint,
+        );
+    } else {
+        error!(
+            "default value not found";
+            "key" => log_wrappers::Key(&key),
+            "write" => ?write,
+            "hint" => hint,
+        );
+        return Error::DefaultNotFound { key, write };
+    }
+}
 
 #[cfg(test)]
 pub mod tests {

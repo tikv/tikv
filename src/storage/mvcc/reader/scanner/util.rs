@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::mvcc::{Lock, LockType, Write};
 use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
-use crate::util::metrics::CRITICAL_ERROR;
-use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Representing check lock result.
 #[derive(Debug)]
@@ -84,27 +83,11 @@ where
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid() {
-        CRITICAL_ERROR
-            .with_label_values(&["default value not found"])
-            .inc();
-        if panic_when_unexpected_key_or_data() {
-            set_panic_mark();
-            panic!(
-                "default value not found for key {}, write: {:?}",
-                hex::encode_upper(&user_key.to_raw()?),
-                write
-            );
-        } else {
-            error!(
-                "default value not found";
-                "key" => log_wrappers::Key(&user_key.to_raw()?),
-                "write" => ?write,
-            );
-            return Err(Error::DefaultNotFound {
-                key: user_key.to_raw()?,
-                write: write.clone(),
-            });
-        }
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_load_data_by_write",
+        ));
     }
     assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
     statistics.data.processed += 1;
@@ -126,27 +109,11 @@ where
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
     if !default_cursor.valid() {
-        CRITICAL_ERROR
-            .with_label_values(&["default value not found"])
-            .inc();
-        if panic_when_unexpected_key_or_data() {
-            set_panic_mark();
-            panic!(
-                "default value not found for key {:?}, write: {:?}",
-                hex::encode_upper(&user_key.to_raw()?),
-                write
-            );
-        } else {
-            error!(
-                "default value not found";
-                "key" => log_wrappers::Key(&user_key.to_raw()?),
-                "write" => ?write,
-            );
-            return Err(Error::DefaultNotFound {
-                key: user_key.to_raw()?,
-                write: write.clone(),
-            });
-        }
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_reverse_load_data_by_write",
+        ));
     }
     assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
     statistics.data.processed += 1;
