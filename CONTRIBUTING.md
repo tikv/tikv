@@ -73,8 +73,8 @@ You can use option `-s` for `git commit` to automatically add a `Signed-off-by` 
 ### Handling CI
 
 We use an ad-hoc jenkins CI deployment to test each PR. If you are submitting a
-PR for the first time, you will need someone of us to comment`/ok-to-test` to
+PR for the first time, you will need someone of us to comment `/ok-to-test` to
 trigger the CI. After this, new changes on the branch will be able to trigger
-the test automatically. You may also manually run the test by commenting
+the test automatically. You can also manually run the test by commenting
 `/test`.
 
