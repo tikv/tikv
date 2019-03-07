@@ -208,7 +208,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(MvccPropertiesCollector::new())
     }
 }
@@ -408,7 +408,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
 pub struct SizePropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for SizePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(SizePropertiesCollector::new())
     }
 }
@@ -659,7 +659,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
 pub struct RangePropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(RangePropertiesCollector::default())
     }
 }

@@ -58,7 +58,7 @@ impl Default for SecurityConfig {
 ///  # Arguments
 ///
 ///  - `tag`: only used in the error message, like "ca key", "cert key", "private key", etc.
-fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
+fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<dyn Error>> {
     if path.is_empty() {
         return Ok(None);
     }
@@ -69,7 +69,7 @@ fn check_key_file(tag: &str, path: &str) -> Result<Option<File>, Box<Error>> {
 }
 
 /// Loads key file content. Returns `Ok(vec![])` if the path is empty.
-fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
+fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut key = vec![];
     let f = check_key_file(tag, path)?;
     match f {
@@ -85,7 +85,7 @@ fn load_key(tag: &str, path: &str) -> Result<Vec<u8>, Box<Error>> {
 
 impl SecurityConfig {
     /// Validates ca, cert and private key.
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         check_key_file("ca key", &self.ca_path)?;
         check_key_file("cert key", &self.cert_path)?;
         check_key_file("private key", &self.key_path)?;
@@ -120,7 +120,7 @@ impl Drop for SecurityManager {
 }
 
 impl SecurityManager {
-    pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<Error>> {
+    pub fn new(cfg: &SecurityConfig) -> Result<SecurityManager, Box<dyn Error>> {
         Ok(SecurityManager {
             ca: load_key("CA", &cfg.ca_path)?,
             cert: load_key("certificate", &cfg.cert_path)?,

@@ -13,12 +13,6 @@
 
 #[macro_use]
 extern crate clap;
-extern crate chrono;
-extern crate futures;
-extern crate grpcio;
-extern crate hex;
-extern crate kvproto;
-extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate protobuf;
@@ -99,7 +93,7 @@ fn new_debug_executor(
     host: Option<&str>,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
-) -> Box<DebugExecutor> {
+) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
             let mut kv_db_opts = cfg.rocksdb.build_opt();
@@ -129,9 +123,9 @@ fn new_debug_executor(
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
-            ))) as Box<DebugExecutor>
+            ))) as Box<dyn DebugExecutor>
         }
-        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<DebugExecutor>,
+        (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),
     }
 }
@@ -563,7 +557,7 @@ trait DebugExecutor {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>;
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str);
 
@@ -657,7 +651,7 @@ impl DebugExecutor for DebugClient {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let mut req = ScanMvccRequest::new();
         req.set_from_key(from);
         req.set_to_key(to);
@@ -667,7 +661,7 @@ impl DebugExecutor for DebugClient {
                 .unwrap()
                 .map_err(|e| e.to_string())
                 .map(|mut resp| (resp.take_key(), resp.take_info())),
-        ) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        ) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
@@ -808,12 +802,12 @@ impl DebugExecutor for Debugger {
         from: Vec<u8>,
         to: Vec<u8>,
         limit: u64,
-    ) -> Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
+    ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
         let iter = self
             .scan_mvcc(&from, &to, limit)
             .unwrap_or_else(|e| perror_and_exit("Debugger::scan_mvcc", e));
         let stream = stream::iter_result(iter).map_err(|e| e.to_string());
-        Box::new(stream) as Box<Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
+        Box::new(stream) as Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>>
     }
 
     fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {

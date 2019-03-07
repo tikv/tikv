@@ -65,7 +65,7 @@ quick_error! {
             description(msg)
             display("Not Found {:?}", msg)
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -471,6 +471,7 @@ impl Debugger {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                peer_id,
                 tag.clone(),
             ));
 

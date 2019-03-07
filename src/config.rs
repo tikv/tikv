@@ -709,7 +709,7 @@ impl DbConfig {
         ]
     }
 
-    fn validate(&mut self) -> Result<(), Box<Error>> {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
 
@@ -967,7 +967,7 @@ macro_rules! readpool_config {
                 }
             }
 
-            pub fn validate(&self) -> Result<(), Box<Error>> {
+            pub fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.high_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
@@ -1126,7 +1126,7 @@ pub struct ReadPoolConfig {
 }
 
 impl ReadPoolConfig {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.storage.validate()?;
         self.coprocessor.validate()?;
         Ok(())
@@ -1179,7 +1179,7 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -1343,7 +1343,7 @@ impl TiKvConfig {
         P: fmt::Debug,
     {
         fs::File::open(&path)
-            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
             .and_then(|mut f| {
                 let mut s = String::new();
                 f.read_to_string(&mut s)?;
