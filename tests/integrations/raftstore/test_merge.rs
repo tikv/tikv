@@ -24,7 +24,7 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::raftstore::store::Peekable;
-use tikv::storage::{CF_RAFT, CF_WRITE};
+use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
 
@@ -95,8 +95,8 @@ fn test_node_base_merge() {
         let mut state = RegionLocalState::default();
         for _ in 0..3 {
             state = cluster
-                .get_engine(i)
-                .get_msg_cf(CF_RAFT, &state_key)
+                .get_raft_engine(i)
+                .get_msg(&state_key)
                 .unwrap()
                 .unwrap();
             if state.get_state() == PeerState::Tombstone {
@@ -464,8 +464,8 @@ fn test_node_merge_brain_split() {
     // Make sure the two regions are already merged on store 3.
     let state_key = keys::region_state_key(left.get_id());
     let state: RegionLocalState = cluster
-        .get_engine(3)
-        .get_msg_cf(CF_RAFT, &state_key)
+        .get_raft_engine(3)
+        .get_msg(&state_key)
         .unwrap()
         .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);

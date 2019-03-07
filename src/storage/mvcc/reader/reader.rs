@@ -497,7 +497,7 @@ mod tests {
     use crate::storage::engine::Modify;
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use crate::util::rocksdb_util::{
         self as rocksdb_util,
         properties::{MvccProperties, MvccPropertiesCollectorFactory},
@@ -627,7 +627,6 @@ mod tests {
         }
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];

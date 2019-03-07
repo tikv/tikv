@@ -15,15 +15,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use protobuf::Message;
-use rocksdb::Writable;
-
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
+use rocksdb::Writable;
 
 use test_raftstore::*;
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
-use tikv::storage::CF_RAFT;
-use tikv::util::rocksdb_util::get_cf_handle;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -57,31 +53,31 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(key, value);
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
-    let engine_2 = cluster.get_engine(2);
-    must_get_none(&engine_2, b"k1");
-    must_get_none(&engine_2, b"k3");
-    let mut existing_kvs = vec![];
+    let kv_engine_2 = cluster.get_engine(2);
+    must_get_none(&kv_engine_2, b"k1");
+    must_get_none(&kv_engine_2, b"k3");
+
+    // No data in kv_engine_2.
     for cf in engine_2.cf_names() {
-        engine_2
-            .scan_cf(cf, b"", &[0xFF], false, |k, v| {
-                existing_kvs.push((k.to_vec(), v.to_vec()));
-                Ok(true)
+        kv_engine_2
+            .scan_cf(cf, keys::MIN_KEY, keys::MAX_KEY, false, |k, _| {
+                panic!("scaned key: {:?}", k);
             })
             .unwrap();
     }
-    // only tombstone key and store ident key exist.
-    assert_eq!(existing_kvs.len(), 2);
-    existing_kvs.sort();
-    assert_eq!(existing_kvs[0].0.as_slice(), keys::STORE_IDENT_KEY);
-    assert_eq!(existing_kvs[1].0, keys::region_state_key(r1));
 
-    let mut ident = StoreIdent::new();
-    ident.merge_from_bytes(&existing_kvs[0].1).unwrap();
-    assert_eq!(ident.get_store_id(), 2);
-    assert_eq!(ident.get_cluster_id(), cluster.id());
+    let raft_engine_2 = cluster.get_raft_engine(2);
+    let ident2: StoreIdent = raft_engine_2
+        .get_msg(keys::STORE_IDENT_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ident2.get_store_id(), 2);
+    assert_eq!(ident2.get_cluster_id(), cluster.id());
 
-    let mut state = RegionLocalState::new();
-    state.merge_from_bytes(&existing_kvs[1].1).unwrap();
+    let state: RegionLocalState = raft_engine_2
+        .get_msg(&keys::region_state_key(1))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // The peer 2 may be destroyed by:
@@ -138,6 +134,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k1", b"v1");
 
     let engine_3 = cluster.get_engine(3);
+    let raft_engine_3 = cluster.get_raft_engine(3);
     must_get_equal(&engine_3, b"k1", b"v1");
     // remove peer (3, 3)
     pd_client.must_remove_peer(1, new_peer(3, 3));
@@ -147,7 +144,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.stop_node(3);
 
     let key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_3.get_msg_cf(CF_RAFT, &key).unwrap().unwrap();
+    let state: RegionLocalState = raft_engine_3.get_msg(&key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // Force add some dirty data.
@@ -264,15 +261,15 @@ fn test_server_stale_meta() {
     cluster.shutdown();
 
     let engine_3 = cluster.get_engine(3);
-    let mut state: RegionLocalState = engine_3
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(1))
+    let raft_engine_3 = cluster.get_raft_engine(3);
+    let mut state: RegionLocalState = raft_engine_3
+        .get_msg(&keys::region_state_key(1))
         .unwrap()
         .unwrap();
     state.set_state(PeerState::Tombstone);
 
-    let handle = get_cf_handle(&engine_3, CF_RAFT).unwrap();
-    engine_3
-        .put_msg_cf(handle, &keys::region_state_key(1), &state)
+    raft_engine_3
+        .put_msg(&keys::region_state_key(1), &state)
         .unwrap();
     cluster.clear_send_filters();
 

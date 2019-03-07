@@ -27,7 +27,6 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::storage::CF_RAFT;
 use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
 
@@ -370,10 +369,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k1", b"v1");
 
-    let engine1 = cluster.get_engine(1);
-    let engine3 = cluster.get_engine(3);
-    must_get_equal(&engine1, b"k1", b"v1");
-    must_get_equal(&engine3, b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
     cluster.stop_node(3);
 
@@ -399,9 +396,10 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run_node(2).unwrap();
     cluster.run_node(3).unwrap();
 
+    let raft_engine1 = cluster.get_raft_engine(1);
     for _ in 0..250 {
-        let region: RegionLocalState = engine1
-            .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
+        let region: RegionLocalState = raft_engine1
+            .get_msg(&keys::region_state_key(r1))
             .unwrap()
             .unwrap();
         if region.get_state() == PeerState::Tombstone {
@@ -409,8 +407,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
         }
         sleep_ms(20);
     }
-    let region: RegionLocalState = engine1
-        .get_msg_cf(CF_RAFT, &keys::region_state_key(r1))
+    let region: RegionLocalState = raft_engine1
+        .get_msg(&keys::region_state_key(r1))
         .unwrap()
         .unwrap();
     assert_eq!(region.get_state(), PeerState::Tombstone);

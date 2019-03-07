@@ -27,7 +27,7 @@ use raft::INVALID_INDEX;
 use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
-use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
+use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS};
 use crate::util::rocksdb_util::{
     self, properties::RangeProperties, stats::get_range_entries_and_versions,
 };
@@ -187,9 +187,8 @@ pub fn delete_all_in_range_cf(
 ) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
     let mut wb = WriteBatch::new();
-    // Since CF_RAFT and CF_LOCK is usually small, so using
-    // traditional way to cleanup.
-    if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
+    // Since CF_LOCK is usually small, so using traditional way to cleanup.
+    if use_delete_range && cf != CF_LOCK {
         if cf == CF_WRITE {
             let start = Key::from_encoded_slice(start_key).append_ts(u64::MAX);
             wb.delete_range_cf(handle, start.as_encoded(), end_key)?;

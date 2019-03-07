@@ -29,7 +29,7 @@ use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::raftstore::store::{keys, Mutable, Peekable};
 use tikv::storage::mvcc::{Lock, LockType};
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
@@ -581,8 +581,6 @@ fn test_debug_region_info() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
 
     let raft_engine = cluster.get_raft_engine(store_id);
-    let kv_engine = cluster.get_engine(store_id);
-    let raft_cf = kv_engine.cf_handle(CF_RAFT).unwrap();
 
     let region_id = 100;
     let raft_state_key = keys::raft_state_key(region_id);
@@ -600,12 +598,10 @@ fn test_debug_region_info() {
     let apply_state_key = keys::apply_state_key(region_id);
     let mut apply_state = raft_serverpb::RaftApplyState::new();
     apply_state.set_applied_index(42);
-    kv_engine
-        .put_msg_cf(raft_cf, &apply_state_key, &apply_state)
-        .unwrap();
+    raft_engine.put_msg(&apply_state_key, &apply_state).unwrap();
     assert_eq!(
-        kv_engine
-            .get_msg_cf::<raft_serverpb::RaftApplyState>(CF_RAFT, &apply_state_key)
+        raft_engine
+            .get_msg::<raft_serverpb::RaftApplyState>(&apply_state_key)
             .unwrap()
             .unwrap(),
         apply_state
@@ -614,12 +610,12 @@ fn test_debug_region_info() {
     let region_state_key = keys::region_state_key(region_id);
     let mut region_state = raft_serverpb::RegionLocalState::new();
     region_state.set_state(raft_serverpb::PeerState::Tombstone);
-    kv_engine
-        .put_msg_cf(raft_cf, &region_state_key, &region_state)
+    raft_engine
+        .put_msg(&region_state_key, &region_state)
         .unwrap();
     assert_eq!(
-        kv_engine
-            .get_msg_cf::<raft_serverpb::RegionLocalState>(CF_RAFT, &region_state_key)
+        raft_engine
+            .get_msg::<raft_serverpb::RegionLocalState>(&region_state_key)
             .unwrap()
             .unwrap(),
         region_state
@@ -646,6 +642,7 @@ fn test_debug_region_info() {
 fn test_debug_region_size() {
     let (cluster, debug_client, store_id) = must_new_cluster_and_debug_client();
     let engine = cluster.get_engine(store_id);
+    let raft_engine = cluster.get_raft_engine(store_id);
 
     // Put some data.
     let region_id = 100;
@@ -656,13 +653,10 @@ fn test_debug_region_size() {
     region.set_end_key(b"z".to_vec());
     let mut state = RegionLocalState::new();
     state.set_region(region);
-    let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
-    engine
-        .put_msg_cf(cf_raft, &region_state_key, &state)
-        .unwrap();
+    raft_engine.put_msg(&region_state_key, &state).unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT];
-    let (k, v) = (keys::data_key(b"k"), b"v");
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
+    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v"); // At lease 8 byets for the WRITE cf.
     for cf in &cfs {
         let cf_handle = engine.cf_handle(cf).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();

@@ -22,7 +22,6 @@ use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
 use tikv::raftstore::store::{keys, Peekable};
-use tikv::storage::CF_RAFT;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.
@@ -53,6 +52,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 
     let engine_2 = cluster.get_engine(2);
+    let raft_engine_2 = cluster.get_raft_engine(2);
     must_get_equal(&engine_2, key, value);
 
     // Isolate peer 2 from rest of the cluster.
@@ -87,7 +87,7 @@ fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_none(&engine_2, key);
     must_get_none(&engine_2, key2);
     let state_key = keys::region_state_key(1);
-    let state: RegionLocalState = engine_2.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = raft_engine_2.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }
 
@@ -133,6 +133,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let engine3 = cluster.get_engine(3);
+    let raft_engine3 = cluster.get_raft_engine(3);
     if right_derive {
         must_get_none(&engine3, b"k1");
         must_get_equal(&engine3, b"k3", b"v3");
@@ -175,7 +176,7 @@ fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_de
     // Before peer 4 is destroyed, a tombstone mark will be written into the engine.
     // So we could check the tombstone mark to make sure peer 4 is destroyed.
     let state_key = keys::region_state_key(new_region_id);
-    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = raft_engine3.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 
     // other region should not be affected.
@@ -228,6 +229,7 @@ fn test_stale_learner() {
     pd_client.must_add_peer(r1, new_learner_peer(3, 3));
     cluster.must_put(b"k1", b"v1");
     let engine3 = cluster.get_engine(3);
+    let raft_engine3 = cluster.get_raft_engine(3);
     must_get_equal(&engine3, b"k1", b"v1");
 
     // And then isolate peer on store 3 from leader.
@@ -253,6 +255,6 @@ fn test_stale_learner() {
     // Check not leader should fail, all data should be removed.
     must_get_none(&engine3, b"k1");
     let state_key = keys::region_state_key(r1);
-    let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    let state: RegionLocalState = raft_engine3.get_msg(&state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
 }

@@ -260,7 +260,7 @@ mod tests {
     use crate::raftstore::store::keys::data_key;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
-    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use crate::util::rocksdb_util::{
         get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
         stats::get_range_entries_and_versions, CFOptions,
@@ -342,7 +342,6 @@ mod tests {
         cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
             CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
