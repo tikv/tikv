@@ -81,35 +81,6 @@ impl PartialEq for SnapState {
     }
 }
 
-/// Updates the `state` with given `compact_index` and `compact_term`.
-///
-/// Remember the Raft log is not deleted here.
-pub fn compact_raft_log(
-    tag: &str,
-    state: &mut RaftApplyState,
-    compact_index: u64,
-    compact_term: u64,
-) -> Result<()> {
-    debug!("{} compact log entries to prior to {}", tag, compact_index);
-
-    if compact_index <= state.get_truncated_state().get_index() {
-        return Err(box_err!("try to truncate compacted entries"));
-    } else if compact_index > state.get_applied_index() {
-        return Err(box_err!(
-            "compact index {} > applied index {}",
-            compact_index,
-            state.get_applied_index()
-        ));
-    }
-
-    // we don't actually delete the logs now, we add an async task to do it.
-
-    state.mut_truncated_state().set_index(compact_index);
-    state.mut_truncated_state().set_term(compact_term);
-
-    Ok(())
-}
-
 #[inline]
 pub fn first_index(state: &RaftApplyState) -> u64 {
     state.get_truncated_state().get_index() + 1
@@ -265,6 +236,7 @@ pub trait HandleRaftReadyContext {
 pub struct PeerStorage {
     pub engines: Engines,
 
+    peer_id: u64,
     region: metapb::Region,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -475,13 +447,14 @@ impl PeerStorage {
         engines: Engines,
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask>,
+        peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage> {
         debug!(
-            "{} creating storage on {} for {:?}",
-            tag,
-            engines.kv.path(),
-            region
+            "creating storage on specified path";
+            "region_id" => region.get_id(),
+            "peer_id" => peer_id,
+            "path" => ?engines.kv.path(),
         );
         let raft_state = init_raft_state(&engines.raft, region)?;
         let apply_state = init_apply_state(&engines.kv, region)?;
@@ -497,6 +470,7 @@ impl PeerStorage {
 
         Ok(PeerStorage {
             engines,
+            peer_id,
             region: region.clone(),
             raft_state,
             apply_state,
@@ -681,10 +655,11 @@ impl PeerStorage {
         if idx < self.truncated_index() {
             // stale snapshot, should generate again.
             info!(
-                "{} snapshot {} < {} is stale, generate again.",
-                self.tag,
-                idx,
-                self.truncated_index()
+                "snapshot is stale, generate again";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "snap_index" => idx,
+                "truncated_index" => self.truncated_index(),
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["stale"])
@@ -695,8 +670,10 @@ impl PeerStorage {
         let mut snap_data = RaftSnapshotData::new();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             error!(
-                "{} decode snapshot fail, it may be corrupted: {:?}",
-                self.tag, e
+                "failed to decode snapshot, it may be corrupted";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["decode"])
@@ -707,8 +684,11 @@ impl PeerStorage {
         let latest_epoch = self.region().get_region_epoch();
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
-                "{} snapshot epoch {:?} < {:?}, generate again.",
-                self.tag, snap_epoch, latest_epoch
+                "snapshot epoch is stale";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "snap_epoch" => ?snap_epoch,
+                "latest_epoch" => ?latest_epoch,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["epoch"])
@@ -750,8 +730,10 @@ impl PeerStorage {
                 }
                 None => {
                     warn!(
-                        "{} snapshot generating failed at {} try time",
-                        self.tag, *tried_cnt
+                        "failed to try generating snapshot";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                        "times" => *tried_cnt,
                     );
                 }
             }
@@ -770,7 +752,11 @@ impl PeerStorage {
             )));
         }
 
-        info!("{} requesting snapshot...", self.tag);
+        info!(
+            "requesting snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+        );
         *tried_cnt += 1;
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
@@ -781,8 +767,10 @@ impl PeerStorage {
         };
         if let Err(e) = self.region_sched.schedule(task) {
             error!(
-                "{} failed to schedule task snap generation: {:?}",
-                self.tag, e
+                "failed to schedule task snap generation";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
             // update the status next time the function is called, also backoff for retry.
         }
@@ -800,7 +788,12 @@ impl PeerStorage {
         entries: &[Entry],
         ready_ctx: &mut H,
     ) -> Result<u64> {
-        debug!("{} append {} entries", self.tag, entries.len());
+        debug!(
+            "append entries";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "count" => entries.len(),
+        );
         let prev_last_index = invoke_ctx.raft_state.get_last_index();
         if entries.is_empty() {
             return Ok(prev_last_index);
@@ -871,7 +864,11 @@ impl PeerStorage {
         kv_wb: &WriteBatch,
         raft_wb: &WriteBatch,
     ) -> Result<()> {
-        info!("{} begin to apply snapshot", self.tag);
+        info!(
+            "begin to apply snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+        );
 
         let mut snap_data = RaftSnapshotData::new();
         snap_data.merge_from_bytes(snap.get_data())?;
@@ -908,8 +905,11 @@ impl PeerStorage {
             .set_term(snap.get_metadata().get_term());
 
         info!(
-            "{} apply snapshot for region {:?} with state {:?} ok",
-            self.tag, region, ctx.apply_state
+            "apply snapshot with state ok";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "region" => ?region,
+            "state" => ?ctx.apply_state,
         );
 
         ctx.snap_region = Some(region);
@@ -983,7 +983,7 @@ impl PeerStorage {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
                     // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag);
+                    panic!("{} applying snapshot failed", self.tag,);
                 } else {
                     return true;
                 }
@@ -1059,10 +1059,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        if self.region_sched.schedule(task).is_err() {
+        if let Err(e) = self.region_sched.schedule(task) {
             info!(
-                "{} fail to schedule apply job, are we shutting down?",
-                self.tag
+                "failed to to schedule apply job, are we shutting down?";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
         }
     }
@@ -1152,8 +1154,10 @@ impl PeerStorage {
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
                 error!(
-                    "{} cleanup data fail, may leave some dirty data: {:?}",
-                    self.tag, e
+                    "failed to cleanup data, may leave some dirty data";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
                 );
             }
         }
@@ -1285,10 +1289,13 @@ pub fn clear_meta(
     raft_wb.delete(&keys::raft_state_key(region_id))?;
 
     info!(
-        "[region {}] clear peer 1 meta key, 1 apply key, 1 raft key and {} raft logs, takes {:?}",
-        region_id,
-        last_index + 1 - first_index,
-        t.elapsed()
+        "finish clear peer meta";
+        "region_id" => region_id,
+        "meta_key" => 1,
+        "apply_key" => 1,
+        "raft_key" => 1,
+        "raft_logs" => last_index + 1 - first_index,
+        "takes" => ?t.elapsed(),
     );
     Ok(())
 }
@@ -1299,7 +1306,10 @@ pub fn do_snapshot(
     snap: &DbSnapshot,
     region_id: u64,
 ) -> raft::Result<Snapshot> {
-    debug!("[region {}] begin to generate a snapshot", region_id);
+    debug!(
+        "begin to generate a snapshot";
+        "region_id" => region_id,
+    );
 
     let apply_state: RaftApplyState =
         match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
@@ -1426,8 +1436,9 @@ pub fn write_peer_state<T: Mutable>(
 
     let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
-        "[region {}] writing merge state: {:?}",
-        region_id, region_state
+        "writing merge state";
+        "region_id" => region_id,
+        "state" => ?region_state,
     );
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
@@ -1462,9 +1473,9 @@ impl Storage for PeerStorage {
 #[cfg(test)]
 mod tests {
     use crate::raftstore::store::bootstrap;
+    use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::util::Engines;
-    use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::worker::RegionTask;
+    use crate::raftstore::store::worker::{RegionRunner, RegionTask};
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
@@ -1493,7 +1504,7 @@ mod tests {
         let engines = Engines::new(kv_db, raft_db);
         bootstrap::bootstrap_store(&engines, 1, 1).expect("");
         let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
-        PeerStorage::new(engines, &region, sched, "".to_owned()).unwrap()
+        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
     #[derive(Default)]
