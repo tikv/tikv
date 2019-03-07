@@ -143,6 +143,7 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Generates `DefaultNotFound` error or panic directly based on config.
 pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error {
     CRITICAL_ERROR
         .with_label_values(&["default value not found"])
@@ -162,7 +163,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
             "write" => ?write,
             "hint" => hint,
         );
-        return Error::DefaultNotFound { key, write };
+        Error::DefaultNotFound { key, write };
     }
 }
 
