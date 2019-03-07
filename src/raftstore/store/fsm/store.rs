@@ -13,11 +13,10 @@
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use futures::Future;
-use kvproto::errorpb;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
-use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use protobuf;
 use raft::{Ready, StateRole};
@@ -42,7 +41,6 @@ use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::rocksdb_util::{self, CompactedEvent, CompactionListener};
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::timer::SteadyTimer;
-use crate::util::transport::RetryableSendCh;
 use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
@@ -69,8 +67,8 @@ use crate::raftstore::store::worker::{
     RegionTask, SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, Callback, Engines, Msg, PeerMsg, SignificantMsg, SnapManager, SnapshotDeleter, StoreMsg,
-    StoreTick,
+    util, Callback, CasualMessage, Engines, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter,
+    StoreMsg, StoreTick,
 };
 
 type Key = Vec<u8>;
@@ -164,80 +162,22 @@ impl RaftRouter {
         }
     }
 
-    pub fn send_peer_msg(&self, msg: PeerMsg) -> std::result::Result<(), TrySendError<Msg>> {
-        let region_id = match msg {
-            PeerMsg::RaftMessage(msg) => {
-                return match self.send_raft_message(msg) {
-                    Ok(()) => Ok(()),
-                    Err(TrySendError::Full(m)) => {
-                        Err(TrySendError::Full(Msg::PeerMsg(PeerMsg::RaftMessage(m))))
-                    }
-                    Err(TrySendError::Disconnected(m)) => Err(TrySendError::Disconnected(
-                        Msg::PeerMsg(PeerMsg::RaftMessage(m)),
-                    )),
-                };
-            }
-            PeerMsg::RaftCmd { ref request, .. } => request.get_header().get_region_id(),
-            PeerMsg::Tick(region_id, _)
-            | PeerMsg::ApplyRes { region_id, .. }
-            | PeerMsg::SplitRegion { region_id, .. }
-            | PeerMsg::ComputeHashResult { region_id, .. }
-            | PeerMsg::RegionApproximateSize { region_id, .. }
-            | PeerMsg::RegionApproximateKeys { region_id, .. }
-            | PeerMsg::CompactionDeclinedBytes { region_id, .. }
-            | PeerMsg::HalfSplitRegion { region_id, .. }
-            | PeerMsg::MergeResult { region_id, .. }
-            | PeerMsg::GcSnap { region_id, .. }
-            | PeerMsg::ClearRegionSize(region_id)
-            | PeerMsg::Start(region_id)
-            | PeerMsg::Noop(region_id) => region_id,
-            PeerMsg::SignificantMsg(ref msg) => match msg {
-                SignificantMsg::SnapshotStatus { region_id, .. }
-                | SignificantMsg::Unreachable { region_id, .. } => *region_id,
-            },
-        };
-        match self.send(region_id, msg) {
+    #[inline]
+    pub fn send_raft_command(
+        &self,
+        cmd: RaftCommand,
+    ) -> std::result::Result<(), TrySendError<RaftCommand>> {
+        let region_id = cmd.request.get_header().get_region_id();
+        match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(m)) => Err(TrySendError::Full(Msg::PeerMsg(m))),
-            Err(TrySendError::Disconnected(m)) => {
-                let callback = match m {
-                    PeerMsg::RaftCmd { callback, .. } | PeerMsg::SplitRegion { callback, .. } => {
-                        callback
-                    }
-                    _ => return Err(TrySendError::Disconnected(Msg::PeerMsg(m))),
-                };
-
-                let mut err = errorpb::Error::new();
-                err.set_message("region is not found".to_owned());
-                err.mut_region_not_found().set_region_id(region_id);
-                let mut resp = RaftCmdResponse::new();
-                resp.mut_header().set_error(err);
-                callback.invoke_with_response(resp);
-                Ok(())
+            Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
+            Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
+                Err(TrySendError::Disconnected(cmd))
             }
-        }
-    }
-
-    fn send_store_msg(&self, msg: StoreMsg) -> std::result::Result<(), TrySendError<Msg>> {
-        match self.send_control(msg) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(m)) => Err(TrySendError::Full(Msg::StoreMsg(m))),
-            Err(TrySendError::Disconnected(m)) => Err(TrySendError::Disconnected(Msg::StoreMsg(m))),
+            _ => unreachable!(),
         }
     }
 }
-
-// TODO: drop Sender support.
-impl crate::util::transport::Sender<Msg> for RaftRouter {
-    fn send(&self, msg: Msg) -> std::result::Result<(), TrySendError<Msg>> {
-        match msg {
-            Msg::PeerMsg(msg) => self.send_peer_msg(msg),
-            Msg::StoreMsg(msg) => self.send_store_msg(msg),
-        }
-    }
-}
-
-pub type SendCh = RetryableSendCh<Msg, RaftRouter>;
 
 pub struct PollContext<T, C: 'static> {
     pub cfg: Arc<Config>,
@@ -1037,15 +977,13 @@ impl RaftBatchSystem {
             future_poller: workers.future_poller.sender().clone(),
         };
         let region_peers = builder.init()?;
-        let sendch = SendCh::new(builder.router.clone(), "raftstore");
-        self.start_system(workers, sendch, region_peers, builder)?;
+        self.start_system(workers, region_peers, builder)?;
         Ok(())
     }
 
     fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
         mut workers: Workers,
-        sendch: SendCh,
         region_peers: Vec<(LooseBoundedSender<PeerMsg>, Box<PeerFsm>)>,
         builder: RaftPollerBuilder<T, C>,
     ) -> Result<()> {
@@ -1053,7 +991,7 @@ impl RaftBatchSystem {
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&builder.engines.kv),
-            sendch.clone(),
+            self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
         );
 
@@ -1078,20 +1016,20 @@ impl RaftBatchSystem {
         let pd_runner = PdRunner::new(
             builder.store.get_id(),
             Arc::clone(&builder.pd_client),
-            sendch.clone(),
+            self.router.clone(),
             Arc::clone(&builder.engines.kv),
             workers.pd_worker.scheduler(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
-        let consistency_check_runner = ConsistencyCheckRunner::new(sendch.clone());
+        let consistency_check_runner = ConsistencyCheckRunner::new(self.router.clone());
         box_try!(workers
             .consistency_check_worker
             .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
             builder.store.get_id(),
-            sendch.clone(),
+            self.router.clone(),
             Arc::clone(&builder.importer),
             Arc::clone(&builder.pd_client),
         );
@@ -1126,7 +1064,7 @@ impl RaftBatchSystem {
         self.router.register_all(mailboxes);
         self.router.send_control(StoreMsg::Start { store }).unwrap();
         for addr in address {
-            self.router.force_send(addr, PeerMsg::Start(addr)).unwrap();
+            self.router.force_send(addr, PeerMsg::Start).unwrap();
         }
         self.workers = Some(workers);
         Ok(())
@@ -1408,11 +1346,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 .router
                 .force_send(
                     id,
-                    PeerMsg::MergeResult {
-                        region_id: id,
+                    PeerMsg::CasualMessage(CasualMessage::MergeResult {
                         target: target.clone(),
                         stale: true,
-                    },
+                    }),
                 )
                 .unwrap();
         }
@@ -1434,7 +1371,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.ctx.router.register(region_id, mailbox);
         self.ctx
             .router
-            .force_send(region_id, PeerMsg::Start(region_id))
+            .force_send(region_id, PeerMsg::Start)
             .unwrap();
         Ok(true)
     }
@@ -1474,10 +1411,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
             let _ = self.ctx.router.send(
                 region_id,
-                PeerMsg::CompactionDeclinedBytes {
-                    region_id,
+                PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
                     bytes: declined_bytes,
-                },
+                }),
             );
         }
     }
@@ -1653,10 +1589,12 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 "store_id" => self.fsm.store.id,
                 "region_id" => region_id,
             );
-            let gc_snap = PeerMsg::GcSnap { region_id, snaps };
+            let gc_snap = PeerMsg::CasualMessage(CasualMessage::GcSnap { snaps });
             match self.ctx.router.send(region_id, gc_snap) {
                 Ok(()) => Ok(()),
-                Err(TrySendError::Disconnected(PeerMsg::GcSnap { region_id, snaps })) => {
+                Err(TrySendError::Disconnected(PeerMsg::CasualMessage(
+                    CasualMessage::GcSnap { snaps },
+                ))) => {
                     // The snapshot exists because MsgAppend has been rejected. So the
                     // peer must have been exist. But now it's disconnected, so the peer
                     // has to be destroyed instead of being created.
@@ -1898,11 +1836,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
         let _ = self.ctx.router.send(
             target_region_id,
-            PeerMsg::RaftCmd {
-                request,
-                callback: Callback::None,
-                send_time: Instant::now(),
-            },
+            PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
         );
     }
 
@@ -1939,10 +1873,10 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             }
         }
         for region_id in regions {
-            let _ = self
-                .ctx
-                .router
-                .send(region_id, PeerMsg::ClearRegionSize(region_id));
+            let _ = self.ctx.router.send(
+                region_id,
+                PeerMsg::CasualMessage(CasualMessage::ClearRegionSize),
+            );
         }
     }
 }
