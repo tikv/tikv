@@ -163,7 +163,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
             "write" => ?write,
             "hint" => hint,
         );
-        Error::DefaultNotFound { key, write };
+        Error::DefaultNotFound { key, write }
     }
 }
 
