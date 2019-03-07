@@ -405,8 +405,8 @@ pub fn get_region_approximate_keys(db: &DB, region: &metapb::Region) -> Result<u
             }
         }
         Err(e) => debug!(
-            "old_version:get keys from RangeProperties failed with err:{:?}",
-            e
+            "failed to get keys from RangeProperties";
+            "err" => ?e,
         ),
     }
 

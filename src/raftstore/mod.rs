@@ -14,4 +14,4 @@
 pub mod coprocessor;
 pub mod errors;
 pub mod store;
-pub use self::errors::{Error, Result};
+pub use self::errors::{DiscardReason, Error, Result};

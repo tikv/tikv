@@ -32,12 +32,61 @@ pub struct DAGRequestHandler {
 }
 
 impl DAGRequestHandler {
-    pub fn build<S: Store + 'static>(
+    fn build_dag<S: Store + 'static>(
+        eval_cfg: EvalConfig,
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         store: S,
         deadline: Deadline,
         batch_row_limit: usize,
+    ) -> Result<Self> {
+        let executor = super::builder::DAGBuilder::build_normal(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            Arc::new(eval_cfg),
+            req.get_collect_range_counts(),
+        )?;
+        Ok(Self {
+            deadline,
+            executor,
+            output_offsets: req.take_output_offsets(),
+            batch_row_limit,
+        })
+    }
+
+    fn build_batch_dag<S: Store + 'static>(
+        deadline: Deadline,
+        eval_config: EvalConfig,
+        mut req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+    ) -> Result<super::batch_handler::BatchDAGHandler> {
+        let ranges_len = ranges.len();
+
+        let (out_most_executor, executor_context) = super::builder::DAGBuilder::build_batch(
+            req.take_executors().into_vec(),
+            store,
+            ranges,
+            eval_config,
+        )?;
+        Ok(super::batch_handler::BatchDAGHandler::new(
+            deadline,
+            out_most_executor,
+            req.take_output_offsets(),
+            executor_context,
+            ranges_len,
+        ))
+    }
+
+    pub fn build<S: Store + 'static>(
+        req: DAGRequest,
+        ranges: Vec<KeyRange>,
+        store: S,
+        deadline: Deadline,
+        batch_row_limit: usize,
+        is_streaming: bool,
+        enable_batch_if_possible: bool,
     ) -> Result<Box<dyn RequestHandler>> {
         let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
         // We respect time zone name first, then offset.
@@ -58,20 +107,19 @@ impl DAGRequestHandler {
         if req.has_is_strict_sql_mode() {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
-        let executor = super::builder::DAGBuilder::build_normal(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            Arc::new(eval_cfg),
-            req.get_collect_range_counts(),
-        )?;
-        let handler = Self {
-            deadline,
-            executor,
-            output_offsets: req.take_output_offsets(),
-            batch_row_limit,
-        };
-        Ok(handler.into_boxed())
+
+        let is_batch = enable_batch_if_possible
+            && !is_streaming
+            && super::builder::DAGBuilder::can_build_batch(req.get_executors());
+
+        if is_batch {
+            Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
+        } else {
+            Ok(
+                Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
+                    .into_boxed(),
+            )
+        }
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {

@@ -359,7 +359,7 @@ mod tests {
     }
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
-        PeerStorage::new(engines, r, worker::dummy_scheduler(), "".to_owned()).unwrap()
+        PeerStorage::new(engines, r, worker::dummy_scheduler(), 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {

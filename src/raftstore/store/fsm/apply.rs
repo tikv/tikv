@@ -45,9 +45,7 @@ use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
-use crate::raftstore::store::peer_storage::{
-    self, compact_raft_log, write_initial_apply_state, write_peer_state,
-};
+use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
 use crate::raftstore::{Error, Result};
@@ -451,7 +449,6 @@ impl ApplyContext {
                 self.notifier.notify(
                     res.region_id,
                     PeerMsg::ApplyRes {
-                        region_id: res.region_id,
                         res: TaskRes::Apply(res),
                     },
                 );
@@ -2005,6 +2002,35 @@ fn check_sst_for_ingestion(sst: &SSTMeta, region: &Region) -> Result<()> {
     Ok(())
 }
 
+/// Updates the `state` with given `compact_index` and `compact_term`.
+///
+/// Remember the Raft log is not deleted here.
+pub fn compact_raft_log(
+    tag: &str,
+    state: &mut RaftApplyState,
+    compact_index: u64,
+    compact_term: u64,
+) -> Result<()> {
+    debug!("{} compact log entries to prior to {}", tag, compact_index);
+
+    if compact_index <= state.get_truncated_state().get_index() {
+        return Err(box_err!("try to truncate compacted entries"));
+    } else if compact_index > state.get_applied_index() {
+        return Err(box_err!(
+            "compact index {} > applied index {}",
+            compact_index,
+            state.get_applied_index()
+        ));
+    }
+
+    // we don't actually delete the logs now, we add an async task to do it.
+
+    state.mut_truncated_state().set_index(compact_index);
+    state.mut_truncated_state().set_term(compact_term);
+
+    Ok(())
+}
+
 pub struct Apply {
     pub region_id: u64,
     pub term: u64,
@@ -2288,7 +2314,6 @@ impl ApplyFsm {
             ctx.notifier.notify(
                 self.delegate.region_id(),
                 PeerMsg::ApplyRes {
-                    region_id: self.delegate.region_id(),
                     res: TaskRes::Destroy {
                         region_id: self.delegate.region_id(),
                         peer_id: self.delegate.id,
