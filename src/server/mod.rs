@@ -29,6 +29,7 @@ pub mod transport;
 
 pub use self::config::{Config, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR};
 pub use self::errors::{Error, Result};
+pub use self::metrics::CONFIG_ROCKSDB_GAUGE;
 pub use self::node::{create_raft_storage, Node};
 pub use self::raft_client::RaftClient;
 pub use self::resolve::{PdStoreAddrResolver, StoreAddrResolver};

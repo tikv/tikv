@@ -471,6 +471,7 @@ impl Debugger {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                peer_id,
                 tag.clone(),
             ));
 
@@ -673,6 +674,7 @@ impl Debugger {
         config_name: &str,
         config_value: &str,
     ) -> Result<()> {
+        use super::CONFIG_ROCKSDB_GAUGE;
         let db = match module {
             MODULE::KVDB => DBType::KV,
             MODULE::RAFTDB => DBType::RAFT,
@@ -698,11 +700,20 @@ impl Debugger {
                         capacity.unwrap_err()
                     )));
                 }
-                box_try!(opt.set_block_cache_capacity(capacity.unwrap().0));
+                let cache_size = capacity.unwrap().0;
+                box_try!(opt.set_block_cache_capacity(cache_size));
+                CONFIG_ROCKSDB_GAUGE
+                    .with_label_values(&[cf, config_name])
+                    .set(cache_size as f64);
             } else {
                 let mut opt = Vec::new();
                 opt.push((config_name, config_value));
                 box_try!(rocksdb.set_options_cf(handle, &opt));
+                if let Ok(v) = config_value.parse::<f64>() {
+                    CONFIG_ROCKSDB_GAUGE
+                        .with_label_values(&[cf, config_name])
+                        .set(v);
+                }
             }
         } else {
             return Err(Error::InvalidArgument(format!(
