@@ -924,6 +924,28 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn instr<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let substr = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        if substr.is_empty() {
+            return Ok(Some(1));
+        }
+        if s.is_empty() {
+            return Ok(Some(0));
+        }
+        let s = s.to_lowercase();
+        let substr = substr.to_lowercase();
+        match s.find(&substr) {
+            Some(x) => Ok(Some(1 + s[..x].chars().count() as i64)),
+            None => Ok(Some(0)),
+        }
+    }
+
+    #[inline]
     pub fn instr_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -3389,6 +3411,48 @@ mod tests {
 
         for (input, length, exp) in cases {
             let got = eval_func(ScalarFuncSig::RightBinary, &[input, length]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_instr() {
+        let cases: Vec<(&str, &str, i64)> = vec![
+            ("a", "abcdefg", 1),
+            ("0", "abcdefg", 0),
+            ("c", "abcdefg", 3),
+            ("F", "abcdefg", 6),
+            ("cd", "abcdefg", 3),
+            (" ", "abcdefg", 0),
+            ("", "", 1),
+            (" ", " ", 1),
+            (" ", "", 0),
+            ("", " ", 1),
+            ("eFg", "abcdefg", 5),
+            ("def", "abcdefg", 4),
+            ("字节", "a多字节", 3),
+            ("a", "a多字节", 1),
+            ("bar", "foobarbar", 4),
+            ("xbar", "foobarbar", 0),
+            ("好世", "你好世界", 2),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::Instr, &[s, substr]).unwrap();
+            assert_eq!(got, Datum::I64(exp))
+        }
+
+        let null_cases = vec![
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Bytes(b"foobar".to_vec()), Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+        for (substr, s, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::Instr, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
     }
