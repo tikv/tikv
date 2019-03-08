@@ -1163,18 +1163,9 @@ mod tests {
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
                     ScalarFuncSig::Instr,
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
-                    ScalarFuncSig::Repeat,
->>>>>>> Stashed changes
-=======
->>>>>>> 5f64ca99... add one test case
                     ScalarFuncSig::AddDatetimeAndDuration,
                     ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::AddDurationAndDuration,
->>>>>>> 6cddee2d... add repeat function in builtin_string
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
