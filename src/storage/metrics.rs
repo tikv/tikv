@@ -165,4 +165,15 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
+    pub static ref MVCC_INSPECTOR_UPDATE_DURATION: Histogram = register_histogram!(
+        "tikv_storage_mvcc_inspector_update_duration",
+        "Duration of mvcc inspector update",
+        exponential_buckets(0.0001, 2.0, 10).unwrap()
+    )
+    .unwrap();
+    pub static ref MVCC_INSPECTOR_TS_REPORT_DURATION: Histogram = register_histogram!(
+        "tikv_storage_mvcc_inspectior_ts_report_duration",
+        "Duration of mvcc inspector ts report",
+        exponential_buckets(0.0001, 2.0, 10).unwrap()
+    ).unwrap();
 }

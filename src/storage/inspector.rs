@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use futures::sync::mpsc;
 use futures::{lazy, Async, Future, Poll, Stream};
@@ -24,9 +25,12 @@ use crate::raftstore::coprocessor::{
     RoleObserver,
 };
 use crate::util::collections::HashMap;
+use crate::util::time::duration_to_sec;
 use crate::util::HandyRwLock;
+use crate::storage::metrics::*;
 
 const INSPECTOR_NAME_PREFIX: &str = "mvcc-inspector";
+const GLOBAL_REGION_SLOTS: usize = 128;
 
 #[derive(Clone)]
 struct LeaderChangeObserver {
@@ -39,9 +43,11 @@ impl LeaderChangeObserver {
     }
 
     fn update_region(&self, region_id: u64, version: u64) {
+        let timer = Instant::now();
         let inner = Arc::clone(&self.inner);
         self.inner.thread_pool.spawn(lazy(move || {
-            let mut map = inner.max_read_ts_map.wl();
+            let slot = region_id as usize % GLOBAL_REGION_SLOTS;
+            let mut map = inner.max_read_ts_map[slot].wl();
             let entry = Arc::clone(map.entry(region_id).or_default());
             let mut entry = entry.wl();
             drop(map);
@@ -55,20 +61,24 @@ impl LeaderChangeObserver {
                     .unbounded_send(UpdateTsTask { region_id, version })
                     .unwrap();
             }
+            MVCC_INSPECTOR_UPDATE_DURATION.observe(duration_to_sec(timer.elapsed()));
             Ok(())
         }));
     }
 
     fn remove_region(&self, region_id: u64, version: u64) {
+        let timer = Instant::now();
         let inner = Arc::clone(&self.inner);
         self.inner.thread_pool.spawn(lazy(move || {
-            let mut map = inner.max_read_ts_map.wl();
+            let slot = region_id as usize % GLOBAL_REGION_SLOTS;
+            let mut map = inner.max_read_ts_map[slot].wl();
             if let Some(entry) = map.get(&region_id).cloned() {
                 let entry = entry.wl();
                 if entry.version <= version {
                     map.remove(&region_id);
                 }
             }
+            MVCC_INSPECTOR_UPDATE_DURATION.observe(duration_to_sec(timer.elapsed()));
             Ok(())
         }));
     }
@@ -140,20 +150,21 @@ pub struct MvccInspector {
 }
 
 pub struct Inner {
-    max_read_ts_map: RwLock<TsMap>,
+    max_read_ts_map: Vec<RwLock<TsMap>>,
     thread_pool: ThreadPool,
     sender: mpsc::UnboundedSender<UpdateTsTask>,
 }
 
 impl MvccInspector {
     pub fn new<C: PdClient + 'static>(pd_client: Arc<C>) -> Self {
+        let maps = (0..GLOBAL_REGION_SLOTS).map(|_| Default::default()).collect();
         let worker = ThreadPoolBuilder::new()
             .pool_size(1)
             .name_prefix(INSPECTOR_NAME_PREFIX)
             .build();
         let (tx, rx) = mpsc::unbounded();
         let inner = Arc::new(Inner {
-            max_read_ts_map: Default::default(),
+            max_read_ts_map: maps,
             thread_pool: worker,
             sender: tx,
         });
@@ -166,7 +177,8 @@ impl MvccInspector {
                 .map(move |tso| (tso, map))
                 .map(move |(tso, map)| {
                     for (region_id, version) in map {
-                        let global_map = inner2.max_read_ts_map.rl();
+                        let slot = region_id as usize % GLOBAL_REGION_SLOTS; 
+                        let global_map = inner2.max_read_ts_map[slot].rl();
                         let e = Arc::clone(global_map.get(&region_id).unwrap());
                         drop(global_map);
                         let mut e = e.wl();
@@ -184,13 +196,14 @@ impl MvccInspector {
 
     // Quickly make the code buildable
     pub fn new_mock() -> Self {
+        let maps = (0..GLOBAL_REGION_SLOTS).map(|_| Default::default()).collect();
         let worker = ThreadPoolBuilder::new()
             .pool_size(1)
             .name_prefix(INSPECTOR_NAME_PREFIX)
             .build();
         let (tx, _) = mpsc::unbounded(); // TODO: real mock.
         let inner = Arc::new(Inner {
-            max_read_ts_map: Default::default(),
+            max_read_ts_map: maps,
             thread_pool: worker,
             sender: tx,
         });
@@ -199,7 +212,6 @@ impl MvccInspector {
 
     pub fn register_observer(&self, host: &mut CoprocessorHost) {
         let observer = LeaderChangeObserver::new(Arc::clone(&self.inner));
-
         host.registry
             .register_role_observer(1, box observer.clone());
         host.registry
@@ -207,6 +219,7 @@ impl MvccInspector {
     }
 
     pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64, _from: &str) {
+        let timer = Instant::now();
         if ts == u64::max_value() {
             return;
         }
@@ -224,6 +237,7 @@ impl MvccInspector {
                 lock.max_read_ts = ts;
             }
         }
+        MVCC_INSPECTOR_TS_REPORT_DURATION.observe(duration_to_sec(timer.elapsed()));
     }
 
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
@@ -237,7 +251,8 @@ impl MvccInspector {
     }
 
     fn get_entry(&self, region_id: u64) -> Option<Arc<RwLock<RegionMaxTsRecord>>> {
-        self.inner.max_read_ts_map.rl().get(&region_id).cloned()
+        let slot = region_id as usize % GLOBAL_REGION_SLOTS;
+        self.inner.max_read_ts_map[slot].rl().get(&region_id).cloned()
     }
 }
 
