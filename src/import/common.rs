@@ -18,7 +18,7 @@ use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
 
-use pd::RegionInfo;
+use crate::pd::RegionInfo;
 
 use super::client::*;
 
@@ -98,7 +98,7 @@ impl<Client: ImportClient> RangeContext<Client> {
         self.region = match self.client.get_region(key) {
             Ok(region) => Some(region),
             Err(e) => {
-                error!("get region: {:?}", e);
+                error!("get region failed"; "err" => %e);
                 None
             }
         }
@@ -146,7 +146,7 @@ pub fn find_region_peer(region: &Region, store_id: u64) -> Option<Peer> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     #[test]
     fn test_before_end() {

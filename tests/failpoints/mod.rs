@@ -22,14 +22,7 @@ extern crate kvproto;
 extern crate raft;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use(
-    slog_kv,
-    slog_debug,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static,
-)]
+#[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
@@ -70,7 +63,8 @@ fn test_setup() {
         panic_hook::mute();
         let _g = setup();
         panic!("Poison!");
-    }).join();
+    })
+    .join();
 
     let _g = setup();
 }

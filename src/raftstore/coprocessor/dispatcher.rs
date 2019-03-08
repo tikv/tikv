@@ -17,8 +17,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use raftstore::store::msg::Msg;
-use util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::CasualRouter;
 
 use super::*;
 
@@ -28,11 +27,11 @@ struct Entry<T> {
 }
 
 // TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
-pub type BoxRoleObserver = Box<RoleObserver + Send + Sync>;
-pub type BoxRegionChangeObserver = Box<RegionChangeObserver + Send + Sync>;
+pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
+pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
+pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
+pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -131,10 +130,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + 'static>(
-        cfg: Config,
-        ch: RetryableSendCh<Msg, C>,
-    ) -> CoprocessorHost {
+    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,
@@ -273,8 +269,8 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::*;
     use protobuf::RepeatedField;
-    use raftstore::coprocessor::*;
     use std::sync::atomic::*;
     use std::sync::*;
 

@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use crate::util;
 use rocksdb::DBCompressionType;
-use util;
 
 quick_error! {
     #[derive(Debug)]
@@ -151,7 +151,7 @@ pub mod compression_type_level_serde {
                             return Err(S::Error::invalid_value(
                                 Unexpected::Str(&value),
                                 &"invalid compression type",
-                            ))
+                            ));
                         }
                     };
                     i += 1;
@@ -237,19 +237,19 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-numeric_enum_mod!{compaction_pri_serde CompactionPriority {
+numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod!{compaction_style_serde DBCompactionStyle {
+numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,
 }}
 
-numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
+numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
@@ -476,35 +476,49 @@ impl ReadableDuration {
     }
 }
 
+impl fmt::Display for ReadableDuration {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut dur = util::time::duration_to_ms(self.0);
+        let mut written = false;
+        if dur >= DAY {
+            written = true;
+            write!(f, "{}d", dur / DAY)?;
+            dur %= DAY;
+        }
+        if dur >= HOUR {
+            written = true;
+            write!(f, "{}h", dur / HOUR)?;
+            dur %= HOUR;
+        }
+        if dur >= MINUTE {
+            written = true;
+            write!(f, "{}m", dur / MINUTE)?;
+            dur %= MINUTE;
+        }
+        if dur >= SECOND {
+            written = true;
+            write!(f, "{}s", dur / SECOND)?;
+            dur %= SECOND;
+        }
+        if dur > 0 {
+            written = true;
+            write!(f, "{}ms", dur)?;
+        }
+        if !written {
+            write!(f, "0s")?;
+        }
+        Ok(())
+    }
+}
+
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
-        if dur >= DAY {
-            write!(buffer, "{}d", dur / DAY).unwrap();
-            dur %= DAY;
-        }
-        if dur >= HOUR {
-            write!(buffer, "{}h", dur / HOUR).unwrap();
-            dur %= HOUR;
-        }
-        if dur >= MINUTE {
-            write!(buffer, "{}m", dur / MINUTE).unwrap();
-            dur %= MINUTE;
-        }
-        if dur >= SECOND {
-            write!(buffer, "{}s", dur / SECOND).unwrap();
-            dur %= SECOND;
-        }
-        if dur > 0 {
-            write!(buffer, "{}ms", dur).unwrap();
-        }
-        if buffer.is_empty() && dur == 0 {
-            write!(buffer, "0s").unwrap();
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }
@@ -584,11 +598,11 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
-pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let parent = Path::new(path);
     let p = parent.join(Path::new(sub_path));
     if p.exists() && p.is_file() {
@@ -646,7 +660,7 @@ mod check_kernel {
     use super::ConfigError;
 
     // pub for tests.
-    pub type Checker = Fn(i64, i64) -> bool;
+    pub type Checker = dyn Fn(i64, i64) -> bool;
 
     // pub for tests.
     pub fn check_kernel_params(
@@ -679,7 +693,7 @@ mod check_kernel {
             )));
         }
 
-        info!("kernel parameters {}: {}", param, got);
+        info!("kernel parameters"; "param" => param, "value" => got);
         Ok(())
     }
 
@@ -851,16 +865,16 @@ mod check_data_dir {
                 return Err(ConfigError::FileSystem(format!(
                     "{}: path: {:?} canonicalize failed: {:?}",
                     op, data_path, e
-                )))
+                )));
             }
         };
 
-        let fs_info = get_fs_info(&real_path, mnt_file)?;
         // TODO check ext4 nodelalloc
-        info!("data_path: {:?}, mount fs info: {:?}", data_path, fs_info);
-        let rotational_info = get_rotational_info(&fs_info.fsname)?;
-        if rotational_info != "0" {
-            warn!("{:?} not on SSD device", data_path);
+        let fs_info = get_fs_info(&real_path, mnt_file)?;
+        info!("check data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+
+        if get_rotational_info(&fs_info.fsname)? != "0" {
+            warn!("not on SSD device"; "data_path" => data_path);
         }
         Ok(())
     }
@@ -983,9 +997,9 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = parts[1]
-        .parse()
-        .map_err(|_| ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr)))?;
+    let port: u16 = parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    })?;
     // Port = 0 is invalid.
     if port == 0 {
         return Err(ConfigError::Address(format!(
@@ -1196,21 +1210,19 @@ mod tests {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
         // value is wrong.
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
     }
 
     #[test]

@@ -70,13 +70,6 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!(
-            "tikv_pd_heartbeat_tick_total",
-            "Total number of pd heartbeat ticks.",
-            &["type"]
-        ).unwrap();
-
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",
@@ -228,4 +221,10 @@ lazy_static! {
             &["type"],
             exponential_buckets(0.001, 1.59, 20).unwrap() // max 10s
         ).unwrap();
+
+    pub static ref KEY_NOT_IN_REGION: IntCounter = register_int_counter!(
+        "tikv_key_not_in_region",
+        "Counter of key not in region"
+    )
+    .unwrap();
 }

@@ -22,15 +22,13 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use rocksdb::{DBIterator, DB};
 
-use raftstore::coprocessor::CoprocessorHost;
-use raftstore::coprocessor::SplitCheckerHost;
-use raftstore::store::engine::{IterOption, Iterable};
-use raftstore::store::{keys, Callback, Msg, PeerMsg};
-use raftstore::Result;
-use storage::{CfName, CF_WRITE, LARGE_CFS};
-use util::escape;
-use util::transport::{RetryableSendCh, Sender};
-use util::worker::Runnable;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::coprocessor::SplitCheckerHost;
+use crate::raftstore::store::engine::{IterOption, Iterable};
+use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
+use crate::raftstore::Result;
+use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
+use crate::util::worker::Runnable;
 
 use super::metrics::*;
 
@@ -93,7 +91,7 @@ impl<'a> MergedIterator<'a> {
     ) -> Result<MergedIterator<'a>> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
-        for (pos, cf) in cfs.into_iter().enumerate() {
+        for (pos, cf) in cfs.iter().enumerate() {
             let iter_opt =
                 IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
@@ -156,21 +154,17 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C> {
+pub struct Runner<S> {
     engine: Arc<DB>,
-    ch: RetryableSendCh<Msg, C>,
+    router: S,
     coprocessor: Arc<CoprocessorHost>,
 }
 
-impl<C: Sender<Msg>> Runner<C> {
-    pub fn new(
-        engine: Arc<DB>,
-        ch: RetryableSendCh<Msg, C>,
-        coprocessor: Arc<CoprocessorHost>,
-    ) -> Runner<C> {
+impl<S: CasualRouter> Runner<S> {
+    pub fn new(engine: Arc<DB>, router: S, coprocessor: Arc<CoprocessorHost>) -> Runner<S> {
         Runner {
             engine,
-            ch,
+            router,
             coprocessor,
         }
     }
@@ -182,10 +176,10 @@ impl<C: Sender<Msg>> Runner<C> {
         let start_key = keys::enc_start_key(region);
         let end_key = keys::enc_end_key(region);
         debug!(
-            "[region {}] executing task {} {}",
-            region_id,
-            escape(&start_key),
-            escape(&end_key)
+            "executing task";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Key(&start_key),
+            "end_key" => log_wrappers::Key(&end_key),
         );
         CHECK_SPILT_COUNTER_VEC.with_label_values(&["all"]).inc();
 
@@ -196,7 +190,7 @@ impl<C: Sender<Msg>> Runner<C> {
             task.policy,
         );
         if host.skip() {
-            debug!("[region {}] skip split check", region.get_id());
+            debug!("skip split check"; "region_id" => region.get_id());
             return;
         }
 
@@ -205,7 +199,7 @@ impl<C: Sender<Msg>> Runner<C> {
                 match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                     Ok(keys) => keys,
                     Err(e) => {
-                        error!("[region {}] failed to scan split key: {}", region_id, e);
+                        error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
                         return;
                     }
                 }
@@ -217,13 +211,14 @@ impl<C: Sender<Msg>> Runner<C> {
                     .collect(),
                 Err(e) => {
                     error!(
-                        "[region {}] failed to get approxiamte split key: {}, try scan way",
-                        region_id, e
+                        "failed to get approxiamte split key, try scan way";
+                        "region_id" => region_id,
+                        "err" => %e,
                     );
                     match self.scan_split_keys(&mut host, region, &start_key, &end_key) {
                         Ok(keys) => keys,
                         Err(e) => {
-                            error!("[region {}] failed to scan split key: {}", region_id, e);
+                            error!("failed to scan split key"; "region_id" => region_id, "err" => %e);
                             return;
                         }
                     }
@@ -233,11 +228,10 @@ impl<C: Sender<Msg>> Runner<C> {
 
         if !split_keys.is_empty() {
             let region_epoch = region.get_region_epoch().clone();
-            let res = self
-                .ch
-                .try_send(new_split_region(region_id, region_epoch, split_keys));
+            let msg = new_split_region(region_epoch, split_keys);
+            let res = self.router.send(region_id, msg);
             if let Err(e) = res {
-                warn!("[region {}] failed to send check result: {}", region_id, e);
+                warn!("failed to send check result"; "region_id" => region_id, "err" => %e);
             }
 
             CHECK_SPILT_COUNTER_VEC
@@ -245,8 +239,8 @@ impl<C: Sender<Msg>> Runner<C> {
                 .inc();
         } else {
             debug!(
-                "[region {}] no need to send, split key not found",
-                region_id,
+                "no need to send, split key not found";
+                "region_id" => region_id,
             );
 
             CHECK_SPILT_COUNTER_VEC.with_label_values(&["ignore"]).inc();
@@ -277,17 +271,16 @@ impl<C: Sender<Msg>> Runner<C> {
     }
 }
 
-impl<C: Sender<Msg>> Runnable<Task> for Runner<C> {
+impl<S: CasualRouter> Runnable<Task> for Runner<S> {
     fn run(&mut self, task: Task) {
         self.check_split(task);
     }
 }
 
-fn new_split_region(region_id: u64, region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> Msg {
-    Msg::PeerMsg(PeerMsg::SplitRegion {
-        region_id,
+fn new_split_region(region_epoch: RegionEpoch, split_keys: Vec<Vec<u8>>) -> CasualMessage {
+    CasualMessage::SplitRegion {
         region_epoch,
         split_keys,
         callback: Callback::None,
-    })
+    }
 }

@@ -27,7 +27,7 @@ extern crate rocksdb;
 extern crate tempdir;
 extern crate test;
 extern crate tipb;
-extern crate tokio;
+extern crate tokio_threadpool;
 extern crate toml;
 extern crate uuid;
 #[macro_use(
@@ -38,7 +38,7 @@ extern crate uuid;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 #[macro_use]

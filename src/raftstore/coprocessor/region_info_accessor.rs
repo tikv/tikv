@@ -15,19 +15,24 @@ use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
+use super::metrics::*;
 use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
+use crate::raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
+use crate::raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
+use crate::storage::engine::{RegionInfoProvider, Result as EngineResult};
+use crate::util::collections::HashMap;
+use crate::util::escape;
+use crate::util::timer::Timer;
+use crate::util::worker::{
+    Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker,
+};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
-use raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
-use storage::engine::{RegionInfoProvider, Result as EngineResult};
-use util::collections::HashMap;
-use util::escape;
-use util::worker::{Builder as WorkerBuilder, Runnable, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -186,7 +191,7 @@ impl RegionCollector {
             self.regions
                 .insert(region_id, RegionInfo::new(region, role))
                 .is_none(),
-            "region_collector: trying to create new region {} but it already exists.",
+            "trying to create new region {} but it already exists.",
             region_id
         );
     }
@@ -208,11 +213,10 @@ impl RegionCollector {
 
             // Insert new entry to `region_ranges`.
             let end_key = data_end_key(region.get_end_key());
-            assert!(
-                self.region_ranges
-                    .insert(end_key, region.get_id())
-                    .is_none()
-            );
+            assert!(self
+                .region_ranges
+                .insert(end_key, region.get_id())
+                .is_none());
         }
 
         // If the region already exists, update it and keep the original role.
@@ -224,7 +228,10 @@ impl RegionCollector {
         // receive an `Update` message, the region may have been deleted for some reason. So we
         // handle it according to whether the region exists in the collection.
         if self.regions.contains_key(&region.get_id()) {
-            info!("region_collector: trying to create region {} but it already exists, try to update it", region.get_id());
+            info!(
+                "trying to create region but it already exists, try to update it";
+                "region_id" => region.get_id(),
+            );
             self.update_region(region);
         } else {
             self.create_region(region, role);
@@ -235,7 +242,10 @@ impl RegionCollector {
         if self.regions.contains_key(&region.get_id()) {
             self.update_region(region);
         } else {
-            info!("region_collector: trying to update region {} but it doesn't exist, try to create it", region.get_id());
+            info!(
+                "trying to update region but it doesn't exist, try to create it";
+                "region_id" => region.get_id(),
+            );
             self.create_region(region, role);
         }
     }
@@ -253,8 +263,8 @@ impl RegionCollector {
             // It's possible that the region is already removed because it's end_key is used by
             // another newer region.
             debug!(
-                "region_collector: destroying region {} but it doesn't exist",
-                region.get_id()
+                "destroying region but it doesn't exist";
+                "region_id" => region.get_id(),
             )
         }
     }
@@ -268,8 +278,8 @@ impl RegionCollector {
         }
 
         warn!(
-            "region_collector: role change on region {} but the region doesn't exist. create it.",
-            region_id
+            "role change on region but the region doesn't exist. create it.";
+            "region_id" => region_id,
         );
         self.create_region(region, new_role);
     }
@@ -395,7 +405,10 @@ impl RegionCollector {
                 return;
             }
             if !self.check_region_range(region, true) {
-                debug!("region_collector: Received stale event: {:?}", event);
+                debug!(
+                    "Received stale event";
+                    "event" => ?event,
+                );
                 return;
             }
         }
@@ -439,6 +452,28 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
     }
 }
 
+const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
+
+impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
+    fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
+        let mut count = 0;
+        let mut leader = 0;
+        for r in self.regions.values() {
+            count += 1;
+            if r.role == StateRole::Leader {
+                leader += 1;
+            }
+        }
+        REGION_COUNT_GAUGE_VEC
+            .with_label_values(&["region"])
+            .set(count);
+        REGION_COUNT_GAUGE_VEC
+            .with_label_values(&["leader"])
+            .set(leader);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
+    }
+}
+
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
@@ -464,10 +499,12 @@ impl RegionInfoAccessor {
 
     /// Starts the `RegionInfoAccessor`. It should be started before raftstore.
     pub fn start(&self) {
+        let mut timer = Timer::new(1);
+        timer.add_task(Duration::from_millis(METRICS_FLUSH_INTERVAL), ());
         self.worker
             .lock()
             .unwrap()
-            .start(RegionCollector::new())
+            .start_with_timer(RegionCollector::new(), timer)
             .unwrap();
     }
 
@@ -500,10 +537,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
             limit,
             callback: box move |res| {
                 tx.send(res).unwrap_or_else(|e| {
-                    panic!(
-                        "region_collector: failed to send seek_region result back to caller: {:?}",
-                        e
-                    )
+                    panic!("failed to send seek_region result back to caller: {:?}", e)
                 })
             },
         };
@@ -648,11 +682,10 @@ mod tests {
         // to `region_id`, it shouldn't be removed since it was used by another region.
         if let Some(old_end_key) = old_end_key {
             if old_end_key.as_slice() != region.get_end_key() {
-                assert!(
-                    c.region_ranges
-                        .get(&data_end_key(&old_end_key))
-                        .map_or(true, |id| *id != region.get_id())
-                );
+                assert!(c
+                    .region_ranges
+                    .get(&data_end_key(&old_end_key))
+                    .map_or(true, |id| *id != region.get_id()));
             }
         }
     }
@@ -667,11 +700,10 @@ mod tests {
         // If the region_id corresponding to the end_key doesn't equals to `id`, it shouldn't be
         // removed since it was used by another region.
         if let Some(end_key) = end_key {
-            assert!(
-                c.region_ranges
-                    .get(&data_end_key(&end_key))
-                    .map_or(true, |r| *r != id)
-            );
+            assert!(c
+                .region_ranges
+                .get(&data_end_key(&end_key))
+                .map_or(true, |r| *r != id));
         }
     }
 

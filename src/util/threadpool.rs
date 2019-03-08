@@ -51,7 +51,7 @@ impl<C: Context + Default> ContextFactory<C> for DefaultContextFactory {
 }
 
 pub struct Task<C> {
-    task: Box<FnBox(&mut C) + Send>,
+    task: Box<dyn FnBox(&mut C) + Send>,
 }
 
 impl<C: Context> Task<C> {
@@ -221,11 +221,12 @@ where
             if let Some(stack_size) = stack_size {
                 tb = tb.stack_size(stack_size);
             }
-            let thread =
-                tb.spawn(move || {
+            let thread = tb
+                .spawn(move || {
                     let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
                     worker.run();
-                }).unwrap();
+                })
+                .unwrap();
             threads.push(thread);
         }
 

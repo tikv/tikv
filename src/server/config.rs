@@ -14,14 +14,14 @@
 use std::i32;
 
 use super::Result;
-use grpc::CompressionAlgorithms;
+use crate::grpc::CompressionAlgorithms;
 
-use util::collections::HashMap;
-use util::config::{self, ReadableDuration, ReadableSize};
-use util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
+use crate::util::collections::HashMap;
+use crate::util::config::{self, ReadableDuration, ReadableSize};
+use crate::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 
-pub use raftstore::store::Config as RaftStoreConfig;
-pub use storage::Config as StorageConfig;
+pub use crate::raftstore::store::Config as RaftStoreConfig;
+pub use crate::storage::Config as StorageConfig;
 
 pub const DEFAULT_CLUSTER_ID: u64 = 0;
 pub const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:20160";
@@ -161,7 +161,10 @@ impl Config {
         if !self.advertise_addr.is_empty() {
             box_try!(config::check_addr(&self.advertise_addr));
         } else {
-            info!("no advertise-addr is specified, fall back to addr.");
+            info!(
+                "no advertise-addr is specified, falling back to default addr";
+                "addr" => %self.addr
+            );
             self.advertise_addr = self.addr.clone();
         }
         if self.advertise_addr.starts_with("0.") {
@@ -265,7 +268,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::config::ReadableDuration;
+    use crate::util::config::ReadableDuration;
 
     #[test]
     fn test_config_validate() {

@@ -21,8 +21,7 @@ extern crate raft;
 extern crate rand;
 extern crate rocksdb;
 extern crate tempdir;
-extern crate tokio;
-extern crate tokio_timer;
+extern crate tokio_threadpool;
 #[macro_use(
     slog_kv,
     slog_error,
@@ -31,7 +30,7 @@ extern crate tokio_timer;
     slog_log,
     slog_record,
     slog_b,
-    slog_record_static,
+    slog_record_static
 )]
 extern crate slog;
 #[macro_use]
@@ -47,9 +46,9 @@ mod server;
 mod transport_simulate;
 mod util;
 
-pub use cluster::*;
-pub use node::*;
-pub use pd::*;
-pub use server::*;
-pub use transport_simulate::*;
-pub use util::*;
+pub use crate::cluster::*;
+pub use crate::node::*;
+pub use crate::pd::*;
+pub use crate::server::*;
+pub use crate::transport_simulate::*;
+pub use crate::util::*;

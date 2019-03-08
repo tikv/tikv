@@ -15,10 +15,10 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
+use crate::grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
 use kvproto::import_kvpb_grpc::create_import_kv;
 
-use config::TiKvConfig;
+use crate::config::TiKvConfig;
 
 use super::{ImportKVService, KVImporter};
 
@@ -35,7 +35,12 @@ impl ImportKVServer {
         let cfg = &tikv.server;
         let addr = SocketAddr::from_str(&cfg.addr).unwrap();
 
-        let importer = KVImporter::new(tikv.import.clone(), tikv.rocksdb.clone()).unwrap();
+        let importer = KVImporter::new(
+            tikv.import.clone(),
+            tikv.rocksdb.clone(),
+            tikv.security.clone(),
+        )
+        .unwrap();
         let import_service = ImportKVService::new(tikv.import.clone(), Arc::new(importer));
 
         let env = Arc::new(

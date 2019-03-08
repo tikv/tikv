@@ -39,20 +39,18 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use storage::engine::Result as EngineResult;
-use storage::Key;
-use storage::{Command, Engine, Error as StorageError, StorageCb};
-use util::collections::HashMap;
-use util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
-
-use super::latch::{Latches, Lock};
-use super::process::{
+use crate::storage::engine::Result as EngineResult;
+use crate::storage::{Command, Engine, Error as StorageError, StorageCb, Key};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
+use crate::storage::txn::latch::{Latches, Lock};
+use crate::storage::txn::process::{
     execute_callback, Executor, MsgScheduler, ProcessResult, SchedContext, SchedContextFactory,
     Task,
 };
-use super::Error;
-use storage::metrics::*;
-use util::worker::ScheduleError;
+use crate::storage::txn::Error;
+use crate::storage::metrics::*;
+use crate::util::worker::ScheduleError;
 
 const TASKS_SLOTS_NUM: usize = 10240;
 
@@ -475,7 +473,7 @@ impl<E: Engine> InnerWrapper<E> {
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
-                err: ::storage::Error::from(e),
+                err: StorageError::from(e),
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {

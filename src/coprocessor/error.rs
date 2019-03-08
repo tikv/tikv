@@ -18,8 +18,8 @@ use std::time::Duration;
 use kvproto::{errorpb, kvrpcpb};
 use tipb;
 
-use coprocessor;
-use storage;
+use crate::coprocessor;
+use crate::storage;
 
 quick_error! {
     #[derive(Debug)]
@@ -43,7 +43,7 @@ quick_error! {
             description("eval failed")
             display("eval error {:?}", err)
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())

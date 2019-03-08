@@ -19,19 +19,21 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::local::LocalHistogramVec;
 
-use storage::engine::{CbContext, Modify, Result as EngineResult};
-use storage::mvcc::{
+use crate::storage::engine::{CbContext, Modify, Result as EngineResult};
+use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
-use storage::{
+use crate::storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
     Statistics, StatisticsSummary, StorageCb,
 };
-use storage::{Key, MvccInfo, Value};
-use util::collections::HashMap;
-use util::threadpool::{self, Context as ThreadContext, ContextFactory as ThreadContextFactory};
-use util::time::SlowTimer;
-use util::worker::ScheduleError;
+use crate::storage::{Key, MvccInfo, Value};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{
+    self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
+};
+use crate::util::worker::ScheduleError;
+use crate::util::time::SlowTimer;
 
 use super::super::metrics::*;
 use super::scheduler::Msg;
@@ -148,8 +150,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
     /// Start the execution of the task.
     pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
         debug!(
-            "receive snapshot finish msg for cid={}, cb_ctx={:?}",
-            task.cid, cb_ctx
+            "receive snapshot finish msg";
+            "cid" => task.cid, "cb_ctx" => ?cb_ctx
         );
 
         match snapshot {
@@ -165,7 +167,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .with_label_values(&[task.tag, "snapshot_err"])
                     .inc();
 
-                error!("get snapshot failed for cid={}, error {:?}", task.cid, err);
+                error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 notify_scheduler(
                     self.take_scheduler(),
                     Msg::FinishedWithErr {
@@ -184,8 +186,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             .with_label_values(&[task.tag, "process"])
             .inc();
         debug!(
-            "process cmd with snapshot, cid={}, cb_ctx={:?}",
-            task.cid, cb_ctx
+            "process cmd with snapshot";
+            "cid" => task.cid, "cb_ctx" => ?cb_ctx
         );
         let tag = task.tag;
         if let Some(term) = cb_ctx.term {
@@ -230,7 +232,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         task: Task,
     ) -> Statistics {
         fail_point!("txn_before_process_read");
-        debug!("process read cmd(cid={}) in worker pool", task.cid);
+        debug!("process read cmd in worker pool"; "cid" => task.cid);
         let tag = task.tag;
         let cid = task.cid;
         let mut statistics = Statistics::default();
@@ -293,7 +295,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                             .with_label_values(&[tag, "async_write_err"])
                             .inc();
 
-                        error!("engine async_write failed, cid={}, err={:?}", cid, e);
+                        error!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
                         Msg::FinishedWithErr { cid, err, tag }
                     } else {
@@ -308,7 +310,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .with_label_values(&[tag, "prepare_write_err"])
                     .inc();
 
-                debug!("write command(cid={}) failed at prewrite.", cid);
+                debug!("write command failed at prewrite"; "cid" => cid);
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
@@ -541,7 +543,7 @@ fn process_write_impl<S: Snapshot>(
         }
         Command::ResolveLock {
             ctx,
-            mut txn_status,
+            txn_status,
             mut scan_key,
             key_locks,
         } => {
@@ -606,7 +608,7 @@ fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) -> bool {
     match scheduler.on_msg(msg) {
         Ok(_) => true,
         e @ Err(ScheduleError::Stopped(_)) => {
-            info!("scheduler stopped, {:?}", e);
+            info!("scheduler stopped"; "err" => ?e);
             false
         }
         Err(e) => {

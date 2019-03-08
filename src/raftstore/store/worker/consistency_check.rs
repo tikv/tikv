@@ -16,15 +16,14 @@ use std::fmt::{self, Display, Formatter};
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 
+use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
-use raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use raftstore::store::{keys, Msg, PeerMsg};
-use storage::CF_RAFT;
-use util::worker::Runnable;
 
 use super::metrics::*;
-use super::MsgSender;
-use raftstore::store::metrics::*;
+use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
@@ -55,19 +54,23 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C: MsgSender> {
-    ch: C,
+pub struct Runner<C: CasualRouter> {
+    router: C,
 }
 
-impl<C: MsgSender> Runner<C> {
-    pub fn new(ch: C) -> Runner<C> {
-        Runner { ch }
+impl<C: CasualRouter> Runner<C> {
+    pub fn new(router: C) -> Runner<C> {
+        Runner { router }
     }
 
     /// Computes the hash of the Region.
     fn compute_hash(&mut self, region: Region, index: u64, snap: Snapshot) {
         let region_id = region.get_id();
-        info!("[region {}] computing hash at {}", region_id, index);
+        info!(
+            "computing hash";
+            "region_id" => region_id,
+            "index" => index,
+        );
         REGION_HASH_COUNTER_VEC
             .with_label_values(&["compute", "all"])
             .inc();
@@ -90,7 +93,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to calculate hash: {:?}", region_id, e);
+                error!(
+                    "failed to calculate hash";
+                    "region_id" => region_id,
+                    "err" => %e,
+                );
                 return;
             }
         }
@@ -103,7 +110,11 @@ impl<C: MsgSender> Runner<C> {
                 REGION_HASH_COUNTER_VEC
                     .with_label_values(&["compute", "failed"])
                     .inc();
-                error!("[region {}] failed to get region state: {:?}", region_id, e);
+                error!(
+                    "failed to get region state";
+                    "region_id" => region_id,
+                    "err" => %e,
+                );
                 return;
             }
             Ok(Some(v)) => digest.write(&v),
@@ -114,21 +125,21 @@ impl<C: MsgSender> Runner<C> {
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = Msg::PeerMsg(PeerMsg::ComputeHashResult {
-            region_id,
+        let msg = CasualMessage::ComputeHashResult {
             index,
             hash: checksum,
-        });
-        if let Err(e) = self.ch.try_send(msg) {
+        };
+        if let Err(e) = self.router.send(region_id, msg) {
             warn!(
-                "[region {}] failed to send hash compute result, err {:?}",
-                region_id, e
+                "failed to send hash compute result";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
     }
 }
 
-impl<C: MsgSender> Runnable<Task> for Runner<C> {
+impl<C: CasualRouter> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         match task {
             Task::ComputeHash {
@@ -143,29 +154,35 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raftstore::store::engine::Snapshot;
+    use crate::raftstore::store::keys;
+    use crate::storage::{CF_DEFAULT, CF_RAFT};
+    use crate::util::rocksdb_util::new_engine;
+    use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use raftstore::store::engine::Snapshot;
-    use raftstore::store::{keys, Msg};
     use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
-    use util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {
         let path = TempDir::new("tikv-store-test").unwrap();
-        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT], None).unwrap();
+        let db = new_engine(
+            path.path().to_str().unwrap(),
+            None,
+            &[CF_DEFAULT, CF_RAFT],
+            None,
+        )
+        .unwrap();
         let db = Arc::new(db);
 
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(100);
         let mut runner = Runner::new(tx);
         let mut digest = Digest::new(crc32::IEEE);
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
@@ -191,11 +208,7 @@ mod tests {
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::PeerMsg(PeerMsg::ComputeHashResult {
-                region_id,
-                index,
-                hash,
-            }) => {
+            (region_id, CasualMessage::ComputeHashResult { index, hash }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);

@@ -29,7 +29,7 @@ pub trait BufferReader {
     fn advance(&mut self, count: usize);
 }
 
-impl<T: AsRef<[u8]>> BufferReader for ::std::io::Cursor<T> {
+impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
@@ -109,7 +109,7 @@ pub trait BufferWriter {
     unsafe fn advance_mut(&mut self, count: usize);
 }
 
-impl<T: AsMut<[u8]>> BufferWriter for ::std::io::Cursor<T> {
+impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
@@ -133,7 +133,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {
-        let original_self = ::std::mem::replace(self, &mut []);
+        let original_self = std::mem::replace(self, &mut []);
         *self = &mut original_self[count..];
     }
 }
@@ -146,7 +146,7 @@ impl BufferWriter for Vec<u8> {
         // Ensure returned slice has enough space
         self.reserve(size);
         let ptr = self.as_mut_ptr();
-        &mut ::std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
+        &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {
@@ -188,7 +188,7 @@ mod tests {
             base.push(rand::random());
         }
 
-        let mut buffer = ::std::io::Cursor::new(base.clone());
+        let mut buffer = std::io::Cursor::new(base.clone());
 
         assert_eq!(buffer.bytes(), &base[0..40]);
         buffer.advance(13);
@@ -264,7 +264,7 @@ mod tests {
                 base_write.push(rand::random());
             }
 
-            let mut buffer = ::std::io::Cursor::new(base.clone());
+            let mut buffer = std::io::Cursor::new(base.clone());
 
             buffer.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
             buffer.advance_mut(13);
@@ -407,6 +407,25 @@ mod tests {
     /// reallocation these values are copied.
     #[test]
     fn test_vec_reallocate() {
+        // FIXME: This test, and presumably the WriteBuffer API, relies on
+        // unspecified behavior of Vec::reserve (that it copies bytes
+        // beyond the length of the vector). It also depends on behavior
+        // specific to the malloc implementation (that calling `reserve`
+        // with a certain size _always_ reallocates).
+        //
+        // On at least one tested platform (Linux w/o jemalloc) the
+        // expected `reserve` behavior of always reallocating does not
+        // hold - malloc is free to realloc in place - so this test is
+        // "fuzzy" about exactly what it expects from the allocator;
+        // and it generates allocation "noise" to disrupt any
+        // predictive analysis in malloc.
+        //
+        // Note that the test harness for this crate uses jemalloc
+        // on platforms where TiKV uses jemalloc.
+
+        let mut in_place_reallocs = 0;
+        const MAX_IN_PLACE_REALLOCS: usize = 32;
+
         for payload_len in 1..1024 {
             let mut payload: Vec<u8> = Vec::with_capacity(payload_len);
             for _ in 0..payload_len {
@@ -421,15 +440,29 @@ mod tests {
                 slice[..payload_len].clone_from_slice(payload.as_slice());
             }
 
+            // These are trying to defeat optimizations in malloc that might
+            // cause realloc to not actually create a new allocation. See
+            // the FIXME above.
+            let _alloc_noise: Vec<u8> = Vec::with_capacity(payload_len);
+            let _alloc_noise: Vec<u8> = Vec::with_capacity(1);
+
             // Re-allocate the vector space and ensure that the address is changed.
             vec.reserve(::std::cmp::max(payload_len * 3, 32));
-            assert_ne!(vec_ptr, vec.as_ptr());
+
+            //assert_ne!(vec_ptr, vec.as_ptr());
+            if vec_ptr == vec.as_ptr() {
+                in_place_reallocs += 1;
+            }
 
             // Move len() forward and check whether our previous written data exists.
             unsafe {
                 vec.advance_mut(payload_len);
             }
             assert_eq!(vec.as_slice(), payload.as_slice());
+        }
+
+        if in_place_reallocs > MAX_IN_PLACE_REALLOCS {
+            panic!("realloc test realloc enough");
         }
     }
 }

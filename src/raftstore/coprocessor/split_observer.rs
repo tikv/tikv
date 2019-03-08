@@ -12,14 +12,14 @@
 // limitations under the License.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
-use coprocessor::codec::table;
-use util::codec::bytes::{self, encode_bytes};
-use util::escape;
+use crate::coprocessor::codec::table;
+use crate::util::codec::bytes::{self, encode_bytes};
+use crate::util::escape;
 
+use crate::raftstore::store::util;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
 use protobuf::RepeatedField;
-use raftstore::store::util;
 use std::result::Result as StdResult;
 
 /// `SplitObserver` adjusts the split key so that it won't separate
@@ -79,11 +79,11 @@ impl SplitObserver {
                     Ok(key) => {
                         if last_valid_key.as_ref().map_or(false, |k| *k >= key) {
                             warn!(
-                                "[region {}] key {} is not larger than previous {} at {}, skip.",
-                                region_id,
-                                escape(&key),
-                                escape(last_valid_key.as_ref().unwrap()),
-                                k
+                                "key is not larger than previous, skip.";
+                                "region_id" => region_id,
+                                "key" => log_wrappers::Key(&key),
+                                "previous" => log_wrappers::Key(last_valid_key.as_ref().unwrap()),
+                                "index" => k,
                             );
                             continue;
                         }
@@ -91,7 +91,12 @@ impl SplitObserver {
                         split.set_split_key(key)
                     }
                     Err(e) => {
-                        warn!("[region {}] invalid key at {}, skip: {:?}", region_id, k, e);
+                        warn!(
+                            "invalid key, skip";
+                            "region_id" => region_id,
+                            "index" => k,
+                            "err" => ?e,
+                        );
                         continue;
                     }
                 }
@@ -129,9 +134,9 @@ impl AdminObserver for SplitObserver {
                 let mut request = vec![req.take_split()];
                 if let Err(e) = self.on_split(ctx, &mut request) {
                     error!(
-                        "[region {}] failed to handle split req: {:?}",
-                        ctx.region().get_id(),
-                        e
+                        "failed to handle split req";
+                        "region_id" => ctx.region().get_id(),
+                        "err" => ?e,
                     );
                     return Err(box_err!(e));
                 }
@@ -150,9 +155,9 @@ impl AdminObserver for SplitObserver {
                 let mut requests = req.mut_splits().take_requests().into_vec();
                 if let Err(e) = self.on_split(ctx, &mut requests) {
                     error!(
-                        "[region {}] failed to handle split req: {:?}",
-                        ctx.region().get_id(),
-                        e
+                        "failed to handle split req";
+                        "region_id" => ctx.region().get_id(),
+                        "err" => ?e,
                     );
                     return Err(box_err!(e));
                 }
@@ -168,13 +173,13 @@ impl AdminObserver for SplitObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::raftstore::coprocessor::AdminObserver;
+    use crate::raftstore::coprocessor::ObserverContext;
+    use crate::util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
-    use coprocessor::codec::{datum, table, Datum};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
-    use raftstore::coprocessor::AdminObserver;
-    use raftstore::coprocessor::ObserverContext;
-    use util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();

@@ -58,7 +58,7 @@ fn test_serde_custom_tikv_config() {
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
-        labels: map!{ "a".to_owned() => "b".to_owned() },
+        labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
@@ -485,6 +485,7 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+        cipher_file: "invalid path".to_owned(),
     };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
@@ -496,6 +497,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         max_open_engines: 2,
     };
+    value.panic_when_key_exceed_bound = true;
 
     let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();

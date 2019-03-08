@@ -21,8 +21,8 @@ use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
 
-use util;
-use util::futurepool::{self, FuturePool};
+use crate::util;
+use crate::util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
 pub use self::priority::Priority;
@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
 
-    type BoxError = Box<error::Error + Send + Sync>;
+    type BoxError = Box<dyn error::Error + Send + Sync>;
 
     pub fn expect_val<T>(v: T, x: result::Result<T, BoxError>)
     where

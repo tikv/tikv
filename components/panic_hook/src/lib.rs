@@ -21,7 +21,7 @@ use std::sync::{Once, ONCE_INIT};
 
 static INIT: Once = ONCE_INIT;
 // store the default panic hook defined in std.
-static mut DEFAULT_HOOK: Option<*mut (Fn(&PanicInfo) + 'static + Sync + Send)> = None;
+static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo) + 'static + Sync + Send)> = None;
 
 thread_local! {
     static MUTED: RefCell<bool> = RefCell::new(false)
@@ -65,7 +65,7 @@ fn track_hook(p: &PanicInfo) {
 /// This function assumes the closure is able to be forced to implement `UnwindSafe`.
 ///
 /// Also see [`AssertUnwindSafe`](https://doc.rust-lang.org/std/panic/struct.AssertUnwindSafe.html).
-pub fn recover_safe<F, R>(f: F) -> ::std::thread::Result<R>
+pub fn recover_safe<F, R>(f: F) -> std::thread::Result<R>
 where
     F: FnOnce() -> R,
 {

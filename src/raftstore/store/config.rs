@@ -16,8 +16,8 @@ use std::u64;
 
 use time::Duration as TimeDuration;
 
-use raftstore::{coprocessor, Result};
-use util::config::{ReadableDuration, ReadableSize};
+use crate::raftstore::{coprocessor, Result};
+use crate::util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -115,7 +115,7 @@ pub struct Config {
 
     /// Max log gap allowed to propose merge.
     pub merge_max_log_gap: u64,
-    /// Interval to repropose merge.
+    /// Interval to re-propose merge.
     pub merge_check_tick_interval: ReadableDuration,
 
     pub use_delete_range: bool,
@@ -364,7 +364,7 @@ impl Config {
 mod tests {
     use super::*;
 
-    use util::config::*;
+    use crate::util::config::*;
 
     #[test]
     fn test_config_validate() {

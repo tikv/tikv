@@ -18,22 +18,22 @@ use std::time::Duration;
 
 use super::transport::RaftStoreRouter;
 use super::Result;
-use import::SSTImporter;
-use kvproto::metapb;
-use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
-use protobuf::RepeatedField;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::fsm::{RaftBatchSystem, SendCh};
-use raftstore::store::{
+use crate::import::SSTImporter;
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use crate::raftstore::store::{
     self, keys, Config as StoreConfig, Engines, Peekable, ReadTask, SnapManager, Transport,
 };
+use crate::server::readpool::ReadPool;
+use crate::server::Config as ServerConfig;
+use crate::server::ServerRaftStoreRouter;
+use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::util::worker::{FutureWorker, Worker};
+use kvproto::metapb;
+use kvproto::raft_serverpb::StoreIdent;
+use protobuf::RepeatedField;
 use rocksdb::DB;
-use server::readpool::ReadPool;
-use server::Config as ServerConfig;
-use server::ServerRaftStoreRouter;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
@@ -129,7 +129,7 @@ where
     /// Starts the Node. It tries to bootstrap cluster if the cluster is not
     /// bootstrapped yet. Then it spawns a thread to run the raftstore in
     /// background.
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
         engines: Engines,
@@ -189,8 +189,8 @@ where
 
     /// Gets a transmission end of a channel which is used to send `Msg` to the
     /// raftstore.
-    pub fn get_sendch(&self) -> SendCh {
-        SendCh::new(self.system.router(), "raftstore")
+    pub fn get_router(&self) -> RaftRouter {
+        self.system.router()
     }
 
     // check store, return store id for the engine.
@@ -204,10 +204,10 @@ where
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
             error!(
-                "cluster ID mismatch: local_id {} remote_id {}. \
-                 you are trying to connect to another cluster, please reconnect to the correct PD",
-                ident.get_cluster_id(),
-                self.cluster_id
+                "cluster ID mismatch. \
+                 you are trying to connect to another cluster, please reconnect to the correct PD";
+                "local_id" => ident.get_cluster_id(),
+                "remote_id" => self.cluster_id
             );
             process::exit(1);
         }
@@ -227,7 +227,7 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        info!("alloc store id {} ", store_id);
+        info!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
@@ -243,13 +243,16 @@ where
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
         info!(
-            "alloc first region id {} for cluster {}, store {}",
-            region_id, self.cluster_id, store_id
+            "alloc first region id";
+            "region_id" => region_id,
+            "cluster_id" => self.cluster_id,
+            "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
         info!(
-            "alloc first peer id {} for first region {}",
-            peer_id, region_id
+            "alloc first peer id for first region";
+            "peer_id" => peer_id,
+            "region_id" => region_id,
         );
 
         let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
@@ -278,7 +281,7 @@ where
                 }
 
                 Err(e) => {
-                    warn!("check cluster prepare bootstrapped failed: {:?}", e);
+                    warn!("check cluster prepare bootstrapped failed"; "err" => ?e);
                 }
             }
             thread::sleep(Duration::from_secs(
@@ -292,7 +295,7 @@ where
         let region_id = region.get_id();
         match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
             Err(PdError::ClusterBootstrapped(_)) => {
-                error!("cluster {} is already bootstrapped", self.cluster_id);
+                error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
                 store::clear_prepare_bootstrap(engines, region_id)?;
                 Ok(())
             }
@@ -300,7 +303,7 @@ where
             Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
             Ok(_) => {
                 store::clear_prepare_bootstrap_state(engines)?;
-                info!("bootstrap cluster {} ok", self.cluster_id);
+                info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                 Ok(())
             }
         }
@@ -311,7 +314,7 @@ where
             match self.pd_client.is_cluster_bootstrapped() {
                 Ok(b) => return Ok(b),
                 Err(e) => {
-                    warn!("check cluster bootstrapped failed: {:?}", e);
+                    warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
             thread::sleep(Duration::from_secs(
@@ -321,7 +324,7 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     fn start_store<T>(
         &mut self,
         store_id: u64,
@@ -336,7 +339,7 @@ where
     where
         T: Transport + 'static,
     {
-        info!("start raft store {} thread", store_id);
+        info!("start raft store thread"; "store_id" => store_id);
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
@@ -361,7 +364,7 @@ where
     }
 
     fn stop_store(&mut self, store_id: u64) -> Result<()> {
-        info!("stop raft store {} thread", store_id);
+        info!("stop raft store thread"; "store_id" => store_id);
         self.system.shutdown();
         Ok(())
     }
@@ -376,8 +379,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::check_region_epoch;
+    use crate::raftstore::store::keys;
     use kvproto::metapb;
-    use raftstore::store::keys;
 
     #[test]
     fn test_check_region_epoch() {

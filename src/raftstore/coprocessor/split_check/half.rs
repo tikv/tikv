@@ -13,15 +13,15 @@
 
 use rocksdb::DB;
 
-use raftstore::store::keys;
-use util::config::ReadableSize;
+use crate::raftstore::store::keys;
+use crate::util::config::ReadableSize;
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
+use crate::raftstore::store::util as raftstore_util;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::util as raftstore_util;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -66,10 +66,10 @@ impl SplitChecker for Checker {
     }
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
-        Ok(box_try!(
-            raftstore_util::get_region_approximate_middle(engine, region)
-                .map(|keys| keys.map_or(vec![], |key| vec![key]))
-        ))
+        Ok(box_try!(raftstore_util::get_region_approximate_middle(
+            engine, region
+        )
+        .map(|keys| keys.map_or(vec![], |key| vec![key]))))
     }
 
     fn policy(&self) -> CheckPolicy {
@@ -119,17 +119,17 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use storage::{Key, ALL_CFS, CF_DEFAULT};
-    use util::config::ReadableSize;
-    use util::properties::SizePropertiesCollectorFactory;
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
+    use crate::util::config::ReadableSize;
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::SizePropertiesCollectorFactory, CFOptions,
+    };
+    use crate::util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
     use super::*;
-    use raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
 
     #[test]
     fn test_split_check() {
@@ -154,13 +154,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0005

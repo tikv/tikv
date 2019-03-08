@@ -18,11 +18,11 @@ mod imp {
     use tikv_alloc;
 
     use tikv::raftstore::store::Engines;
-    use tikv::util::{metrics, rocksdb_stats};
+    use tikv::util::{metrics, rocksdb_util::stats as rocksdb_stats};
 
     #[allow(dead_code)]
     pub fn handle_signal(engines: Option<Engines>) {
-        use nix::sys::signal::{SIGUSR1, SIGUSR2, SIGHUP, SIGINT, SIGTERM};
+        use nix::sys::signal::{SIGHUP, SIGINT, SIGTERM, SIGUSR1, SIGUSR2};
         use signal::trap::Trap;
         let trap = Trap::trap(&[SIGTERM, SIGINT, SIGHUP, SIGUSR1, SIGUSR2]);
         for sig in trap {

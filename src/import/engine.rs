@@ -28,36 +28,48 @@ use rocksdb::{
     ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
 };
 
-use config::DbConfig;
-use raftstore::store::keys;
-use storage::mvcc::{Write, WriteType};
-use storage::types::Key;
-use storage::{is_short_value, CF_DEFAULT, CF_WRITE};
-use util::config::MB;
-use util::rocksdb::properties::{SizeProperties, SizePropertiesCollectorFactory};
-use util::rocksdb::{new_engine_opt, CFOptions};
+use crate::config::DbConfig;
+use crate::raftstore::store::keys;
+use crate::storage::mvcc::{Write, WriteType};
+use crate::storage::types::Key;
+use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
+use crate::util::config::MB;
+use crate::util::rocksdb_util::{
+    new_engine_opt,
+    properties::{SizeProperties, SizePropertiesCollectorFactory},
+    CFOptions,
+};
 
 use super::common::*;
 use super::Result;
+use crate::util::security;
+use crate::util::security::SecurityConfig;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
 pub struct Engine {
     db: Arc<DB>,
     uuid: Uuid,
-    opts: DbConfig,
+    db_cfg: DbConfig,
+    security_cfg: SecurityConfig,
 }
 
 impl Engine {
-    pub fn new<P: AsRef<Path>>(path: P, uuid: Uuid, opts: DbConfig) -> Result<Engine> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        uuid: Uuid,
+        db_cfg: DbConfig,
+        security_cfg: SecurityConfig,
+    ) -> Result<Engine> {
         let db = {
-            let (db_opts, cf_opts) = tune_dboptions_for_bulk_load(&opts);
+            let (db_opts, cf_opts) = tune_dboptions_for_bulk_load(&db_cfg);
             new_engine_opt(path.as_ref().to_str().unwrap(), db_opts, vec![cf_opts])?
         };
         Ok(Engine {
             db: Arc::new(db),
             uuid,
-            opts,
+            db_cfg,
+            security_cfg,
         })
     }
 
@@ -93,7 +105,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.opts)
+        SSTWriter::new(&self.db_cfg, &self.security_cfg)
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -137,7 +149,6 @@ impl SSTInfo {
         let path = info.file_path();
         let mut f = env.new_sequential_file(path.to_str().unwrap(), EnvOptions::new())?;
         f.read_to_end(&mut data)?;
-        assert_eq!(data.len(), info.file_size() as usize);
 
         // This range doesn't contain the data prefix, like the region range.
         let mut range = Range::new();
@@ -154,6 +165,8 @@ impl SSTInfo {
 
 pub struct SSTWriter {
     env: Arc<Env>,
+    // we need to preserve base env for reading raw file while env is an encrypted env
+    base_env: Option<Arc<Env>>,
     default: SstFileWriter,
     default_entries: u64,
     write: SstFileWriter,
@@ -161,27 +174,33 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(cfg: &DbConfig) -> Result<SSTWriter> {
+    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig) -> Result<SSTWriter> {
         // Using a memory environment to generate SST in memory
-        let env = Arc::new(Env::new_mem());
+        let mut env = Arc::new(Env::new_mem());
+        let mut base_env = None;
+        if !security_cfg.cipher_file.is_empty() {
+            base_env = Some(Arc::clone(&env));
+            env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
+        }
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
-        let mut default_opts = cfg.defaultcf.build_opt();
+        let mut default_opts = db_cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
 
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(CF_DEFAULT)?;
 
         // Creates a writer for write CF
-        let mut write_opts = cfg.writecf.build_opt();
+        let mut write_opts = db_cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(CF_WRITE)?;
 
         Ok(SSTWriter {
             env,
+            base_env,
             default,
             default_entries: 0,
             write,
@@ -210,11 +229,19 @@ impl SSTWriter {
         let mut infos = Vec::new();
         if self.default_entries > 0 {
             let info = self.default.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_DEFAULT)?);
+            infos.push(SSTInfo::new(
+                Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
+                info,
+                CF_DEFAULT,
+            )?);
         }
         if self.write_entries > 0 {
             let info = self.write.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_WRITE)?);
+            infos.push(SSTInfo::new(
+                Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
+                info,
+                CF_WRITE,
+            )?);
         }
         Ok(infos)
     }
@@ -299,15 +326,18 @@ mod tests {
     use std::io::Write;
     use tempdir::TempDir;
 
-    use raftstore::store::RegionSnapshot;
-    use storage::mvcc::MvccReader;
-    use util::rocksdb::new_engine_opt;
+    use crate::raftstore::store::RegionSnapshot;
+    use crate::storage::mvcc::MvccReader;
+    use crate::util::file::file_exists;
+    use crate::util::rocksdb_util::new_engine_opt;
+    use crate::util::security::encrypted_env_from_cipher_file;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Engine::new(dir.path(), uuid, opts).unwrap();
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap();
         (dir, engine)
     }
 
@@ -345,22 +375,42 @@ mod tests {
 
     #[test]
     fn test_sst_writer() {
-        test_sst_writer_with(1, &[CF_WRITE]);
-        test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE]);
+        test_sst_writer_with(1, &[CF_WRITE], &SecurityConfig::default());
+        test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &SecurityConfig::default());
+
+        let temp_dir = TempDir::new("/tmp/encrypted_env_from_cipher_file").unwrap();
+        let security_cfg = create_security_cfg(&temp_dir);
+        test_sst_writer_with(1, &[CF_WRITE], &security_cfg);
+        test_sst_writer_with(1024, &[CF_DEFAULT, CF_WRITE], &security_cfg);
     }
 
-    fn test_sst_writer_with(value_size: usize, cf_names: &[&str]) {
+    fn create_security_cfg(temp_dir: &TempDir) -> SecurityConfig {
+        let path = temp_dir.path().join("cipher_file");
+        let mut cipher_file = File::create(&path).unwrap();
+        cipher_file.write_all(b"ACFFDBCC").unwrap();
+        cipher_file.sync_all().unwrap();
+        let mut security_cfg = SecurityConfig::default();
+        security_cfg.cipher_file = path.to_str().unwrap().to_owned();
+        assert_eq!(file_exists(&security_cfg.cipher_file), true);
+        security_cfg
+    }
+
+    fn test_sst_writer_with(value_size: usize, cf_names: &[&str], security_cfg: &SecurityConfig) {
         let temp_dir = TempDir::new("_test_sst_writer").unwrap();
 
         let cfg = DbConfig::default();
-        let db_opts = cfg.build_opt();
+        let mut db_opts = cfg.build_opt();
+        if !security_cfg.cipher_file.is_empty() {
+            let env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, None).unwrap();
+            db_opts.set_env(env);
+        }
         let cfs_opts = cfg.build_cf_opts();
         let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts).unwrap();
         let db = Arc::new(db);
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg).unwrap();
+        let mut w = SSTWriter::new(&cfg, &security_cfg).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];

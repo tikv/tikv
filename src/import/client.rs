@@ -15,19 +15,19 @@ use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
-use grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
-use pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
-use storage::types::Key;
-use util::collections::{HashMap, HashMapEntry};
-use util::security::SecurityManager;
+use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
+use crate::storage::types::Key;
+use crate::util::collections::{HashMap, HashMapEntry};
+use crate::util::security::SecurityManager;
 
 use super::common::*;
 use super::{Error, Result};
@@ -107,11 +107,12 @@ impl Client {
 
     pub fn switch_cluster(&self, req: &SwitchModeRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -119,7 +120,7 @@ impl Client {
             let future = match client.switch_mode_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("switch mode failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -134,11 +135,12 @@ impl Client {
 
     pub fn compact_cluster(&self, req: &CompactRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -146,7 +148,7 @@ impl Client {
             let future = match client.compact_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("compact failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };

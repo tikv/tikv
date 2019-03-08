@@ -13,17 +13,17 @@
 
 use std::sync::Arc;
 
+use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;
 
-use raftstore::store::keys;
-use storage::types::Key;
-use util::time::Instant;
+use crate::raftstore::store::keys;
+use crate::storage::types::Key;
+use crate::util::time::Instant;
 
 use super::client::*;
 use super::metrics::*;
@@ -89,11 +89,11 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
-                            info!("switch cluster {:?}", req.get_request());
+                            info!("switch cluster"; "req" => ?req.get_request());
                             Ok(())
                         }
                         Err(e) => {
-                            error!("switch cluster {:?}: {:?}", req.get_request(), e);
+                            error!("switch cluster failed"; "req" => ?req.get_request(), "err" => %e);
                             Err(e)
                         }
                     }
@@ -284,11 +284,11 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.compact_cluster(&compact) {
                         Ok(_) => {
-                            info!("compact cluster {:?}", compact);
+                            info!("compact cluster"; "req" => ?compact);
                             Ok(())
                         }
                         Err(e) => {
-                            error!("compact cluster {:?}: {:?}", compact, e);
+                            error!("compact cluster failed"; "req" => ?compact, "err" => %e);
                             Err(e)
                         }
                     }
