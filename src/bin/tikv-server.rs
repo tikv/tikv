@@ -14,11 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate hyper;
-extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate rocksdb;
@@ -40,10 +35,6 @@ extern crate slog;
 extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
@@ -98,14 +89,14 @@ fn check_system_config(config: &TiKvConfig) {
         );
     }
 
-    // check rocksdb data dir
+    // Check RocksDB data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!(
             "rocksdb check data dir";
             "err" => %e
         );
     }
-    // check raft data dir
+    // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
             "raft check data dir";
@@ -170,11 +161,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
     let pd_sender = pd_worker.scheduler();
 
-    // Create encrypted env from ciphter file
+    // Create encrypted env from cipher file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
         match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
-                "failed to create encrypted env from ciphter file, err {:?}",
+                "failed to create encrypted env from cipher file, err {:?}",
                 e
             ),
             Ok(env) => Some(env),
@@ -215,7 +206,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Some(Arc::clone(&kv_engine)),
         Some(raft_router.clone()),
     )
-    .unwrap_or_else(|e| fatal!("failed to create raft stroage: {}", e));
+    .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
     // Create raft engine.
     let mut raft_db_opts = cfg.raftdb.build_opt();
@@ -497,7 +488,7 @@ fn main() {
     }
 
     // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validata()`,
+    // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
     initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);

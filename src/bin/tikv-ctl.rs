@@ -13,12 +13,6 @@
 
 #[macro_use]
 extern crate clap;
-extern crate chrono;
-extern crate futures;
-extern crate grpcio;
-extern crate hex;
-extern crate kvproto;
-extern crate libc;
 #[cfg(unix)]
 extern crate nix;
 extern crate protobuf;
