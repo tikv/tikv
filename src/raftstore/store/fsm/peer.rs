@@ -699,9 +699,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let status = self.fsm.peer.raft_group.status();
             self.fsm.waken = !status
                 .progress
-                .values()
-                .chain(status.learner_progress.values())
-                .all(|p| p.recent_active);
+                .iter()
+                .chain(status.learner_progress.iter())
+                .all(|(id, p)| *id == self.fsm.peer.peer_id() || p.recent_active);
         }
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
