@@ -993,9 +993,10 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Ok(());
     }
 
-    let parts: Vec<&str> = addr.split(':')
-            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
-            .collect();
+    let parts: Vec<&str> = addr
+        .split(':')
+        .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+        .collect();
 
     // ["Host", "Port"]
     if parts.len() != 2 {

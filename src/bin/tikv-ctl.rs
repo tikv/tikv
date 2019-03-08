@@ -122,8 +122,8 @@ fn new_debug_executor(
 fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
     let env = Arc::new(Environment::new(1));
     let cb = ChannelBuilder::new(env)
-            .max_receive_message_len(1 << 30) // 1G.
-            .max_send_message_len(1 << 30);
+        .max_receive_message_len(1 << 30) // 1G.
+        .max_send_message_len(1 << 30);
 
     let channel = mgr.connect(cb, host);
     DebugClient::new(channel)

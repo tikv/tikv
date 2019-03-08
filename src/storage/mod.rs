@@ -1126,7 +1126,8 @@ impl<E: Engine> Storage<E> {
                 // no scan_count for this kind of op.
 
                 let key_len = key.len();
-                let result = snapshot.get_cf(cf, &Key::from_encoded(key))
+                let result = snapshot
+                    .get_cf(cf, &Key::from_encoded(key))
                     // map storage::engine::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {

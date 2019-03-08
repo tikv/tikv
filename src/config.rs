@@ -26,7 +26,6 @@ use rocksdb::{
 };
 use slog;
 use sys_info;
-use toml;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;

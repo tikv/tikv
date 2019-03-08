@@ -19,6 +19,8 @@
 extern crate quick_error;
 #[cfg(test)]
 extern crate test;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 mod buffer;
 mod byte;
