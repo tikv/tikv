@@ -354,7 +354,7 @@
 ## 3. auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = 0
-# rate-limiter-mod = 3
+# rate-limiter-mod = 2
 # auto-tuned = false
 
 

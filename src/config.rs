@@ -688,15 +688,11 @@ impl DbConfig {
         }
 
         if self.rate_bytes_per_sec.0 > 0 {
-            if self.auto_tuned {
-                opts.set_ratelimiter_with_auto_tuned(
-                    self.rate_bytes_per_sec.0 as i64,
-                    self.rate_limiter_mod,
-                    true,
-                );
-            } else {
-                opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
-            }
+            opts.set_ratelimiter_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                self.rate_limiter_mod,
+                self.auto_tuned,
+            );
         }
 
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
