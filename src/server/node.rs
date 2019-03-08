@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::process;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -147,15 +146,7 @@ where
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.bootstrap_store(&engines)?;
-        } else if !bootstrapped {
-            // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!(
-                "store {} is not empty, but cluster {} is not bootstrapped, \
-                 maybe you connected a wrong PD or need to remove the TiKV data \
-                 and start again",
-                store_id,
-                self.cluster_id
-            ));
+            fail_point!("node_after_bootstrap_store", |_| Ok(()));
         }
 
         self.store.set_id(store_id);
@@ -203,20 +194,18 @@ where
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            error!(
-                "cluster ID mismatch. \
-                 you are trying to connect to another cluster, please reconnect to the correct PD";
-                "local_id" => ident.get_cluster_id(),
-                "remote_id" => self.cluster_id
-            );
-            process::exit(1);
+            return Err(box_err!(
+                "cluster ID mismatch, local {} != remote {}, \
+                 you are trying to connect to another cluster, please reconnect to the correct PD",
+                ident.get_cluster_id(),
+                self.cluster_id
+            ));
         }
 
         let store_id = ident.get_store_id();
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
-
         Ok(store_id)
     }
 
