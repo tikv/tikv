@@ -40,16 +40,16 @@ use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
 use crate::storage::engine::Result as EngineResult;
-use crate::storage::{Command, Engine, Error as StorageError, StorageCb, Key};
-use crate::util::collections::HashMap;
-use crate::util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
+use crate::storage::metrics::*;
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{
     execute_callback, Executor, MsgScheduler, ProcessResult, SchedContext, SchedContextFactory,
     Task,
 };
 use crate::storage::txn::Error;
-use crate::storage::metrics::*;
+use crate::storage::{Command, Engine, Error as StorageError, Key, StorageCb};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
 use crate::util::worker::ScheduleError;
 
 const TASKS_SLOTS_NUM: usize = 1024;

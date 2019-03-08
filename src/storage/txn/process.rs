@@ -32,8 +32,8 @@ use crate::util::collections::HashMap;
 use crate::util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
 };
-use crate::util::worker::ScheduleError;
 use crate::util::time::SlowTimer;
+use crate::util::worker::ScheduleError;
 
 use super::super::metrics::*;
 use super::scheduler::Msg;
