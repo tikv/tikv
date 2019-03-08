@@ -1152,4 +1152,8 @@ impl PdClient for TestPdClient {
         let safe_point = self.cluster.rl().get_gc_safe_point();
         Box::new(ok(safe_point))
     }
+
+    fn get_timestamp(&self) -> PdFuture<u64> {
+        unimplemented!();
+    }
 }

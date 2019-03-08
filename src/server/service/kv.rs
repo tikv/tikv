@@ -1216,10 +1216,15 @@ fn future_prewrite<E: Engine>(
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::new();
+        if let Ok((_, max_read_ts)) = &v {
+            resp.set_max_read_ts(*max_read_ts);
+        }
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(RepeatedField::from_vec(extract_key_errors(
+                v.map(|(vec, _)| vec),
+            )));
         }
         resp
     })

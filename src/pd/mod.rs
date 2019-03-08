@@ -178,6 +178,8 @@ pub trait PdClient: Send + Sync {
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
 
     fn get_gc_safe_point(&self) -> PdFuture<u64>;
+
+    fn get_timestamp(&self) -> PdFuture<u64>;
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

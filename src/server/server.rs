@@ -251,7 +251,7 @@ mod tests {
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
     use crate::server::readpool::{self, ReadPool};
-    use crate::storage::TestStorageBuilder;
+    use crate::storage::{MvccInspector, TestStorageBuilder};
     use crate::util::security::SecurityConfig;
     use crate::util::worker::FutureWorker;
     use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -337,7 +337,12 @@ mod tests {
             &readpool::Config::default_for_test(),
             || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
         );
-        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
+        let cop = coprocessor::Endpoint::new(
+            &cfg,
+            storage.get_engine(),
+            MvccInspector::new_mock(),
+            cop_read_pool,
+        );
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

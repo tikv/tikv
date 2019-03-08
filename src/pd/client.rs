@@ -526,4 +526,37 @@ impl PdClient for RpcClient {
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
     }
+
+    fn get_timestamp(&self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::TsoRequest::new();
+        req.set_header(self.header());
+        req.set_count(1);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let (sender, receiver) = client.rl().client.tso_opt(option).unwrap();
+            let send = sender.send((req, WriteFlags::default().buffer_hint(false)));
+            Box::new(
+                send.and_then(|mut s| {
+                    s.close().unwrap();
+                    receiver.collect().map(|mut v| v.remove(0))
+                })
+                .map_err(Error::Grpc)
+                .and_then(move |resp| {
+                    PD_REQUEST_HISTOGRAM_VEC
+                        .with_label_values(&["get_timestamp"])
+                        .observe(duration_to_sec(timer.elapsed()));
+                    check_resp_header(resp.get_header())?;
+                    let ts = resp.get_timestamp();
+                    Ok(((ts.get_physical() << 18) | ts.get_logical()) as u64)
+                }),
+            ) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
 }
