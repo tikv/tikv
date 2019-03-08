@@ -1,0 +1,3 @@
+/Users/zhaoyue/Desktop/tikv/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+/Users/zhaoyue/Desktop/tikv/cmake-build-debug/CMakeFiles/edit_cache.dir
+/Users/zhaoyue/Desktop/tikv/cmake-build-debug/CMakeFiles/tikv.dir

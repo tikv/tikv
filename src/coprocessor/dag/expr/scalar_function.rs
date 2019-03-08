@@ -133,7 +133,11 @@ impl ScalarFunc {
             | ScalarFuncSig::AddDurationAndDuration
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
+<<<<<<< Updated upstream
             | ScalarFuncSig::Instr
+=======
+            | ScalarFuncSig::Repeat
+>>>>>>> Stashed changes
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
@@ -980,6 +984,7 @@ dispatch_call! {
         SubstringBinary2Args => substring_binary_2_args,
         SubstringBinary3Args => substring_binary_3_args,
         Space => space,
+        Repeat => repeat,
         Lpad => lpad,
         LpadBinary => lpad_binary,
         Rpad => rpad,
@@ -1162,7 +1167,17 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+<<<<<<< Updated upstream
                     ScalarFuncSig::Instr,
+<<<<<<< HEAD
+=======
+=======
+                    ScalarFuncSig::Repeat,
+>>>>>>> Stashed changes
+                    ScalarFuncSig::AddDatetimeAndDuration,
+                    ScalarFuncSig::AddDatetimeAndString,
+                    ScalarFuncSig::AddDurationAndDuration,
+>>>>>>> 6cddee2d... add repeat function in builtin_string
                     ScalarFuncSig::AddDurationAndString,
                     ScalarFuncSig::AddDurationAndDuration,
                     ScalarFuncSig::Locate2Args,

@@ -904,6 +904,7 @@ impl ScalarFunc {
         }
     }
 
+<<<<<<< Updated upstream
     pub fn instr<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -926,6 +927,31 @@ impl ScalarFunc {
             }
             None => Ok(Some(0)),
         }
+=======
+    #[inline]
+    pub fn repeat<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let input: Cow<'a, [u8]> = try_opt!(self.children[0].eval_string(ctx, row));
+        let s: &str = box_try!(::std::str::from_utf8(&input));
+        if s.is_empty() {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        let len = s.len() as u64;
+        let mut num = try_opt!(self.children[0].eval_int(ctx,row));
+        if num > i32::max_value() as i64 {
+            num = i32::max_value() as i64;
+        }
+        if len * (num as u64) > cop_datatype::MAX_BLOB_WIDTH as u64 {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        if (len as i64) > (cop_datatype::MAX_BLOB_WIDTH as i64) / num {
+            return Ok(Some(Cow::Borrowed(b"")));
+        }
+        Ok(Some(Cow::Owned(s.repeat(num as usize))))
+>>>>>>> Stashed changes
     }
 }
 
@@ -1874,11 +1900,15 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+<<<<<<< Updated upstream
                     Datum::Bytes(
                         "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
                             .as_bytes()
                             .to_vec(),
                     ),
+=======
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+>>>>>>> Stashed changes
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1932,11 +1962,15 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
+<<<<<<< Updated upstream
                     Datum::Bytes(
                         "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
                             .as_bytes()
                             .to_vec(),
                     ),
+=======
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+>>>>>>> Stashed changes
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -3295,6 +3329,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< Updated upstream
     fn test_instr() {
         let cases: Vec<(&str, &str, i64)> = vec![
             ("f", "foobArbar", 1),
@@ -3313,6 +3348,24 @@ mod tests {
             let s = Datum::Bytes(s.as_bytes().to_vec());
             let got = eval_func(ScalarFuncSig::Instr, &[s, substr]).unwrap();
             assert_eq!(got, Datum::I64(exp))
+=======
+    pub fn test_repeat() {
+        let cases: Vec<(&str, i64, &str)> = vec![
+            ("f", 3, "fff"),
+            ("a", 10, "aaaaaaaaaa"),
+            ("s", 5, "sssss"),
+            ("s", 1, "s"),
+            ("你好", 4, "你好你好你好你好"),
+            ("s", 0, ""),
+            ("nihao", 0, ""),
+            ("你", Datum::I64(i64::from(MAX_BLOB_WIDTH) + 1), "")
+        ];
+        for (input, num, exp) in cases {
+            let input = Datum::Bytes(input.as_bytes().to_vec());
+            let num = Datum::I64(num);
+            let got = eval_func(ScalarFuncSig::Repeat, &[s, substr]).unwrap();
+            assert_eq!(got, Datum::Bytes(exp.as_bytes().to_vec()))
+>>>>>>> Stashed changes
         }
     }
 }
