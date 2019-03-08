@@ -189,6 +189,8 @@ fn test_serde_custom_tikv_config() {
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_mod: DBRateLimiterMode::AllIo,
+        auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
