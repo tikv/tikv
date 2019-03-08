@@ -175,5 +175,6 @@ lazy_static! {
         "tikv_storage_mvcc_inspectior_ts_report_duration",
         "Duration of mvcc inspector ts report",
         exponential_buckets(0.0001, 2.0, 10).unwrap()
-    ).unwrap();
+    )
+    .unwrap();
 }

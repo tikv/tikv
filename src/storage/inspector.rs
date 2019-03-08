@@ -24,10 +24,10 @@ use crate::raftstore::coprocessor::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
+use crate::storage::metrics::*;
 use crate::util::collections::HashMap;
 use crate::util::time::duration_to_sec;
 use crate::util::HandyRwLock;
-use crate::storage::metrics::*;
 
 const INSPECTOR_NAME_PREFIX: &str = "mvcc-inspector";
 const GLOBAL_REGION_SLOTS: usize = 128;
@@ -157,7 +157,9 @@ pub struct Inner {
 
 impl MvccInspector {
     pub fn new<C: PdClient + 'static>(pd_client: Arc<C>) -> Self {
-        let maps = (0..GLOBAL_REGION_SLOTS).map(|_| Default::default()).collect();
+        let maps = (0..GLOBAL_REGION_SLOTS)
+            .map(|_| Default::default())
+            .collect();
         let worker = ThreadPoolBuilder::new()
             .pool_size(1)
             .name_prefix(INSPECTOR_NAME_PREFIX)
@@ -177,7 +179,7 @@ impl MvccInspector {
                 .map(move |tso| (tso, map))
                 .map(move |(tso, map)| {
                     for (region_id, version) in map {
-                        let slot = region_id as usize % GLOBAL_REGION_SLOTS; 
+                        let slot = region_id as usize % GLOBAL_REGION_SLOTS;
                         let global_map = inner2.max_read_ts_map[slot].rl();
                         let e = Arc::clone(global_map.get(&region_id).unwrap());
                         drop(global_map);
@@ -196,7 +198,9 @@ impl MvccInspector {
 
     // Quickly make the code buildable
     pub fn new_mock() -> Self {
-        let maps = (0..GLOBAL_REGION_SLOTS).map(|_| Default::default()).collect();
+        let maps = (0..GLOBAL_REGION_SLOTS)
+            .map(|_| Default::default())
+            .collect();
         let worker = ThreadPoolBuilder::new()
             .pool_size(1)
             .name_prefix(INSPECTOR_NAME_PREFIX)
@@ -252,7 +256,10 @@ impl MvccInspector {
 
     fn get_entry(&self, region_id: u64) -> Option<Arc<RwLock<RegionMaxTsRecord>>> {
         let slot = region_id as usize % GLOBAL_REGION_SLOTS;
-        self.inner.max_read_ts_map[slot].rl().get(&region_id).cloned()
+        self.inner.max_read_ts_map[slot]
+            .rl()
+            .get(&region_id)
+            .cloned()
     }
 }
 
