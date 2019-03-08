@@ -23,7 +23,9 @@ use super::{
     RoleObserver,
 };
 use crate::raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
-use crate::raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
+use crate::raftstore::store::msg::{
+    GetRegionsInRangeCallback, SeekRegionCallback, SeekRegionFilter, SeekRegionResult,
+};
 use crate::storage::engine::{RegionInfoProvider, Result as EngineResult};
 use crate::util::collections::HashMap;
 use crate::util::escape;
@@ -94,6 +96,11 @@ enum RegionCollectorMsg {
         limit: u32,
         callback: SeekRegionCallback,
     },
+    GetRegionsInRange {
+        start: Vec<u8>,
+        end: Vec<u8>,
+        callback: GetRegionsInRangeCallback,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -105,6 +112,12 @@ impl Display for RegionCollectorMsg {
             RegionCollectorMsg::SeekRegion { from, limit, .. } => {
                 write!(f, "SeekRegion(from: {}, limit: {})", escape(from), limit)
             }
+            RegionCollectorMsg::GetRegionsInRange { start, end, .. } => write!(
+                f,
+                "GetRegionsInRange(start: {}, end: {})",
+                escape(start),
+                escape(end)
+            ),
             RegionCollectorMsg::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
@@ -428,6 +441,25 @@ impl RegionCollector {
             }
         }
     }
+
+    fn handle_get_regions_in_range(
+        &self,
+        start: Vec<u8>,
+        end: Vec<u8>,
+        callback: GetRegionsInRangeCallback,
+    ) {
+        let mut regions = vec![];
+        let start_key = data_key(&start);
+        let end_key = data_end_key(&end);
+        for (_, region_id) in self
+            .region_ranges
+            .range((Excluded(start_key), Excluded(end_key)))
+        {
+            let region_info = &self.regions[region_id];
+            regions.push(region_info.region.clone());
+        }
+        callback(regions);
+    }
 }
 
 impl Runnable<RegionCollectorMsg> for RegionCollector {
@@ -443,6 +475,13 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
                 callback,
             } => {
                 self.handle_seek_region(from, filter, limit, callback);
+            }
+            RegionCollectorMsg::GetRegionsInRange {
+                start,
+                end,
+                callback,
+            } => {
+                self.handle_get_regions_in_range(start, end, callback);
             }
             RegionCollectorMsg::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -548,6 +587,33 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 rx.recv().map_err(|e| {
                     box_err!(
                         "failed to receive seek region result from region collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+
+    fn get_regions_in_range(&self, start: &[u8], end: &[u8]) -> EngineResult<Vec<Region>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionCollectorMsg::GetRegionsInRange {
+            start: start.to_vec(),
+            end: end.to_vec(),
+            callback: box move |res| {
+                tx.send(res).unwrap_or_else(|e| {
+                    panic!(
+                        "failed to send get_regions_in_range result back to caller: {:?}",
+                        e
+                    )
+                })
+            },
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_regions_in_range result from region collector: {:?}",
                         e
                     )
                 })

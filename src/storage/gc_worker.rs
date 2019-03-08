@@ -1205,6 +1205,14 @@ mod tests {
                 None => Ok(SeekRegionResult::Ended),
             }
         }
+
+        fn get_regions_in_range(
+            &self,
+            _start: &[u8],
+            _end: &[u8],
+        ) -> EngineResult<Vec<metapb::Region>> {
+            Ok(vec![])
+        }
     }
 
     struct MockGCRunner {

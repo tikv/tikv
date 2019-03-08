@@ -22,6 +22,7 @@ use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
+use kvproto::metapb;
 use rocksdb::TablePropertiesCollection;
 
 mod btree_engine;
@@ -164,6 +165,9 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
         filter: SeekRegionFilter,
         limit: u32,
     ) -> Result<SeekRegionResult>;
+
+    /// Get all regions in range [`start`, `end`).
+    fn get_regions_in_range(&self, start: &[u8], end: &[u8]) -> Result<Vec<metapb::Region>>;
 }
 
 macro_rules! near_loop {
