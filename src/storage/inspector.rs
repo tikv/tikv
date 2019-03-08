@@ -13,78 +13,113 @@
 
 use std::sync::{Arc, RwLock};
 
-//use super::metrics::*;
-use futures::{Future, Async, Poll, Stream};
 use futures::sync::mpsc;
-use tokio_threadpool::{ThreadPool, Builder as ThreadPoolBuilder};
-//use raft::StateRole;
+use futures::{lazy, Async, Future, Poll, Stream};
+use raft::StateRole;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
 use crate::pd::PdClient;
-use crate::raftstore::coprocessor::CoprocessorHost;
+use crate::raftstore::coprocessor::{
+    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
+    RoleObserver,
+};
 use crate::util::collections::HashMap;
 use crate::util::HandyRwLock;
 
-//const KEY_BUCKET_SIZE: usize = 1024;
 const INSPECTOR_NAME_PREFIX: &str = "mvcc-inspector";
 
-//#[derive(Clone)]
-//struct LeaderChangeObserver {
-//    scheduler: Scheduler<InspectorRunnerTask>,
-//}
-//
-//impl LeaderChangeObserver {
-//    //    pub fn new(scheduler: Scheduler<LeaderChangeEvent>) -> Self {
-//    //        Self { scheduler }
-//    //    }
-//}
-//
-//impl Coprocessor for LeaderChangeObserver {}
-//
-//impl RoleObserver for LeaderChangeObserver {
-//    fn on_role_change(&self, ctx: &mut ObserverContext, role: StateRole) {
-//        if role == StateRole::Leader {
-//            self.scheduler
-//                .schedule(InspectorRunnerTask::UpdateRegion {
-//                    region_id: ctx.region().get_id(),
-//                    version: ctx.region().get_region_epoch().get_version(),
-//                })
-//                .unwrap();
-//        } else {
-//            self.scheduler
-//                .schedule(InspectorRunnerTask::RemoveRegion {
-//                    region_id: ctx.region().get_id(),
-//                })
-//                .unwrap();
-//        }
-//    }
-//}
+#[derive(Clone)]
+struct LeaderChangeObserver {
+    inner: Arc<Inner>,
+}
 
-//impl RegionChangeObserver for LeaderChangeObserver {
-//    fn on_region_changed(
-//        &self,
-//        ctx: &mut ObserverContext,
-//        event: RegionChangeEvent,
-//        role: StateRole,
-//    ) {
-//        if role == StateRole::Leader {
-//            let event = match event {
-//                RegionChangeEvent::Create | RegionChangeEvent::Update => {
-//                    LeaderChangeEvent::UpdateRegion {
-//                        region_id: ctx.region().get_id(),
-//                        version: ctx.region().get_region_epoch().get_version(),
-//                    }
-//                }
-//                RegionChangeEvent::Destroy => LeaderChangeEvent::Remove {
-//                    region_id: ctx.region().get_id(),
-//                },
-//            };
-//            self.scheduler.schedule(event).unwrap();
-//        }
-//    }
-//}
+impl LeaderChangeObserver {
+    pub fn new(inner: Arc<Inner>) -> Self {
+        Self { inner }
+    }
+
+    fn update_region(&self, region_id: u64, version: u64) {
+        let inner = Arc::clone(&self.inner);
+        self.inner.thread_pool.spawn(lazy(move || {
+            let mut map = inner.max_read_ts_map.wl();
+            let entry = Arc::clone(map.entry(region_id).or_default());
+            let mut entry = entry.wl();
+            drop(map);
+
+            // If inserted with `or_default`, the version must be 0
+            if entry.version < version {
+                entry.is_ready = false;
+                entry.version = version;
+                inner
+                    .sender
+                    .unbounded_send(UpdateTsTask { region_id, version })
+                    .unwrap();
+            }
+            Ok(())
+        }));
+    }
+
+    fn remove_region(&self, region_id: u64, version: u64) {
+        let inner = Arc::clone(&self.inner);
+        self.inner.thread_pool.spawn(lazy(move || {
+            let mut map = inner.max_read_ts_map.wl();
+            if let Some(entry) = map.get(&region_id).cloned() {
+                let entry = entry.wl();
+                if entry.version <= version {
+                    map.remove(&region_id);
+                }
+            }
+            Ok(())
+        }));
+    }
+}
+
+impl Coprocessor for LeaderChangeObserver {}
+
+impl RoleObserver for LeaderChangeObserver {
+    fn on_role_change(&self, ctx: &mut ObserverContext, role: StateRole) {
+        if role == StateRole::Leader {
+            self.update_region(
+                ctx.region().get_id(),
+                ctx.region().get_region_epoch().get_version(),
+            );
+        } else {
+            self.remove_region(
+                ctx.region().get_id(),
+                ctx.region().get_region_epoch().get_version(),
+            );
+        }
+    }
+}
+
+impl RegionChangeObserver for LeaderChangeObserver {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext,
+        event: RegionChangeEvent,
+        role: StateRole,
+    ) {
+        if role == StateRole::Leader {
+            match event {
+                RegionChangeEvent::Create | RegionChangeEvent::Update => {
+                    self.update_region(
+                        ctx.region().get_id(),
+                        ctx.region().get_region_epoch().get_version(),
+                    );
+                }
+                RegionChangeEvent::Destroy => {
+                    self.remove_region(
+                        ctx.region().get_id(),
+                        ctx.region().get_region_epoch().get_version(),
+                    );
+                }
+            };
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
-struct UpdateTsTask { 
+struct UpdateTsTask {
     region_id: u64,
     version: u64,
 }
@@ -106,7 +141,7 @@ pub struct MvccInspector {
 
 pub struct Inner {
     max_read_ts_map: RwLock<TsMap>,
-    worker: ThreadPool,
+    thread_pool: ThreadPool,
     sender: mpsc::UnboundedSender<UpdateTsTask>,
 }
 
@@ -119,19 +154,19 @@ impl MvccInspector {
         let (tx, rx) = mpsc::unbounded();
         let inner = Arc::new(Inner {
             max_read_ts_map: Default::default(),
-            worker,
+            thread_pool: worker,
             sender: tx,
         });
 
         let inner1 = Arc::clone(&inner);
-        inner.worker.spawn(TaskCollector(rx).for_each(move |map|{
+        inner.thread_pool.spawn(TaskCollector(rx).for_each(move |map|{
             let inner2 = Arc::clone(&inner1);
             pd_client.get_timestamp()
                 .map_err(|e| error!("get timestamp fail"; "err" => ?e))
                 .map(move |tso| (tso, map))
                 .map(move |(tso, map)| {
                     for (region_id, version) in map {
-                        let global_map = inner2.max_read_ts_map.rl();  
+                        let global_map = inner2.max_read_ts_map.rl();
                         let e = Arc::clone(global_map.get(&region_id).unwrap());
                         drop(global_map);
                         let mut e = e.wl();
@@ -156,83 +191,70 @@ impl MvccInspector {
         let (tx, _) = mpsc::unbounded(); // TODO: real mock.
         let inner = Arc::new(Inner {
             max_read_ts_map: Default::default(),
-            worker,
+            thread_pool: worker,
             sender: tx,
         });
         Self { inner }
     }
 
-    pub fn register_observer(&self, _host: &mut CoprocessorHost) {
-        //        let scheduler = self.update_worker.lock().unwrap().scheduler();
-        //        let observer = LeaderChangeObserver::new(scheduler);
-        //
-        //        host.registry
-        //            .register_role_observer(1, box observer.clone());
-        //        host.registry
-        //            .register_region_change_observer(1, box observer);
+    pub fn register_observer(&self, host: &mut CoprocessorHost) {
+        let observer = LeaderChangeObserver::new(Arc::clone(&self.inner));
+
+        host.registry
+            .register_role_observer(1, box observer.clone());
+        host.registry
+            .register_region_change_observer(1, box observer);
     }
 
     pub fn report_read_ts(&self, region_id: u64, version: u64, ts: u64, _from: &str) {
         if ts == u64::max_value() {
             return;
         }
-        let entry = self.get_entry(region_id, version);
-        let mut lock = entry.wl();
-        if lock.version < version {
-            lock.is_ready = false;
-            lock.version = version;
-            self.inner.sender
-                .unbounded_send(UpdateTsTask { region_id, version })
-                .unwrap();
-        }
-        if lock.max_read_ts < ts {
-            lock.max_read_ts = ts;
+        if let Some(entry) = self.get_entry(region_id) {
+            let mut lock = entry.wl();
+            if lock.version < version {
+                lock.is_ready = false;
+                lock.version = version;
+                self.inner
+                    .sender
+                    .unbounded_send(UpdateTsTask { region_id, version })
+                    .unwrap();
+            }
+            if lock.max_read_ts < ts {
+                lock.max_read_ts = ts;
+            }
         }
     }
 
     pub fn get_max_read_ts(&self, region_id: u64, version: u64) -> u64 {
-        let entry = self.get_entry(region_id, version);
-        let lock = entry.rl();
-        if lock.is_ready && lock.version == version {
-            return lock.max_read_ts;
+        if let Some(entry) = self.get_entry(region_id) {
+            let lock = entry.rl();
+            if lock.is_ready && lock.version == version {
+                return lock.max_read_ts;
+            }
         }
         0
     }
 
-    fn get_entry(&self, region_id: u64, version: u64) -> Arc<RwLock<RegionMaxTsRecord>> {
-        if let Some(entry) = self.inner.max_read_ts_map.rl().get(&region_id) {
-            return entry.clone();
-        }
-        let mut map = self.inner.max_read_ts_map.wl();
-        let mut not_exist = false;
-        let entry = map.entry(region_id).or_insert_with(|| {
-            not_exist = true;
-            Arc::new(RwLock::new(RegionMaxTsRecord {
-                is_ready: false,
-                version,
-                max_read_ts: 0,
-            }))
-        });
-        self.inner.sender
-            .unbounded_send(UpdateTsTask { region_id, version })
-            .unwrap();
-        entry.clone()
+    fn get_entry(&self, region_id: u64) -> Option<Arc<RwLock<RegionMaxTsRecord>>> {
+        self.inner.max_read_ts_map.rl().get(&region_id).cloned()
     }
 }
 
 struct TaskCollector(mpsc::UnboundedReceiver<UpdateTsTask>);
 impl Stream for TaskCollector {
-    type Error = ();
     type Item = HashMap<u64, u64>;
+    type Error = ();
+
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         let mut items = HashMap::new();
         loop {
             match self.0.poll() {
-                Ok(Async::Ready(Some(UpdateTsTask {region_id, version}))) => {
-                    if items.get(&region_id).unwrap_or(&0) < &version {
+                Ok(Async::Ready(Some(UpdateTsTask { region_id, version }))) => {
+                    if *items.get(&region_id).unwrap_or(&0) < version {
                         items.insert(region_id, version);
                     }
-                },
+                }
                 Ok(Async::NotReady) => break,
                 _ => unreachable!(),
             }
