@@ -53,7 +53,7 @@ pub use self::engine::{
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::readpool_context::Context as ReadPoolContext;
-use self::txn::scheduler;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -517,7 +517,7 @@ pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    sched: scheduler::Scheduler<E>,
+    sched: TxnScheduler<E>,
     read_pool: ReadPool<ReadPoolContext>,
 
     /// Used to handle requests related to GC.
@@ -582,7 +582,7 @@ impl<E: Engine> Storage<E> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        let sched = scheduler::Scheduler::new(
+        let sched = TxnScheduler::new(
             engine.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,

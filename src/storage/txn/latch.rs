@@ -109,7 +109,6 @@ impl Latches {
         let mut acquired_count: usize = 0;
         for i in &lock.required_slots[lock.owned_count..] {
             let mut latch = self.slots[*i].lock().unwrap();
-
             let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
@@ -139,7 +138,6 @@ impl Latches {
             let mut latch = self.slots[*i].lock().unwrap();
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
-
             if let Some(wakeup) = latch.waiting.front() {
                 wakeup_list.push(*wakeup);
             }

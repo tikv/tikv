@@ -52,7 +52,7 @@ use crate::storage::txn::Error;
 use crate::storage::metrics::*;
 use crate::util::worker::ScheduleError;
 
-const TASKS_SLOTS_NUM: usize = 10240;
+const TASKS_SLOTS_NUM: usize = 1024;
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
