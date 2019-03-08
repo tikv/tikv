@@ -640,7 +640,7 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
-            rate_limiter_mod: DBRateLimiterMode::AllIo,
+            rate_limiter_mod: DBRateLimiterMode::WriteOnly,
             auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
