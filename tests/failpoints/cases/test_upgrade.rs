@@ -23,11 +23,12 @@ use tempdir::TempDir;
 use test_raftstore::*;
 use tikv::config::DbConfig;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::{
-    keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb_util;
+use tikv::raftstore::store::{
+     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+};
 
 fn test_upgrade_from_v2_to_v3(fp: &str) {
     let tmp_path = TempDir::new("test_upgrade").unwrap();
@@ -273,4 +274,158 @@ fn test_double_upgrade_2_3() {
     let _guard = crate::setup();
     // An empty fail point injects nothing.
     test_upgrade_from_v2_to_v3("");
+}
+
+fn test_upgrade_2_3_boostrap(fp: &str) {
+    let tmp_path = TempDir::new("test_upgrade_bootstrap").unwrap();
+
+    let all_cfs_v2 = &[CF_LOCK, CF_RAFT, CF_WRITE, CF_DEFAULT];
+    // Create a v2 kv engine.
+    let kv_engine =
+        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, all_cfs_v2, None)
+            .unwrap();
+
+    // Create a raft engine.
+    let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap()
+    );
+
+    let cluster_id = 1000_000_000;
+    let store_id = 1;
+    let region_id = 3;
+    let peer_id = 4;
+
+    let kv_wb = WriteBatch::new();
+    // Mock boostrap store in v2.x.
+    let mut store_ident = StoreIdent::new();
+    store_ident.set_cluster_id(cluster_id);
+    store_ident.set_store_id(store_id);
+    kv_wb.put_msg(keys::STORE_IDENT_KEY, &store_ident).unwrap();
+
+    // Mock boostrap cluster in v2.x.
+    let mut region = Region::new();
+    region.set_id(region_id);
+    region.set_peers(vec![new_peer(store_id, peer_id)].into());
+    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+    kv_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &region).unwrap();
+
+    let raft_cf_handle = kv_engine.cf_handle(CF_RAFT).unwrap();
+    // RegionLocalState
+    let mut region_state = RegionLocalState::new();
+    region_state.set_region(region.clone());
+    kv_wb
+        .put_msg_cf(
+            raft_cf_handle,
+            &keys::region_state_key(region_id),
+            &region_state,
+        )
+        .unwrap();
+    // RaftApplyState
+    let mut apply_state = RaftApplyState::new();
+    apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_index(RAFT_INIT_LOG_INDEX);
+    apply_state
+        .mut_truncated_state()
+        .set_term(RAFT_INIT_LOG_TERM);
+    kv_wb
+        .put_msg_cf(
+            raft_cf_handle,
+            &keys::apply_state_key(region_id),
+            &apply_state,
+        )
+        .unwrap();
+    // RaftLocalState
+    let raft_wb = WriteBatch::new();
+    let mut raft_state = RaftLocalState::new();
+    raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
+    raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
+    raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
+    raft_wb
+        .put_msg(&keys::raft_state_key(region_id), &raft_state)
+        .unwrap();
+
+    let mut write_opt = WriteOptions::new();
+    write_opt.set_sync(true);
+    kv_engine.write_opt(kv_wb, &write_opt).unwrap();
+    raft_engine.write_opt(raft_wb, &write_opt).unwrap();
+
+    drop(kv_engine);
+
+    // Return early.
+    fail::cfg(fp, "return").unwrap();
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+        &raft_engine,
+        tmp_path.path().to_str().unwrap(),
+        DBOptions::new(),
+        &DbConfig::default(),
+    );
+    fail::remove(fp);
+    // Retry upgrade.
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+        &raft_engine,
+        tmp_path.path().to_str().unwrap(),
+        DBOptions::new(),
+        &DbConfig::default(),
+    );
+
+    // create a v3.x. node
+
+
+    let pd_client = Arc::new(TestPdClient::new(0, false));
+    for _ in 0..peer_id {
+        // Advance the id allocator.
+        pd_client.alloc_id().unwrap();
+        break;
+    }
+
+    // Update upgraded engines.
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = Cluster::new(cluster_id, 5, sim, pd_client.clone());
+    cluster.create_engines();
+
+    // Create a kv engine.
+    let kv_engine =
+        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+    let engines = Engines::new(Arc::new(kv_engine), raft_engine.clone());
+    cluster.dbs[0] = engines.clone();
+    cluster.paths[0] = tmp_path;
+    cluster.engines.insert(store_id, engines);
+    cluster.start().unwrap();
+
+    // Wait for bootstraping cluster.
+    let mut count = 1;
+    while !pd_client.is_cluster_bootstrapped().unwrap() {
+        sleep_ms(10);
+        count += 1;
+        if count > 1000 {
+            panic!("failed to bootstrap cluster");
+        }
+    }
+    assert!(raft_engine
+        .get_msg::<Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .unwrap()
+        .is_none());
+    assert_eq!(pd_client.get_region(b"").unwrap().get_id(), region_id);
+}
+
+#[test]
+fn test_upgrade_2_3_bootstrap_return_before_update_raft() {
+    let _guard = crate::setup();
+    test_upgrade_2_3_boostrap("upgrade_2_3_before_update_raft");
+}
+
+#[test]
+fn test_upgrade_2_3_bootstrap_return_before_update_kv() {
+    let _guard = crate::setup();
+    test_upgrade_2_3_boostrap("upgrade_2_3_before_update_kv");
+}
+
+#[test]
+fn test_upgrade_2_3_bootstrap_return_before_drop_raft_cf() {
+    let _guard = crate::setup();
+    test_upgrade_2_3_boostrap("upgrade_2_3_before_drop_raft_cf");
 }

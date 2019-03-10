@@ -63,7 +63,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     Ok(())
 }
 
-/// The first phase of bootstrap cluster
+/// The first phase of bootstrapping cluster.
 ///
 /// Write the first region meta and prepare state.
 pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
@@ -80,7 +80,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     Ok(())
 }
 
-// Clear first region meta and prepare key.
+// Clear first region meta and prepare key for bootstrapping cluster.
 pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Result<()> {
     let wb = WriteBatch::new();
     wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
@@ -95,8 +95,8 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
 
 // Clear prepare key
 pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
-    engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
-    engines.kv.sync_wal()?;
+    engines.raft.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+    engines.raft.sync_wal()?;
     Ok(())
 }
 
