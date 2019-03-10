@@ -272,7 +272,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
-            meta.node.stop().unwrap();
+            meta.node.stop();
             meta.worker.stop().unwrap().join().unwrap();
         }
     }

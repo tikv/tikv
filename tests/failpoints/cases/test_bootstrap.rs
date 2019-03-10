@@ -67,8 +67,11 @@ fn test_boostrap_half_way_failure() {
         coprocessor_host,
         importer,
     );
+    node.stop();
     fail::remove("node_after_bootstrap_store");
 
+    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
+    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
     let pd_worker = FutureWorker::new("test-pd-worker");
     let local_reader = Worker::new("test-local-reader");
     let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
@@ -86,4 +89,5 @@ fn test_boostrap_half_way_failure() {
         importer,
     )
     .unwrap();
+    node.stop();
 }

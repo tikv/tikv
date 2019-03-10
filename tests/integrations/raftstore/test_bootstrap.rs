@@ -111,7 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
-    node.stop().unwrap();
+    node.stop();
 }
 
 #[test]

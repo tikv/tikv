@@ -352,14 +352,13 @@ where
         Ok(())
     }
 
-    fn stop_store(&mut self, store_id: u64) -> Result<()> {
+    fn stop_store(&mut self, store_id: u64) {
         info!("stop raft store thread"; "store_id" => store_id);
         self.system.shutdown();
-        Ok(())
     }
 
     /// Stops the Node.
-    pub fn stop(&mut self) -> Result<()> {
+    pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id)
     }

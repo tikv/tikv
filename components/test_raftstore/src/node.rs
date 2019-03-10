@@ -272,7 +272,7 @@ impl Simulator for NodeCluster {
 
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
-            node.stop().unwrap();
+            node.stop();
         }
         self.trans
             .core
