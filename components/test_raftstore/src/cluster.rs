@@ -98,10 +98,10 @@ pub trait Simulator {
 pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
-    paths: Vec<TempDir>,
-    dbs: Vec<Engines>,
     count: usize,
 
+    pub dbs: Vec<Engines>,
+    pub paths: Vec<TempDir>,
     pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,
@@ -133,7 +133,7 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self) {
+    pub fn create_engines(&mut self) {
         for _ in 0..self.count {
             let path = TempDir::new("test_cluster").unwrap();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
@@ -154,20 +154,19 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn start(&mut self) {
-        if self.engines.is_empty() {
+        // Try recover from last shutdown.
+        let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
+        for node_id in node_ids {
+            self.run_node(node_id);
+        }
+
+        // Try start new nodes.
+        for _ in 0..self.count - self.engines.len() {
             let mut sim = self.sim.wl();
-            for _ in 0..self.count {
-                let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
-                self.dbs.push(engines.clone());
-                self.engines.insert(node_id, engines);
-                self.paths.push(path.unwrap());
-            }
-        } else {
-            // recover from last shutdown.
-            let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
-            for node_id in node_ids.drain(..) {
-                self.run_node(node_id);
-            }
+            let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
+            self.dbs.push(engines.clone());
+            self.engines.insert(node_id, engines);
+            self.paths.push(path.unwrap());
         }
     }
 

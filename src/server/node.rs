@@ -54,26 +54,6 @@ where
     Ok(store)
 }
 
-fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result<()> {
-    let epoch = region.get_region_epoch();
-    let other_epoch = other.get_region_epoch();
-    if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
-        return Err(box_err!(
-            "region conf_ver inconsist: {} with {}",
-            epoch.get_conf_ver(),
-            other_epoch.get_conf_ver()
-        ));
-    }
-    if epoch.get_version() != other_epoch.get_version() {
-        return Err(box_err!(
-            "region version inconsist: {} with {}",
-            epoch.get_version(),
-            other_epoch.get_version()
-        ));
-    }
-    Ok(())
-}
-
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
 pub struct Node<C: PdClient + 'static> {
@@ -142,7 +122,6 @@ where
     where
         T: Transport + 'static,
     {
-        let bootstrapped = self.check_cluster_bootstrapped()?;
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.bootstrap_store(&engines)?;
@@ -150,12 +129,11 @@ where
         }
 
         self.store.set_id(store_id);
-        self.check_prepare_bootstrap_cluster(&engines)?;
-        if !bootstrapped {
+        if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
+            info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
-            // prepare bootstrap.
-            let region = self.prepare_bootstrap_cluster(&engines, store_id)?;
-            self.bootstrap_cluster(&engines, region)?;
+            fail_point!("node_after_prepare_bootstrap_cluster", |_| Ok(()));
+            self.bootstrap_cluster(&engines, first_region)?;
         }
 
         // inform pd.
@@ -248,54 +226,65 @@ where
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
-        let res = engines
+    fn check_or_prepare_bootstrap_cluster(
+        &self,
+        engines: &Engines,
+        store_id: u64,
+    ) -> Result<Option<metapb::Region>> {
+        if let Some(first_region) = engines
             .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
-        if res.is_none() {
-            return Ok(());
+            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?
+        {
+            Ok(Some(first_region))
+        } else {
+            if self.check_cluster_bootstrapped()? {
+                Ok(None)
+            } else {
+                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
+            }
         }
+    }
 
-        let first_region = res.unwrap();
-        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
-            match self.pd_client.get_region(b"") {
-                Ok(region) => {
-                    if region.get_id() == first_region.get_id() {
-                        check_region_epoch(&region, &first_region)?;
-                        store::clear_prepare_bootstrap_state(engines)?;
-                    } else {
-                        store::clear_prepare_bootstrap(engines, first_region.get_id())?;
-                    }
+    fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {
+        let region_id = first_region.get_id();
+        let mut retry = 0;
+        while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self
+                .pd_client
+                .bootstrap_cluster(self.store.clone(), first_region.clone())
+            {
+                Ok(_) => {
+                    fail_point!("node_after_bootstrap_cluster", |_| Ok(()));
+                    store::clear_prepare_bootstrap_state(engines)?;
+                    info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     return Ok(());
                 }
-
+                Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
+                    Ok(region) => {
+                        if region == first_region {
+                            store::clear_prepare_bootstrap_state(engines)?;
+                            return Ok(());
+                        } else {
+                            error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
+                            store::clear_prepare_bootstrap(engines, region_id)?;
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("get the first region failed"; "err" => ?e);
+                    }
+                },
+                // TODO: should we clean region for other errors too?
                 Err(e) => {
-                    warn!("check cluster prepare bootstrapped failed"; "err" => ?e);
+                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
                 }
             }
+            retry += 1;
             thread::sleep(Duration::from_secs(
                 CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
             ));
         }
-        Err(box_err!("check cluster prepare bootstrapped failed"))
-    }
-
-    fn bootstrap_cluster(&mut self, engines: &Engines, region: metapb::Region) -> Result<()> {
-        let region_id = region.get_id();
-        match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
-            Err(PdError::ClusterBootstrapped(_)) => {
-                error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                store::clear_prepare_bootstrap(engines, region_id)?;
-                Ok(())
-            }
-            // TODO: should we clean region for other errors too?
-            Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
-            Ok(_) => {
-                store::clear_prepare_bootstrap_state(engines)?;
-                info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
-                Ok(())
-            }
-        }
+        Err(box_err!("bootstrapped cluster failed"))
     }
 
     fn check_cluster_bootstrapped(&self) -> Result<bool> {
