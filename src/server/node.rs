@@ -231,7 +231,7 @@ where
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(new_peer(store_id, peer_id));
 
-        store::prepare_bootstrap(engines, &region)?;
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
@@ -264,18 +264,18 @@ where
             {
                 Ok(_) => {
                     fail_point!("node_after_bootstrap_cluster", |_| Ok(()));
-                    store::clear_prepare_bootstrap_state(engines)?;
+                    store::clear_prepare_bootstrap_key(engines)?;
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
                     Ok(region) => {
                         if region == first_region {
-                            store::clear_prepare_bootstrap_state(engines)?;
+                            store::clear_prepare_bootstrap_key(engines)?;
                             return Ok(());
                         } else {
                             error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
-                            store::clear_prepare_bootstrap(engines, region_id)?;
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                             return Ok(());
                         }
                     }
@@ -359,39 +359,5 @@ where
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::check_region_epoch;
-    use crate::raftstore::store::keys;
-    use kvproto::metapb;
-
-    #[test]
-    fn test_check_region_epoch() {
-        let mut r1 = metapb::Region::new();
-        r1.set_id(1);
-        r1.set_start_key(keys::EMPTY_KEY.to_vec());
-        r1.set_end_key(keys::EMPTY_KEY.to_vec());
-        r1.mut_region_epoch().set_version(1);
-        r1.mut_region_epoch().set_conf_ver(1);
-
-        let mut r2 = metapb::Region::new();
-        r2.set_id(1);
-        r2.set_start_key(keys::EMPTY_KEY.to_vec());
-        r2.set_end_key(keys::EMPTY_KEY.to_vec());
-        r2.mut_region_epoch().set_version(2);
-        r2.mut_region_epoch().set_conf_ver(1);
-
-        let mut r3 = metapb::Region::new();
-        r3.set_id(1);
-        r3.set_start_key(keys::EMPTY_KEY.to_vec());
-        r3.set_end_key(keys::EMPTY_KEY.to_vec());
-        r3.mut_region_epoch().set_version(1);
-        r3.mut_region_epoch().set_conf_ver(2);
-
-        assert!(check_region_epoch(&r1, &r2).is_err());
-        assert!(check_region_epoch(&r1, &r3).is_err());
     }
 }

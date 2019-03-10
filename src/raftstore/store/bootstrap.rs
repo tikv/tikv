@@ -60,10 +60,10 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     Ok(())
 }
 
-/// The first phase of bootstrap
+/// The first phase of bootstrap cluster
 ///
 /// Write the first region meta and prepare state.
-pub fn prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<()> {
+pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
@@ -82,8 +82,8 @@ pub fn prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<(
     Ok(())
 }
 
-// Clear first region meta and prepare state.
-pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
+// Clear first region meta and prepare key.
+pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Result<()> {
     engines.raft.delete(&keys::raft_state_key(region_id))?;
     engines.raft.sync_wal()?;
 
@@ -98,8 +98,8 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     Ok(())
 }
 
-// Clear prepare state
-pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
+// Clear prepare key
+pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
     engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     engines.kv.sync_wal()?;
     Ok(())
@@ -146,7 +146,7 @@ mod tests {
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
-        assert!(prepare_bootstrap(&engines, &region).is_ok());
+        assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
@@ -164,8 +164,8 @@ mod tests {
             .unwrap()
             .is_some());
 
-        assert!(clear_prepare_bootstrap_state(&engines).is_ok());
-        assert!(clear_prepare_bootstrap(&engines, 1).is_ok());
+        assert!(clear_prepare_bootstrap_key(&engines).is_ok());
+        assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
         assert!(is_range_empty(
             &kv_engine,
             CF_RAFT,

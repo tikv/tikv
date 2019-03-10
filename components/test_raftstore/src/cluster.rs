@@ -436,7 +436,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engines in self.engines.values() {
-            prepare_bootstrap(engines, &region)?;
+            prepare_bootstrap_cluster(engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -467,7 +467,7 @@ impl<T: Simulator> Cluster<T> {
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(new_peer(node_id, peer_id));
 
-        prepare_bootstrap(&self.engines[&node_id], &region).unwrap();
+        prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
         self.bootstrap_cluster(region);
         region_id
     }

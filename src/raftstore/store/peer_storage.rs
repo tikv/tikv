@@ -1477,7 +1477,7 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{
-        bootstrap_store, prepare_bootstrap, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+        bootstrap_store, prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     };
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
@@ -1504,7 +1504,7 @@ mod tests {
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let engines = Engines::new(kv_db, raft_db);
-        bootstrap_store(&engines, 1, 1).expect("");
+        bootstrap_store(&engines, 1, 1).unwrap();
 
         let mut region = metapb::Region::new();
         region.set_id(1);
@@ -1514,7 +1514,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(new_peer(1, 1));
 
-        prepare_bootstrap(&engines, &region).expect("");
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
         PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
@@ -1555,9 +1555,7 @@ mod tests {
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::default();
-        store
-            .append(&mut ctx, &ents[1..], &mut ready_ctx)
-            .expect("");
+        store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
         ctx.apply_state
             .mut_truncated_state()
             .set_index(ents[0].get_index());
@@ -1568,8 +1566,8 @@ mod tests {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
             .unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).expect("");
-        store.engines.kv.write(kv_wb).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
+        store.engines.kv.write(kv_wb).unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1580,7 +1578,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1679,8 +1677,10 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        store.clear_meta(&raft_wb).unwrap();
+        store.clear_meta(&kv_wb, &raft_wb).unwrap();
+        store.engines.kv.write(kv_wb).unwrap();
         store.engines.raft.write(raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
@@ -1788,7 +1788,7 @@ mod tests {
                 let mut kv_wb = WriteBatch::new();
                 ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
                     .unwrap();
-                store.engines.kv.write(kv_wb).expect("");
+                store.engines.kv.write(kv_wb).unwrap();
             }
         }
     }
@@ -1821,7 +1821,7 @@ mod tests {
         assert!(!snap.get_data().is_empty());
 
         let mut data = RaftSnapshotData::new();
-        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
@@ -1941,7 +1941,7 @@ mod tests {
             let mut store = new_storage_from_ents(sched, &td, &ents);
             append_ents(&mut store, &entries);
             let li = store.last_index();
-            let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
+            let actual_entries = store.entries(4, li + 1, u64::max_value()).unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
