@@ -138,6 +138,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
+            | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
@@ -416,7 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
-            | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
@@ -837,6 +837,7 @@ dispatch_call! {
 
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
+        InstrBinary => instr_binary,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1180,6 +1181,7 @@ mod tests {
                     ScalarFuncSig::SubDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
+                    ScalarFuncSig::InstrBinary,
                 ],
                 2,
                 2,
@@ -1501,7 +1503,6 @@ mod tests {
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
-            ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
