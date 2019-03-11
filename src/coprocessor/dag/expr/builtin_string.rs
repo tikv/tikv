@@ -903,6 +903,28 @@ impl ScalarFunc {
             Ok(Some(Cow::Borrowed(b"")))
         }
     }
+
+    #[inline]
+    pub fn instr_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let substr = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        if substr.is_empty() {
+            return Ok(Some(1));
+        }
+        if s.is_empty() {
+            return Ok(Some(0));
+        }
+        let s = String::from(s);
+        let substr = String::from(substr);
+        match s.find(&substr) {
+            Some(x) => Ok(Some(1 + s[..x].chars().count() as i64)),
+            None => Ok(Some(0)),
+        }
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -1850,7 +1872,7 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes( "НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1885,6 +1907,7 @@ mod tests {
             assert_eq!(res, exp);
         }
     }
+
     #[test]
     fn test_concat_ws() {
         let cases = vec![
@@ -1903,7 +1926,7 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes( "НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -2373,6 +2396,7 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
+
     #[test]
     fn test_trim_3_args() {
         let tests = vec![
@@ -3256,6 +3280,45 @@ mod tests {
 
         for (input, length, exp) in cases {
             let got = eval_func(ScalarFuncSig::RightBinary, &[input, length]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_instr_binary() {
+        let cases: Vec<(&str, &str, i64)> = vec![
+            ("a", "abcdefg", 1),
+            ("0", "abcdefg", 0),
+            ("c", "abcdefg", 3),
+            ("F", "abcdefg", 0),
+            ("cd", "abcdefg", 3),
+            (" ", "abcdefg", 0),
+            ("", "", 1),
+            ("eFg", "abcdefg", 0),
+            ("deF", "abcdefg", 0),
+            ("字节", "a多字节", 3),
+            ("a", "a多字节", 1),
+            ("bar", "foobarbar", 4),
+            ("bAr", "foobarbar", 0),
+            ("好世", "你好世界", 2),
+        ];
+
+        for (substr, s, exp) in cases {
+            let substr = Datum::Bytes(substr.as_bytes().to_vec());
+            let s = Datum::Bytes(s.as_bytes().to_vec());
+            let got = eval_func(ScalarFuncSig::InstrBinary, &[s, substr]).unwrap();
+            assert_eq!(got, Datum::I64(exp))
+        }
+
+        let null_cases = vec![
+            (Datum::Null, Datum::Bytes(b"".to_vec()), Datum::Null),
+            (Datum::Null, Datum::Bytes(b"foobar".to_vec()), Datum::Null),
+            (Datum::Bytes(b"".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Bytes(b"bar".to_vec()), Datum::Null, Datum::Null),
+            (Datum::Null, Datum::Null, Datum::Null),
+        ];
+        for (substr, s, exp) in null_cases {
+            let got = eval_func(ScalarFuncSig::InstrBinary, &[substr, s]).unwrap();
             assert_eq!(got, exp);
         }
     }
