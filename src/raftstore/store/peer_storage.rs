@@ -1473,12 +1473,10 @@ impl Storage for PeerStorage {
 #[cfg(test)]
 mod tests {
     use crate::raftstore::store::fsm::apply::compact_raft_log;
-    use crate::raftstore::store::util::{new_peer, Engines};
+    use crate::raftstore::store::util::Engines;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
-    use crate::raftstore::store::{
-        bootstrap_store, prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-    };
+    use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
@@ -1506,14 +1504,7 @@ mod tests {
         let engines = Engines::new(kv_db, raft_db);
         bootstrap_store(&engines, 1, 1).unwrap();
 
-        let mut region = metapb::Region::new();
-        region.set_id(1);
-        region.set_start_key(keys::EMPTY_KEY.to_vec());
-        region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
-        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-        region.mut_peers().push(new_peer(1, 1));
-
+        let region = initial_region(1, 1, 1);
         prepare_bootstrap_cluster(&engines, &region).unwrap();
         PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }

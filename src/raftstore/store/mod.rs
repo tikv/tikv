@@ -30,7 +30,7 @@ mod snap;
 mod worker;
 
 pub use self::bootstrap::{
-    bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key,
+    bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
     prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 pub use self::config::Config;

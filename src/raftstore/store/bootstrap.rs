@@ -14,7 +14,7 @@
 use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use super::util::Engines;
+use super::util::{new_peer, Engines};
 use crate::raftstore::Result;
 use crate::storage::{CF_DEFAULT, CF_RAFT};
 use crate::util::rocksdb_util;
@@ -26,6 +26,17 @@ use rocksdb::{Writable, WriteBatch, DB};
 pub const INIT_EPOCH_VER: u64 = 1;
 /// The initial region epoch conf_version.
 pub const INIT_EPOCH_CONF_VER: u64 = 1;
+
+pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.set_start_key(keys::EMPTY_KEY.to_vec());
+    region.set_end_key(keys::EMPTY_KEY.to_vec());
+    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+    region.mut_peers().push(new_peer(store_id, peer_id));
+    region
+}
 
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {

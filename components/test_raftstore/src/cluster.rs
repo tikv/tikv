@@ -459,14 +459,7 @@ impl<T: Simulator> Cluster<T> {
         let region_id = 1;
         let peer_id = 1;
 
-        let mut region = metapb::Region::new();
-        region.set_id(region_id);
-        region.set_start_key(keys::EMPTY_KEY.to_vec());
-        region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
-        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-        region.mut_peers().push(new_peer(node_id, peer_id));
-
+        let region = initial_region(node_id, region_id, peer_id);
         prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
         self.bootstrap_cluster(region);
         region_id
