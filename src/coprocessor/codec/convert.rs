@@ -55,7 +55,6 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
 }
 
 /// `overflow` returns an overflowed error.
-#[macro_export]
 macro_rules! overflow {
     ($val:ident, $bound:ident) => {{
         Err(box_err!("constant {} overflows {}", $val, $bound))
