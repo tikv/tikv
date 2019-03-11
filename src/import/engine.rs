@@ -16,7 +16,7 @@ use std::fmt;
 use std::i32;
 use std::io::Read;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::{Path, MAIN_SEPARATOR};
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -48,7 +48,6 @@ use crate::util::security::SecurityConfig;
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
 pub struct Engine {
-    path: PathBuf,
     db: Arc<DB>,
     uuid: Uuid,
     db_cfg: DbConfig,
@@ -67,7 +66,6 @@ impl Engine {
             new_engine_opt(path.as_ref().to_str().unwrap(), db_opts, vec![cf_opts])?
         };
         Ok(Engine {
-            path: path.as_ref().to_path_buf(),
             db: Arc::new(db),
             uuid,
             db_cfg,
@@ -107,7 +105,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.db_cfg, &self.security_cfg, &self.path)
+        SSTWriter::new(&self.db_cfg, &self.security_cfg, self.db.path())
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -176,7 +174,7 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &Path) -> Result<SSTWriter> {
+    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
         let mut env = Arc::new(Env::default());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
@@ -190,19 +188,14 @@ impl SSTWriter {
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
-
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
-        let default_path = path.join(format!(".{}:default", uuid));
-        let cf_default = default_path.to_str().unwrap();
-        default.open(&cf_default)?;
+        default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
-        let write_path = path.join(format!(".{}:write", uuid));
-        let cf_write = write_path.to_str().unwrap();
-        write.open(&cf_write)?;
+        write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
         Ok(SSTWriter {
             env,
@@ -417,7 +410,7 @@ mod tests {
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg, &security_cfg, temp_dir.path()).unwrap();
+        let mut w = SSTWriter::new(&cfg, &security_cfg, temp_dir.path().to_str().unwrap()).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];
