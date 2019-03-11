@@ -77,7 +77,7 @@ struct PrevoteRangeFilter {
     tx: Mutex<mpsc::Sender<(Vec<u8>, Vec<u8>)>>,
 }
 
-impl Filter<RaftMessage> for PrevoteRangeFilter {
+impl Filter for PrevoteRangeFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         self.filter.before(msgs)?;
         if let Some(msg) = msgs.iter().filter(|m| is_vote_msg(m.get_message())).last() {

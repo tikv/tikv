@@ -1,4 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
+// Copyright 2019 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod coprocessor;
-pub mod errors;
-pub mod store;
-pub use self::errors::{DiscardReason, Error, Result};
+mod backward;
+mod forward;
+mod util;
+
+pub use self::backward::{BackwardScanner, BackwardScannerBuilder};
+pub use self::forward::{ForwardScanner, ForwardScannerBuilder};
