@@ -3292,11 +3292,19 @@ mod tests {
             ("", "", 1),
             ("eFg", "abcdefg", 0),
             ("deF", "abcdefg", 0),
-            ("字节", "a多字节", 1 + "a多字节".find("字节").unwrap() as i64, ),
+            (
+                "字节",
+                "a多字节",
+                1 + "a多字节".find("字节").unwrap() as i64,
+            ),
             ("a", "a多字节", 1),
             ("bar", "foobarbar", 4),
             ("bAr", "foobarbar", 0),
-            ("好世", "你好世界", 1 + "你好世界".find("好世").unwrap() as i64, ),
+            (
+                "好世",
+                "你好世界",
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
         ];
 
         for (substr, s, exp) in cases {
