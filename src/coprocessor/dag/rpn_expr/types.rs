@@ -256,18 +256,25 @@ impl RpnExpressionNodeVec {
         Ok(RpnExpressionNodeVec(expr_nodes))
     }
 
-    /// Evaluates the expression into a vector.
-    ///
-    /// # Panics
-    ///
-    /// Panics if referenced columns are not decoded.
+    /// Evaluates the expression into a vector. If referred columns are not decoded, they will be
+    /// decoded according to the given schema.
     pub fn eval<'a>(
         &'a self,
         context: &mut EvalContext,
         rows: usize,
-        columns: &'a LazyBatchColumnVec,
+        schema: &[FieldType],
+        columns: &'a mut LazyBatchColumnVec,
     ) -> Result<RpnStackNode<'a>> {
         let mut stack = Vec::with_capacity(self.0.len());
+
+        // First loop: ensure referred columns are decoded.
+        for node in &self.0 {
+            if let RpnExpressionNode::TableColumnRef { ref offset, .. } = node {
+                columns.ensure_column_decoded(*offset, context.cfg.tz, &schema[*offset])?;
+            }
+        }
+
+        // Second loop: evaluate RPN expressions.
         for node in &self.0 {
             match node {
                 RpnExpressionNode::Constant {
@@ -329,13 +336,14 @@ impl RpnExpressionNodeVec {
         &self,
         context: &mut EvalContext,
         rows: usize,
-        columns: &LazyBatchColumnVec,
+        schema: &[FieldType],
+        columns: &mut LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
     ) -> Result<()> {
         use crate::coprocessor::codec::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, columns)?;
+        let values = self.eval(context, rows, schema, columns)?;
         match values {
             RpnStackNode::Scalar { value, .. } => {
                 let b = value.as_mysql_bool(context)?;
@@ -1059,9 +1067,14 @@ mod tests {
         col.mut_decoded().push_int(Some(7));
         col.mut_decoded().push_int(Some(15));
 
-        let cols = LazyBatchColumnVec::from(vec![col]);
+        let mut ft = FieldType::new();
+        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+
+        let mut cols = LazyBatchColumnVec::from(vec![col]);
         let mut ctx = EvalContext::default();
-        let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols).unwrap();
+        let ret = rpn_nodes
+            .eval(&mut ctx, cols.rows_len(), &[ft], &mut cols)
+            .unwrap();
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(
             ret.vector_value().unwrap().as_int_slice(),
