@@ -245,7 +245,7 @@ impl std::ops::DerefMut for RpnExpressionNodeVec {
 impl RpnExpressionNodeVec {
     /// Builds the RPN expression node list from an expression definition tree.
     // TODO: Deprecate it in Coprocessor V2 DAG interface.
-    pub fn build_from_def(def: Expr, time_zone: Tz) -> Result<Self> {
+    pub fn build_from_expr_tree(def: Expr, time_zone: Tz) -> Result<Self> {
         let mut expr_nodes = Vec::new();
         Self::append_rpn_nodes_recursively(
             def,
@@ -1026,9 +1026,9 @@ mod tests {
     }
 
     #[test]
-    fn test_build_from_def() {
+    fn test_build_from_expr_tree() {
         let expr = new_gt_int_def(1, 123);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
+        let rpn_nodes = RpnExpressionNodeVec::build_from_expr_tree(expr, Tz::utc()).unwrap();
 
         assert_eq!(rpn_nodes.len(), 3);
         assert_eq!(rpn_nodes[0].field_type().tp(), FieldTypeTp::LongLong);
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn test_eval() {
         let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_def(expr, Tz::utc()).unwrap();
+        let rpn_nodes = RpnExpressionNodeVec::build_from_expr_tree(expr, Tz::utc()).unwrap();
 
         let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
         col.mut_decoded().push_int(Some(1));
