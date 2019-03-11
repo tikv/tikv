@@ -61,15 +61,15 @@ impl ScalarValue {
 
 impl AsMySQLBool for ScalarValue {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
-            ScalarValue::Int(ref v) => v.as_mysql_bool(),
-            ScalarValue::Real(ref v) => v.as_mysql_bool(),
-            ScalarValue::Decimal(ref v) => v.as_mysql_bool(),
-            ScalarValue::Bytes(ref v) => v.as_mysql_bool(),
-            ScalarValue::DateTime(ref v) => v.as_mysql_bool(),
-            ScalarValue::Duration(ref v) => v.as_mysql_bool(),
-            ScalarValue::Json(ref v) => v.as_mysql_bool(),
+            ScalarValue::Int(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Real(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Decimal(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Bytes(ref v) => v.as_mysql_bool(context),
+            ScalarValue::DateTime(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Duration(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Json(ref v) => v.as_mysql_bool(context),
         }
     }
 }

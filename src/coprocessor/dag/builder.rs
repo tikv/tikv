@@ -48,8 +48,8 @@ impl DAGBuilder {
         _executor_descriptors: Vec<executor::Executor>,
         _store: S,
         _ranges: Vec<KeyRange>,
-        _eval_config: EvalConfig,
-    ) -> Result<(Box<dyn BatchExecutor>, BatchExecutorContext)> {
+        _config: Arc<EvalConfig>,
+    ) -> Result<Box<dyn BatchExecutor>> {
         // Currently no batch executors and this function should never be called, so unreachable.
         unreachable!()
     }

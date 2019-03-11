@@ -1793,8 +1793,9 @@ impl Display for Decimal {
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
-        self.as_f64().unwrap_or(0.0).round() != 0f64
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
+        // Note: as_f64() may be never fail?
+        Ok(self.as_f64()?.round() != 0f64)
     }
 }
 
