@@ -81,6 +81,7 @@ pub enum VectorLikeValueRefSpecialized<'a, T> {
 impl<'a, T> Index<usize> for VectorLikeValueRefSpecialized<'a, T> {
     type Output = T;
 
+    #[inline]
     fn index(&self, index: usize) -> &Self::Output {
         match self {
             VectorLikeValueRefSpecialized::Vector(ref v) => &v[index],
