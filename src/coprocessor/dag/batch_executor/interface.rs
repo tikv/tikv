@@ -15,6 +15,8 @@
 
 //! Batch executor common structures.
 
+pub use super::statistics::{BatchExecuteStatistics, ExecSummaryCollector};
+
 use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
@@ -102,32 +104,4 @@ pub struct BatchExecuteResult {
     // TODO: The name of this field is confusing and not obvious, that we need so many comments to
     // explain what it is. We can change it to a better name or use an enum if necessary.
     pub is_drained: Result<bool, Error>,
-}
-
-/// Data to be flowed between parent and child executors at once during `collect_statistics()`
-/// invocation.
-///
-/// Each batch executor aggregates and updates corresponding slots in this structure.
-pub struct BatchExecuteStatistics {
-    /// For each range given in the request, how many rows are scanned.
-    pub scanned_rows_per_range: Vec<usize>,
-
-    /// Scanning statistics for each CF during execution.
-    pub cf_stats: crate::storage::Statistics,
-}
-
-impl BatchExecuteStatistics {
-    pub fn new(ranges: usize) -> Self {
-        Self {
-            scanned_rows_per_range: vec![0; ranges],
-            cf_stats: crate::storage::Statistics::default(),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        for item in self.scanned_rows_per_range.iter_mut() {
-            *item = 0;
-        }
-        self.cf_stats = crate::storage::Statistics::default();
-    }
 }

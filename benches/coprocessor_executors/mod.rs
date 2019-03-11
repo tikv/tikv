@@ -33,6 +33,7 @@ use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::dag::batch_executor::interface::*;
+use tikv::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::storage::RocksEngine;
 
@@ -106,6 +107,7 @@ fn bench_table_scan_next_1000_batch(
     b.iter_with_setup(
         || {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.to_fixture_store(),
                 std::sync::Arc::new(tikv::coprocessor::dag::expr::EvalConfig::default()),
                 columns_info.clone(),
@@ -1063,6 +1065,7 @@ fn bench_batch_table_scan_multi_rows(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut executor = BatchTableScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
                     store.to_fixture_store(),
                     std::sync::Arc::new(tikv::coprocessor::dag::expr::EvalConfig::default()),
                     columns_info.clone(),
@@ -1118,6 +1121,7 @@ fn bench_batch_table_scan_datum_all_multi_rows(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut executor = BatchTableScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
                     store.to_fixture_store(),
                     std::sync::Arc::new(tikv::coprocessor::dag::expr::EvalConfig::default()),
                     table.columns_info(),

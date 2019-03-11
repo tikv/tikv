@@ -12,6 +12,7 @@
 // limitations under the License.
 
 pub mod interface;
+pub mod statistics;
 
 mod index_scan_executor;
 mod ranges_iter;

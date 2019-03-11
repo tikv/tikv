@@ -25,6 +25,7 @@
 #![feature(const_int_ops)]
 #![feature(cell_update)]
 #![feature(ptr_offset_from)]
+#![feature(vec_resize_with)]
 #![recursion_limit = "200"]
 #![feature(range_contains)]
 // Currently this raises some false positives, so we allow it:

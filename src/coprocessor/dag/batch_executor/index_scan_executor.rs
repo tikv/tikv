@@ -26,16 +26,18 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(
+pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
     super::scan_executor::ScanExecutor<
+        C,
         S,
         IndexScanExecutorImpl,
         super::ranges_iter::PointRangeConditional,
     >,
 );
 
-impl<S: Store> BatchIndexScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(
+        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -63,6 +65,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             decode_handle,
         };
         let wrapper = super::scan_executor::ScanExecutor::new(
+            summary_collector,
             imp,
             store,
             desc,
@@ -73,7 +76,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
     }
 }
 
-impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor<C, S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()

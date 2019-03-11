@@ -27,16 +27,18 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
+pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
     super::scan_executor::ScanExecutor<
+        C,
         S,
         TableScanExecutorImpl,
         super::ranges_iter::PointRangeEnable,
     >,
 );
 
-impl<S: Store> BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     pub fn new(
+        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -72,6 +74,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             is_column_filled,
         };
         let wrapper = super::scan_executor::ScanExecutor::new(
+            summary_collector,
             imp,
             store,
             desc,
@@ -82,7 +85,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     }
 }
 
-impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor<C, S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -278,6 +281,7 @@ mod tests {
     use crate::storage::SnapshotStore;
 
     use super::*;
+    use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, TestStore,
     };
@@ -302,6 +306,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner = BatchTableScanExecutor::new(
+            ExecSummaryCollectorDisabled,
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -341,6 +346,7 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner = BatchTableScanExecutor::new(
+            ExecSummaryCollectorDisabled,
             store,
             Arc::new(EvalConfig::default()),
             columns_info.clone(),

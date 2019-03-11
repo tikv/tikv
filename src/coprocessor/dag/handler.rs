@@ -22,6 +22,7 @@ use crate::coprocessor::*;
 use crate::storage::Store;
 
 use super::executor::{Executor, ExecutorMetrics};
+use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
@@ -63,19 +64,23 @@ impl DAGRequestHandler {
         store: S,
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
+        let executors_len = req.get_executors().len();
         let config = Arc::new(config);
-        let out_most_executor = super::builder::DAGBuilder::build_batch(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            config.clone(),
-        )?;
+        // TODO: Use `ExecSummaryCollectorNormal` according to `DAGRequest`.
+        let out_most_executor =
+            super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorDisabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                config.clone(),
+            )?;
         Ok(super::batch_handler::BatchDAGHandler::new(
             deadline,
             out_most_executor,
             req.take_output_offsets(),
             config,
             ranges_len,
+            executors_len,
         ))
     }
 

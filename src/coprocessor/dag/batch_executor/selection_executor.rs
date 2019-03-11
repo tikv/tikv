@@ -21,22 +21,30 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::RpnExpressionNodeVec;
 use crate::coprocessor::Result;
 
-pub struct BatchSelectionExecutor<Src: BatchExecutor> {
+pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
+    summary_collector: C,
     context: EvalContext,
     src: Src,
+
     conditions: Vec<RpnExpressionNodeVec>,
 
     is_ended: bool,
 }
 
-impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
-    pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src> {
+    pub fn new(
+        summary_collector: C,
+        config: Arc<EvalConfig>,
+        src: Src,
+        conditions_def: Vec<Expr>,
+    ) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         for def in conditions_def {
             conditions.push(RpnExpressionNodeVec::build_from_expr_tree(def, config.tz)?);
         }
 
         Ok(Self {
+            summary_collector,
             context: EvalContext::new(config),
             src,
             conditions,
@@ -45,7 +53,7 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     }
 }
 
-impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<C, Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         // The selection executor's schema comes from its child.
@@ -55,6 +63,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
+
+        self.summary_collector.inc_iterations();
+        let _guard = self.summary_collector.collect_scope_duration();
 
         let mut result = self.src.next_batch(expect_rows);
 
@@ -81,6 +92,9 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         }
 
         result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
+        self.summary_collector
+            .inc_produced_rows(result.data.rows_len());
+
         result.warnings.merge(&mut self.context.warnings);
         result
     }
@@ -88,5 +102,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
+        self.summary_collector
+            .collect_into(&mut destination.summary_per_executor);
     }
 }

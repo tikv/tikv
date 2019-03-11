@@ -130,7 +130,7 @@ impl DAGBuilder {
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
-    pub fn build_batch<S: Store + 'static>(
+    pub fn build_batch<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         executor_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
@@ -143,6 +143,7 @@ impl DAGBuilder {
             .ok_or_else(|| Error::Other(box_err!("No executors")))?;
 
         let mut executor: Box<dyn BatchExecutor>;
+        let mut summary_slot_index = 0;
 
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
@@ -152,6 +153,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = box BatchTableScanExecutor::new(
+                    C::new(summary_slot_index),
                     store,
                     config.clone(),
                     columns_info,
@@ -165,6 +167,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_idx_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = box BatchIndexScanExecutor::new(
+                    C::new(summary_slot_index),
                     store,
                     config.clone(),
                     columns_info,
@@ -182,6 +185,8 @@ impl DAGBuilder {
         }
 
         for mut ed in executor_descriptors {
+            summary_slot_index += 1;
+
             let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(Error::Other(box_err!(
@@ -193,6 +198,7 @@ impl DAGBuilder {
                     COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
 
                     Box::new(BatchSelectionExecutor::new(
+                        C::new(summary_slot_index),
                         config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into_vec(),
