@@ -910,20 +910,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let substr = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let substr = try_opt!(self.children[1].eval_string(ctx, row));
         if substr.is_empty() {
             return Ok(Some(1));
         }
         if s.is_empty() {
             return Ok(Some(0));
         }
-        let s = String::from(s);
-        let substr = String::from(substr);
-        match s.find(&substr) {
-            Some(x) => Ok(Some(1 + s[..x].chars().count() as i64)),
-            None => Ok(Some(0)),
-        }
+        let idz = s.windows(substr.len()).position(|w| w == &*substr);
+        Ok(Some(idz.map(|i| i as i64 + 1).unwrap_or(0)))
     }
 }
 
@@ -3296,11 +3292,11 @@ mod tests {
             ("", "", 1),
             ("eFg", "abcdefg", 0),
             ("deF", "abcdefg", 0),
-            ("字节", "a多字节", 3),
+            ("字节", "a多字节", 1 + "a多字节".find("字节").unwrap() as i64, ),
             ("a", "a多字节", 1),
             ("bar", "foobarbar", 4),
             ("bAr", "foobarbar", 0),
-            ("好世", "你好世界", 2),
+            ("好世", "你好世界", 1 + "你好世界".find("好世").unwrap() as i64, ),
         ];
 
         for (substr, s, exp) in cases {
