@@ -419,8 +419,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val =
-            Time::from_duration(ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+        let mut val = Time::from_duration(
+            ctx.cfg.tz.clone(),
+            self.field_type.tp().try_into()?,
+            val.as_ref(),
+        )?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -690,14 +693,17 @@ impl ScalarFunc {
     }
 
     fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, ctx.cfg.tz.clone())?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
     fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t =
-            Time::parse_datetime_from_float_string(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+        let mut t = Time::parse_datetime_from_float_string(
+            s,
+            self.field_type.decimal() as i8,
+            ctx.cfg.tz.clone(),
+        )?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }

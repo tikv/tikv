@@ -207,7 +207,7 @@ impl Datum {
             }
             Datum::Time(ref t) => {
                 let s = str::from_utf8(bs)?;
-                let t2 = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
+                let t2 = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz.clone())?;
                 Ok(t.cmp(&t2))
             }
             Datum::Dur(ref d) => {
@@ -251,7 +251,7 @@ impl Datum {
         match *self {
             Datum::Bytes(ref bs) => {
                 let s = str::from_utf8(bs)?;
-                let t = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz)?;
+                let t = Time::parse_datetime(s, DEFAULT_FSP, ctx.cfg.tz.clone())?;
                 Ok(t.cmp(time))
             }
             Datum::Time(ref t) => Ok(t.cmp(time)),

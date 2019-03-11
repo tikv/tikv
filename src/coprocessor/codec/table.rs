@@ -218,7 +218,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
         FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
             let fsp = field_type.decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, ctx.cfg.tz)?;
+            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, ctx.cfg.tz.clone())?;
             Ok(Datum::Time(t))
         }
         FieldTypeTp::Duration => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
@@ -245,7 +245,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
                     FieldTypeTp::NewDecimal,
                     FieldTypeTp::JSON
                 ]
-                .contains(&t),
+                    .contains(&t),
                 "unknown type {} {:?}",
                 t,
                 datum
@@ -542,9 +542,11 @@ mod tests {
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
-            .unwrap()
-            .is_empty());
+        assert!(
+            decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+                .unwrap()
+                .is_empty()
+        );
         datums = cut_row_as_owned(&bs, &col_id_set);
         assert!(datums.is_empty());
     }

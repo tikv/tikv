@@ -20,12 +20,12 @@ use rand::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::codec::{self, Datum};
 use crate::util::codec::number;
-use cop_datatype::prelude::*;
-use cop_datatype::FieldTypeFlag;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -262,7 +262,7 @@ impl Expression {
                 .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = field_type.decimal() as i8;
-                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz.clone())
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())

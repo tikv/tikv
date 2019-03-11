@@ -212,7 +212,7 @@ impl LazyBatchColumn {
                 } else {
                     raw_value.as_slice()
                 };
-                decoded_column.push_datum(raw_datum, time_zone, column_info)?;
+                decoded_column.push_datum(raw_datum, time_zone.clone(), column_info)?;
             }
         }
         *self = LazyBatchColumn::Decoded(decoded_column);
@@ -485,8 +485,8 @@ mod benches {
     /// Bench performance of cloning a decoded column.
     #[bench]
     fn bench_lazy_batch_column_clone_decoded(b: &mut test::Bencher) {
-        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -516,8 +516,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode(b: &mut test::Bencher) {
-        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
@@ -548,8 +548,8 @@ mod benches {
     /// Note that there is a clone in the bench suite, whose cost should be excluded.
     #[bench]
     fn bench_lazy_batch_column_clone_and_decode_decoded(b: &mut test::Bencher) {
-        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
         use cop_datatype::FieldTypeTp;
+        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
         let mut column = LazyBatchColumn::raw_with_capacity(1000);
 
