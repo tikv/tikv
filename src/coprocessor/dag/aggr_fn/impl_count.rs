@@ -3,7 +3,7 @@
 use cop_codegen::AggrFunction;
 use cop_datatype::builder::FieldTypeBuilder;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;

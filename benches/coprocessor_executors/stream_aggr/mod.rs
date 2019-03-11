@@ -3,7 +3,7 @@
 mod util;
 
 use cop_datatype::FieldTypeTp;
-use tipb::expression::ExprType;
+use tipb::ExprType;
 use tipb_helper::ExprDefBuilder;
 
 use crate::util::{BenchCase, FixtureBuilder};

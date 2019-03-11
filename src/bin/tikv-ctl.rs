@@ -20,20 +20,18 @@ use std::{process, str, u64};
 use clap::{crate_authors, crate_version, App, AppSettings, Arg, ArgMatches, SubCommand};
 use futures::{future, stream, Future, Stream};
 use grpcio::{CallOption, ChannelBuilder, Environment};
-use protobuf::Message;
-use protobuf::RepeatedField;
+use prost::Message;
 
 use engine::rocks;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::debugpb::{DB as DBType, *};
-use kvproto::debugpb_grpc::DebugClient;
+use kvproto::debugpb::{Db as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
-use kvproto::tikvpb_grpc::TikvClient;
+use kvproto::tikvpb::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::binutil as util;
 use tikv::config::TiKvConfig;
@@ -182,17 +180,17 @@ trait DebugExecutor {
 
         match entry.get_entry_type() {
             EntryType::EntryNormal => {
-                let mut msg = RaftCmdRequest::new();
-                msg.merge_from_bytes(&data).unwrap();
+                let mut msg = RaftCmdRequest::default();
+                msg.merge(&data).unwrap();
                 v1!("Normal: {:#?}", msg);
             }
             EntryType::EntryConfChange => {
-                let mut msg = ConfChange::new();
-                msg.merge_from_bytes(&data).unwrap();
+                let mut msg = ConfChange::default();
+                msg.merge(&data).unwrap();
                 let ctx = msg.take_context();
                 v1!("ConfChange: {:?}", msg);
-                let mut cmd = RaftCmdRequest::new();
-                cmd.merge_from_bytes(&ctx).unwrap();
+                let mut cmd = RaftCmdRequest::default();
+                cmd.merge(&ctx).unwrap();
                 v1!("ConfChange.RaftCmdRequest: {:#?}", cmd);
             }
         }
@@ -556,7 +554,7 @@ trait DebugExecutor {
 
     fn recover_all(&self, threads: usize, read_only: bool);
 
-    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str);
+    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str);
 
     fn dump_metrics(&self, tags: Vec<&str>);
 
@@ -574,8 +572,8 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        let mut req = GetRequest::new();
-        req.set_db(DBType::KV);
+        let mut req = GetRequest::default();
+        req.set_db(DBType::Kv);
         req.set_cf(cf.to_owned());
         req.set_key(key);
         self.get(&req)
@@ -585,8 +583,8 @@ impl DebugExecutor for DebugClient {
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
         let cfs = cfs.into_iter().map(ToOwned::to_owned).collect();
-        let mut req = RegionSizeRequest::new();
-        req.set_cfs(RepeatedField::from_vec(cfs));
+        let mut req = RegionSizeRequest::default();
+        req.set_cfs(cfs);
         req.set_region_id(region);
         self.region_size(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
@@ -597,7 +595,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
-        let mut req = RegionInfoRequest::new();
+        let mut req = RegionInfoRequest::default();
         req.set_region_id(region);
         let mut resp = self
             .region_info(&req)
@@ -617,7 +615,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {
-        let mut req = RaftLogRequest::new();
+        let mut req = RaftLogRequest::default();
         req.set_region_id(region);
         req.set_log_index(index);
         self.raft_log(&req)
@@ -631,7 +629,7 @@ impl DebugExecutor for DebugClient {
         to: Vec<u8>,
         limit: u64,
     ) -> Box<dyn Stream<Item = (Vec<u8>, MvccInfo), Error = String>> {
-        let mut req = ScanMvccRequest::new();
+        let mut req = ScanMvccRequest::default();
         req.set_from_key(from);
         req.set_to_key(to);
         req.set_limit(limit);
@@ -656,7 +654,7 @@ impl DebugExecutor for DebugClient {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        let mut req = CompactRequest::new();
+        let mut req = CompactRequest::default();
         req.set_db(db);
         req.set_cf(cf.to_owned());
         req.set_from_key(from.to_owned());
@@ -668,7 +666,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn dump_metrics(&self, tags: Vec<&str>) {
-        let mut req = GetMetricsRequest::new();
+        let mut req = GetMetricsRequest::default();
         req.set_all(true);
         if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
             req.set_all(false);
@@ -720,15 +718,15 @@ impl DebugExecutor for DebugClient {
     }
 
     fn check_region_consistency(&self, region_id: u64) {
-        let mut req = RegionConsistencyCheckRequest::new();
+        let mut req = RegionConsistencyCheckRequest::default();
         req.set_region_id(region_id);
         self.check_region_consistency(&req)
             .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
         v1!("success!");
     }
 
-    fn modify_tikv_config(&self, module: MODULE, config_name: &str, config_value: &str) {
-        let mut req = ModifyTikvConfigRequest::new();
+    fn modify_tikv_config(&self, module: Module, config_name: &str, config_value: &str) {
+        let mut req = ModifyTikvConfigRequest::default();
         req.set_module(module);
         req.set_config_name(config_name.to_owned());
         req.set_config_value(config_value.to_owned());
@@ -738,7 +736,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn dump_region_properties(&self, region_id: u64) {
-        let mut req = GetRegionPropertiesRequest::new();
+        let mut req = GetRegionPropertiesRequest::default();
         req.set_region_id(region_id);
         let resp = self
             .get_region_properties(&req)
@@ -758,7 +756,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        self.get(DBType::KV, cf, &key)
+        self.get(DBType::Kv, cf, &key)
             .unwrap_or_else(|e| perror_and_exit("Debugger::get", e))
     }
 
@@ -910,7 +908,7 @@ impl DebugExecutor for Debugger {
         region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(new_peer_id);
         peer.set_store_id(store_id);
         region.mut_peers().push(peer);
@@ -934,7 +932,7 @@ impl DebugExecutor for Debugger {
         process::exit(-1);
     }
 
-    fn modify_tikv_config(&self, _: MODULE, _: &str, _: &str) {
+    fn modify_tikv_config(&self, _: Module, _: &str, _: &str) {
         ve1!("only support remote mode");
         process::exit(-1);
     }
@@ -1757,7 +1755,7 @@ fn main() {
         let pd_client = get_pd_rpc_client(pd, Arc::clone(&mgr));
         if let Some(matches) = matches.subcommand_matches("compact-cluster") {
             let db = matches.value_of("db").unwrap();
-            let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+            let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
             let cfs = Vec::from_iter(matches.values_of("cf").unwrap());
             let from_key = matches.value_of("from").map(|k| unescape(k));
             let to_key = matches.value_of("to").map(|k| unescape(k));
@@ -1858,7 +1856,7 @@ fn main() {
         debug_executor.diff_region(region, to_db, None, to_host, &cfg, mgr);
     } else if let Some(matches) = matches.subcommand_matches("compact") {
         let db = matches.value_of("db").unwrap();
-        let db_type = if db == "kv" { DBType::KV } else { DBType::RAFT };
+        let db_type = if db == "kv" { DBType::Kv } else { DBType::Raft };
         let cf = matches.value_of("cf").unwrap();
         let from_key = matches.value_of("from").map(|k| unescape(k));
         let to_key = matches.value_of("to").map(|k| unescape(k));
@@ -1990,7 +1988,7 @@ fn main() {
                     v1!("No action for fail point {}", name);
                     continue;
                 }
-                let mut inject_req = InjectFailPointRequest::new();
+                let mut inject_req = InjectFailPointRequest::default();
                 inject_req.set_name(name);
                 inject_req.set_actions(actions);
 
@@ -2007,13 +2005,13 @@ fn main() {
                 }
             }
             for (name, _) in list {
-                let mut recover_req = RecoverFailPointRequest::new();
+                let mut recover_req = RecoverFailPointRequest::default();
                 recover_req.set_name(name);
                 let option = CallOption::default().timeout(Duration::from_secs(10));
                 client.recover_fail_point_opt(&recover_req, option).unwrap();
             }
         } else if matches.is_present("list") {
-            let list_req = ListFailPointsRequest::new();
+            let list_req = ListFailPointsRequest::default();
             let option = CallOption::default().timeout(Duration::from_secs(10));
             let resp = client.list_fail_points_opt(&list_req, option).unwrap();
             v1!("{:?}", resp.get_entries());
@@ -2027,19 +2025,19 @@ fn gen_random_bytes(len: usize) -> Vec<u8> {
     (0..len).map(|_| rand::random::<u8>()).collect()
 }
 
-fn get_module_type(module: &str) -> MODULE {
+fn get_module_type(module: &str) -> Module {
     match module {
-        "kvdb" => MODULE::KVDB,
-        "raftdb" => MODULE::RAFTDB,
-        "readpool" => MODULE::READPOOL,
-        "server" => MODULE::SERVER,
-        "storage" => MODULE::STORAGE,
-        "ps" => MODULE::PD,
-        "metric" => MODULE::METRIC,
-        "coprocessor" => MODULE::COPROCESSOR,
-        "security" => MODULE::SECURITY,
-        "import" => MODULE::IMPORT,
-        _ => MODULE::UNUSED,
+        "kvdb" => Module::Kvdb,
+        "raftdb" => Module::Raftdb,
+        "readpool" => Module::Readpool,
+        "server" => Module::Server,
+        "storage" => Module::Storage,
+        "ps" => Module::Pd,
+        "metric" => Module::Metric,
+        "coprocessor" => Module::Coprocessor,
+        "security" => Module::Security,
+        "import" => Module::Import,
+        _ => Module::Unused,
     }
 }
 
@@ -2101,8 +2099,8 @@ fn dump_snap_meta_file(path: &str) {
     let content =
         fs::read(path).unwrap_or_else(|e| panic!("read meta file {} failed, error {:?}", path, e));
 
-    let mut meta = SnapshotMeta::new();
-    meta.merge_from_bytes(&content)
+    let mut meta = SnapshotMeta::default();
+    meta.merge(&content)
         .unwrap_or_else(|e| panic!("parse from bytes error {:?}", e));
     for cf_file in meta.get_cf_files() {
         v1!(
@@ -2144,7 +2142,7 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         TikvClient::new(channel)
     };
 
-    let mut req = SplitRegionRequest::new();
+    let mut req = SplitRegionRequest::default();
     req.mut_context().set_region_id(region_id);
     req.mut_context()
         .set_region_epoch(region.get_region_epoch().clone());

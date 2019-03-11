@@ -26,9 +26,7 @@ use kvproto::kvrpcpb::{self, *};
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest};
 use kvproto::raft_serverpb::*;
 use kvproto::tikvpb::*;
-use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
-use protobuf::RepeatedField;
 use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
@@ -85,7 +83,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
     }
 }
 
-impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E> {
+impl<T: RaftStoreRouter + 'static, E: Engine> Tikv for Service<T, E> {
     fn kv_get(&mut self, ctx: RpcContext<'_>, req: GetRequest, sink: UnarySink<GetResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
         let future = future_get(&self.storage, req)
@@ -318,7 +316,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GCRequest, sink: UnarySink<GCResponse>) {
+    fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GcRequest, sink: UnarySink<GcResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
@@ -575,7 +573,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = UnsafeDestroyRangeResponse::new();
+                let mut resp = UnsafeDestroyRangeResponse::default();
                 // Region error is impossible here.
                 if let Err(e) = v {
                     resp.set_error(format!("{}", e));
@@ -744,7 +742,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = MvccGetByKeyResponse::new();
+                let mut resp = MvccGetByKeyResponse::default();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
@@ -786,7 +784,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let future = AndThenWith::new(res, f.map_err(Error::from))
             .and_then(|v| {
-                let mut resp = MvccGetByStartTsResponse::new();
+                let mut resp = MvccGetByStartTsResponse::default();
                 if let Some(err) = extract_region_error(&v) {
                     resp.set_region_error(err);
                 } else {
@@ -838,7 +836,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let future = future
             .map_err(Error::from)
             .map(move |mut v| {
-                let mut resp = SplitRegionResponse::new();
+                let mut resp = SplitRegionResponse::default();
                 if v.response.get_header().has_error() {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
@@ -854,7 +852,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                             admin_resp
                         ));
                     } else {
-                        let mut regions = admin_resp.mut_splits().take_regions().into_vec();
+                        let mut regions = admin_resp.mut_splits().take_regions();
                         let mut d = regions.drain(..);
                         resp.set_left(d.next().unwrap());
                         resp.set_right(d.next().unwrap());
@@ -884,9 +882,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
-        let mut cmd = RaftCmdRequest::new();
-        let mut header = RaftRequestHeader::new();
-        let mut inner_req = RaftRequest::new();
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        let mut inner_req = RaftRequest::default();
         inner_req.set_cmd_type(CmdType::ReadIndex);
         header.set_region_id(req.get_context().get_region_id());
         header.set_peer(req.get_context().get_peer().clone());
@@ -897,7 +895,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         header.set_sync_log(req.get_context().get_sync_log());
         header.set_read_quorum(true);
         cmd.set_header(header);
-        cmd.set_requests(RepeatedField::from_vec(vec![inner_req]));
+        cmd.set_requests(vec![inner_req]);
 
         let (cb, future) = paired_future_callback();
 
@@ -909,7 +907,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let future = future
             .map_err(Error::from)
             .map(move |mut v| {
-                let mut resp = ReadIndexResponse::new();
+                let mut resp = ReadIndexResponse::default();
                 if v.response.get_header().has_error() {
                     resp.set_region_error(v.response.mut_header().take_error());
                 } else {
@@ -959,7 +957,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 
         let request_handler = stream.for_each(move |mut req| {
             let request_ids = req.take_request_ids();
-            let requests = req.take_requests().into_vec();
+            let requests = req.take_requests();
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
                 handle_batch_commands_request(&storage, &cop, peer.clone(), id, req, tx.clone());
@@ -973,7 +971,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let response_retriever = BatchReceiver::new(
             rx,
             GRPC_MSG_MAX_BATCH_SIZE,
-            BatchCommandsResponse::new,
+            BatchCommandsResponse::default,
             |batch_resp, (id, resp)| {
                 batch_resp.mut_request_ids().push(id);
                 batch_resp.mut_responses().push(resp);
@@ -1004,10 +1002,10 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
 fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
-    tx: Sender<(u64, BatchCommandsResponse_Response)>,
+    tx: Sender<(u64, batch_commands_response::Response)>,
     timer: HistogramTimer,
 ) where
-    F: Future<Item = BatchCommandsResponse_Response, Error = ()> + Send + 'static,
+    F: Future<Item = batch_commands_response::Response, Error = ()> + Send + 'static,
 {
     let f = resp.and_then(move |resp| {
         if tx.send_and_notify((id, resp)).is_err() {
@@ -1052,14 +1050,14 @@ fn handle_batch_commands_request<E: Engine>(
     cop: &Endpoint<E>,
     peer: String,
     id: u64,
-    req: BatchCommandsRequest_Request,
-    tx: Sender<(u64, BatchCommandsResponse_Response)>,
+    req: batch_commands_request::Request,
+    tx: Sender<(u64, batch_commands_response::Response)>,
 ) {
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
             |resp| {
-                let mut res = BatchCommandsResponse_Response::new();
+                let mut res = batch_commands_response::Response::default();
                 res.cmd = Some($p(resp));
                 res
             }
@@ -1070,203 +1068,191 @@ fn handle_batch_commands_request<E: Engine>(
         None => {
             // For some invalid requests.
             let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
-            let resp = future::ok(BatchCommandsResponse_Response::default());
+            let resp = future::ok(batch_commands_response::Response::default());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Get(req)) => {
+        Some(batch_commands_request::request::Cmd::Get(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_get.start_coarse_timer();
             let resp = future_get(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Get))
+                .map(oneof!(batch_commands_response::response::Cmd::Get))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Scan(req)) => {
+        Some(batch_commands_request::request::Cmd::Scan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan.start_coarse_timer();
             let resp = future_scan(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Scan))
+                .map(oneof!(batch_commands_response::response::Cmd::Scan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Prewrite(req)) => {
+        Some(batch_commands_request::request::Cmd::Prewrite(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
             let resp = future_prewrite(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Prewrite))
+                .map(oneof!(batch_commands_response::response::Cmd::Prewrite))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_prewrite.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Commit(req)) => {
+        Some(batch_commands_request::request::Cmd::Commit(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_commit.start_coarse_timer();
             let resp = future_commit(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Commit))
+                .map(oneof!(batch_commands_response::response::Cmd::Commit))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_commit.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Import(_)) => unimplemented!(),
-        Some(BatchCommandsRequest_Request_oneof_cmd::Cleanup(req)) => {
+        Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
+        Some(batch_commands_request::request::Cmd::Cleanup(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_cleanup.start_coarse_timer();
             let resp = future_cleanup(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Cleanup))
+                .map(oneof!(batch_commands_response::response::Cmd::Cleanup))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_cleanup.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::BatchGet(req)) => {
+        Some(batch_commands_request::request::Cmd::BatchGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_batch_get.start_coarse_timer();
             let resp = future_batch_get(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::BatchGet))
+                .map(oneof!(batch_commands_response::response::Cmd::BatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::BatchRollback(req)) => {
+        Some(batch_commands_request::request::Cmd::BatchRollback(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_batch_rollback
                 .start_coarse_timer();
             let resp = future_batch_rollback(&storage, req)
                 .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::BatchRollback
+                    batch_commands_response::response::Cmd::BatchRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_batch_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::ScanLock(req)) => {
+        Some(batch_commands_request::request::Cmd::ScanLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_scan_lock.start_coarse_timer();
             let resp = future_scan_lock(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::ScanLock))
+                .map(oneof!(batch_commands_response::response::Cmd::ScanLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_scan_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::ResolveLock(req)) => {
+        Some(batch_commands_request::request::Cmd::ResolveLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_resolve_lock.start_coarse_timer();
             let resp = future_resolve_lock(&storage, req)
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::ResolveLock
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::ResolveLock))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_resolve_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::GC(req)) => {
+        Some(batch_commands_request::request::Cmd::Gc(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
             let resp = future_gc(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::GC))
+                .map(oneof!(batch_commands_response::response::Cmd::Gc))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_gc.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::DeleteRange(req)) => {
+        Some(batch_commands_request::request::Cmd::DeleteRange(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.kv_delete_range.start_coarse_timer();
             let resp = future_delete_range(&storage, req)
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::DeleteRange
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::DeleteRange))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_delete_range.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawGet(req)) => {
+        Some(batch_commands_request::request::Cmd::RawGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_get.start_coarse_timer();
             let resp = future_raw_get(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::RawGet))
+                .map(oneof!(batch_commands_response::response::Cmd::RawGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchGet(req)) => {
+        Some(batch_commands_request::request::Cmd::RawBatchGet(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_get.start_coarse_timer();
             let resp = future_raw_batch_get(&storage, req)
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::RawBatchGet
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::RawBatchGet))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_get.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawPut(req)) => {
+        Some(batch_commands_request::request::Cmd::RawPut(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_put.start_coarse_timer();
             let resp = future_raw_put(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::RawPut))
+                .map(oneof!(batch_commands_response::response::Cmd::RawPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_put.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchPut(req)) => {
+        Some(batch_commands_request::request::Cmd::RawBatchPut(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_put.start_coarse_timer();
             let resp = future_raw_batch_put(&storage, req)
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::RawBatchPut
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::RawBatchPut))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_put.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawDelete(req)) => {
+        Some(batch_commands_request::request::Cmd::RawDelete(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete.start_coarse_timer();
             let resp = future_raw_delete(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::RawDelete))
+                .map(oneof!(batch_commands_response::response::Cmd::RawDelete))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchDelete(req)) => {
+        Some(batch_commands_request::request::Cmd::RawBatchDelete(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_delete.start_coarse_timer();
             let resp = future_raw_batch_delete(&storage, req)
                 .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::RawBatchDelete
+                    batch_commands_response::response::Cmd::RawBatchDelete
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_delete.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawScan(req)) => {
+        Some(batch_commands_request::request::Cmd::RawScan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
             let resp = future_raw_scan(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::RawScan))
+                .map(oneof!(batch_commands_response::response::Cmd::RawScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawDeleteRange(req)) => {
+        Some(batch_commands_request::request::Cmd::RawDeleteRange(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_delete_range.start_coarse_timer();
             let resp = future_raw_delete_range(&storage, req)
                 .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::RawDeleteRange
+                    batch_commands_response::response::Cmd::RawDeleteRange
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_delete_range.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::RawBatchScan(req)) => {
+        Some(batch_commands_request::request::Cmd::RawBatchScan(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.raw_batch_scan.start_coarse_timer();
             let resp = future_raw_batch_scan(&storage, req)
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::RawBatchScan
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::RawBatchScan))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_batch_scan.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Coprocessor(req)) => {
+        Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
             let resp = future_cop(&cop, req, Some(peer))
-                .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::Coprocessor
-                ))
+                .map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticLock(req)) => {
+        Some(batch_commands_request::request::Cmd::PessimisticLock(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_pessimistic_lock
                 .start_coarse_timer();
             let resp = future_acquire_pessimistic_lock(&storage, req)
                 .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::PessimisticLock
+                    batch_commands_response::response::Cmd::PessimisticLock
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(req)) => {
+        Some(batch_commands_request::request::Cmd::PessimisticRollback(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_pessimistic_rollback
                 .start_coarse_timer();
             let resp = future_pessimistic_rollback(&storage, req)
                 .map(oneof!(
-                    BatchCommandsResponse_Response_oneof_cmd::PessimisticRollback
+                    batch_commands_response::response::Cmd::PessimisticRollback
                 ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Empty(req)) => {
+        Some(batch_commands_request::request::Cmd::Empty(req)) => {
             let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
             let resp = future_handle_empty(req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Empty))
+                .map(oneof!(batch_commands_response::response::Cmd::Empty))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
@@ -1279,7 +1265,7 @@ fn future_handle_empty(
     tikv_util::timer::GLOBAL_TIMER_HANDLE
         .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
         .map(move |_| {
-            let mut res = BatchCommandsEmptyResponse::new();
+            let mut res = BatchCommandsEmptyResponse::default();
             res.set_test_id(req.get_test_id());
             res
         })
@@ -1297,7 +1283,7 @@ fn future_get<E: Engine>(
             req.get_version(),
         )
         .then(|v| {
-            let mut resp = GetResponse::new();
+            let mut resp = GetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
@@ -1335,11 +1321,11 @@ fn future_scan<E: Engine>(
             options,
         )
         .then(|v| {
-            let mut resp = ScanResponse::new();
+            let mut resp = ScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v));
             }
             Ok(resp)
         })
@@ -1378,11 +1364,11 @@ fn future_prewrite<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PrewriteResponse::new();
+        let mut resp = PrewriteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v));
         }
         resp
     })
@@ -1419,11 +1405,11 @@ fn future_acquire_pessimistic_lock<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PessimisticLockResponse::new();
+        let mut resp = PessimisticLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v));
         }
         resp
     })
@@ -1444,11 +1430,11 @@ fn future_pessimistic_rollback<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = PessimisticRollbackResponse::new();
+        let mut resp = PessimisticRollbackResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
-            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+            resp.set_errors(extract_key_errors(v));
         }
         resp
     })
@@ -1469,7 +1455,7 @@ fn future_commit<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = CommitResponse::new();
+        let mut resp = CommitResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1492,7 +1478,7 @@ fn future_cleanup<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = CleanupResponse::new();
+        let mut resp = CleanupResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1514,11 +1500,11 @@ fn future_batch_get<E: Engine>(
     storage
         .async_batch_get(req.take_context(), keys, req.get_version())
         .then(|v| {
-            let mut resp = BatchGetResponse::new();
+            let mut resp = BatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v));
             }
             Ok(resp)
         })
@@ -1534,7 +1520,7 @@ fn future_batch_rollback<E: Engine>(
     let res = storage.async_rollback(req.take_context(), keys, req.get_start_version(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = BatchRollbackResponse::new();
+        let mut resp = BatchRollbackResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1558,12 +1544,12 @@ fn future_scan_lock<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = ScanLockResponse::new();
+        let mut resp = ScanLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             match v {
-                Ok(locks) => resp.set_locks(RepeatedField::from_vec(locks)),
+                Ok(locks) => resp.set_locks(locks),
                 Err(e) => resp.set_error(extract_key_error(&e)),
             }
         }
@@ -1604,7 +1590,7 @@ fn future_resolve_lock<E: Engine>(
     };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = ResolveLockResponse::new();
+        let mut resp = ResolveLockResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1616,13 +1602,13 @@ fn future_resolve_lock<E: Engine>(
 
 fn future_gc<E: Engine>(
     storage: &Storage<E>,
-    mut req: GCRequest,
-) -> impl Future<Item = GCResponse, Error = Error> {
+    mut req: GcRequest,
+) -> impl Future<Item = GcResponse, Error = Error> {
     let (cb, f) = paired_future_callback();
     let res = storage.async_gc(req.take_context(), req.get_safe_point(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = GCResponse::new();
+        let mut resp = GcResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1646,7 +1632,7 @@ fn future_delete_range<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = DeleteRangeResponse::new();
+        let mut resp = DeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1663,7 +1649,7 @@ fn future_raw_get<E: Engine>(
     storage
         .async_raw_get(req.take_context(), req.take_cf(), req.take_key())
         .then(|v| {
-            let mut resp = RawGetResponse::new();
+            let mut resp = RawGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
@@ -1681,15 +1667,15 @@ fn future_raw_batch_get<E: Engine>(
     storage: &Storage<E>,
     mut req: RawBatchGetRequest,
 ) -> impl Future<Item = RawBatchGetResponse, Error = Error> {
-    let keys = req.take_keys().into_vec();
+    let keys = req.take_keys();
     storage
         .async_raw_batch_get(req.take_context(), req.take_cf(), keys)
         .then(|v| {
-            let mut resp = RawBatchGetResponse::new();
+            let mut resp = RawBatchGetResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_pairs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_pairs(extract_kv_pairs(v));
             }
             Ok(resp)
         })
@@ -1709,7 +1695,7 @@ fn future_raw_put<E: Engine>(
     );
 
     AndThenWith::new(res, future.map_err(Error::from)).map(|v| {
-        let mut resp = RawPutResponse::new();
+        let mut resp = RawPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1734,7 +1720,7 @@ fn future_raw_batch_put<E: Engine>(
     let res = storage.async_raw_batch_put(req.take_context(), cf, pairs, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawBatchPutResponse::new();
+        let mut resp = RawBatchPutResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1752,7 +1738,7 @@ fn future_raw_delete<E: Engine>(
     let res = storage.async_raw_delete(req.take_context(), req.take_cf(), req.take_key(), cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawDeleteResponse::new();
+        let mut resp = RawDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1767,12 +1753,12 @@ fn future_raw_batch_delete<E: Engine>(
     mut req: RawBatchDeleteRequest,
 ) -> impl Future<Item = RawBatchDeleteResponse, Error = Error> {
     let cf = req.take_cf();
-    let keys = req.take_keys().into_vec();
+    let keys = req.take_keys();
     let (cb, f) = paired_future_callback();
     let res = storage.async_raw_batch_delete(req.take_context(), cf, keys, cb);
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawBatchDeleteResponse::new();
+        let mut resp = RawBatchDeleteResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1802,11 +1788,11 @@ fn future_raw_scan<E: Engine>(
             req.get_reverse(),
         )
         .then(|v| {
-            let mut resp = RawScanResponse::new();
+            let mut resp = RawScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v));
             }
             Ok(resp)
         })
@@ -1820,17 +1806,17 @@ fn future_raw_batch_scan<E: Engine>(
         .async_raw_batch_scan(
             req.take_context(),
             req.take_cf(),
-            req.take_ranges().into_vec(),
+            req.take_ranges(),
             req.get_each_limit() as usize,
             req.get_key_only(),
             req.get_reverse(),
         )
         .then(|v| {
-            let mut resp = RawBatchScanResponse::new();
+            let mut resp = RawBatchScanResponse::default();
             if let Some(err) = extract_region_error(&v) {
                 resp.set_region_error(err);
             } else {
-                resp.set_kvs(RepeatedField::from_vec(extract_kv_pairs(v)));
+                resp.set_kvs(extract_kv_pairs(v));
             }
             Ok(resp)
         })
@@ -1850,7 +1836,7 @@ fn future_raw_delete_range<E: Engine>(
     );
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
-        let mut resp = RawDeleteRangeResponse::new();
+        let mut resp = RawDeleteRangeResponse::default();
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else if let Err(e) = v {
@@ -1879,15 +1865,15 @@ fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
             Some(e.to_owned())
         }
         Err(Error::SchedTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
+            let mut err = RegionError::default();
+            let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(SCHEDULER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
         }
         Err(Error::GCWorkerTooBusy) => {
-            let mut err = RegionError::new();
-            let mut server_is_busy_err = ServerIsBusy::new();
+            let mut err = RegionError::default();
+            let mut server_is_busy_err = ServerIsBusy::default();
             server_is_busy_err.set_reason(GC_WORKER_IS_BUSY.to_owned());
             err.set_server_is_busy(server_is_busy_err);
             Some(err)
@@ -1904,7 +1890,7 @@ fn extract_committed(err: &storage::Error) -> Option<u64> {
 }
 
 fn extract_key_error(err: &storage::Error) -> KeyError {
-    let mut key_error = KeyError::new();
+    let mut key_error = KeyError::default();
     match *err {
         storage::Error::Txn(TxnError::Mvcc(MvccError::KeyIsLocked {
             ref key,
@@ -1913,7 +1899,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ttl,
             txn_size,
         })) => {
-            let mut lock_info = LockInfo::new();
+            let mut lock_info = LockInfo::default();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
@@ -1930,7 +1916,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ref primary,
             ..
         })) => {
-            let mut write_conflict = WriteConflict::new();
+            let mut write_conflict = WriteConflict::default();
             write_conflict.set_start_ts(start_ts);
             write_conflict.set_conflict_ts(conflict_start_ts);
             write_conflict.set_conflict_commit_ts(conflict_commit_ts);
@@ -1941,7 +1927,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         storage::Error::Txn(TxnError::Mvcc(MvccError::AlreadyExist { ref key })) => {
-            let mut exist = AlreadyExist::new();
+            let mut exist = AlreadyExist::default();
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
@@ -1957,7 +1943,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ..
         })) => {
             warn!("txn deadlocks"; "err" => ?err);
-            let mut deadlock = Deadlock::new();
+            let mut deadlock = Deadlock::default();
             deadlock.set_lock_ts(lock_ts);
             deadlock.set_lock_key(lock_key.to_owned());
             deadlock.set_deadlock_key_hash(deadlock_key_hash);
@@ -1977,20 +1963,20 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
             .into_iter()
             .map(|r| match r {
                 Ok((key, value)) => {
-                    let mut pair = KvPair::new();
+                    let mut pair = KvPair::default();
                     pair.set_key(key);
                     pair.set_value(value);
                     pair
                 }
                 Err(e) => {
-                    let mut pair = KvPair::new();
+                    let mut pair = KvPair::default();
                     pair.set_error(extract_key_error(&e));
                     pair
                 }
             })
             .collect(),
         Err(e) => {
-            let mut pair = KvPair::new();
+            let mut pair = KvPair::default();
             pair.set_error(extract_key_error(&e));
             vec![pair]
         }
@@ -1998,16 +1984,16 @@ fn extract_kv_pairs(res: storage::Result<Vec<storage::Result<storage::KvPair>>>)
 }
 
 fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
-    let mut mvcc_info = MvccInfo::new();
+    let mut mvcc_info = MvccInfo::default();
     if let Some(lock) = mvcc.lock {
-        let mut lock_info = MvccLock::new();
+        let mut lock_info = MvccLock::default();
         let op = match lock.lock_type {
             LockType::Put => Op::Put,
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
             LockType::Pessimistic => Op::PessimisticLock,
         };
-        lock_info.set_field_type(op);
+        lock_info.set_field_type_(op);
         lock_info.set_start_ts(lock.ts);
         lock_info.set_primary(lock.primary);
         lock_info.set_short_value(lock.short_value.unwrap_or_default());
@@ -2015,15 +2001,15 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
     }
     let vv = extract_2pc_values(mvcc.values);
     let vw = extract_2pc_writes(mvcc.writes);
-    mvcc_info.set_writes(RepeatedField::from_vec(vw));
-    mvcc_info.set_values(RepeatedField::from_vec(vv));
+    mvcc_info.set_writes(vw);
+    mvcc_info.set_values(vv);
     mvcc_info
 }
 
 fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
     res.into_iter()
         .map(|(start_ts, value)| {
-            let mut value_info = MvccValue::new();
+            let mut value_info = MvccValue::default();
             value_info.set_start_ts(start_ts);
             value_info.set_value(value);
             value_info
@@ -2034,14 +2020,14 @@ fn extract_2pc_values(res: Vec<(u64, Value)>) -> Vec<MvccValue> {
 fn extract_2pc_writes(res: Vec<(u64, MvccWrite)>) -> Vec<kvrpcpb::MvccWrite> {
     res.into_iter()
         .map(|(commit_ts, write)| {
-            let mut write_info = kvrpcpb::MvccWrite::new();
+            let mut write_info = kvrpcpb::MvccWrite::default();
             let op = match write.write_type {
                 WriteType::Put => Op::Put,
                 WriteType::Delete => Op::Del,
                 WriteType::Lock => Op::Lock,
                 WriteType::Rollback => Op::Rollback,
             };
-            write_info.set_field_type(op);
+            write_info.set_field_type_(op);
             write_info.set_start_ts(write.start_ts);
             write_info.set_commit_ts(commit_ts);
             write_info.set_short_value(write.short_value.unwrap_or_default());
@@ -2088,8 +2074,8 @@ mod tests {
             key: key.clone(),
             primary: primary.clone(),
         }));
-        let mut expect = KeyError::new();
-        let mut write_conflict = WriteConflict::new();
+        let mut expect = KeyError::default();
+        let mut write_conflict = WriteConflict::default();
         write_conflict.set_start_ts(start_ts);
         write_conflict.set_conflict_ts(conflict_start_ts);
         write_conflict.set_conflict_commit_ts(conflict_commit_ts);

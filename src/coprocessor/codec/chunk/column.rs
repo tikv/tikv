@@ -388,7 +388,7 @@ mod tests {
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::mysql::*;
     use std::{f64, u64};
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
 
     #[test]
     fn test_column_i64() {

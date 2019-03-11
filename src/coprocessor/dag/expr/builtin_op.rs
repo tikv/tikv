@@ -191,7 +191,7 @@ mod tests {
     };
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_logic_op() {

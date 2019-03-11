@@ -78,7 +78,7 @@ fn decimal_is_false(arg: &Option<Decimal>) -> Result<Option<i64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::coprocessor::codec::mysql::{time, Tz};
     use crate::coprocessor::dag::rpn_expr::test_util::RpnFnScalarEvaluator;

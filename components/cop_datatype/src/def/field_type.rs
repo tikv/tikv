@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use num_traits::FromPrimitive;
 
-/// Valid values of `tipb::expression::FieldType::tp` and `tipb::schema::ColumnInfo::tp`.
+/// Valid values of `tipb::FieldType::tp` and `tipb::ColumnInfo::tp`.
 ///
 /// `FieldType` is the field type of a column defined by schema.
 ///
@@ -54,8 +54,8 @@ impl fmt::Display for FieldTypeTp {
     }
 }
 
-/// Valid values of `tipb::expression::FieldType::collate` and
-/// `tipb::schema::ColumnInfo::collation`.
+/// Valid values of `tipb::FieldType::collate` and
+/// `tipb::ColumnInfo::collation`.
 ///
 /// The default value if `UTF8Bin`.
 #[derive(Primitive, PartialEq, Debug, Clone, Copy)]
@@ -277,12 +277,12 @@ impl FieldTypeAccessor for ColumnInfo {
 
     #[inline]
     fn flen(&self) -> isize {
-        self.get_columnLen() as isize
+        self.get_column_len() as isize
     }
 
     #[inline]
     fn set_flen(&mut self, flen: isize) -> &mut dyn FieldTypeAccessor {
-        ColumnInfo::set_columnLen(self, flen as i32);
+        ColumnInfo::set_column_len(self, flen as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
@@ -311,7 +311,7 @@ impl FieldTypeAccessor for ColumnInfo {
 
 impl From<FieldTypeTp> for FieldType {
     fn from(fp: FieldTypeTp) -> FieldType {
-        let mut ft = FieldType::new();
+        let mut ft = FieldType::default();
         ft.as_mut_accessor().set_tp(fp);
         ft
     }
@@ -319,7 +319,7 @@ impl From<FieldTypeTp> for FieldType {
 
 impl From<FieldTypeTp> for ColumnInfo {
     fn from(fp: FieldTypeTp) -> ColumnInfo {
-        let mut ft = ColumnInfo::new();
+        let mut ft = ColumnInfo::default();
         ft.as_mut_accessor().set_tp(fp);
         ft
     }

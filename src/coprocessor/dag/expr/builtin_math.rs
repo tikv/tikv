@@ -558,7 +558,7 @@ mod tests {
     use std::{f64, i64, u64};
 
     use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{
@@ -657,9 +657,7 @@ mod tests {
         // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
-                if args[0]
-                    .get_field_type()
-                    .flag()
+                if FieldTypeAccessor::flag(args[0].get_field_type())
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
                     op.mut_field_type()
@@ -731,9 +729,7 @@ mod tests {
         // for ceil decimal to int.
         for (sig, arg, exp) in tests {
             let got = eval_func_with(sig, &[arg], |op, args| {
-                if args[0]
-                    .get_field_type()
-                    .flag()
+                if FieldTypeAccessor::flag(args[0].get_field_type())
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
                     op.mut_field_type()
@@ -852,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_pi() {
-        let got = eval_func(ScalarFuncSig::PI, &[]).unwrap();
+        let got = eval_func(ScalarFuncSig::Pi, &[]).unwrap();
         assert_eq!(got, Datum::F64(f64::consts::PI));
     }
 
@@ -916,7 +912,7 @@ mod tests {
 
         for (arg, exp) in cases {
             let arg = Datum::Bytes(arg.as_bytes().to_vec());
-            let got = eval_func(ScalarFuncSig::CRC32, &[arg]).unwrap();
+            let got = eval_func(ScalarFuncSig::Crc32, &[arg]).unwrap();
             let exp = Datum::I64(exp);
             assert_eq!(got, exp);
         }
@@ -1350,9 +1346,7 @@ mod tests {
         ];
         for (x, d, exp) in tests {
             let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
-                if args[0]
-                    .get_field_type()
-                    .flag()
+                if FieldTypeAccessor::flag(args[0].get_field_type())
                     .contains(FieldTypeFlag::UNSIGNED)
                 {
                     op.mut_field_type()

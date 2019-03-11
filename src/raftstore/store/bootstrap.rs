@@ -15,7 +15,7 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
-    let mut region = metapb::Region::new();
+    let mut region = metapb::Region::default();
     region.set_id(region_id);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
     region.set_end_key(keys::EMPTY_KEY.to_vec());
@@ -38,7 +38,7 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 
 // Bootstrap the store, the DB for this store must be empty and has no data.
 pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
-    let mut ident = StoreIdent::new();
+    let mut ident = StoreIdent::default();
 
     if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
@@ -62,7 +62,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
 ///
 /// Write the first region meta and prepare state.
 pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
-    let mut state = RegionLocalState::new();
+    let mut state = RegionLocalState::default();
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();

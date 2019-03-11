@@ -3,7 +3,7 @@
 use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
 use kvproto::coprocessor::KeyRange;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
 
 use super::{Executor, ExecutorMetrics, Row};
 use crate::coprocessor::codec::table;

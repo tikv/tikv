@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use protobuf::RepeatedField;
-
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::IndexScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::IndexScan;
 
 use test_coprocessor::*;
 use tikv::coprocessor::dag::batch::executors::BatchIndexScanExecutor;
@@ -41,8 +39,8 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         store: &Store<RocksEngine>,
         unique: bool,
     ) -> Self::E {
-        let mut req = IndexScan::new();
-        req.set_columns(RepeatedField::from_slice(columns));
+        let mut req = IndexScan::default();
+        req.set_columns(columns.to_owned());
 
         let mut executor = IndexScanExecutor::index_scan(
             black_box(req),

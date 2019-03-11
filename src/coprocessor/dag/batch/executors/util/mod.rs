@@ -8,7 +8,7 @@ pub mod ranges_iter;
 pub mod scan_executor;
 
 use tikv_util::{erase_lifetime, erase_lifetime_mut};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::mysql::Tz;

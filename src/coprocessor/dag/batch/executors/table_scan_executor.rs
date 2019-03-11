@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::TableScan;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::{ColumnInfo, FieldType, TableScan};
 
 use crate::storage::{FixtureStore, Store};
 use tikv_util::collections::HashMap;
@@ -272,8 +270,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 let default_value = if !self.columns_default_value[i].is_empty() {
                     // default value is provided, use the default value
                     self.columns_default_value[i].as_slice()
-                } else if !self.schema[i]
-                    .flag()
+                } else if !FieldTypeAccessor::flag(&self.schema[i])
                     .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
                 {
                     // NULL is allowed, use NULL
@@ -304,8 +301,8 @@ mod tests {
 
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
-    use tipb::expression::FieldType;
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
+    use tipb::FieldType;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
     use crate::coprocessor::codec::data_type::*;
@@ -391,20 +388,20 @@ mod tests {
             // The column info for each column in `data`.
             let columns_info = vec![
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_pk_handle(true);
                     ci.set_column_id(1);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                     ci.set_column_id(2);
                     ci
                 },
                 {
-                    let mut ci = ColumnInfo::new();
+                    let mut ci = ColumnInfo::default();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
                     ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
@@ -448,7 +445,7 @@ mod tests {
             self.data
                 .iter()
                 .map(|(row_id, _, _)| {
-                    let mut r = KeyRange::new();
+                    let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, *row_id));
                     r.set_end(r.get_start().to_vec());
                     convert_to_prefix_next(r.mut_end());
@@ -462,7 +459,7 @@ mod tests {
             vec![
                 self.table_range(std::i64::MIN, 3),
                 {
-                    let mut r = KeyRange::new();
+                    let mut r = KeyRange::default();
                     r.set_start(table::encode_row_key(self.table_id, 3));
                     r.set_end(r.get_start().to_vec());
                     convert_to_prefix_next(r.mut_end());
@@ -495,7 +492,7 @@ mod tests {
 
         /// Returns the range for handle in [start_id,end_id)
         fn table_range(&self, start_id: i64, end_id: i64) -> KeyRange {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             range.set_start(table::encode_row_key(self.table_id, start_id));
             range.set_end(table::encode_row_key(self.table_id, end_id));
             range
@@ -689,20 +686,20 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(3);
                 ci
@@ -753,7 +750,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                let mut r = KeyRange::new();
+                let mut r = KeyRange::default();
                 r.set_start(table::encode_row_key(TABLE_ID, index as i64));
                 r.set_end(r.get_start().to_vec());
                 convert_to_prefix_next(r.mut_end());
@@ -812,14 +809,14 @@ mod tests {
 
         let columns_info = vec![
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_pk_handle(true);
                 ci.set_column_id(1);
                 ci
             },
             {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
                 ci.set_column_id(2);
                 ci
@@ -859,7 +856,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                let mut r = KeyRange::new();
+                let mut r = KeyRange::default();
                 r.set_start(table::encode_row_key(TABLE_ID, index as i64));
                 r.set_end(r.get_start().to_vec());
                 convert_to_prefix_next(r.mut_end());

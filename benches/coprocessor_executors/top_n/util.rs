@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::expression::Expr;
+use tipb::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
 use tikv::coprocessor::dag::executor::{Executor, TopNExecutor};
@@ -55,7 +55,7 @@ impl TopNBencher for NormalBencher {
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             assert_eq!(order_by_expr.len(), order_is_desc.len());
-            let meta = top_n(order_by_expr, order_is_desc, n).take_topN();
+            let meta = top_n(order_by_expr, order_is_desc, n).take_top_n();
             let src = fb.clone().build_normal_fixture_executor();
             Box::new(
                 TopNExecutor::new(

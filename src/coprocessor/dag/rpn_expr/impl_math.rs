@@ -47,7 +47,7 @@ fn abs_decimal(arg: &Option<Decimal>) -> Result<Option<Decimal>> {
 mod tests {
     use super::*;
 
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 

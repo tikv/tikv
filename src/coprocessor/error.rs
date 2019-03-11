@@ -27,7 +27,7 @@ quick_error! {
         Full {
             description("Coprocessor end-point thread pool is full")
         }
-        Eval(err: tipb::select::Error) {
+        Eval(err: tipb::Error) {
             from()
             description("eval failed")
             display("Eval error: {}", err.get_msg())
@@ -68,7 +68,7 @@ impl From<storage::txn::Error> for Error {
                 ttl,
                 txn_size,
             }) => {
-                let mut info = kvrpcpb::LockInfo::new();
+                let mut info = kvrpcpb::LockInfo::default();
                 info.set_primary_lock(primary);
                 info.set_lock_version(ts);
                 info.set_key(key);

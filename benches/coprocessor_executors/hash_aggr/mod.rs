@@ -3,7 +3,7 @@
 mod util;
 
 use cop_datatype::FieldTypeTp;
-use tipb::expression::{ExprType, ScalarFuncSig};
+use tipb::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 
 use crate::util::{BenchCase, FixtureBuilder};
@@ -36,7 +36,7 @@ fn bench_hash_aggr_count_1_group_by_int_col_2_groups(b: &mut criterion::Bencher,
 fn bench_hash_aggr_count_1_group_by_fn_2_groups(b: &mut criterion::Bencher, input: &Input) {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_0_n();
     let group_by = vec![
-        ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+        ExprDefBuilder::scalar_func(ScalarFuncSig::GtInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .push_child(ExprDefBuilder::constant_int((input.src_rows / 2) as i64))
             .build(),

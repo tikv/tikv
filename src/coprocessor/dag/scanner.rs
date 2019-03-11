@@ -165,7 +165,7 @@ pub mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use tipb::schema::ColumnInfo;
+    use tipb::ColumnInfo;
 
     use super::super::executor::tests::{get_range, new_col_info, TestStore};
     use crate::coprocessor::codec::datum::{self, Datum};
@@ -241,7 +241,7 @@ pub mod tests {
         let start_key = table::encode_row_key(table_id, handle);
         let mut end = start_key.clone();
         util::convert_to_prefix_next(&mut end);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end);
         key_range
@@ -258,7 +258,7 @@ pub mod tests {
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         let mut scanner = Scanner::new(&store, ScanOn::Table, false, false, range).unwrap();
         for &(ref k, ref v) in &test_data {
@@ -276,7 +276,7 @@ pub mod tests {
         let mut data = prepare_table_data(key_number, table_id);
         let mut test_store = TestStore::new(&data.kv_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         let mut scanner = Scanner::new(&store, ScanOn::Table, true, false, range).unwrap();
         data.kv_data.reverse();
@@ -299,7 +299,7 @@ pub mod tests {
         ];
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let range = get_range(table_id, i64::MIN, i64::MAX);
         let mut scanner = Scanner::new(&store, ScanOn::Table, false, true, range).unwrap();
         let (_, value) = scanner.next_row().unwrap().unwrap();
@@ -321,13 +321,13 @@ pub mod tests {
             .collect();
         let mut test_store = TestStore::new(&test_data);
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
 
         // `test_take` is used to take `count` keys from the scanner. It calls `start_scan` at
         // beginning, `stop_scan` in the end, producing a range. the range will be checked against
         // `expect_start_pk` and `expect_end_pk`. Pass -1 as pk means the end.
         let test_take = |scanner: &mut Scanner<_>, count, expect_start_pk, expect_end_pk| {
-            let mut range = KeyRange::new();
+            let mut range = KeyRange::default();
             scanner.start_scan(&mut range);
 
             let mut keys = Vec::new();

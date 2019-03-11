@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
@@ -330,7 +330,7 @@ mod tests {
 
         let aggr_definitions: Vec<_> = (0..6)
             .map(|index| {
-                let mut exp = Expr::new();
+                let mut exp = Expr::default();
                 exp.mut_val().push(index as u8);
                 exp
             })
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a simple aggregation executor with the following aggregate functions:
@@ -607,7 +607,7 @@ mod tests {
         }
 
         let mut exec =
-            BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::new()], MyParser);
+            BatchSimpleAggregationExecutor::new_for_test(src_exec, vec![Expr::default()], MyParser);
 
         let r = exec.next_batch(1);
         assert!(r.logical_rows.is_empty());

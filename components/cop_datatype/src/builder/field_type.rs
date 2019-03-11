@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::FieldTypeAccessor;
 
@@ -9,7 +9,7 @@ pub struct FieldTypeBuilder(FieldType);
 
 impl FieldTypeBuilder {
     pub fn new() -> Self {
-        Self(FieldType::new())
+        Self(FieldType::default())
     }
 
     pub fn tp(mut self, v: crate::FieldTypeTp) -> Self {

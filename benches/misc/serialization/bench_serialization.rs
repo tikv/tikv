@@ -1,13 +1,13 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, Request};
+use prost::Message;
 use raft::eraftpb::Entry;
 
-use protobuf::{self, Message};
 use rand::{thread_rng, RngCore};
 use test::Bencher;
 
-use tikv_util::collections::HashMap;
+use tikv_util::{collections::HashMap, write_to_bytes};
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
@@ -20,7 +20,7 @@ fn gen_rand_str(len: usize) -> Vec<u8> {
 fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
     for (key, value) in map {
-        let mut r = Request::new();
+        let mut r = Request::default();
         r.set_cmd_type(CmdType::Put);
         r.mut_put().set_cf("tikv".to_owned());
         r.mut_put().set_key(key.to_vec());
@@ -31,20 +31,20 @@ fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
 }
 
 fn encode(map: &HashMap<&[u8], &[u8]>) -> Vec<u8> {
-    let mut e = Entry::new();
-    let mut cmd = RaftCmdRequest::new();
+    let mut e = Entry::default();
+    let mut cmd = RaftCmdRequest::default();
     let reqs = generate_requests(map);
-    cmd.set_requests(protobuf::RepeatedField::from_vec(reqs));
-    let cmd_msg = cmd.write_to_bytes().unwrap();
+    cmd.set_requests(reqs);
+    let cmd_msg = write_to_bytes(&cmd).unwrap();
     e.set_data(cmd_msg);
-    e.write_to_bytes().unwrap()
+    write_to_bytes(&e).unwrap()
 }
 
 fn decode(data: &[u8]) {
-    let mut entry = Entry::new();
-    entry.merge_from_bytes(data).unwrap();
-    let mut cmd = RaftCmdRequest::new();
-    cmd.merge_from_bytes(entry.get_data()).unwrap();
+    let mut entry = Entry::default();
+    entry.merge(data).unwrap();
+    let mut cmd = RaftCmdRequest::default();
+    cmd.merge(entry.get_data()).unwrap();
 }
 
 #[bench]

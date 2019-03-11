@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+use tipb::{Expr, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue};
@@ -89,7 +89,7 @@ impl RpnFnScalarEvaluator {
             .as_ref()
             .iter()
             .map(|expr_node| {
-                let mut ed = Expr::new();
+                let mut ed = Expr::default();
                 ed.set_field_type(expr_node.field_type().clone());
                 ed
             })

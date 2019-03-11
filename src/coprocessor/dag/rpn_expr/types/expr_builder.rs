@@ -4,7 +4,7 @@ use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::codec::number;
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFnMeta;
 use super::expr::{RpnExpression, RpnExpressionNode};
@@ -24,7 +24,9 @@ impl RpnExpressionBuilder {
         // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
         // it can be different from the one we calculated (e.g. pass a column / fn with different
         // type).
-        box_try!(EvalType::try_from(c.get_field_type().tp()));
+        box_try!(EvalType::try_from(FieldTypeAccessor::tp(
+            c.get_field_type()
+        )));
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
@@ -96,7 +98,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+        F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -250,7 +252,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     match tree_node.get_tp() {
         ExprType::ScalarFunc => {
@@ -292,7 +294,7 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
+    F: Fn(tipb::ScalarFuncSig, &[Expr]) -> Result<RpnFnMeta> + Copy,
 {
     // Map pb func to `RpnFnMeta`.
     let func_meta = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
@@ -307,7 +309,7 @@ where
         ))
     })?;
 
-    let args = tree_node.take_children().into_vec();
+    let args = tree_node.take_children();
     let args_len = args.len();
 
     // Only Int/Real/Duration/Decimal/Bytes/Json will be decoded
@@ -346,7 +348,9 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
+    let eval_type = box_try!(EvalType::try_from(FieldTypeAccessor::tp(
+        tree_node.get_field_type()
+    )));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
@@ -435,8 +439,13 @@ fn extract_scalar_value_date_time(
     let v = number::decode_u64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
-    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
-        .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
+    let value = DateTime::from_packed_u64(
+        v,
+        FieldTypeAccessor::tp(field_type).try_into()?,
+        fsp,
+        time_zone,
+    )
+    .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
 
@@ -469,7 +478,7 @@ mod tests {
 
     use cop_codegen::rpn_fn;
     use cop_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
     use crate::coprocessor::codec::datum::{self, Datum};
@@ -858,6 +867,7 @@ mod tests {
                 .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong))
                 .push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::LongLong))
                 .build();
+
         for i in 0..=5 {
             assert!(RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(
                 node.clone(),

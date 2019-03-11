@@ -15,9 +15,7 @@ use futures::{Future, Sink, Stream};
 use grpcio::{
     self, DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink, WriteFlags,
 };
-use kvproto::deadlock::*;
-use kvproto::deadlock_grpc;
-use protobuf::RepeatedField;
+use kvproto::deadlockpb::*;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
@@ -416,11 +414,11 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                         DetectType::CleanUpWaitFor => DeadlockRequestType::CleanUpWaitFor,
                         DetectType::CleanUp => DeadlockRequestType::CleanUp,
                     };
-                    let mut entry = WaitForEntry::new();
+                    let mut entry = WaitForEntry::default();
                     entry.set_txn(txn_ts);
                     entry.set_wait_for_txn(lock.ts);
                     entry.set_key_hash(lock.hash);
-                    let mut req = DeadlockRequest::new();
+                    let mut req = DeadlockRequest::default();
                     req.set_tp(tp);
                     req.set_entry(entry);
                     if leader_client.detect(req).is_ok() {
@@ -475,7 +473,7 @@ impl<S: StoreAddrResolver + 'static> Detector<S> {
                         if let Some(deadlock_key_hash) =
                             detect_table.detect(*txn, *wait_for_txn, *key_hash)
                         {
-                            let mut resp = DeadlockResponse::new();
+                            let mut resp = DeadlockResponse::default();
                             resp.set_entry(req.take_entry());
                             resp.set_deadlock_key_hash(deadlock_key_hash);
                             Some((resp, WriteFlags::default()))
@@ -538,7 +536,7 @@ impl Service {
     }
 }
 
-impl deadlock_grpc::Deadlock for Service {
+impl Deadlock for Service {
     // TODO: remove it
     fn get_wait_for_entries(
         &mut self,
@@ -554,8 +552,8 @@ impl deadlock_grpc::Deadlock for Service {
             ctx.spawn(
                 f.map_err(Error::from)
                     .map(|v| {
-                        let mut resp = WaitForEntriesResponse::new();
-                        resp.set_entries(RepeatedField::from_vec(v));
+                        let mut resp = WaitForEntriesResponse::default();
+                        resp.set_entries(v);
                         resp
                     })
                     .and_then(|resp| sink.success(resp).map_err(Error::Grpc))

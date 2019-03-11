@@ -1,12 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message, RepeatedField};
-use tipb::executor::ExecutorExecutionSummary;
-use tipb::select::{Chunk, SelectResponse, StreamResponse};
+use tipb::{Chunk, ExecutorExecutionSummary, SelectResponse, StreamResponse};
+
+use tikv_util::write_to_bytes;
 
 use super::executor::{Executor, ExecutorMetrics};
-
 use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::*;
 
@@ -41,17 +40,17 @@ impl DAGRequestHandler {
     }
 
     fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
-        let mut s_resp = StreamResponse::new();
-        s_resp.set_data(box_try!(chunk.write_to_bytes()));
+        let mut s_resp = StreamResponse::default();
+        s_resp.set_data(box_try!(write_to_bytes(&chunk)));
         if let Some(eval_warnings) = self.executor.take_eval_warnings() {
-            s_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+            s_resp.set_warnings(eval_warnings.warnings);
             s_resp.set_warning_count(eval_warnings.warning_cnt as i64);
         }
         self.executor
             .collect_output_counts(s_resp.mut_output_counts());
 
-        let mut resp = Response::new();
-        resp.set_data(box_try!(s_resp.write_to_bytes()));
+        let mut resp = Response::default();
+        resp.set_data(box_try!(write_to_bytes(&s_resp)));
         if let Some(range) = range {
             resp.set_range(range);
         }
@@ -68,7 +67,7 @@ impl RequestHandler for DAGRequestHandler {
                 Ok(Some(row)) => {
                     self.deadline.check_if_exceeded()?;
                     if chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        let chunk = Chunk::new();
+                        let chunk = Chunk::default();
                         chunks.push(chunk);
                         record_cnt = 0;
                     }
@@ -79,11 +78,11 @@ impl RequestHandler for DAGRequestHandler {
                     chunk.mut_rows_data().extend_from_slice(&value);
                 }
                 Ok(None) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
+                    sel_resp.set_chunks(chunks);
                     if let Some(eval_warnings) = self.executor.take_eval_warnings() {
-                        sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
+                        sel_resp.set_warnings(eval_warnings.warnings);
                         sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
                     }
                     self.executor
@@ -97,25 +96,25 @@ impl RequestHandler for DAGRequestHandler {
                         let summaries = summary_per_executor
                             .iter()
                             .map(|summary| {
-                                let mut ret = ExecutorExecutionSummary::new();
+                                let mut ret = ExecutorExecutionSummary::default();
                                 ret.set_num_iterations(summary.num_iterations as u64);
                                 ret.set_num_produced_rows(summary.num_produced_rows as u64);
                                 ret.set_time_processed_ns(summary.time_processed_ns as u64);
                                 ret
                             })
                             .collect();
-                        sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                        sel_resp.set_execution_summaries(summaries);
                     }
 
-                    let data = box_try!(sel_resp.write_to_bytes());
+                    let data = box_try!(write_to_bytes(&sel_resp));
                     resp.set_data(data);
                     return Ok(resp);
                 }
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
                     sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
+                    let data = box_try!(write_to_bytes(&sel_resp));
                     resp.set_data(data);
                     return Ok(resp);
                 }
@@ -126,7 +125,7 @@ impl RequestHandler for DAGRequestHandler {
 
     fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
         let (mut record_cnt, mut finished) = (0, false);
-        let mut chunk = Chunk::new();
+        let mut chunk = Chunk::default();
         self.executor.start_scan();
         while record_cnt < self.batch_row_limit {
             match self.executor.next() {
@@ -141,10 +140,10 @@ impl RequestHandler for DAGRequestHandler {
                     break;
                 }
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = StreamResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = StreamResponse::default();
                     sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
+                    let data = box_try!(write_to_bytes(&sel_resp));
                     resp.set_data(data);
                     return Ok((Some(resp), true));
                 }

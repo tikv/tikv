@@ -34,6 +34,7 @@ extern crate fail;
 
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
+use std::convert::TryFrom;
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, slice, thread, u64};
 
-use protobuf::Message;
+use prost::Message;
 use rand;
 use rand::rngs::ThreadRng;
 
@@ -121,10 +122,10 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
         .iter()
         .take_while(|&e| {
             if size == 0 {
-                size += u64::from(Message::compute_size(e));
+                size += u64::try_from(Message::encoded_len(e)).unwrap();
                 true
             } else {
-                size += u64::from(Message::compute_size(e));
+                size += u64::try_from(Message::encoded_len(e)).unwrap();
                 size <= max
             }
         })
@@ -575,11 +576,19 @@ pub unsafe fn erase_lifetime<'a, T: ?Sized>(v: &T) -> &'a T {
     &*(v as *const T)
 }
 
+#[inline]
+pub fn write_to_bytes(msg: &impl ::prost::Message) -> Result<Vec<u8>, ::prost::EncodeError> {
+    let mut buf = Vec::with_capacity(msg.encoded_len());
+    msg.encode(&mut buf)?;
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protobuf::Message;
+
     use raft::eraftpb::Entry;
+    use std::convert::TryFrom;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::*;
@@ -663,9 +672,9 @@ mod tests {
 
     #[test]
     fn test_limit_size() {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_data(b"0123456789".to_vec());
-        let size = u64::from(e.compute_size());
+        let size = u64::try_from(e.encoded_len()).unwrap();
 
         let tbls = vec![
             (vec![], NO_LIMIT, 0),

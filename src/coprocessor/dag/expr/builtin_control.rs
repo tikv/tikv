@@ -218,8 +218,8 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use protobuf::RepeatedField;
-    use tipb::expression::{Expr, ExprType, ScalarFuncSig};
+
+    use tipb::{Expr, ExprType, ScalarFuncSig};
 
     use crate::coprocessor::codec::mysql::{Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
@@ -522,11 +522,11 @@ mod tests {
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
-            let mut expr = Expr::new();
+            let mut expr = Expr::default();
             expr.set_tp(ExprType::ScalarFunc);
             expr.set_sig(sig);
 
-            expr.set_children(RepeatedField::from_vec(children));
+            expr.set_children(children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);

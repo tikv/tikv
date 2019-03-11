@@ -182,7 +182,7 @@ impl TestEngineBuilder {
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.new_cf.build_opt(&cache)),
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
@@ -258,7 +258,7 @@ impl Engine for RocksEngine {
             "snapshot failed"
         )));
         fail_point!("rockskv_async_snapshot_not_leader", |_| {
-            let mut header = ErrorHeader::new();
+            let mut header = ErrorHeader::default();
             header.mut_not_leader().set_region_id(100);
             Err(Error::Request(header))
         });
@@ -424,7 +424,7 @@ mod tests {
         must_delete(engine, b"foo42");
         must_delete(engine, b"foo5");
 
-        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let snapshot = engine.snapshot(&Context::default()).unwrap();
         let mut iter = snapshot
             .iter(IterOption::default(), ScanMode::Forward)
             .unwrap();

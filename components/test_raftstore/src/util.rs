@@ -5,7 +5,6 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{thread, u64};
 
-use protobuf;
 use rand::RngCore;
 use tempfile::{Builder, TempDir};
 
@@ -184,7 +183,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
 
 // Create a base request.
 pub fn new_base_request(region_id: u64, epoch: RegionEpoch, read_quorum: bool) -> RaftCmdRequest {
-    let mut req = RaftCmdRequest::new();
+    let mut req = RaftCmdRequest::default();
     req.mut_header().set_region_id(region_id);
     req.mut_header().set_region_epoch(epoch);
     req.mut_header().set_read_quorum(read_quorum);
@@ -198,12 +197,12 @@ pub fn new_request(
     read_quorum: bool,
 ) -> RaftCmdRequest {
     let mut req = new_base_request(region_id, epoch, read_quorum);
-    req.set_requests(protobuf::RepeatedField::from_vec(requests));
+    req.set_requests(requests);
     req
 }
 
 pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Put);
     cmd.mut_put().set_key(key.to_vec());
     cmd.mut_put().set_value(value.to_vec());
@@ -211,7 +210,7 @@ pub fn new_put_cmd(key: &[u8], value: &[u8]) -> Request {
 }
 
 pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Put);
     cmd.mut_put().set_key(key.to_vec());
     cmd.mut_put().set_value(value.to_vec());
@@ -220,20 +219,20 @@ pub fn new_put_cf_cmd(cf: &str, key: &[u8], value: &[u8]) -> Request {
 }
 
 pub fn new_get_cmd(key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
     cmd
 }
 
 pub fn new_read_index_cmd() -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::ReadIndex);
     cmd
 }
 
 pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Get);
     cmd.mut_get().set_key(key.to_vec());
     cmd.mut_get().set_cf(cf.to_string());
@@ -241,7 +240,7 @@ pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
 }
 
 pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::Delete);
     cmd.mut_delete().set_key(key.to_vec());
     cmd.mut_delete().set_cf(cf.to_string());
@@ -249,7 +248,7 @@ pub fn new_delete_cmd(cf: &str, key: &[u8]) -> Request {
 }
 
 pub fn new_delete_range_cmd(cf: &str, start: &[u8], end: &[u8]) -> Request {
-    let mut cmd = Request::new();
+    let mut cmd = Request::default();
     cmd.set_cmd_type(CmdType::DeleteRange);
     cmd.mut_delete_range().set_start_key(start.to_vec());
     cmd.mut_delete_range().set_end_key(end.to_vec());
@@ -262,20 +261,20 @@ pub fn new_status_request(
     peer: metapb::Peer,
     request: StatusRequest,
 ) -> RaftCmdRequest {
-    let mut req = new_base_request(region_id, RegionEpoch::new(), false);
+    let mut req = new_base_request(region_id, RegionEpoch::default(), false);
     req.mut_header().set_peer(peer);
     req.set_status_request(request);
     req
 }
 
 pub fn new_region_detail_cmd() -> StatusRequest {
-    let mut cmd = StatusRequest::new();
+    let mut cmd = StatusRequest::default();
     cmd.set_cmd_type(StatusCmdType::RegionDetail);
     cmd
 }
 
 pub fn new_region_leader_cmd() -> StatusRequest {
-    let mut cmd = StatusRequest::new();
+    let mut cmd = StatusRequest::default();
     cmd.set_cmd_type(StatusCmdType::RegionLeader);
     cmd
 }
@@ -291,7 +290,7 @@ pub fn new_admin_request(
 }
 
 pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
     req.mut_change_peer().set_change_type(change_type);
     req.mut_change_peer().set_peer(peer);
@@ -299,7 +298,7 @@ pub fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) 
 }
 
 pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
-    let mut req = AdminRequest::new();
+    let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::CompactLog);
     req.mut_compact_log().set_compact_index(index);
     req.mut_compact_log().set_compact_term(term);
@@ -307,7 +306,7 @@ pub fn new_compact_log_request(index: u64, term: u64) -> AdminRequest {
 }
 
 pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
+    let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::TransferLeader);
     cmd.mut_transfer_leader().set_peer(peer);
     cmd
@@ -315,14 +314,14 @@ pub fn new_transfer_leader_cmd(peer: metapb::Peer) -> AdminRequest {
 
 #[allow(dead_code)]
 pub fn new_prepare_merge(target_region: metapb::Region) -> AdminRequest {
-    let mut cmd = AdminRequest::new();
+    let mut cmd = AdminRequest::default();
     cmd.set_cmd_type(AdminCmdType::PrepareMerge);
     cmd.mut_prepare_merge().set_target(target_region);
     cmd
 }
 
 pub fn new_store(store_id: u64, addr: String) -> metapb::Store {
-    let mut store = metapb::Store::new();
+    let mut store = metapb::Store::default();
     store.set_id(store_id);
     store.set_address(addr);
 
@@ -341,36 +340,36 @@ pub fn new_pd_change_peer(
     change_type: ConfChangeType,
     peer: metapb::Peer,
 ) -> RegionHeartbeatResponse {
-    let mut change_peer = ChangePeer::new();
+    let mut change_peer = ChangePeer::default();
     change_peer.set_change_type(change_type);
     change_peer.set_peer(peer);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_change_peer(change_peer);
     resp
 }
 
 pub fn new_half_split_region() -> RegionHeartbeatResponse {
-    let split_region = SplitRegion::new();
-    let mut resp = RegionHeartbeatResponse::new();
+    let split_region = SplitRegion::default();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_split_region(split_region);
     resp
 }
 
 pub fn new_pd_transfer_leader(peer: metapb::Peer) -> RegionHeartbeatResponse {
-    let mut transfer_leader = TransferLeader::new();
+    let mut transfer_leader = TransferLeader::default();
     transfer_leader.set_peer(peer);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_transfer_leader(transfer_leader);
     resp
 }
 
 pub fn new_pd_merge_region(target_region: metapb::Region) -> RegionHeartbeatResponse {
-    let mut merge = Merge::new();
+    let mut merge = Merge::default();
     merge.set_target(target_region);
 
-    let mut resp = RegionHeartbeatResponse::new();
+    let mut resp = RegionHeartbeatResponse::default();
     resp.set_merge(merge);
     resp
 }
@@ -383,7 +382,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
             CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
-            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
                 is_write = true
             }
             CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),

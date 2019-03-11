@@ -2,8 +2,8 @@
 
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use protobuf::RepeatedField;
-use tipb::analyze;
+
+use tipb;
 
 /// `CMSketch` is used to estimate point queries.
 /// Refer:[Count-Min Sketch](https://en.wikipedia.org/wiki/Count-min_sketch)
@@ -51,13 +51,13 @@ impl CMSketch {
         }
     }
 
-    pub fn into_proto(self) -> analyze::CMSketch {
-        let mut proto = analyze::CMSketch::new();
-        let mut rows = vec![analyze::CMSketchRow::default(); self.depth];
+    pub fn into_proto(self) -> tipb::CmSketch {
+        let mut proto = tipb::CmSketch::default();
+        let mut rows = vec![tipb::CmSketchRow::default(); self.depth];
         for (i, row) in self.table.iter().enumerate() {
             rows[i].set_counters(row.to_vec());
         }
-        proto.set_rows(RepeatedField::from_vec(rows));
+        proto.set_rows(rows);
         proto
     }
 }

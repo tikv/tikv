@@ -8,7 +8,6 @@ use std::result;
 use futures::Canceled;
 use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
-use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
 use crate::pd::Error as PdError;
@@ -32,11 +31,6 @@ quick_error! {
             from()
             cause(err)
             display("{:?}", err)
-            description(err.description())
-        }
-        Protobuf(err: ProtobufError) {
-            from()
-            cause(err)
             description(err.description())
         }
         Grpc(err: GrpcError) {

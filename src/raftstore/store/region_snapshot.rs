@@ -394,8 +394,8 @@ mod tests {
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a2".to_vec());
         r.set_end_key(b"a7".to_vec());
@@ -416,8 +416,8 @@ mod tests {
     }
 
     fn load_multiple_levels_dataset(engines: Engines) -> (PeerStorage, DataSet) {
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_id(10);
         r.set_start_key(b"a04".to_vec());
         r.set_end_key(b"a15".to_vec());
@@ -463,7 +463,7 @@ mod tests {
     fn test_peekable() {
         let path = Builder::new().prefix("test-raftstore").tempdir().unwrap();
         let engines = new_temp_engine(&path);
-        let mut r = Region::new();
+        let mut r = Region::default();
         r.set_id(10);
         r.set_start_key(b"key0".to_vec());
         r.set_end_key(b"key4".to_vec());
@@ -633,8 +633,8 @@ mod tests {
         assert_eq!(res, base_data[1..3].to_vec());
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines.clone(), &region);
         let snap = RegionSnapshot::new(&store);
         data.clear();
@@ -734,8 +734,8 @@ mod tests {
         assert_eq!(res, expect);
 
         // test last region
-        let mut region = Region::new();
-        region.mut_peers().push(Peer::new());
+        let mut region = Region::default();
+        region.mut_peers().push(Peer::default());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
         let it = snap.iter(IterOption::default());
@@ -815,13 +815,13 @@ mod tests {
         let cache = cfg.storage.block_cache.build_shared_cache();
         cfg.rocksdb.titan.enabled = true;
         cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
-        cfg.rocksdb.defaultcf.disable_auto_compactions = true;
+        cfg.rocksdb.new_cf.disable_auto_compactions = true;
         // Disable dynamic_level_bytes, otherwise SST files would be ingested to L0.
-        cfg.rocksdb.defaultcf.dynamic_level_bytes = false;
-        cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize(0);
-        cfg.rocksdb.defaultcf.titan.discardable_ratio = 0.4;
-        cfg.rocksdb.defaultcf.titan.sample_ratio = 1.0;
-        cfg.rocksdb.defaultcf.titan.min_blob_size = ReadableSize(0);
+        cfg.rocksdb.new_cf.dynamic_level_bytes = false;
+        cfg.rocksdb.new_cf.titan.min_gc_batch_size = ReadableSize(0);
+        cfg.rocksdb.new_cf.titan.discardable_ratio = 0.4;
+        cfg.rocksdb.new_cf.titan.sample_ratio = 1.0;
+        cfg.rocksdb.new_cf.titan.min_blob_size = ReadableSize(0);
         let kv_db_opts = cfg.rocksdb.build_opt();
         let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
@@ -1037,8 +1037,8 @@ mod tests {
         .unwrap();
 
         // Do scan on other DB.
-        let mut r = Region::new();
-        r.mut_peers().push(Peer::new());
+        let mut r = Region::default();
+        r.mut_peers().push(Peer::default());
         r.set_start_key(b"a".to_vec());
         r.set_end_key(b"z".to_vec());
         let snapshot = RegionSnapshot::from_raw(Arc::clone(&engines1.kv), r);

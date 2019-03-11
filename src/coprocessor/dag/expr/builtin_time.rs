@@ -584,7 +584,7 @@ fn month_to_period(month: u64) -> u64 {
 mod tests {
     use std::sync::Arc;
 
-    use tipb::expression::{Expr, ScalarFuncSig};
+    use tipb::{Expr, ScalarFuncSig};
 
     use crate::coprocessor::codec::mysql::{Duration, Time};
     use crate::coprocessor::codec::Datum;

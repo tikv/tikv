@@ -19,11 +19,17 @@ quick_error! {
                 hex::encode_upper(&key), regoin_id, hex::encode_upper(&start), hex::encode_upper(&end)
             )
         }
-        Protobuf(err: protobuf::ProtobufError) {
+        ProstDecode(err: prost::DecodeError) {
             from()
             cause(err)
             description(err.description())
-            display("Protobuf {}", err)
+            display("Prost Decode {}", err)
+        }
+        ProstEncode(err: prost::EncodeError) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Prost Encode {}", err)
         }
         Io(err: std::io::Error) {
             from()
@@ -51,7 +57,7 @@ impl From<Error> for raft::Error {
 
 impl From<Error> for kvproto::errorpb::Error {
     fn from(err: Error) -> kvproto::errorpb::Error {
-        let mut errorpb = kvproto::errorpb::Error::new();
+        let mut errorpb = kvproto::errorpb::Error::default();
         errorpb.set_message(error::Error::description(&err).to_owned());
 
         if let Error::NotInRange(key, region_id, start_key, end_key) = err {

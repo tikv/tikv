@@ -8,8 +8,8 @@ use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::TableScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::TableScan;
 
 pub struct TableInnerExecutor {
     col_ids: HashSet<i64>,
@@ -81,8 +81,7 @@ mod tests {
     use std::i64;
 
     use kvproto::{coprocessor::KeyRange, kvrpcpb::IsolationLevel};
-    use protobuf::RepeatedField;
-    use tipb::{executor::TableScan, schema::ColumnInfo};
+    use tipb::{ColumnInfo, TableScan};
 
     use crate::storage::SnapshotStore;
 
@@ -113,10 +112,10 @@ mod tests {
         fn default() -> TableScanTestWrapper {
             let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut table_scan = TableScan::new();
+            let mut table_scan = TableScan::default();
             // prepare cols
             let cols = test_data.get_prev_2_cols();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone();
             table_scan.set_columns(col_req);
             // prepare range
             let range = get_range(TABLE_ID, i64::MIN, i64::MAX);
@@ -142,7 +141,7 @@ mod tests {
         wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let mut table_scanner =
             super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
                 .unwrap();
@@ -184,7 +183,7 @@ mod tests {
         wrapper.ranges = vec![r1, r2, r3, r4];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let mut table_scanner =
             super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
                 .unwrap();
@@ -225,7 +224,7 @@ mod tests {
         wrapper.ranges = vec![r1, r2, r3, r4];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let mut table_scanner =
             super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
                 .unwrap();

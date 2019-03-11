@@ -7,7 +7,7 @@
 pub use super::super::exec_summary::{ExecSummaryCollector, WithSummaryCollector};
 pub use super::statistics::BatchExecuteStatistics;
 
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::expr::EvalWarnings;

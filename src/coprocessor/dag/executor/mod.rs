@@ -5,8 +5,8 @@ use std::sync::Arc;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
-use tipb::expression::{Expr, ExprType};
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::{Expr, ExprType};
 
 use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
@@ -161,7 +161,7 @@ impl OriginCols {
             let col_id = col.get_column_id();
             let value = match self.data.get(col_id) {
                 None if col.has_default_val() => col.get_default_val().to_vec(),
-                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                None if FieldTypeAccessor::flag(col).contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                 }
                 None => box_try!(datum::encode_value(&[Datum::Null])),
@@ -187,7 +187,7 @@ impl OriginCols {
                 None if col.has_default_val() => {
                     values.extend_from_slice(col.get_default_val());
                 }
-                None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                None if FieldTypeAccessor::flag(col).contains(FieldTypeFlag::NOT_NULL) => {
                     return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                 }
                 None => {
@@ -224,7 +224,7 @@ impl OriginCols {
                             col
                         ))
                     }
-                    None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
+                    None if FieldTypeAccessor::flag(col).contains(FieldTypeFlag::NOT_NULL) => {
                         return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                     }
                     None => Datum::Null,
@@ -371,16 +371,11 @@ pub mod tests {
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
-    use protobuf::RepeatedField;
     use tikv_util::codec::number::NumberEncoder;
-    use tipb::{
-        executor::TableScan,
-        expression::{Expr, ExprType},
-        schema::ColumnInfo,
-    };
+    use tipb::{ColumnInfo, Expr, ExprType, TableScan};
 
     pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
-        let mut expr = Expr::new();
+        let mut expr = Expr::default();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
             expr.mut_val().encode_i64(id.unwrap()).unwrap();
@@ -391,7 +386,7 @@ pub mod tests {
     }
 
     pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
+        let mut col_info = ColumnInfo::default();
         col_info.as_mut_accessor().set_tp(tp);
         col_info.set_column_id(cid);
         col_info
@@ -426,7 +421,7 @@ pub mod tests {
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
             let engine = TestEngineBuilder::new().build().unwrap();
-            let ctx = Context::new();
+            let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
                 snapshot,
@@ -485,7 +480,7 @@ pub mod tests {
 
     #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(table::encode_row_key(table_id, start));
         key_range.set_end(table::encode_row_key(table_id, end));
         key_range
@@ -500,14 +495,14 @@ pub mod tests {
         let table_data = gen_table_data(tid, &cis, raw_data);
         let mut test_store = TestStore::new(&table_data);
 
-        let mut table_scan = TableScan::new();
+        let mut table_scan = TableScan::default();
         table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+        table_scan.set_columns(cis);
 
         let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
 
         let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, true).unwrap())
     }
 }

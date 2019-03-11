@@ -9,14 +9,14 @@ use std::time::{Duration, Instant};
 use engine::Engines;
 use futures::{Future, Stream};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use kvproto::debugpb_grpc::create_debug;
-use kvproto::import_sstpb_grpc::create_import_sst;
-use kvproto::tikvpb_grpc::*;
+use kvproto::debugpb::create_debug;
+use kvproto::import_sstpb::create_import_sst;
+use kvproto::tikvpb::*;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::storage::lock_manager::deadlock::Service as DeadlockService;
-use kvproto::deadlock_grpc::create_deadlock;
+use kvproto::deadlockpb::create_deadlock;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
@@ -356,11 +356,11 @@ mod tests {
         server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
-        trans.report_unreachable(RaftMessage::new());
+        trans.report_unreachable(RaftMessage::default());
         let mut resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 0, 0), "{:?}", resp);
 
-        let mut msg = RaftMessage::new();
+        let mut msg = RaftMessage::default();
         msg.set_region_id(1);
         trans.send(msg.clone()).unwrap();
         trans.flush();

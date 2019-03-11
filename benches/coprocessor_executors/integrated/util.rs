@@ -6,7 +6,7 @@ use std::sync::Arc;
 use criterion::black_box;
 
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::Executor as PbExecutor;
+use tipb::Executor as PbExecutor;
 
 use test_coprocessor::*;
 use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;

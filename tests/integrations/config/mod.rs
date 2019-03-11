@@ -188,7 +188,7 @@ fn test_serde_custom_tikv_config() {
         writable_file_max_buffer_size: ReadableSize::mb(12),
         use_direct_io_for_flush_and_compaction: true,
         enable_pipelined_write: false,
-        defaultcf: DefaultCfConfig {
+        new_cf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
             disable_block_cache: false,
@@ -428,7 +428,7 @@ fn test_serde_custom_tikv_config() {
         allow_concurrent_memtable_write: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
-        defaultcf: RaftDefaultCfConfig {
+        new_cf: RaftDefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
             disable_block_cache: false,
@@ -548,9 +548,9 @@ fn test_block_cache_backward_compatible() {
     assert!(cfg.storage.block_cache.capacity.is_some());
     assert_eq!(
         cfg.storage.block_cache.capacity.unwrap().0,
-        cfg.rocksdb.defaultcf.block_cache_size.0
+        cfg.rocksdb.new_cf.block_cache_size.0
             + cfg.rocksdb.writecf.block_cache_size.0
             + cfg.rocksdb.lockcf.block_cache_size.0
-            + cfg.raftdb.defaultcf.block_cache_size.0
+            + cfg.raftdb.new_cf.block_cache_size.0
     );
 }

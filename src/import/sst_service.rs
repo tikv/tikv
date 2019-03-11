@@ -9,7 +9,6 @@ use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
 use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
-use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;
@@ -82,7 +81,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
         ctx.spawn(
             future::result(res)
-                .map(|_| SwitchModeResponse::new())
+                .map(|_| SwitchModeResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer)),
         )
     }
@@ -132,7 +131,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                             })
                             .and_then(|mut file| file.finish())
                     })
-                    .map(|_| UploadResponse::new())
+                    .map(|_| UploadResponse::default())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
             ),
         )
@@ -153,15 +152,15 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         let timer = Instant::now_coarse();
 
         // Make ingest command.
-        let mut ingest = Request::new();
-        ingest.set_cmd_type(CmdType::IngestSST);
+        let mut ingest = Request::default();
+        ingest.set_cmd_type(CmdType::IngestSst);
         ingest.mut_ingest_sst().set_sst(req.take_sst());
         let mut context = req.take_context();
-        let mut header = RaftRequestHeader::new();
+        let mut header = RaftRequestHeader::default();
         header.set_peer(context.take_peer());
         header.set_region_id(context.get_region_id());
         header.set_region_epoch(context.take_region_epoch());
-        let mut cmd = RaftCmdRequest::new();
+        let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.mut_requests().push(ingest);
 
@@ -175,7 +174,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                 .map_err(Error::from)
                 .then(|res| match res {
                     Ok(mut res) => {
-                        let mut resp = IngestResponse::new();
+                        let mut resp = IngestResponse::default();
                         let mut header = res.response.take_header();
                         if header.has_error() {
                             resp.set_error(header.take_error());
@@ -231,7 +230,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
 
             future::result(res)
                 .map_err(Error::from)
-                .map(|_| CompactResponse::new())
+                .map(|_| CompactResponse::default())
                 .then(move |res| send_rpc_response!(res, sink, label, timer))
         }))
     }

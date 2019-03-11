@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::expression::Expr;
+use tipb::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSelectionExecutor;
 use tikv::coprocessor::dag::batch::interface::BatchExecutor;

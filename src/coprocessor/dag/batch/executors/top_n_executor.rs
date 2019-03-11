@@ -6,8 +6,7 @@ use std::ptr::NonNull;
 
 use servo_arc::Arc;
 
-use tipb::executor::TopN;
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType, TopN};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;

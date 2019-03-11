@@ -19,9 +19,9 @@ use engine::rocks::DB;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
-use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
-use protobuf::Message;
-use protobuf::RepeatedField;
+use kvproto::raft_serverpb::{SnapshotCfFile, SnapshotMeta};
+use prost::Message;
+
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::raftstore::errors::Error as RaftStoreError;
@@ -120,8 +120,8 @@ impl SnapKey {
     }
 
     pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
-        let mut snap_data = RaftSnapshotData::new();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+        let mut snap_data = RaftSnapshotData::default();
+        if let Err(e) = snap_data.merge(snap.get_data()) {
             return Err(io::Error::new(ErrorKind::Other, e));
         }
 
@@ -228,14 +228,14 @@ fn gen_snapshot_meta(cf_files: &[CfFile]) -> RaftStoreResult<SnapshotMeta> {
             ));
         }
 
-        let mut cf_file_meta = SnapshotCFFile::new();
+        let mut cf_file_meta = SnapshotCfFile::default();
         cf_file_meta.set_cf(cf_file.cf.to_owned());
         cf_file_meta.set_size(cf_file.size);
         cf_file_meta.set_checksum(cf_file.checksum);
         meta.push(cf_file_meta);
     }
-    let mut snapshot_meta = SnapshotMeta::new();
-    snapshot_meta.set_cf_files(RepeatedField::from_vec(meta));
+    let mut snapshot_meta = SnapshotMeta::default();
+    snapshot_meta.set_cf_files(meta);
     Ok(snapshot_meta)
 }
 
@@ -489,8 +489,8 @@ impl Snap {
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
         let buf = fs::read(&self.meta_file.path)?;
-        let mut snapshot_meta = SnapshotMeta::new();
-        snapshot_meta.merge_from_bytes(&buf)?;
+        let mut snapshot_meta = SnapshotMeta::default();
+        snapshot_meta.merge(&buf)?;
         Ok(snapshot_meta)
     }
 
@@ -587,7 +587,7 @@ impl Snap {
     // Only called in `do_build`.
     fn save_meta_file(&mut self) -> RaftStoreResult<()> {
         let mut v = vec![];
-        box_try!(self.meta_file.meta.write_to_vec(&mut v));
+        box_try!(self.meta_file.meta.encode(&mut v));
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot exists
             // so no temporary meta file is created, and this field is None. However in `do_build`
@@ -824,7 +824,7 @@ impl Snapshot for Snap {
         sync_dir(&self.dir_path)?;
         // write meta file
         let mut v = vec![];
-        self.meta_file.meta.write_to_vec(&mut v)?;
+        self.meta_file.meta.encode(&mut v)?;
         {
             let mut meta_file = self.meta_file.file.take().unwrap();
             meta_file.write_all(&v[..])?;
@@ -1160,8 +1160,8 @@ impl SnapManager {
         data: &[u8],
     ) -> RaftStoreResult<Box<dyn Snapshot>> {
         let core = self.core.rl();
-        let mut snapshot_data = RaftSnapshotData::new();
-        snapshot_data.merge_from_bytes(data)?;
+        let mut snapshot_data = RaftSnapshotData::default();
+        snapshot_data.merge(data)?;
         let f = Snap::new_for_receiving(
             &core.base,
             key,
@@ -1366,7 +1366,7 @@ pub mod tests {
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
-    use protobuf::Message;
+    use prost::Message;
     use std::path::PathBuf;
     use tempfile::{Builder, TempDir};
 
@@ -1422,7 +1422,7 @@ pub mod tests {
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
             let handle = rocks::util::get_cf_handle(&db, cf)?;
-            let mut p = Peer::new();
+            let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
             db.put_msg_cf(handle, &key[..], &p)?;
@@ -1447,7 +1447,7 @@ pub mod tests {
         )?;
         for &region_id in regions {
             // Put apply state into kv engine.
-            let mut apply_state = RaftApplyState::new();
+            let mut apply_state = RaftApplyState::default();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
@@ -1455,7 +1455,7 @@ pub mod tests {
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
-            let mut region_state = RegionLocalState::new();
+            let mut region_state = RegionLocalState::default();
             region_state.set_region(region);
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
@@ -1487,10 +1487,10 @@ pub mod tests {
     }
 
     pub fn gen_test_region(region_id: u64, store_id: u64, peer_id: u64) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_store_id(store_id);
         peer.set_id(peer_id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"z".to_vec());
@@ -1622,7 +1622,7 @@ pub mod tests {
         assert!(!s1.exists());
         assert_eq!(size_track.load(Ordering::SeqCst), 0);
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -1758,7 +1758,7 @@ pub mod tests {
         .unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -1819,14 +1819,14 @@ pub mod tests {
                     .unwrap()
                     .ends_with(META_FILE_SUFFIX)
                 {
-                    let mut snapshot_meta = SnapshotMeta::new();
+                    let mut snapshot_meta = SnapshotMeta::default();
                     let mut buf = Vec::with_capacity(TEST_META_FILE_BUFFER_SIZE);
                     {
                         let mut f = OpenOptions::new().read(true).open(e.path()).unwrap();
                         f.read_to_end(&mut buf).unwrap();
                     }
 
-                    snapshot_meta.merge_from_bytes(&buf).unwrap();
+                    snapshot_meta.merge(&buf).unwrap();
 
                     for cf in snapshot_meta.mut_cf_files().iter_mut() {
                         let corrupted_checksum = cf.get_checksum() + 100;
@@ -1834,7 +1834,7 @@ pub mod tests {
                     }
 
                     buf.clear();
-                    snapshot_meta.write_to_vec(&mut buf).unwrap();
+                    snapshot_meta.encode(&mut buf).unwrap();
                     {
                         let mut f = OpenOptions::new()
                             .write(true)
@@ -1947,7 +1947,7 @@ pub mod tests {
         .unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -2072,7 +2072,7 @@ pub mod tests {
         .unwrap();
         assert!(!s1.exists());
 
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -2186,7 +2186,7 @@ pub mod tests {
             Snap::new_for_building(&path, &key1, Arc::clone(&size_track), deleter.clone(), None)
                 .unwrap();
         let mut region = gen_test_region(1, 1, 1);
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -2284,7 +2284,7 @@ pub mod tests {
         // Ensure the snapshot being built will not be deleted on GC.
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
-        let mut snap_data = RaftSnapshotData::new();
+        let mut snap_data = RaftSnapshotData::default();
         snap_data.set_region(region.clone());
         let mut stat = SnapshotStatistics::new();
         s1.build(
@@ -2296,7 +2296,7 @@ pub mod tests {
         )
         .unwrap();
         let mut v = vec![];
-        snap_data.write_to_vec(&mut v).unwrap();
+        snap_data.encode(&mut v).unwrap();
 
         check_registry_around_deregister(src_mgr.clone(), &key, &SnapEntry::Generating);
 
@@ -2359,7 +2359,7 @@ pub mod tests {
         let recv_key = SnapKey::new(100, 100, 100);
         let recv_head = {
             let mut stat = SnapshotStatistics::new();
-            let mut snap_data = RaftSnapshotData::new();
+            let mut snap_data = RaftSnapshotData::default();
             let mut s = snap_mgr.get_snapshot_for_building(&recv_key).unwrap();
             s.build(
                 &snapshot,
@@ -2369,7 +2369,9 @@ pub mod tests {
                 Box::new(snap_mgr.clone()),
             )
             .unwrap();
-            snap_data.write_to_bytes().unwrap()
+            let mut buf = Vec::new();
+            snap_data.encode(&mut buf).unwrap();
+            buf
         };
         let recv_remain = {
             let mut data = Vec::with_capacity(1024);
@@ -2388,7 +2390,7 @@ pub mod tests {
             let key = SnapKey::new(region_id, 1, 1);
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
-            let mut snap_data = RaftSnapshotData::new();
+            let mut snap_data = RaftSnapshotData::default();
             let mut stat = SnapshotStatistics::new();
             s.build(
                 &snapshot,

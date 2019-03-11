@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use cop_codegen::AggrFunction;
 use cop_datatype::EvalType;
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
@@ -33,7 +33,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         use std::convert::TryFrom;
         assert_eq!(aggr_def.get_tp(), ExprType::First);
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let eval_type = EvalType::try_from(child.get_field_type().tp()).unwrap();
+        let eval_type = EvalType::try_from(FieldTypeAccessor::tp(child.get_field_type())).unwrap();
 
         // FIRST outputs one column with the same type as its child
         out_schema.push(aggr_def.take_field_type());

@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use crate::storage::{Key, Store};
 
@@ -176,10 +176,10 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
 /// Extracts `FieldType` from `ColumnInfo`.
 // TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
 pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
-    let mut field_type = FieldType::new();
+    let mut field_type = FieldType::default();
     field_type.set_tp(ci.get_tp());
     field_type.set_flag(ci.get_flag() as u32); // FIXME: This `as u32` is really awful.
-    field_type.set_flen(ci.get_columnLen());
+    field_type.set_flen(ci.get_column_len());
     field_type.set_decimal(ci.get_decimal());
     field_type.set_collate(ci.get_collation());
     // Note: Charset is not provided in column info.
@@ -188,13 +188,12 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
 
 /// Checks whether the given columns info are supported.
 pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
-    use cop_datatype::EvalType;
-    use cop_datatype::FieldTypeAccessor;
+    use cop_datatype::{EvalType, FieldTypeAccessor};
     use std::convert::TryFrom;
 
     for column in columns_info {
         if column.has_pk_handle() {
-            box_try!(EvalType::try_from(column.tp()));
+            box_try!(EvalType::try_from(FieldTypeAccessor::tp(column)));
         }
     }
     Ok(())

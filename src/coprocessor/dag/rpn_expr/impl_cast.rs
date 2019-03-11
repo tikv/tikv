@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 
 use cop_codegen::rpn_fn;
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
@@ -19,8 +19,8 @@ pub fn get_cast_fn_rpn_node(
     from_field_type: &FieldType,
     to_field_type: FieldType,
 ) -> Result<RpnExpressionNode> {
-    let from = box_try!(EvalType::try_from(from_field_type.tp()));
-    let to = box_try!(EvalType::try_from(to_field_type.tp()));
+    let from = box_try!(EvalType::try_from(FieldTypeAccessor::tp(from_field_type)));
+    let to = box_try!(EvalType::try_from(FieldTypeAccessor::tp(&to_field_type)));
     let func_meta = match (from, to) {
         (EvalType::Int, EvalType::Decimal) => {
             if !from_field_type
@@ -62,7 +62,9 @@ fn produce_dec_with_specified_tp(
 ) -> Result<Decimal> {
     // FIXME: The implementation is not exactly the same as TiDB's `ProduceDecWithSpecifiedTp`.
     let (flen, decimal) = (ft.flen(), ft.decimal());
-    if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
+    if flen as isize == cop_datatype::UNSPECIFIED_LENGTH
+        || decimal as isize == cop_datatype::UNSPECIFIED_LENGTH
+    {
         return Ok(dec);
     }
     Ok(dec.convert_to(ctx, flen as u8, decimal as u8)?)

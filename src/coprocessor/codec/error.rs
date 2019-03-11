@@ -6,8 +6,7 @@ use std::io;
 use std::str::Utf8Error;
 use std::string::FromUtf8Error;
 use std::{error, str};
-use tipb::expression::ScalarFuncSig;
-use tipb::select;
+use tipb::{self, ScalarFuncSig};
 
 pub const ERR_UNKNOWN: i32 = 1105;
 pub const ERR_REGEXP: i32 = 1139;
@@ -132,9 +131,9 @@ impl Error {
     }
 }
 
-impl From<Error> for select::Error {
-    fn from(error: Error) -> select::Error {
-        let mut err = select::Error::new();
+impl From<Error> for tipb::Error {
+    fn from(error: Error) -> tipb::Error {
+        let mut err = tipb::Error::default();
         err.set_code(error.code());
         err.set_msg(format!("{:?}", error));
         err

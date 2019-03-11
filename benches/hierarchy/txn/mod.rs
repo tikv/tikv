@@ -11,7 +11,7 @@ use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 
 fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
     b.iter_batched(
         || {
@@ -38,7 +38,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
 
 fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
     b.iter_batched(
         || {

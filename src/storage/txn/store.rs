@@ -320,7 +320,7 @@ mod tests {
             let keys: Vec<String> = (START_ID..START_ID + key_num)
                 .map(|i| format!("{}{}", KEY_PREFIX, i))
                 .collect();
-            let ctx = Context::new();
+            let ctx = Context::default();
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut store = TestStore {
                 keys,
@@ -372,7 +372,7 @@ mod tests {
             SnapshotStore::new(
                 self.snapshot.clone(),
                 COMMIT_TS + 1,
-                IsolationLevel::SI,
+                IsolationLevel::Si,
                 true,
             )
         }
@@ -589,7 +589,7 @@ mod tests {
     fn test_scanner_verify_bound() {
         // Store with a limited range
         let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
-        let store = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::Si, true);
         let bound_a = Key::from_encoded(b"a".to_vec());
         let bound_b = Key::from_encoded(b"b".to_vec());
         let bound_c = Key::from_encoded(b"c".to_vec());
@@ -610,7 +610,7 @@ mod tests {
 
         // Store with whole range
         let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
-        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::Si, true);
         assert!(store2.scanner(false, false, None, None).is_ok());
         assert!(store2
             .scanner(false, false, Some(bound_a.clone()), None)

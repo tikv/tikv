@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::executor::Aggregation;
-use tipb::expression::Expr;
+use tipb::Aggregation;
+use tipb::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
 use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
@@ -91,7 +91,7 @@ impl HashAggrBencher for BatchBencher {
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            let mut meta = Aggregation::new();
+            let mut meta = Aggregation::default();
             meta.set_agg_func(aggr_expr.to_vec().into());
             meta.set_group_by(group_by_expr.to_vec().into());
             if BatchFastHashAggregationExecutor::check_supported(&meta).is_ok() {

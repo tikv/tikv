@@ -11,10 +11,10 @@ pub use self::chunk::{Chunk, ChunkEncoder};
 mod tests {
     use cop_datatype::FieldTypeAccessor;
     use cop_datatype::FieldTypeTp;
-    use tipb::expression::FieldType;
+    use tipb::FieldType;
 
     pub fn field_type(tp: FieldTypeTp) -> FieldType {
-        let mut fp = FieldType::new();
+        let mut fp = FieldType::default();
         fp.as_mut_accessor().set_tp(tp);
         fp
     }

@@ -23,7 +23,7 @@ impl ScalarFunc {
 
     pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+        if FieldTypeAccessor::flag(&self.field_type).contains(FieldTypeFlag::UNSIGNED) {
             let uval = convert_float_to_uint(ctx, val, FieldTypeTp::LongLong)?;
             Ok(Some(uval as i64))
         } else {
@@ -35,13 +35,14 @@ impl ScalarFunc {
     pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        let (overflow, res) = if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-            let uint = val.as_u64();
-            (uint.is_overflow(), uint.unwrap() as i64)
-        } else {
-            let val = val.as_i64();
-            (val.is_overflow(), val.unwrap())
-        };
+        let (overflow, res) =
+            if FieldTypeAccessor::flag(&self.field_type).contains(FieldTypeFlag::UNSIGNED) {
+                let uint = val.as_u64();
+                (uint.is_overflow(), uint.unwrap() as i64)
+            } else {
+                let val = val.as_i64();
+                (val.is_overflow(), val.unwrap())
+            };
 
         if overflow {
             if !ctx.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
@@ -65,7 +66,7 @@ impl ScalarFunc {
         let res = if is_negative {
             convert_bytes_to_int(ctx, &val, FieldTypeTp::LongLong).map(|v| {
                 // TODO: handle inUion flag
-                if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                if FieldTypeAccessor::flag(&self.field_type).contains(FieldTypeFlag::UNSIGNED) {
                     ctx.warnings
                         .append_warning(Error::cast_neg_int_as_unsigned());
                 }
@@ -73,7 +74,7 @@ impl ScalarFunc {
             })
         } else {
             convert::bytes_to_uint(ctx, &val).map(|urs| {
-                if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
+                if !FieldTypeAccessor::flag(&self.field_type).contains(FieldTypeFlag::UNSIGNED)
                     && urs > (i64::MAX as u64)
                 {
                     ctx.warnings
@@ -192,8 +193,8 @@ impl ScalarFunc {
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let field_type = &self.children[0].field_type();
-        let res = if !field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+        let field_type = self.children[0].field_type();
+        let res = if !FieldTypeAccessor::flag(field_type).contains(FieldTypeFlag::UNSIGNED) {
             Cow::Owned(Decimal::from(val))
         } else {
             let uval = val as u64;
@@ -404,7 +405,7 @@ impl ScalarFunc {
         let mut val = val.into_owned();
         val.round_frac(self.field_type.decimal() as i8)?;
         // TODO: tidb only update tp when tp is Date
-        val.set_time_type(self.field_type.tp().try_into()?)?;
+        val.set_time_type(FieldTypeAccessor::tp(&self.field_type).try_into()?)?;
         Ok(Some(Cow::Owned(val)))
     }
 
@@ -414,7 +415,11 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val)?;
+        let mut val = Time::from_duration(
+            &ctx.cfg.tz,
+            FieldTypeAccessor::tp(&self.field_type).try_into()?,
+            val,
+        )?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -522,7 +527,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let flag = self.children[0].field_type().flag();
+        let flag = FieldTypeAccessor::flag(self.children[0].field_type());
         let j = if flag.contains(FieldTypeFlag::IS_BOOLEAN) {
             Json::Boolean(val != 0)
         } else if flag.contains(FieldTypeFlag::UNSIGNED) {
@@ -560,11 +565,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        if self
-            .field_type
-            .flag()
-            .contains(FieldTypeFlag::PARSE_TO_JSON)
-        {
+        if FieldTypeAccessor::flag(&self.field_type).contains(FieldTypeFlag::PARSE_TO_JSON) {
             let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
         } else {
@@ -610,8 +611,8 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         val: Cow<'a, Decimal>,
     ) -> Result<Cow<'a, Decimal>> {
-        let flen = self.field_type.flen();
-        let decimal = self.field_type.decimal();
+        let flen = FieldTypeAccessor::flen(&self.field_type);
+        let decimal = FieldTypeAccessor::decimal(&self.field_type);
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
@@ -672,7 +673,7 @@ impl ScalarFunc {
             return Ok(Cow::Owned(res));
         }
 
-        if self.field_type.tp() == FieldTypeTp::String && s.len() < flen {
+        if FieldTypeAccessor::tp(&self.field_type) == FieldTypeTp::String && s.len() < flen {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             return Ok(Cow::Owned(s));
@@ -682,7 +683,7 @@ impl ScalarFunc {
 
     fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
         let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, &ctx.cfg.tz)?;
-        t.set_time_type(self.field_type.tp().try_into()?)?;
+        t.set_time_type(FieldTypeAccessor::tp(&self.field_type).try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
@@ -692,7 +693,7 @@ impl ScalarFunc {
             self.field_type.decimal() as i8,
             &ctx.cfg.tz,
         )?;
-        t.set_time_type(self.field_type.tp().try_into()?)?;
+        t.set_time_type(FieldTypeAccessor::tp(&self.field_type).try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
@@ -700,8 +701,8 @@ impl ScalarFunc {
     /// a new float64 according to `flen` and `decimal` in `self.tp`.
     /// TODO port tests from tidb(tidb haven't implemented now)
     fn produce_float_with_specified_tp(&self, ctx: &mut EvalContext, f: f64) -> Result<f64> {
-        let flen = self.field_type.flen();
-        let decimal = self.field_type.decimal();
+        let flen = FieldTypeAccessor::flen(&self.field_type);
+        let decimal = FieldTypeAccessor::decimal(&self.field_type);
         if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(f);
         }
@@ -723,7 +724,7 @@ mod tests {
     use std::{i64, u64};
 
     use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
-    use tipb::expression::{Expr, FieldType, ScalarFuncSig};
+    use tipb::{Expr, FieldType, ScalarFuncSig};
 
     use chrono::Utc;
 
@@ -738,7 +739,7 @@ mod tests {
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
-        let mut fp = FieldType::new();
+        let mut fp = FieldType::default();
         fp.as_mut_accessor().set_tp(tp);
         if tp == FieldTypeTp::String {
             fp.set_charset(charset::CHARSET_UTF8.to_owned());
@@ -1765,7 +1766,7 @@ mod tests {
             let col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
-                let mut flag = ex.get_field_type().flag();
+                let mut flag = FieldTypeAccessor::flag(ex.get_field_type());
                 flag |= FieldTypeFlag::PARSE_TO_JSON;
                 ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }

@@ -3,8 +3,6 @@
 use std::sync::Arc;
 use std::{i64, mem, u64};
 
-use tipb::select;
-
 use super::{Error, Result};
 use crate::coprocessor::codec::mysql::Tz;
 
@@ -149,7 +147,7 @@ pub struct EvalWarnings {
     // number of warnings
     pub warning_cnt: usize,
     // details of previous max_warning_cnt warnings
-    pub warnings: Vec<select::Error>,
+    pub warnings: Vec<tipb::Error>,
 }
 
 impl EvalWarnings {

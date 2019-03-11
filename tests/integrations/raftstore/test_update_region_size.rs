@@ -20,7 +20,7 @@ fn test_update_regoin_size<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .cfg
         .rocksdb
-        .defaultcf
+        .new_cf
         .level0_file_num_compaction_trigger = 10;
     cluster.start().unwrap();
 

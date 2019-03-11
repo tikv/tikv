@@ -18,7 +18,7 @@ time = "0.1"
 toml = "0.4"
 libc = "0.2"
 crc = "1.8"
-protobuf = "2"
+prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }
 utime = "0.2"
 chrono = "0.4"
 lazy_static = "1.3"
@@ -36,7 +36,7 @@ tokio-threadpool = "0.1.13"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-grpcio = { version = "0.4", features = [ "secure" ] }
+grpcio = { version = "0.5.0-alpha.1", features = [ "secure", "prost-codec" ] }
 crossbeam = "0.5"
 fail = "0.2"
 fxhash = "0.2.1"
@@ -54,7 +54,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [dev-dependencies]
 panic_hook = { path = "../panic_hook" }
-raft = "0.4"
+raft = { git = "https://github.com/pingcap/raft-rs", rev = "eeaee89a4eba7aa17abd630388df2f1c3a0f76ad" }
 
 [[bench]]
 name = "channel"

@@ -7,8 +7,8 @@ use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::IndexScan;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::IndexScan;
 
 pub struct IndexInnerExecutor {
     pk_col: Option<ColumnInfo>,
@@ -51,7 +51,8 @@ impl InnerExecutor for IndexInnerExecutor {
         };
 
         if let Some(ref pk_col) = self.pk_col {
-            let handle_datum = if pk_col.flag().contains(FieldTypeFlag::UNSIGNED) {
+            let handle_datum = if FieldTypeAccessor::flag(pk_col).contains(FieldTypeFlag::UNSIGNED)
+            {
                 // PK column is unsigned
                 datum::Datum::U64(handle as u64)
             } else {
@@ -118,8 +119,8 @@ pub mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
-    use tipb::schema::ColumnInfo;
+
+    use tipb::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::storage::SnapshotStore;
@@ -146,7 +147,7 @@ pub mod tests {
     ) -> KeyRange {
         let (_, start_key) = generate_index_data(table_id, idx_id, start, val_start, unique);
         let (_, end_key) = generate_index_data(table_id, idx_id, end, val_end, unique);
-        let mut key_range = KeyRange::new();
+        let mut key_range = KeyRange::default();
         key_range.set_start(start_key);
         key_range.set_end(end_key);
         key_range
@@ -226,19 +227,17 @@ pub mod tests {
             let mut wrapper = IndexTestWrapper::new(unique, test_data);
             let mut cols = wrapper.data.cols.clone();
             cols.push(wrapper.data.get_col_pk());
-            wrapper
-                .scan
-                .set_columns(RepeatedField::from_vec(cols.clone()));
+            wrapper.scan.set_columns(cols.clone());
             wrapper.cols = cols;
             wrapper
         }
 
         pub fn new(unique: bool, test_data: Data) -> IndexTestWrapper {
             let test_store = TestStore::new(&test_data.kv_data);
-            let mut scan = IndexScan::new();
+            let mut scan = IndexScan::default();
             // prepare cols
             let cols = test_data.cols.clone();
-            let col_req = RepeatedField::from_vec(cols.clone());
+            let col_req = cols.clone();
             scan.set_columns(col_req);
             // prepare range
             let val_start = Datum::Bytes(b"a".to_vec());
@@ -290,7 +289,7 @@ pub mod tests {
         );
         wrapper.ranges = vec![r1, r2];
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
 
         let mut scanner =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
@@ -346,7 +345,7 @@ pub mod tests {
         wrapper.ranges = vec![r1, r2, r3, r4, r5];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let mut scanner =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
@@ -398,7 +397,7 @@ pub mod tests {
         wrapper.ranges = vec![r1, r2];
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
 
         let mut scanner =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, false)
@@ -423,7 +422,7 @@ pub mod tests {
     fn test_include_pk() {
         let mut wrapper = IndexTestWrapper::include_pk_cols();
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
 
         let mut scanner =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)

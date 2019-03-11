@@ -1063,7 +1063,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use std::{f64, i64};
-    use tipb::expression::{Expr, ScalarFuncSig};
+    use tipb::{Expr, ScalarFuncSig};
 
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{
@@ -1646,7 +1646,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (input, exp) in cases {
             let input = datum_expr(input);
-            let op = scalar_func_expr(ScalarFuncSig::ASCII, &[input]);
+            let op = scalar_func_expr(ScalarFuncSig::Ascii, &[input]);
             let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
@@ -1953,7 +1953,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
-            let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let expr = scalar_func_expr(ScalarFuncSig::ConcatWs, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);

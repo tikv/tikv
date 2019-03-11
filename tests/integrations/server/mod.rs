@@ -10,8 +10,9 @@ use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
-use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
-use kvproto::tikvpb_grpc::{create_tikv, Tikv};
+use kvproto::tikvpb::{
+    create_tikv, BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage, Tikv,
+};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
@@ -110,7 +111,7 @@ trait MockKvService {
     );
     unary_call!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call!(kv_gc, GCRequest, GCResponse);
+    unary_call!(kv_gc, GcRequest, GcResponse);
     unary_call!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call!(raw_get, RawGetRequest, RawGetResponse);
     unary_call!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);
@@ -175,7 +176,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call_dispatch!(kv_scan_lock, ScanLockRequest, ScanLockResponse);
     unary_call_dispatch!(kv_resolve_lock, ResolveLockRequest, ResolveLockResponse);
-    unary_call_dispatch!(kv_gc, GCRequest, GCResponse);
+    unary_call_dispatch!(kv_gc, GcRequest, GcResponse);
     unary_call_dispatch!(kv_delete_range, DeleteRangeRequest, DeleteRangeResponse);
     unary_call_dispatch!(raw_get, RawGetRequest, RawGetResponse);
     unary_call_dispatch!(raw_batch_get, RawBatchGetRequest, RawBatchGetResponse);

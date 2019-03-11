@@ -4,14 +4,14 @@ use std::vec::IntoIter;
 
 use crc::crc64::{self, Digest, Hasher64};
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::Message;
-use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
-use crate::storage::{Snapshot, SnapshotStore};
+use tipb::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, ChecksumScanOn};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::dag::{ScanOn, Scanner};
 use crate::coprocessor::*;
+use crate::storage::{Snapshot, SnapshotStore};
+use tikv_util::write_to_bytes;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`
 pub struct ChecksumContext<S: Snapshot> {
@@ -81,7 +81,7 @@ impl<S: Snapshot> ChecksumContext<S> {
 impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
     fn handle_request(&mut self) -> Result<Response> {
         let algorithm = self.req.get_algorithm();
-        if algorithm != ChecksumAlgorithm::Crc64_Xor {
+        if algorithm != ChecksumAlgorithm::Crc64Xor {
             return Err(box_err!("unknown checksum algorithm {:?}", algorithm));
         }
 
@@ -94,13 +94,13 @@ impl<S: Snapshot> RequestHandler for ChecksumContext<S> {
             total_bytes += k.len() + v.len();
         }
 
-        let mut resp = ChecksumResponse::new();
+        let mut resp = ChecksumResponse::default();
         resp.set_checksum(checksum);
         resp.set_total_kvs(total_kvs);
         resp.set_total_bytes(total_bytes as u64);
-        let data = box_try!(resp.write_to_bytes());
+        let data = box_try!(write_to_bytes(&resp));
 
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         resp.set_data(data);
         Ok(resp)
     }

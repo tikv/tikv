@@ -1024,7 +1024,6 @@ impl<T: BufferWriter> NumberEncoder for T {}
 
 #[cfg(test)]
 mod tests {
-    use protobuf::CodedOutputStream;
     use rand;
 
     fn get_u8_samples() -> Vec<u8> {
@@ -1745,20 +1744,6 @@ mod tests {
             write_var_u64,
             read_var_u64,
         );
-        // Check encoded output with ProtoBuf
-        let samples = get_u64_samples();
-        for sample in samples {
-            let mut buf = vec![0; super::MAX_VARINT64_LENGTH];
-            let len = super::NumberCodec::encode_var_u64(buf.as_mut_slice(), sample);
-
-            let mut protobuf_output = vec![];
-            {
-                let mut writer = CodedOutputStream::new(&mut protobuf_output);
-                writer.write_uint64_no_tag(sample).unwrap();
-                writer.flush().unwrap();
-            }
-            assert_eq!(buf[..len], protobuf_output[..]);
-        }
     }
 
     #[test]
@@ -1776,9 +1761,7 @@ mod tests {
 #[cfg(test)]
 mod benches {
     use crate::Error;
-
     use byteorder;
-    use protobuf::CodedOutputStream;
 
     /// Encode u64 little endian using `NumberCodec` and store position in extra variable.
     #[bench]
@@ -2006,23 +1989,6 @@ mod benches {
         let mut buf: Vec<u8> = Vec::with_capacity(super::MAX_VARINT64_LENGTH);
         b.iter(|| {
             naive_encode_varint(test::black_box(&mut buf), test::black_box(VARINT_SAMPLE));
-            test::black_box(&buf);
-            unsafe { buf.set_len(0) };
-        });
-    }
-
-    /// Encode u64 in VarInt using ProtoBuf implementation.
-    #[bench]
-    fn bench_encode_varint_protobuf(b: &mut test::Bencher) {
-        let mut buf: Vec<u8> = Vec::with_capacity(super::MAX_VARINT64_LENGTH);
-        b.iter(|| {
-            {
-                let mut writer = CodedOutputStream::new(test::black_box(&mut buf));
-                writer
-                    .write_uint64_no_tag(test::black_box(VARINT_SAMPLE))
-                    .unwrap();
-                writer.flush().unwrap();
-            }
             test::black_box(&buf);
             unsafe { buf.set_len(0) };
         });

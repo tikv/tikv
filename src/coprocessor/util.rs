@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor as coppb;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
 
 use crate::coprocessor::codec::datum::Datum;
 
@@ -95,7 +95,7 @@ pub fn is_point(range: &coppb::KeyRange) -> bool {
 pub fn get_pk(col: &ColumnInfo, h: i64) -> Datum {
     use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
 
-    if col.flag().contains(FieldTypeFlag::UNSIGNED) {
+    if FieldTypeAccessor::flag(col).contains(FieldTypeFlag::UNSIGNED) {
         // PK column is unsigned
         Datum::U64(h as u64)
     } else {

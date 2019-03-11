@@ -3,11 +3,9 @@
 use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
-use protobuf::{Message, RepeatedField};
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
-use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::executor::TableScan;
+use tipb::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType, TableScan};
 
 use crate::storage::{Snapshot, SnapshotStore};
 
@@ -16,6 +14,7 @@ use crate::coprocessor::dag::executor::{
     Executor, ExecutorMetrics, IndexScanExecutor, ScanExecutor, TableScanExecutor,
 };
 use crate::coprocessor::*;
+use tikv_util::write_to_bytes;
 
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
@@ -57,14 +56,14 @@ impl<S: Snapshot> AnalyzeContext<S> {
         let (collectors, pk_builder) = builder.collect_columns_stats()?;
 
         let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
+        let cols: Vec<tipb::SampleCollector> =
             collectors.into_iter().map(|col| col.into_proto()).collect();
 
         let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
+            let mut res = tipb::AnalyzeColumnsResp::default();
+            res.set_collectors(cols);
             res.set_pk_hist(pk_hist);
-            box_try!(res.write_to_bytes())
+            box_try!(write_to_bytes(&res))
         };
         Ok(res_data)
     }
@@ -90,12 +89,12 @@ impl<S: Snapshot> AnalyzeContext<S> {
                 }
             }
         }
-        let mut res = analyze::AnalyzeIndexResp::new();
+        let mut res = tipb::AnalyzeIndexResp::default();
         res.set_hist(hist.into_proto());
         if let Some(c) = cms {
             res.set_cms(c.into_proto());
         }
-        let dt = box_try!(res.write_to_bytes());
+        let dt = box_try!(write_to_bytes(&res));
         Ok(dt)
     }
 }
@@ -127,12 +126,12 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         };
         match ret {
             Ok(data) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 resp.set_data(data);
                 Ok(resp)
             }
             Err(Error::Other(e)) => {
-                let mut resp = Response::new();
+                let mut resp = Response::default();
                 resp.set_other_error(format!("{}", e));
                 Ok(resp)
             }
@@ -176,7 +175,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             col_len -= 1;
         }
 
-        let mut meta = TableScan::new();
+        let mut meta = TableScan::default();
         meta.set_columns(cols_info);
         let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
         Ok(Self {
@@ -255,12 +254,12 @@ impl SampleCollector {
         }
     }
 
-    fn into_proto(self) -> analyze::SampleCollector {
-        let mut s = analyze::SampleCollector::new();
+    fn into_proto(self) -> tipb::SampleCollector {
+        let mut s = tipb::SampleCollector::default();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
         s.set_fm_sketch(self.fm_sketch.into_proto());
-        s.set_samples(RepeatedField::from_vec(self.samples));
+        s.set_samples(self.samples);
         if let Some(c) = self.cm_sketch {
             s.set_cm_sketch(c.into_proto())
         }

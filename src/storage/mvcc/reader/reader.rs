@@ -214,8 +214,8 @@ impl<S: Snapshot> MvccReader<S> {
     pub fn get(&mut self, key: &Key, mut ts: u64) -> Result<Option<Value>> {
         // Check for locks that signal concurrent writes.
         match self.isolation_level {
-            IsolationLevel::SI => ts = self.check_lock(key, ts)?,
-            IsolationLevel::RC => {}
+            IsolationLevel::Si => ts = self.check_lock(key, ts)?,
+            IsolationLevel::Rc => {}
         }
         if let Some(mut write) = self.get_write(key, ts)? {
             if write.short_value.is_some() {
@@ -659,10 +659,10 @@ mod tests {
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {
-        let mut peer = Peer::new();
+        let mut peer = Peer::default();
         peer.set_id(id);
         peer.set_store_id(id);
-        let mut region = Region::new();
+        let mut region = Region::default();
         region.set_id(id);
         region.set_start_key(start_key);
         region.set_end_key(end_key);
@@ -677,7 +677,7 @@ mod tests {
         need_gc: bool,
     ) -> Option<MvccProperties> {
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
     }
@@ -815,7 +815,7 @@ mod tests {
         engine.commit(k, 45, 50);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
         // Let's assume `45_40 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
@@ -888,7 +888,7 @@ mod tests {
         engine.prewrite(m, k, 14);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::Si);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.

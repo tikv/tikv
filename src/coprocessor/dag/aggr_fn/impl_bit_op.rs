@@ -4,7 +4,7 @@ use std::convert::TryFrom;
 
 use cop_codegen::AggrFunction;
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
@@ -44,9 +44,9 @@ macro_rules! bit_op {
     };
 }
 
-bit_op!(BitAnd, ExprType::Agg_BitAnd, 0xffff_ffff_ffff_ffff, &=);
-bit_op!(BitOr, ExprType::Agg_BitOr, 0, |=);
-bit_op!(BitXor, ExprType::Agg_BitXor, 0, ^=);
+bit_op!(BitAnd, ExprType::AggBitAnd, 0xffff_ffff_ffff_ffff, &=);
+bit_op!(BitOr, ExprType::AggBitOr, 0, |=);
+bit_op!(BitXor, ExprType::AggBitXor, 0, ^=);
 
 /// The parser for bit operation aggregate functions.
 pub struct AggrFnDefinitionParserBitOp<T: BitOp>(std::marker::PhantomData<T>);
@@ -67,7 +67,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         // Int and does not support other types (which need casting).
         // TODO: remove this check after implementing `CAST as Int`
         let child = &aggr_def.get_children()[0];
-        let eval_type = EvalType::try_from(child.get_field_type().tp())
+        let eval_type = EvalType::try_from(FieldTypeAccessor::tp(child.get_field_type()))
             .map_err(|e| Error::Other(box_err!(e)))?;
         match eval_type {
             EvalType::Int => {}
@@ -354,17 +354,17 @@ mod tests {
         let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>::new();
         let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>::new();
 
-        let bit_and = ExprDefBuilder::aggr_func(ExprType::Agg_BitAnd, FieldTypeTp::LongLong)
+        let bit_and = ExprDefBuilder::aggr_func(ExprType::AggBitAnd, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_and_parser.check_supported(&bit_and).unwrap();
 
-        let bit_or = ExprDefBuilder::aggr_func(ExprType::Agg_BitOr, FieldTypeTp::LongLong)
+        let bit_or = ExprDefBuilder::aggr_func(ExprType::AggBitOr, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_or_parser.check_supported(&bit_or).unwrap();
 
-        let bit_xor = ExprDefBuilder::aggr_func(ExprType::Agg_BitXor, FieldTypeTp::LongLong)
+        let bit_xor = ExprDefBuilder::aggr_func(ExprType::AggBitXor, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
             .build();
         bit_xor_parser.check_supported(&bit_xor).unwrap();
@@ -391,21 +391,21 @@ mod tests {
             .parse(bit_and, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 1);
-        assert_eq!(schema[0].tp(), FieldTypeTp::LongLong);
+        assert_eq!(FieldTypeAccessor::tp(&schema[0]), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 1);
 
         let bit_or_fn = bit_or_parser
             .parse(bit_or, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 2);
-        assert_eq!(schema[1].tp(), FieldTypeTp::LongLong);
+        assert_eq!(FieldTypeAccessor::tp(&schema[1]), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 2);
 
         let bit_xor_fn = bit_xor_parser
             .parse(bit_xor, &Tz::utc(), &src_schema, &mut schema, &mut exp)
             .unwrap();
         assert_eq!(schema.len(), 3);
-        assert_eq!(schema[2].tp(), FieldTypeTp::LongLong);
+        assert_eq!(FieldTypeAccessor::tp(&schema[2]), FieldTypeTp::LongLong);
         assert_eq!(exp.len(), 3);
 
         let mut ctx = EvalContext::default();

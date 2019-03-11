@@ -4,8 +4,8 @@ use std::cmp::Ordering;
 use std::mem;
 use std::sync::Arc;
 
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, ExprType};
+use tipb::Aggregation;
+use tipb::{Expr, ExprType};
 
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
@@ -32,7 +32,7 @@ impl AggFuncExpr {
     }
 
     fn build(ctx: &EvalContext, mut expr: Expr) -> Result<AggFuncExpr> {
-        let args = Expression::batch_build(ctx, expr.take_children().into_vec())?;
+        let args = Expression::batch_build(ctx, expr.take_children())?;
         let tp = expr.get_tp();
         let eval_buffer = Vec::with_capacity(args.len());
         Ok(AggFuncExpr {
@@ -162,9 +162,9 @@ impl HashAggExecutor {
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<Self> {
-        let group_bys = meta.take_group_by().into_vec();
-        let aggs = meta.take_agg_func().into_vec();
+    ) -> Result<HashAggExecutor> {
+        let group_bys = meta.take_group_by();
+        let aggs = meta.take_agg_func();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         Ok(HashAggExecutor {
             inner,
@@ -329,9 +329,9 @@ impl StreamAggExecutor {
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
-    ) -> Result<Self> {
-        let group_bys = meta.take_group_by().into_vec();
-        let aggs = meta.take_agg_func().into_vec();
+    ) -> Result<StreamAggExecutor> {
+        let group_bys = meta.take_group_by();
+        let aggs = meta.take_agg_func();
         let group_len = group_bys.len();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         // Get aggregation functions.
@@ -402,9 +402,9 @@ mod tests {
 
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
-    use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
+
+    use tipb::ColumnInfo;
+    use tipb::{Expr, ExprType};
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
@@ -493,10 +493,10 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![0, 1];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by);
         let funcs = vec![(ExprType::Count, 0), (ExprType::Sum, 1), (ExprType::Avg, 1)];
         let agg_funcs = build_aggr_func(&funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(agg_funcs));
+        aggregation.set_agg_func(agg_funcs);
 
         // test no row
         let idx_vals = vec![];
@@ -505,7 +505,7 @@ mod tests {
         let unique = false;
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let is_executor =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
@@ -537,7 +537,7 @@ mod tests {
         let unique = false;
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let is_executor =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
@@ -587,7 +587,7 @@ mod tests {
         let idx_row_cnt = idx_data.kv_data.len() as i64;
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::Si, true);
         let is_executor =
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
@@ -723,7 +723,7 @@ mod tests {
         let mut aggregation = Aggregation::default();
         let group_by_cols = vec![1, 2];
         let group_by = build_group_by(&group_by_cols);
-        aggregation.set_group_by(RepeatedField::from_vec(group_by));
+        aggregation.set_group_by(group_by);
         let aggr_funcs = vec![
             (ExprType::Avg, 0),
             (ExprType::Count, 2),
@@ -731,7 +731,7 @@ mod tests {
             (ExprType::Avg, 4),
         ];
         let aggr_funcs = build_aggr_func(&aggr_funcs);
-        aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
+        aggregation.set_agg_func(aggr_funcs);
         // init the hash aggregation executor
         let mut aggr_ect =
             HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();

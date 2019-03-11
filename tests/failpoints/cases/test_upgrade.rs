@@ -43,7 +43,7 @@ fn write_store_ident(db: &DB, cf: &str, key: &[u8]) -> StoreIdent {
 }
 
 fn write_region(db: &DB, cf: &str, key: &[u8]) -> Region {
-    let mut region = Region::new();
+    let mut region = Region::default();
     region.set_id(REGION_ID);
     region.set_peers(vec![new_peer(STOER_ID, PEER_ID)].into());
     region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);

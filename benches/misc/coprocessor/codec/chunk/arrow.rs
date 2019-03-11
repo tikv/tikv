@@ -9,7 +9,7 @@ use arrow::record_batch::RecordBatch;
 use cop_datatype::prelude::*;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tikv::coprocessor::codec::Datum;
-use tipb::expression::FieldType;
+use tipb::FieldType;
 
 pub struct Chunk {
     pub data: RecordBatch,
@@ -23,14 +23,14 @@ impl Chunk {
             }
         }
 
-        match field_type.tp() {
+        match FieldTypeAccessor::tp(field_type) {
             FieldTypeTp::Tiny
             | FieldTypeTp::Short
             | FieldTypeTp::Int24
             | FieldTypeTp::Long
             | FieldTypeTp::LongLong
             | FieldTypeTp::Year => {
-                if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                if FieldTypeAccessor::flag(field_type).contains(FieldTypeFlag::UNSIGNED) {
                     let data = self
                         .data
                         .column(col_id)
@@ -79,14 +79,14 @@ impl ChunkBuilder {
         let mut fields = Vec::with_capacity(tps.len());
         let mut arrays: Vec<Arc<dyn array::Array>> = Vec::with_capacity(tps.len());
         for (field_type, column) in tps.iter().zip(self.columns.into_iter()) {
-            let (field, data) = match field_type.tp() {
+            let (field, data) = match FieldTypeAccessor::tp(field_type) {
                 FieldTypeTp::Tiny
                 | FieldTypeTp::Short
                 | FieldTypeTp::Int24
                 | FieldTypeTp::Long
                 | FieldTypeTp::LongLong
                 | FieldTypeTp::Year => {
-                    if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                    if FieldTypeAccessor::flag(field_type).contains(FieldTypeFlag::UNSIGNED) {
                         column.into_u64_array()
                     } else {
                         column.into_i64_array()

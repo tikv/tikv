@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::convert::TryFrom;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -18,7 +19,7 @@ use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 };
-use protobuf::Message;
+use prost::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
@@ -122,7 +123,11 @@ impl EntryCache {
             .take_while(|e| {
                 let cur_idx = end_idx as u64 + cache_low;
                 assert_eq!(e.get_index(), cur_idx);
-                let m = u64::from(e.compute_size());
+                // `try_from` will only fail if we have 128 bit usize and e is larger
+                // than u64::MAX. We currently only support 64 bits, and even if we
+                // did support 128, the chance of a protobuf message being longer than
+                // u64::MAX bytes long is small.
+                let m = u64::try_from(e.encoded_len()).unwrap();
                 fetched_size += m;
                 if fetched_size == m {
                     end_idx += 1;
@@ -345,7 +350,7 @@ pub fn recover_from_applying_state(
     let raft_state_key = keys::raft_state_key(region_id);
     let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
         Some(state) => state,
-        None => RaftLocalState::new(),
+        None => RaftLocalState::default(),
     };
 
     // if we recv append log when applying snapshot, last_index in raft_local_state will
@@ -365,7 +370,7 @@ pub fn init_raft_state(engines: &Engines, region: &Region) -> Result<RaftLocalSt
     Ok(match engines.raft.get_msg(&state_key)? {
         Some(s) => s,
         None => {
-            let mut raft_state = RaftLocalState::new();
+            let mut raft_state = RaftLocalState::default();
             if !region.get_peers().is_empty() {
                 // new split region
                 raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
@@ -386,7 +391,7 @@ pub fn init_apply_state(engines: &Engines, region: &Region) -> Result<RaftApplyS
         {
             Some(s) => s,
             None => {
-                let mut apply_state = RaftApplyState::new();
+                let mut apply_state = RaftApplyState::default();
                 if !region.get_peers().is_empty() {
                     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
                     let state = apply_state.mut_truncated_state();
@@ -524,7 +529,7 @@ impl PeerStorage {
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
         let hard_state = self.raft_state.get_hard_state().clone();
-        if hard_state == HardState::new() {
+        if hard_state == HardState::default() {
             assert!(
                 !self.is_initialized(),
                 "peer for region {:?} is initialized but local state {:?} has empty hard \
@@ -701,8 +706,8 @@ impl PeerStorage {
             return false;
         }
 
-        let mut snap_data = RaftSnapshotData::new();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
+        let mut snap_data = RaftSnapshotData::default();
+        if let Err(e) = snap_data.merge(snap.get_data()) {
             error!(
                 "failed to decode snapshot, it may be corrupted";
                 "region_id" => self.region.get_id(),
@@ -906,8 +911,8 @@ impl PeerStorage {
             "peer_id" => self.peer_id,
         );
 
-        let mut snap_data = RaftSnapshotData::new();
-        snap_data.merge_from_bytes(snap.get_data())?;
+        let mut snap_data = RaftSnapshotData::default();
+        snap_data.merge(snap.get_data())?;
 
         let region_id = self.get_region_id();
 
@@ -1245,8 +1250,8 @@ pub fn fetch_entries_to(
             match engine.get(&key) {
                 Ok(None) => return Err(RaftError::Store(StorageError::Unavailable)),
                 Ok(Some(v)) => {
-                    let mut entry = Entry::new();
-                    entry.merge_from_bytes(&v)?;
+                    let mut entry = Entry::default();
+                    entry.merge(&*v)?;
                     assert_eq!(entry.get_index(), i);
                     total_size += v.len() as u64;
                     if buf.is_empty() || total_size <= max_size {
@@ -1269,8 +1274,8 @@ pub fn fetch_entries_to(
         &end_key,
         true, // fill_cache
         |_, value| {
-            let mut entry = Entry::new();
-            entry.merge_from_bytes(value)?;
+            let mut entry = Entry::default();
+            entry.merge(value)?;
 
             // May meet gap or has been compacted.
             if entry.get_index() != next_index {
@@ -1395,7 +1400,7 @@ pub fn do_snapshot(
         )));
     }
 
-    let mut snapshot = Snapshot::new();
+    let mut snapshot = Snapshot::default();
 
     // Set snapshot metadata.
     snapshot.mut_metadata().set_index(key.idx);
@@ -1406,7 +1411,7 @@ pub fn do_snapshot(
 
     let mut s = mgr.get_snapshot_for_building(&key)?;
     // Set snapshot data.
-    let mut snap_data = RaftSnapshotData::new();
+    let mut snap_data = RaftSnapshotData::default();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
@@ -1417,7 +1422,7 @@ pub fn do_snapshot(
         Box::new(mgr.clone()),
     )?;
     let mut v = vec![];
-    snap_data.write_to_vec(&mut v)?;
+    snap_data.encode(&mut v)?;
     snapshot.set_data(v);
 
     SNAPSHOT_KV_COUNT_HISTOGRAM.observe(stat.kv_count as f64);
@@ -1428,7 +1433,7 @@ pub fn do_snapshot(
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
-    let mut raft_state = RaftLocalState::new();
+    let mut raft_state = RaftLocalState::default();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
@@ -1444,7 +1449,7 @@ pub fn write_initial_apply_state<T: Mutable>(
     kv_wb: &T,
     region_id: u64,
 ) -> Result<()> {
-    let mut apply_state = RaftApplyState::new();
+    let mut apply_state = RaftApplyState::default();
     apply_state.set_applied_index(RAFT_INIT_LOG_INDEX);
     apply_state
         .mut_truncated_state()
@@ -1466,7 +1471,7 @@ pub fn write_peer_state<T: Mutable>(
     merge_state: Option<MergeState>,
 ) -> Result<()> {
     let region_id = region.get_id();
-    let mut region_state = RegionLocalState::new();
+    let mut region_state = RegionLocalState::default();
     region_state.set_state(state);
     region_state.set_region(region.clone());
     if let Some(state) = merge_state {
@@ -1568,9 +1573,9 @@ pub fn maybe_upgrade_from_2_to_3(
                 let raft_state_key = keys::raft_state_key(region_id);
                 let raft_state = raft_engine
                     .get_msg(&raft_state_key)?
-                    .unwrap_or_else(RaftLocalState::new);
-                let mut snapshot_raft_state = RaftLocalState::new();
-                box_try!(snapshot_raft_state.merge_from_bytes(value));
+                    .unwrap_or_else(RaftLocalState::default);
+                let mut snapshot_raft_state = RaftLocalState::default();
+                box_try!(snapshot_raft_state.merge(value));
                 // if we recv append log when applying snapshot, last_index in
                 // raft_local_state will larger than snapshot_index. since
                 // raft_local_state is written to raft engine, and raft
@@ -1738,21 +1743,21 @@ mod tests {
         for e in exp_ents {
             let key = keys::raft_log_key(store.get_region_id(), e.get_index());
             let bytes = store.engines.raft.get(&key).unwrap().unwrap();
-            let mut entry = Entry::new();
-            entry.merge_from_bytes(&bytes).unwrap();
+            let mut entry = Entry::default();
+            entry.merge(&*bytes).unwrap();
             assert_eq!(entry, *e);
         }
     }
 
     fn new_entry(index: u64, term: u64) -> Entry {
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_index(index);
         e.set_term(term);
         e
     }
 
-    fn size_of<T: protobuf::Message>(m: &T) -> u32 {
-        m.compute_size()
+    fn size_of<T: Message>(m: &T) -> usize {
+        m.encoded_len()
     }
 
     #[test]
@@ -1873,26 +1878,26 @@ mod tests {
             (
                 4,
                 7,
-                u64::from(size_of(&ents[1]) + size_of(&ents[2])),
+                (size_of(&ents[1]) + size_of(&ents[2])) as u64,
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2),
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) / 2) as u64,
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             (
                 4,
                 7,
-                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1),
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3]) - 1) as u64,
                 Ok(vec![new_entry(4, 4), new_entry(5, 5)]),
             ),
             // all
             (
                 4,
                 7,
-                u64::from(size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])),
+                (size_of(&ents[1]) + size_of(&ents[2]) + size_of(&ents[3])) as u64,
                 Ok(vec![new_entry(4, 4), new_entry(5, 5), new_entry(6, 6)]),
             ),
         ];
@@ -1947,7 +1952,7 @@ mod tests {
     #[test]
     fn test_storage_create_snapshot() {
         let ents = vec![new_entry(3, 3), new_entry(4, 4), new_entry(5, 5)];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -1975,8 +1980,7 @@ mod tests {
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert!(!snap.get_data().is_empty());
 
-        let mut data = RaftSnapshotData::new();
-        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
+        let data: RaftSnapshotData = Message::decode(snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
@@ -2011,7 +2015,7 @@ mod tests {
             &mut ready_ctx,
         )
         .unwrap();
-        let mut hs = HardState::new();
+        let mut hs = HardState::default();
         hs.set_commit(7);
         hs.set_term(5);
         ctx.raft_state.set_hard_state(hs);
@@ -2150,12 +2154,15 @@ mod tests {
         // size limit should be supported correctly.
         res = store.entries(4, 8, 0).unwrap();
         assert_eq!(res, vec![new_entry(4, 4)]);
-        let mut size = ents[1..].iter().map(|e| u64::from(e.compute_size())).sum();
+        let mut size = ents[1..]
+            .iter()
+            .map(|e| u64::try_from(e.encoded_len()).unwrap())
+            .sum();
         res = store.entries(4, 8, size).unwrap();
         let mut exp_res = ents[1..].to_vec();
         assert_eq!(res, exp_res);
         for e in &entries {
-            size += u64::from(e.compute_size());
+            size += u64::try_from(e.encoded_len()).unwrap();
             exp_res.push(e.clone());
             res = store.entries(4, 8, size).unwrap();
             assert_eq!(res, exp_res);
@@ -2264,7 +2271,7 @@ mod tests {
             new_entry(5, 5),
             new_entry(6, 6),
         ];
-        let mut cs = ConfState::new();
+        let mut cs = ConfState::default();
         cs.set_nodes(vec![1, 2, 3]);
 
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
@@ -2429,16 +2436,16 @@ mod tests {
         let mut tbl = vec![];
 
         // Do not sync empty entrise.
-        tbl.push((Entry::new(), false));
+        tbl.push((Entry::default(), false));
 
         // Sync if sync_log is set.
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_sync_log(true);
         tbl.push((e, true));
 
         // Sync if context is marked sync.
         let context = ProposalContext::SYNC_LOG.to_vec();
-        let mut e = Entry::new();
+        let mut e = Entry::default();
         e.set_context(context);
         tbl.push((e.clone(), true));
 

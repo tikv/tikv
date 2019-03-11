@@ -122,7 +122,7 @@ fn test_server_split_region_twice() {
         let mut resp = write_resp.response;
         let admin_resp = resp.mut_admin_response();
         let split_resp = admin_resp.mut_splits();
-        let mut regions = split_resp.take_regions().into_vec();
+        let mut regions = split_resp.take_regions();
         let mut d = regions.drain(..);
         let (left, right) = (d.next().unwrap(), d.next().unwrap());
         assert_eq!(left.get_end_key(), key.as_slice());
@@ -830,11 +830,11 @@ fn test_split_with_epoch_not_match() {
     pd_client.must_remove_peer(1, new_peer(2, 2));
     let region = cluster.get_region(b"");
 
-    let mut admin_req = AdminRequest::new();
+    let mut admin_req = AdminRequest::default();
     admin_req.set_cmd_type(AdminCmdType::BatchSplit);
 
-    let mut batch_split_req = BatchSplitRequest::new();
-    batch_split_req.mut_requests().push(SplitRequest::new());
+    let mut batch_split_req = BatchSplitRequest::default();
+    batch_split_req.mut_requests().push(SplitRequest::default());
     batch_split_req.mut_requests()[0].set_split_key(b"s".to_vec());
     batch_split_req.mut_requests()[0].set_new_region_id(1000);
     batch_split_req.mut_requests()[0].set_new_peer_ids(vec![1001, 1002]);

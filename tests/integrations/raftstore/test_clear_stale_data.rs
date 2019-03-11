@@ -53,7 +53,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .cfg
         .rocksdb
-        .defaultcf
+        .new_cf
         .level0_file_num_compaction_trigger = 100;
     cluster
         .cfg

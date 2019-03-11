@@ -3,7 +3,7 @@
 use super::*;
 
 use tikv::coprocessor::codec::{datum, Datum};
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
 
 pub const TYPE_VAR_CHAR: i32 = 1;
 pub const TYPE_LONG: i32 = 2;
@@ -19,7 +19,7 @@ pub struct Column {
 
 impl Column {
     pub fn as_column_info(&self) -> ColumnInfo {
-        let mut c_info = ColumnInfo::new();
+        let mut c_info = ColumnInfo::default();
         c_info.set_column_id(self.id);
         c_info.set_tp(self.col_type);
         c_info.set_pk_handle(self.index == 0);

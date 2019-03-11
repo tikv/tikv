@@ -27,11 +27,6 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        ProtoBuf(err: protobuf::error::ProtobufError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         Mvcc(err: crate::storage::mvcc::Error) {
             from()
             cause(err)
@@ -92,7 +87,7 @@ impl Error {
                 lower_bound: lower_bound.clone(),
                 upper_bound: upper_bound.clone(),
             }),
-            Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
+            Error::Other(_) | Error::Io(_) => None,
         }
     }
 }

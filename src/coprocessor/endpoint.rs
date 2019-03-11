@@ -5,13 +5,12 @@ use std::time::Duration;
 
 use futures::sync::mpsc;
 use futures::{future, stream, Future, Stream};
-use protobuf::{CodedInputStream, Message};
 
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
-use tipb::analyze::{AnalyzeReq, AnalyzeType};
-use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
-use tipb::executor::ExecType;
-use tipb::select::DAGRequest;
+use prost::Message;
+use tipb::{AnalyzeReq, AnalyzeType};
+use tipb::{ChecksumRequest, ChecksumScanOn};
+use tipb::{DagRequest, ExecType};
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
@@ -31,9 +30,6 @@ const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
 pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool,
-
-    /// The recursion limit when parsing Coprocessor Protobuf requests.
-    recursion_limit: u32,
 
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
@@ -61,7 +57,6 @@ impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
         Self {
             read_pool,
-            recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -89,16 +84,13 @@ impl<E: Engine> Endpoint<E> {
             req.take_ranges().to_vec(),
         );
 
-        let mut is = CodedInputStream::from_bytes(&data);
-        is.set_recursion_limit(self.recursion_limit);
-
         let req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
 
         match req.get_tp() {
             REQ_TYPE_DAG => {
-                let mut dag = DAGRequest::new();
-                box_try!(dag.merge_from(&mut is));
+                let mut dag = DagRequest::default();
+                box_try!(dag.merge(&data));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -140,8 +132,8 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_ANALYZE => {
-                let mut analyze = AnalyzeReq::new();
-                box_try!(analyze.merge_from(&mut is));
+                let mut analyze = AnalyzeReq::default();
+                box_try!(analyze.merge(&data));
                 let table_scan = analyze.get_tp() == AnalyzeType::TypeColumn;
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
@@ -159,8 +151,8 @@ impl<E: Engine> Endpoint<E> {
                 });
             }
             REQ_TYPE_CHECKSUM => {
-                let mut checksum = ChecksumRequest::new();
-                box_try!(checksum.merge_from(&mut is));
+                let mut checksum = ChecksumRequest::default();
+                box_try!(checksum.merge(&data));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 req_ctx = ReqContext::new(
                     make_tag(table_scan),
@@ -455,7 +447,7 @@ fn make_error_response(e: Error) -> coppb::Response {
         "error-response";
         "err" => %e
     );
-    let mut resp = coppb::Response::new();
+    let mut resp = coppb::Response::default();
     let tag;
     match e {
         Error::Region(e) => {
@@ -475,9 +467,9 @@ fn make_error_response(e: Error) -> coppb::Response {
         }
         Error::Full => {
             tag = "full";
-            let mut errorpb = errorpb::Error::new();
+            let mut errorpb = errorpb::Error::default();
             errorpb.set_message("Coprocessor end-point is full".to_owned());
-            let mut server_is_busy_err = errorpb::ServerIsBusy::new();
+            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
             server_is_busy_err.set_reason(BUSY_ERROR_MSG.to_owned());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
@@ -499,12 +491,13 @@ mod tests {
     use std::thread;
     use std::vec;
 
-    use tipb::executor::Executor;
-    use tipb::expression::Expr;
+    use tipb::Executor;
+    use tipb::Expr;
 
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine, RocksEngine};
     use crate::storage::TestEngineBuilder;
+    use tikv_util::write_to_bytes;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -632,7 +625,7 @@ mod tests {
 
         // a normal request
         let handler_builder =
-            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -642,10 +635,10 @@ mod tests {
 
         // an outdated request
         let handler_builder =
-            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
             "test",
-            kvrpcpb::Context::new(),
+            kvrpcpb::Context::default(),
             &[],
             Duration::from_secs(0),
             None,
@@ -663,28 +656,22 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::<RocksEngine>::new(
-            &Config {
-                end_point_recursion_limit: 5,
-                ..Config::default()
-            },
-            read_pool,
-        );
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let req = {
-            let mut expr = Expr::new();
-            for _ in 0..10 {
-                let mut e = Expr::new();
+            let mut expr = Expr::default();
+            for _ in 0..101 {
+                let mut e = Expr::default();
                 e.mut_children().push(expr);
                 expr = e;
             }
-            let mut e = Executor::new();
+            let mut e = Executor::default();
             e.mut_selection().mut_conditions().push(expr);
-            let mut dag = DAGRequest::new();
+            let mut dag = DagRequest::default();
             dag.mut_executors().push(e);
-            let mut req = coppb::Request::new();
+            let mut req = coppb::Request::default();
             req.set_tp(REQ_TYPE_DAG);
-            req.set_data(dag.write_to_bytes().unwrap());
+            req.set_data(write_to_bytes(&dag).unwrap());
             req
         };
 
@@ -701,7 +688,7 @@ mod tests {
         let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
-        let mut req = coppb::Request::new();
+        let mut req = coppb::Request::default();
         req.set_tp(9999);
 
         let resp: coppb::Response = cop
@@ -717,7 +704,7 @@ mod tests {
         let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
-        let mut req = coppb::Request::new();
+        let mut req = coppb::Request::default();
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(vec![1, 2, 3]);
 
@@ -749,10 +736,10 @@ mod tests {
 
         // first 2 requests are processed as normal and laters are returned as errors
         for i in 0..5 {
-            let mut response = coppb::Response::new();
+            let mut response = coppb::Response::default();
             response.set_data(vec![1, 2, i]);
 
-            let mut context = kvrpcpb::Context::new();
+            let mut context = kvrpcpb::Context::default();
             context.set_priority(kvrpcpb::CommandPri::Normal);
 
             let handler_builder = Box::new(|_, _: &_| {
@@ -826,7 +813,7 @@ mod tests {
         // Fail after some success responses
         let mut responses = Vec::new();
         for i in 0..5 {
-            let mut resp = coppb::Response::new();
+            let mut resp = coppb::Response::default();
             resp.set_data(vec![1, 2, i]);
             responses.push(Ok(resp));
         }
@@ -876,7 +863,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 7]);
                 Ok((Some(resp), true))
             }
@@ -902,7 +889,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 13]);
                 Ok((Some(resp), false))
             }
@@ -928,7 +915,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| match nth {
             0 => {
-                let mut resp = coppb::Response::new();
+                let mut resp = coppb::Response::default();
                 resp.set_data(vec![1, 2, 23]);
                 Ok((Some(resp), false))
             }
@@ -967,7 +954,7 @@ mod tests {
         let counter_clone = Arc::clone(&counter);
         let handler = StreamFromClosure::new(move |nth| {
             // produce an infinite stream
-            let mut resp = coppb::Response::new();
+            let mut resp = coppb::Response::default();
             resp.set_data(vec![1, 2, nth as u8]);
             counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
             Ok((Some(resp), false))
@@ -1031,7 +1018,7 @@ mod tests {
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::new()),
+                    Ok(coppb::Response::default()),
                     PAYLOAD_SMALL as u64,
                 )
                 .into_boxed())
@@ -1106,7 +1093,7 @@ mod tests {
             // Request 1: Unary, success response.
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
-                    Ok(coppb::Response::new()),
+                    Ok(coppb::Response::default()),
                     PAYLOAD_LARGE as u64,
                 )
                 .into_boxed())
@@ -1123,9 +1110,9 @@ mod tests {
             let handler_builder = Box::new(|_, _: &_| {
                 Ok(StreamFixture::new_with_duration(
                     vec![
-                        Ok(coppb::Response::new()),
+                        Ok(coppb::Response::default()),
                         Err(box_err!("foo")),
-                        Ok(coppb::Response::new()),
+                        Ok(coppb::Response::default()),
                     ],
                     vec![
                         PAYLOAD_SMALL as u64,

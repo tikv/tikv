@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::{Expr, ExprType, FieldType};
+use tipb::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::impl_bit_op::*;
@@ -48,9 +48,9 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
         ExprType::Sum => Ok(Box::new(super::impl_sum::AggrFnDefinitionParserSum)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
         ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
-        ExprType::Agg_BitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>::new())),
-        ExprType::Agg_BitOr => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitOr>::new())),
-        ExprType::Agg_BitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
+        ExprType::AggBitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>::new())),
+        ExprType::AggBitOr => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitOr>::new())),
+        ExprType::AggBitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
         ExprType::Max => Ok(Box::new(AggrFnDefinitionParserExtremum::<Max>::new())),
         ExprType::Min => Ok(Box::new(AggrFnDefinitionParserExtremum::<Min>::new())),
         v => Err(box_err!(

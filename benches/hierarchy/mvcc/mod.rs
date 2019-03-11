@@ -11,7 +11,7 @@ use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let option = Options::default();
     b.iter_batched(
         || {
@@ -39,7 +39,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
-    let ctx = Context::new();
+    let ctx = Context::default();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let option = Options::default();
     b.iter_batched(
@@ -102,7 +102,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
                     true,
                     None,
                     None,
-                    ctx.isolation_level,
+                    ctx.get_isolation_level(),
                 );
                 black_box(reader.load_lock(&key).unwrap());
             }
@@ -139,7 +139,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
                     true,
                     None,
                     None,
-                    ctx.isolation_level,
+                    ctx.get_isolation_level(),
                 );
                 black_box(reader.seek_write(&key, u64::max_value()).unwrap());
             }

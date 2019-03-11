@@ -2,16 +2,14 @@
 
 use std::sync::Arc;
 
-use protobuf::{Message, RepeatedField};
-
 use kvproto::coprocessor::Response;
-use tipb::executor::ExecutorExecutionSummary;
-use tipb::select::{Chunk, SelectResponse};
+use tipb::{Chunk, ExecutorExecutionSummary, SelectResponse};
 
 use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
+use tikv_util::write_to_bytes;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value
@@ -24,7 +22,7 @@ pub const BATCH_MAX_SIZE: usize = 1024;
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
 
-/// Must be built from DAGRequestHandler.
+/// Must be built from DagRequestHandler.
 pub struct BatchDAGHandler {
     /// The deadline of this handler. For each check point (e.g. each iteration) we need to check
     /// whether or not the deadline is exceeded and break the process if so.
@@ -92,10 +90,10 @@ impl RequestHandler for BatchDAGHandler {
             // Check error first, because it means that we should directly respond error.
             match result.is_drained {
                 Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
+                    let mut resp = Response::default();
+                    let mut sel_resp = SelectResponse::default();
                     sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
+                    let data = box_try!(write_to_bytes(&sel_resp));
                     resp.set_data(data);
                     return Ok(resp);
                 }
@@ -114,7 +112,7 @@ impl RequestHandler for BatchDAGHandler {
                     result.physical_columns.columns_len(),
                     self.out_most_executor.schema().len()
                 );
-                let mut chunk = Chunk::new();
+                let mut chunk = Chunk::default();
                 {
                     let data = chunk.mut_rows_data();
                     data.reserve(
@@ -139,9 +137,9 @@ impl RequestHandler for BatchDAGHandler {
                     .collect_statistics(&mut self.statistics);
                 self.metrics.cf_stats.add(&self.statistics.cf_stats);
 
-                let mut resp = Response::new();
-                let mut sel_resp = SelectResponse::new();
-                sel_resp.set_chunks(chunks.into());
+                let mut resp = Response::default();
+                let mut sel_resp = SelectResponse::default();
+                sel_resp.set_chunks(chunks);
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.statistics
@@ -157,20 +155,20 @@ impl RequestHandler for BatchDAGHandler {
                         .summary_per_executor
                         .iter()
                         .map(|summary| {
-                            let mut ret = ExecutorExecutionSummary::new();
+                            let mut ret = ExecutorExecutionSummary::default();
                             ret.set_num_iterations(summary.num_iterations as u64);
                             ret.set_num_produced_rows(summary.num_produced_rows as u64);
                             ret.set_time_processed_ns(summary.time_processed_ns as u64);
                             ret
                         })
                         .collect();
-                    sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                    sel_resp.set_execution_summaries(summaries);
                 }
 
-                sel_resp.set_warnings(warnings.warnings.into());
+                sel_resp.set_warnings(warnings.warnings);
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
 
-                let data = box_try!(sel_resp.write_to_bytes());
+                let data = box_try!(write_to_bytes(&sel_resp));
                 resp.set_data(data);
 
                 // Not really useful here, because we only collect it once. But when we change it

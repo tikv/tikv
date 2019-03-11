@@ -7,8 +7,8 @@ publish = false
 [dependencies]
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
-protobuf = "2"
+tipb = { git = "https://github.com/pingcap/tipb.git", features = ["prost-codec"] }
+kvproto = { path = "../../../kvproto" }
 test_storage = { path = "../test_storage" }
 futures = "0.1"
+prost = { git = "https://github.com/danburkert/prost", rev = "1944c27c3029d01ff216e7b126d846b6cf8c7d77" }

@@ -11,7 +11,7 @@ use crate::storage::{Error as StorageError, StorageCb};
 use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
-use kvproto::deadlock::WaitForEntry;
+use kvproto::deadlockpb::WaitForEntry;
 use prometheus::HistogramTimer;
 use std::cell::RefCell;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -161,7 +161,7 @@ impl WaitTable {
             .iter()
             .flat_map(|(_, waiters)| {
                 waiters.iter().map(|waiter| {
-                    let mut wait_for_entry = WaitForEntry::new();
+                    let mut wait_for_entry = WaitForEntry::default();
                     wait_for_entry.set_txn(waiter.start_ts);
                     wait_for_entry.set_wait_for_txn(waiter.lock.ts);
                     wait_for_entry.set_key_hash(waiter.lock.hash);

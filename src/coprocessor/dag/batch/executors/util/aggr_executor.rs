@@ -30,7 +30,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, FieldType};
+use tipb::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
@@ -162,7 +162,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 // The unwrap is fine because aggregate function parser should never return an
                 // eval type that we cannot process later. If we made a mistake there, then we
                 // should panic.
-                EvalType::try_from(ft.tp()).unwrap()
+                EvalType::try_from(FieldTypeAccessor::tp(ft)).unwrap()
             })
             .collect();
 

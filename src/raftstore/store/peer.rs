@@ -19,7 +19,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
 };
-use protobuf::{self, Message};
+use prost::Message;
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
@@ -40,7 +40,7 @@ use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
-use tikv_util::MustConsumeVec;
+use tikv_util::{write_to_bytes, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -805,7 +805,7 @@ impl Peer {
             }
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 if instant.elapsed() >= max_duration {
-                    let mut stats = PeerStats::new();
+                    let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(instant.elapsed().as_secs());
                     down_peers.push(stats);
@@ -1109,17 +1109,15 @@ impl Peer {
                 return None;
             }
 
-            let mut snap_data = RaftSnapshotData::new();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to parse snap data";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+            let mut snap_data = RaftSnapshotData::default();
+            snap_data.merge(snap.get_data()).unwrap_or_else(|e| {
+                warn!(
+                    "failed to parse snap data";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "err" => ?e,
+                );
+            });
             let region = snap_data.take_region();
 
             let meta = ctx.store_meta.lock().unwrap();
@@ -1926,7 +1924,7 @@ impl Peer {
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
-            let req = RaftCmdRequest::new();
+            let req = RaftCmdRequest::default();
             if let Ok(index) = self.propose_normal(poll_ctx, req) {
                 let meta = ProposalMeta {
                     index,
@@ -2077,7 +2075,7 @@ impl Peer {
                 return Err(e);
             }
         };
-        let data = req.write_to_bytes()?;
+        let data = write_to_bytes(&req)?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
@@ -2168,13 +2166,13 @@ impl Peer {
 
         ctx.raft_metrics.propose.conf_change += 1;
 
-        let data = req.write_to_bytes()?;
+        let data = write_to_bytes(req)?;
 
         // TODO: use local histogram metrics
         PEER_PROPOSE_LOG_SIZE_HISTOGRAM.observe(data.len() as f64);
 
         let change_peer = apply::get_change_peer_cmd(req).unwrap();
-        let mut cc = eraftpb::ConfChange::new();
+        let mut cc = eraftpb::ConfChange::default();
         cc.set_change_type(change_peer.get_change_type());
         cc.set_node_id(change_peer.get_peer().get_id());
         cc.set_context(data);
@@ -2281,7 +2279,7 @@ impl Peer {
     }
 
     fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
-        let mut send_msg = RaftMessage::new();
+        let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         // set current epoch
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
@@ -2308,7 +2306,7 @@ impl Peer {
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "msg_type" => ?msg_type,
-            "msg_size" => msg.compute_size(),
+            "msg_size" => msg.encoded_len(),
             "from" => from_peer.get_id(),
             "to" => to_peer_id,
         );
@@ -2390,7 +2388,7 @@ pub trait RequestInspector {
         for r in req.get_requests() {
             match r.get_cmd_type() {
                 CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
-                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
+                CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSst => {
                     has_write = true
                 }
                 CmdType::Prewrite | CmdType::Invalid => {
@@ -2504,7 +2502,7 @@ impl ReadExecutor {
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, region)?;
 
-        let mut resp = Response::new();
+        let mut resp = Response::default();
         let snapshot = self.snapshot.as_ref().unwrap();
         let res = if !req.get_get().get_cf().is_empty() {
             let cf = req.get_get().get_cf();
@@ -2581,12 +2579,12 @@ impl ReadExecutor {
                 },
                 CmdType::Snap => {
                     need_snapshot = true;
-                    raft_cmdpb::Response::new()
+                    raft_cmdpb::Response::default()
                 }
                 CmdType::ReadIndex => {
-                    let mut resp = raft_cmdpb::Response::new();
+                    let mut resp = raft_cmdpb::Response::default();
                     if let Some(read_index) = read_index {
-                        let mut res = ReadIndexResponse::new();
+                        let mut res = ReadIndexResponse::default();
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
                     } else {
@@ -2598,15 +2596,15 @@ impl ReadExecutor {
                 | CmdType::Put
                 | CmdType::Delete
                 | CmdType::DeleteRange
-                | CmdType::IngestSST
+                | CmdType::IngestSst
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
             responses.push(resp);
         }
 
-        let mut response = RaftCmdResponse::new();
-        response.set_responses(protobuf::RepeatedField::from_vec(responses));
+        let mut response = RaftCmdResponse::default();
+        response.set_responses(responses);
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
                 self.snapshot.clone().unwrap(),
@@ -2671,18 +2669,16 @@ fn is_request_urgent(req: &RaftCmdRequest) -> bool {
 }
 
 fn make_transfer_leader_response() -> RaftCmdResponse {
-    let mut response = AdminResponse::new();
+    let mut response = AdminResponse::default();
     response.set_cmd_type(AdminCmdType::TransferLeader);
-    response.set_transfer_leader(TransferLeaderResponse::new());
-    let mut resp = RaftCmdResponse::new();
+    response.set_transfer_leader(TransferLeaderResponse::default());
+    let mut resp = RaftCmdResponse::default();
     resp.set_admin_response(response);
     resp
 }
 
 #[cfg(test)]
 mod tests {
-    use protobuf::ProtobufEnum;
-
     use super::*;
 
     #[test]
@@ -2695,7 +2691,7 @@ mod tests {
             AdminCmdType::VerifyHash,
         ];
         for tp in AdminCmdType::values() {
-            let mut msg = RaftCmdRequest::new();
+            let mut msg = RaftCmdRequest::default();
             msg.mut_admin_request().set_cmd_type(*tp);
             assert_eq!(
                 get_sync_log_from_request(&msg),
@@ -2719,7 +2715,7 @@ mod tests {
             AdminCmdType::RollbackMerge,
         ];
         for tp in AdminCmdType::values() {
-            let mut req = RaftCmdRequest::new();
+            let mut req = RaftCmdRequest::default();
             req.mut_admin_request().set_cmd_type(*tp);
             assert_eq!(
                 is_request_urgent(&req),
@@ -2728,7 +2724,7 @@ mod tests {
                 tp
             );
         }
-        assert!(!is_request_urgent(&RaftCmdRequest::new()));
+        assert!(!is_request_urgent(&RaftCmdRequest::default()));
     }
 
     #[test]
@@ -2775,18 +2771,18 @@ mod tests {
         let mut table = vec![];
 
         // Ok(_)
-        let mut req = RaftCmdRequest::new();
-        let mut admin_req = raft_cmdpb::AdminRequest::new();
+        let mut req = RaftCmdRequest::default();
+        let mut admin_req = raft_cmdpb::AdminRequest::default();
 
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeNormal));
 
-        admin_req.set_change_peer(raft_cmdpb::ChangePeerRequest::new());
+        admin_req.set_change_peer(raft_cmdpb::ChangePeerRequest::default());
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeConfChange));
         admin_req.clear_change_peer();
 
-        admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::new());
+        admin_req.set_transfer_leader(raft_cmdpb::TransferLeaderRequest::default());
         req.set_admin_request(admin_req.clone());
         table.push((req.clone(), RequestPolicy::ProposeTransferLeader));
         admin_req.clear_transfer_leader();
@@ -2798,9 +2794,9 @@ mod tests {
             (CmdType::Put, RequestPolicy::ProposeNormal),
             (CmdType::Delete, RequestPolicy::ProposeNormal),
             (CmdType::DeleteRange, RequestPolicy::ProposeNormal),
-            (CmdType::IngestSST, RequestPolicy::ProposeNormal),
+            (CmdType::IngestSst, RequestPolicy::ProposeNormal),
         ] {
-            let mut request = raft_cmdpb::Request::new();
+            let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());
             table.push((req.clone(), policy));
@@ -2826,7 +2822,7 @@ mod tests {
         }
 
         // Read quorum.
-        let mut request = raft_cmdpb::Request::new();
+        let mut request = raft_cmdpb::Request::default();
         request.set_cmd_type(CmdType::Snap);
         req.set_requests(vec![request].into());
         req.mut_header().set_read_quorum(true);
@@ -2840,14 +2836,14 @@ mod tests {
         // Err(_)
         let mut err_table = vec![];
         for op in vec![CmdType::Prewrite, CmdType::Invalid] {
-            let mut request = raft_cmdpb::Request::new();
+            let mut request = raft_cmdpb::Request::default();
             request.set_cmd_type(op);
             req.set_requests(vec![request].into());
             err_table.push(req.clone());
         }
-        let mut snap = raft_cmdpb::Request::new();
+        let mut snap = raft_cmdpb::Request::default();
         snap.set_cmd_type(CmdType::Snap);
-        let mut put = raft_cmdpb::Request::new();
+        let mut put = raft_cmdpb::Request::default();
         put.set_cmd_type(CmdType::Put);
         req.set_requests(vec![snap, put].into());
         err_table.push(req.clone());

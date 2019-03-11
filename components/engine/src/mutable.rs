@@ -3,16 +3,18 @@
 use crate::rocks::{CFHandle, Writable};
 use crate::Result;
 
+use tikv_util::write_to_bytes;
+
 pub trait Mutable: Writable {
-    fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
-        let value = m.write_to_bytes()?;
+    fn put_msg<M: prost::Message>(&self, key: &[u8], m: &M) -> Result<()> {
+        let value = write_to_bytes(m)?;
         self.put(key, &value)?;
         Ok(())
     }
 
     // TODO: change CFHandle to str.
-    fn put_msg_cf<M: protobuf::Message>(&self, cf: &CFHandle, key: &[u8], m: &M) -> Result<()> {
-        let value = m.write_to_bytes()?;
+    fn put_msg_cf<M: prost::Message>(&self, cf: &CFHandle, key: &[u8], m: &M) -> Result<()> {
+        let value = write_to_bytes(m)?;
         self.put_cf(cf, key, &value)?;
         Ok(())
     }

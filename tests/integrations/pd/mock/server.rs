@@ -13,7 +13,6 @@ use tikv::pd::Error as PdError;
 use tikv_util::security::*;
 
 use kvproto::pdpb::*;
-use kvproto::pdpb_grpc::{self, Pd};
 
 use super::mocker::*;
 
@@ -62,7 +61,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     }
 
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
-        let service = pdpb_grpc::create_pd(self.mocker.clone());
+        let service = create_pd(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -192,8 +191,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn alloc_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: AllocIDRequest,
-        sink: UnarySink<AllocIDResponse>,
+        req: AllocIdRequest,
+        sink: UnarySink<AllocIdResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.alloc_id(&req))
     }
@@ -277,7 +276,7 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_region_by_id(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetRegionByIDRequest,
+        req: GetRegionByIdRequest,
         sink: UnarySink<GetRegionResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_region_by_id(&req))
@@ -353,8 +352,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn get_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: GetGCSafePointRequest,
-        sink: UnarySink<GetGCSafePointResponse>,
+        req: GetGcSafePointRequest,
+        sink: UnarySink<GetGcSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.get_gc_safe_point(&req))
     }
@@ -362,8 +361,8 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     fn update_gc_safe_point(
         &mut self,
         ctx: RpcContext<'_>,
-        req: UpdateGCSafePointRequest,
-        sink: UnarySink<UpdateGCSafePointResponse>,
+        req: UpdateGcSafePointRequest,
+        sink: UnarySink<UpdateGcSafePointResponse>,
     ) {
         hijack_unary(self, ctx, sink, |c| c.update_gc_safe_point(&req))
     }

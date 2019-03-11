@@ -59,7 +59,7 @@ impl ScalarFunc {
             (false, false) => lhs.checked_add(rhs),
         };
         let data_type = if lus | rus {
-            "BIGINT UNSIGNED"
+            "BIGINT Unsigned"
         } else {
             "BIGINT"
         };
@@ -94,7 +94,7 @@ impl ScalarFunc {
         let lus = self.children[0].is_unsigned();
         let rus = self.children[1].is_unsigned();
         let data_type = if lus | rus {
-            "BIGINT UNSIGNED"
+            "BIGINT Unsigned"
         } else {
             "BIGINT"
         };
@@ -161,7 +161,7 @@ impl ScalarFunc {
             (true, false) => u64_mul_i64(lhs, rhs),
             (false, true) => u64_mul_i64(rhs, lhs),
         };
-        res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)))
+        res.ok_or_else(|| Error::overflow("BIGINT Unsigned", &format!("({} * {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -174,7 +174,7 @@ impl ScalarFunc {
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         let res = (lhs as u64).checked_mul(rhs as u64).map(|t| t as i64);
         // TODO: output expression in error when column's name pushed down.
-        res.ok_or_else(|| Error::overflow("BIGINT UNSIGNED", &format!("({} * {})", lhs, rhs)))
+        res.ok_or_else(|| Error::overflow("BIGINT Unsigned", &format!("({} * {})", lhs, rhs)))
             .map(Some)
     }
 
@@ -295,7 +295,7 @@ mod tests {
     use std::{f64, i64, u64};
 
     use cop_datatype::FieldTypeFlag;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
     use crate::coprocessor::codec::mysql::Decimal;
@@ -536,14 +536,10 @@ mod tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let lus = lhs
-                .get_field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
-            let rus = rhs
-                .get_field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
+            let lus =
+                FieldTypeAccessor::flag(lhs.get_field_type()).contains(FieldTypeFlag::UNSIGNED);
+            let rus =
+                FieldTypeAccessor::flag(rhs.get_field_type()).contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;
 
             let mut op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();
@@ -950,14 +946,10 @@ mod tests {
             let lhs = datum_expr(tt.1);
             let rhs = datum_expr(tt.2);
 
-            let lus = lhs
-                .get_field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
-            let rus = rhs
-                .get_field_type()
-                .flag()
-                .contains(FieldTypeFlag::UNSIGNED);
+            let lus =
+                FieldTypeAccessor::flag(lhs.get_field_type()).contains(FieldTypeFlag::UNSIGNED);
+            let rus =
+                FieldTypeAccessor::flag(rhs.get_field_type()).contains(FieldTypeFlag::UNSIGNED);
             let unsigned = lus | rus;
 
             let mut op = Expression::build(&ctx, scalar_func_expr(tt.0, &[lhs, rhs])).unwrap();

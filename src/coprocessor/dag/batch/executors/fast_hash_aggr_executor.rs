@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use tikv_util::collections::HashMap;
-use tipb::executor::Aggregation;
-use tipb::expression::{Expr, FieldType};
+use tipb::Aggregation;
+use tipb::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
@@ -82,7 +82,9 @@ impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor>> {
         let def = &group_by_definitions[0];
 
         // Only a subset of all eval types are supported.
-        let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
+        let eval_type = box_try!(EvalType::try_from(FieldTypeAccessor::tp(
+            def.get_field_type()
+        )));
         match eval_type {
             EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
             _ => return Err(box_err!("Eval type {} is not supported", eval_type)),
@@ -132,7 +134,8 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let group_by_field_type = group_by_exp.ret_field_type(src.schema()).clone();
-        let group_by_eval_type = EvalType::try_from(group_by_field_type.tp()).unwrap();
+        let group_by_eval_type =
+            EvalType::try_from(FieldTypeAccessor::tp(&group_by_field_type)).unwrap();
         let groups = match_template_hashable! {
             TT, match group_by_eval_type {
                 EvalType::TT => Groups::TT(HashMap::default()),
@@ -343,7 +346,7 @@ mod tests {
     use super::*;
 
     use cop_datatype::FieldTypeTp;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
@@ -357,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_it_works_integration() {
-        use tipb::expression::ExprType;
+        use tipb::ExprType;
         use tipb_helper::ExprDefBuilder;
 
         // This test creates a hash aggregation executor with the following aggregate functions:
@@ -513,7 +516,7 @@ mod tests {
             Box::new(BatchFastHashAggregationExecutor::new_for_test(
                 src_exec,
                 RpnExpressionBuilder::new().push_column_ref(0).build(),
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };
@@ -522,7 +525,7 @@ mod tests {
             Box::new(BatchSlowHashAggregationExecutor::new_for_test(
                 src_exec,
                 vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
-                vec![Expr::new()],
+                vec![Expr::default()],
                 MyParser,
             )) as Box<dyn BatchExecutor>
         };

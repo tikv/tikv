@@ -10,8 +10,8 @@ use rand_xorshift::XorShiftRng;
 use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use test_coprocessor::*;
 use tikv_util::collections::HashMap;
-use tipb::expression::FieldType;
-use tipb::schema::ColumnInfo;
+use tipb::ColumnInfo;
+use tipb::FieldType;
 
 use tikv::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use tikv::coprocessor::codec::data_type::Decimal;
@@ -276,14 +276,14 @@ impl FixtureBuilder {
             .into_iter()
             .enumerate()
             .map(|(index, ft)| {
-                let mut ci = ColumnInfo::new();
+                let mut ci = ColumnInfo::default();
                 ci.set_column_id(index as i64);
                 ci.as_mut_accessor()
-                    .set_tp(ft.tp())
-                    .set_flag(ft.flag())
-                    .set_flen(ft.flen())
-                    .set_decimal(ft.decimal())
-                    .set_collation(ft.collation());
+                    .set_tp(FieldTypeAccessor::tp(&ft))
+                    .set_flag(FieldTypeAccessor::flag(&ft))
+                    .set_flen(FieldTypeAccessor::flen(&ft))
+                    .set_decimal(FieldTypeAccessor::decimal(&ft))
+                    .set_collation(FieldTypeAccessor::collation(&ft));
                 ci
             })
             .collect();

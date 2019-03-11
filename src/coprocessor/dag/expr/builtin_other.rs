@@ -37,7 +37,7 @@ mod tests {
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
     use std::sync::Arc;
-    use tipb::expression::ScalarFuncSig;
+    use tipb::ScalarFuncSig;
 
     #[test]
     fn test_bit_count() {
