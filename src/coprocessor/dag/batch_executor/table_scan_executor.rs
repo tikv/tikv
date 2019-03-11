@@ -11,15 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cop_datatype::EvalType;
+use std::sync::Arc;
+
+use cop_datatype::{EvalType, FieldTypeAccessor};
 use kvproto::coprocessor::KeyRange;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use crate::storage::Store;
-
 use crate::util::collections::HashMap;
 
 use super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
@@ -34,29 +38,37 @@ pub struct BatchTableScanExecutor<S: Store>(
 impl<S: Store> BatchTableScanExecutor<S> {
     pub fn new(
         store: S,
-        context: BatchExecutorContext,
+        config: Arc<EvalConfig>,
+        columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         desc: bool,
     ) -> Result<Self> {
-        let is_column_filled = vec![false; context.columns_info.len()];
-
+        let is_column_filled = vec![false; columns_info.len()];
         let mut key_only = true;
         let mut handle_index = std::usize::MAX;
+        let mut schema = Vec::with_capacity(columns_info.len());
+        let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
-        for (index, column_info) in context.columns_info.iter().enumerate() {
-            if column_info.get_pk_handle() {
+
+        for (index, mut ci) in columns_info.into_iter().enumerate() {
+            schema.push(super::scan_executor::field_type_from_column_info(&ci));
+            columns_default_value.push(ci.take_default_val());
+
+            if ci.get_pk_handle() {
                 handle_index = index;
             } else {
                 key_only = false;
-                column_id_index.insert(column_info.get_column_id(), index);
+                column_id_index.insert(ci.get_column_id(), index);
             }
         }
 
         let imp = TableScanExecutorImpl {
-            context,
+            context: EvalContext::new(config),
+            schema,
+            columns_default_value,
+            column_id_index,
             key_only,
             handle_index,
-            column_id_index,
             is_column_filled,
         };
         let wrapper = super::scan_executor::ScanExecutor::new(
@@ -72,6 +84,11 @@ impl<S: Store> BatchTableScanExecutor<S> {
 
 impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.0.schema()
+    }
+
+    #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(expect_rows)
     }
@@ -83,21 +100,30 @@ impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
 }
 
 struct TableScanExecutorImpl {
-    context: BatchExecutorContext,
+    /// Note: Although called `EvalContext`, it is some kind of execution context instead.
+    // TODO: Rename EvalContext to ExecContext.
+    context: EvalContext,
+
+    /// The schema of the output. All of the output come from specific columns in the underlying
+    /// storage.
+    schema: Vec<FieldType>,
+
+    /// The default value of corresponding columns in the schema. When column data is missing,
+    /// the default value will be used to fill the output.
+    columns_default_value: Vec<Vec<u8>>,
+
+    /// The output position in the schema giving the column id.
+    column_id_index: HashMap<i64, usize>,
 
     /// Whether or not KV value can be omitted.
     ///
-    /// It will be set to `true` if only PK handle column exists in `context.columns_info`.
+    /// It will be set to `true` if only PK handle column exists in `schema`.
     key_only: bool,
 
     /// The index in output row to put the handle.
     ///
-    /// If PK handle column does not exist in `context.columns_info`, this field will be set to
-    /// `usize::MAX`.
+    /// If PK handle column does not exist in `schema`, this field will be set to `usize::MAX`.
     handle_index: usize,
-
-    /// A hash map to map column id to the index of `context.columns_info`.
-    column_id_index: HashMap<i64, usize>,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -106,10 +132,17 @@ struct TableScanExecutorImpl {
 }
 
 impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
-    fn get_context(&self) -> &BatchExecutorContext {
-        &self.context
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        &self.schema
     }
 
+    #[inline]
+    fn mut_context(&mut self) -> &mut EvalContext {
+        &mut self.context
+    }
+
+    #[inline]
     fn build_scanner<S: Store>(
         &self,
         store: &S,
@@ -128,7 +161,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
         // Construct empty columns, with PK in decoded format and the rest in raw format.
 
-        let columns_len = self.context.columns_info.len();
+        let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
         for i in 0..columns_len {
             if i == self.handle_index {
@@ -155,7 +188,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         use crate::coprocessor::codec::{datum, table};
         use crate::util::codec::number;
 
-        let columns_len = self.context.columns_info.len();
+        let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
         // Decode handle from key if handle is specified in columns.
@@ -205,13 +238,27 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             }
         }
 
-        // Some fields may be missing in the row, we push empty slot to make all columns
-        // in same length.
+        // Some fields may be missing in the row, we push corresponding default value to make all
+        // columns in same length.
         for i in 0..columns_len {
             if !self.is_column_filled[i] {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
-                columns[i].push_raw(&[]);
+
+                let default_value = if !self.columns_default_value[i].is_empty() {
+                    self.columns_default_value[i].as_slice()
+                } else if !self.schema[i]
+                    .flag()
+                    .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
+                {
+                    datum::DATUM_DATA_NULL
+                } else {
+                    return Err(box_err!(
+                        "Column (offset = {}) has flag NOT NULL, but no value is given",
+                        i
+                    ));
+                };
+                columns[i].push_raw(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
                 self.is_column_filled[i] = false;
@@ -242,10 +289,7 @@ mod tests {
     fn test_point_get() {
         let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
         let mut test_store = TestStore::new(&test_data.kv_data);
-        let context = {
-            let columns_info = test_data.get_prev_2_cols();
-            BatchExecutorContext::with_default_config(columns_info)
-        };
+        let columns_info = test_data.get_prev_2_cols();
 
         const HANDLE: i64 = 0;
 
@@ -257,8 +301,14 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner =
-            BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
+        let mut table_scanner = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            ranges,
+            false,
+        )
+        .unwrap();
 
         let result = table_scanner.next_batch(10);
         assert!(result.is_drained.as_ref().unwrap(), true);
@@ -266,7 +316,7 @@ mod tests {
         assert_eq!(result.data.rows_len(), 1);
 
         let expect_row = &test_data.expect_rows[HANDLE as usize];
-        for (idx, col) in context.columns_info.iter().enumerate() {
+        for (idx, col) in columns_info.iter().enumerate() {
             let cid = col.get_column_id();
             let v = &result.data[idx].raw()[0];
             assert_eq!(expect_row[&cid].as_slice(), v.as_slice());
@@ -279,11 +329,8 @@ mod tests {
 
         let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
         let mut test_store = TestStore::new(&test_data.kv_data);
-        let context = {
-            let mut columns_info = test_data.get_prev_2_cols();
-            columns_info.push(test_data.get_col_pk());
-            BatchExecutorContext::with_default_config(columns_info)
-        };
+        let mut columns_info = test_data.get_prev_2_cols();
+        columns_info.push(test_data.get_col_pk());
 
         let r1 = get_range(TABLE_ID, i64::MIN, 0);
         let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
@@ -293,8 +340,14 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner =
-            BatchTableScanExecutor::new(store, context.clone(), ranges, false).unwrap();
+        let mut table_scanner = BatchTableScanExecutor::new(
+            store,
+            Arc::new(EvalConfig::default()),
+            columns_info.clone(),
+            ranges,
+            false,
+        )
+        .unwrap();
 
         let mut data = table_scanner.next_batch(1).data;
         {
@@ -319,7 +372,7 @@ mod tests {
             );
             // check rest columns
             let expect_row = &test_data.expect_rows[row_index];
-            for (col_index, col) in context.columns_info.iter().enumerate() {
+            for (col_index, col) in columns_info.iter().enumerate() {
                 if col.get_pk_handle() {
                     continue;
                 }

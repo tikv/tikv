@@ -11,13 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use crate::storage::Store;
 
 use super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
@@ -32,16 +37,19 @@ pub struct BatchIndexScanExecutor<S: Store>(
 impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
         store: S,
-        context: BatchExecutorContext,
+        config: Arc<EvalConfig>,
+        columns_info: Vec<ColumnInfo>,
         key_ranges: Vec<KeyRange>,
         desc: bool,
         unique: bool,
         // TODO: this does not mean that it is a unique index scan. What does it mean?
     ) -> Result<Self> {
+        let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_len_without_handle = 0;
         let mut decode_handle = false;
-        for column_info in &context.columns_info {
-            if column_info.get_pk_handle() {
+        for ci in &columns_info {
+            schema.push(super::scan_executor::field_type_from_column_info(&ci));
+            if ci.get_pk_handle() {
                 decode_handle = true;
             } else {
                 columns_len_without_handle += 1;
@@ -49,7 +57,8 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         }
 
         let imp = IndexScanExecutorImpl {
-            context,
+            context: EvalContext::new(config),
+            schema,
             columns_len_without_handle,
             decode_handle,
         };
@@ -66,6 +75,11 @@ impl<S: Store> BatchIndexScanExecutor<S> {
 
 impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.0.schema()
+    }
+
+    #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(expect_rows)
     }
@@ -77,7 +91,11 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
 }
 
 struct IndexScanExecutorImpl {
-    context: BatchExecutorContext,
+    /// See `TableScanExecutorImpl`'s `context`.
+    context: EvalContext,
+
+    /// See `TableScanExecutorImpl`'s `schema`.
+    schema: Vec<FieldType>,
 
     /// Number of interested columns (exclude PK handle column).
     columns_len_without_handle: usize,
@@ -87,10 +105,17 @@ struct IndexScanExecutorImpl {
 }
 
 impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
-    fn get_context(&self) -> &BatchExecutorContext {
-        &self.context
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        &self.schema
     }
 
+    #[inline]
+    fn mut_context(&mut self) -> &mut EvalContext {
+        &mut self.context
+    }
+
+    #[inline]
     fn build_scanner<S: Store>(
         &self,
         store: &S,
@@ -109,7 +134,7 @@ impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
         // Construct empty columns, with PK in decoded format and the rest in raw format.
 
-        let columns_len = self.context.columns_info.len();
+        let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
         for _ in 0..self.columns_len_without_handle {
             columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));

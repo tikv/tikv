@@ -12,18 +12,25 @@
 // limitations under the License.
 
 use kvproto::coprocessor::KeyRange;
+use tipb::expression::FieldType;
+use tipb::schema::ColumnInfo;
 
 use crate::storage::{Key, Store};
 
 use super::interface::*;
 use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
+/// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
-    fn get_context(&self) -> &BatchExecutorContext;
+    /// Gets the schema.
+    fn schema(&self) -> &[FieldType];
+
+    /// Gets a mutable reference of the executor context.
+    fn mut_context(&mut self) -> &mut EvalContext;
 
     fn build_scanner<S: Store>(&self, store: &S, desc: bool, range: KeyRange)
         -> Result<Scanner<S>>;
@@ -164,7 +171,25 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     }
 }
 
+/// Extracts `FieldType` from `ColumnInfo`.
+// TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
+pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
+    let mut field_type = FieldType::new();
+    field_type.set_tp(ci.get_tp());
+    field_type.set_flag(ci.get_flag() as u32); // FIXME: This `as u32` is really awful.
+    field_type.set_flen(ci.get_columnLen());
+    field_type.set_decimal(ci.get_decimal());
+    field_type.set_collate(ci.get_collation());
+    // Note: Charset is not provided in column info.
+    field_type
+}
+
 impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.imp.schema()
+    }
+
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
@@ -192,7 +217,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         BatchExecuteResult {
             data,
             is_drained,
-            warnings: EvalWarnings::new(self.imp.get_context().config.max_warning_cnt),
+            warnings: self.imp.mut_context().take_warnings(),
         }
     }
 

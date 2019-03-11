@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::{RpnFnCallPayload, RpnRuntimeContext};
+use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
+use crate::coprocessor::dag::expr::EvalContext;
 
 /// A trait for all RPN functions.
 pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
@@ -29,7 +30,7 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
     fn eval(
         &self,
         rows: usize,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue;
 }
@@ -49,7 +50,7 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
     fn eval(
         &self,
         rows: usize,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue {
         (**self).eval(rows, context, payload)
@@ -66,12 +67,12 @@ impl Helper {
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue
     where
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload) -> Ret,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -89,13 +90,13 @@ impl Helper {
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0) -> Ret,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -122,14 +123,14 @@ impl Helper {
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -180,7 +181,7 @@ impl Helper {
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
         lhs: &ScalarValue,
         rhs: &ScalarValue,
@@ -189,7 +190,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -204,7 +205,7 @@ impl Helper {
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
         lhs: &ScalarValue,
         rhs: &VectorValue,
@@ -213,7 +214,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -229,7 +230,7 @@ impl Helper {
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
         lhs: &VectorValue,
         rhs: &ScalarValue,
@@ -238,7 +239,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -254,7 +255,7 @@ impl Helper {
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
         lhs: &VectorValue,
         rhs: &VectorValue,
@@ -263,7 +264,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -284,7 +285,7 @@ impl Helper {
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
         mut f: F,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         payload: RpnFnCallPayload,
     ) -> VectorValue
     where
@@ -292,7 +293,7 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut RpnRuntimeContext, RpnFnCallPayload, &Arg0, &Arg1, &Arg2) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1, &Arg2) -> Ret,
     {
         assert_eq!(payload.args_len(), 3);
 
@@ -341,7 +342,7 @@ macro_rules! impl_template_fn {
             fn eval(
                 &self,
                 rows: usize,
-                context: &mut $crate::coprocessor::dag::rpn_expr::RpnRuntimeContext,
+                context: &mut $crate::coprocessor::dag::expr::EvalContext,
                 payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
             ) -> $crate::coprocessor::codec::data_type::VectorValue {
                 $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(

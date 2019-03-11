@@ -19,38 +19,8 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
+use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::{Error, Result};
-
-/// Runtime context for evaluating RPN expressions.
-#[derive(Debug)]
-pub struct RpnRuntimeContext {
-    // TODO: Make it Arc if necessary. Currently it is not needed because it is efficient to copy
-    // `EvalConfig`.
-    pub config: EvalConfig,
-
-    // TODO: Warnings should be recorded by row.
-    // TODO: We'd better store structural data that can be converted to message (but not the
-    // message itself) to avoid unnecessary message construct when corresponding warning is thrown
-    // away.
-    pub warnings: EvalWarnings,
-}
-
-impl RpnRuntimeContext {
-    pub fn new(config: EvalConfig) -> Self {
-        Self {
-            warnings: EvalWarnings::new(config.max_warning_cnt),
-            config,
-        }
-    }
-}
-
-impl Default for RpnRuntimeContext {
-    /// Constructs a new instance using the default `EvalConfig`. It should be useful only in tests.
-    fn default() -> Self {
-        Self::new(EvalConfig::default())
-    }
-}
 
 /// A structure for holding argument values and type information of arguments and return values.
 ///
@@ -293,7 +263,7 @@ impl RpnExpressionNodeVec {
     /// Panics if referenced columns are not decoded.
     pub fn eval<'a>(
         &'a self,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         rows: usize,
         columns: &'a LazyBatchColumnVec,
     ) -> RpnStackNode<'a> {
@@ -357,7 +327,7 @@ impl RpnExpressionNodeVec {
     /// Panics if the boolean vector output buffer is not large enough to contain all values.
     pub fn eval_as_mysql_bools(
         &self,
-        context: &mut RpnRuntimeContext,
+        context: &mut EvalContext,
         rows: usize,
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
@@ -701,7 +671,7 @@ mod tests {
     impl FnA {
         #[inline(always)]
         fn call(
-            _ctx: &mut RpnRuntimeContext,
+            _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload,
             v: &Option<i64>,
         ) -> Option<f64> {
@@ -718,7 +688,7 @@ mod tests {
     impl FnB {
         #[inline(always)]
         fn call(
-            _ctx: &mut RpnRuntimeContext,
+            _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload,
             v1: &Option<f64>,
             v2: &Option<f64>,
@@ -739,7 +709,7 @@ mod tests {
     impl FnC {
         #[inline(always)]
         fn call(
-            _ctx: &mut RpnRuntimeContext,
+            _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload,
             v1: &Option<i64>,
             v2: &Option<i64>,
@@ -761,7 +731,7 @@ mod tests {
     impl FnD {
         #[inline(always)]
         fn call(
-            _ctx: &mut RpnRuntimeContext,
+            _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload,
             v1: &Option<f64>,
             v2: &Option<f64>,
@@ -1085,7 +1055,7 @@ mod tests {
         col.mut_decoded().push_int(Some(15));
 
         let cols = LazyBatchColumnVec::from(vec![col]);
-        let mut ctx = RpnRuntimeContext::default();
+        let mut ctx = EvalContext::default();
         let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols);
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(

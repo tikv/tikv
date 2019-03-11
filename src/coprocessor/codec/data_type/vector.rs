@@ -14,6 +14,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tipb::expression::FieldType;
 
 use super::*;
 use crate::coprocessor::codec::datum;
@@ -256,7 +257,7 @@ impl VectorValue {
         &mut self,
         mut raw_datum: &[u8],
         time_zone: Tz,
-        field_type: &dyn FieldTypeAccessor,
+        field_type: &FieldType,
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -323,7 +324,7 @@ impl VectorValue {
         fn decode_date_time_from_uint(
             v: u64,
             time_zone: Tz,
-            field_type: &dyn FieldTypeAccessor,
+            field_type: &FieldType,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
             let time_type = field_type.tp().try_into()?;
@@ -525,7 +526,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &dyn FieldTypeAccessor,
+        field_type: &FieldType,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         use crate::coprocessor::codec::mysql::DecimalEncoder;
@@ -951,11 +952,8 @@ mod benches {
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut field_type = tipb::expression::FieldType::new();
+        field_type.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         b.iter(move || {
@@ -964,7 +962,7 @@ mod benches {
                     .push_datum(
                         test::black_box(&datum_raw),
                         test::black_box(tz),
-                        test::black_box(&col_info),
+                        test::black_box(&field_type),
                     )
                     .unwrap();
             }

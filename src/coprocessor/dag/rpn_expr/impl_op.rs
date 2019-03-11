@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::{RpnFnCallPayload, RpnRuntimeContext};
+use super::types::RpnFnCallPayload;
+use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnLogicalAnd;
@@ -21,7 +22,7 @@ impl_template_fn! { 2 arg @ RpnFnLogicalAnd }
 impl RpnFnLogicalAnd {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
@@ -50,7 +51,7 @@ impl_template_fn! { 2 arg @ RpnFnLogicalOr }
 impl RpnFnLogicalOr {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,

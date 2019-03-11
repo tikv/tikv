@@ -11,7 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::types::{RpnFnCallPayload, RpnRuntimeContext};
+use super::types::RpnFnCallPayload;
+use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnEQReal;
@@ -22,7 +23,7 @@ impl RpnFnEQReal {
     #[allow(clippy::float_cmp)]
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<f64>,
         arg1: &Option<f64>,
@@ -44,7 +45,7 @@ impl_template_fn! { 2 arg @ RpnFnEQInt }
 impl RpnFnEQInt {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
@@ -65,7 +66,7 @@ impl_template_fn! { 2 arg @ RpnFnGTInt }
 impl RpnFnGTInt {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
@@ -86,7 +87,7 @@ impl_template_fn! { 2 arg @ RpnFnLTInt }
 impl RpnFnLTInt {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,

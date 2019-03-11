@@ -11,17 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use tipb::expression::Expr;
+use tipb::expression::FieldType;
 
 use super::interface::*;
 use crate::coprocessor::dag::executor::ExprColumnRefVisitor;
-use crate::coprocessor::dag::rpn_expr::{RpnExpressionNodeVec, RpnRuntimeContext};
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+use crate::coprocessor::dag::rpn_expr::RpnExpressionNodeVec;
 use crate::coprocessor::Result;
 
 pub struct BatchSelectionExecutor<Src: BatchExecutor> {
-    context: BatchExecutorContext,
+    context: EvalContext,
     src: Src,
-    rt_context: RpnRuntimeContext,
     conditions: Vec<RpnExpressionNodeVec>,
 
     /// The index (in `context.columns_info`) of referred columns in expression.
@@ -31,27 +34,22 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
 }
 
 impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
-    pub fn new(context: BatchExecutorContext, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
+        // TODO: Remove the need of schema len.
         let referred_columns = {
-            let mut ref_visitor = ExprColumnRefVisitor::new(context.columns_info.len());
+            let mut ref_visitor = ExprColumnRefVisitor::new(src.schema().len());
             ref_visitor.batch_visit(&conditions_def)?;
             ref_visitor.column_offsets()
         };
 
-        let rt_context = RpnRuntimeContext::new(context.config);
-
         let mut conditions = Vec::with_capacity(conditions_def.len());
         for def in conditions_def {
-            conditions.push(RpnExpressionNodeVec::build_from_def(
-                def,
-                context.config.tz,
-            )?);
+            conditions.push(RpnExpressionNodeVec::build_from_def(def, config.tz)?);
         }
 
         Ok(Self {
-            context,
+            context: EvalContext::new(config),
             src,
-            rt_context,
             conditions,
             referred_columns,
 
@@ -62,16 +60,22 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
 
 impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
     #[inline]
+    fn schema(&self) -> &[FieldType] {
+        // The selection executor's schema comes from its child.
+        self.src.schema()
+    }
+
+    #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
+        // TODO: It's better to make RPN framework take care of referred columns.
         let mut result = self.src.next_batch(expect_rows);
+        let schema = self.src.schema();
         for idx in &self.referred_columns {
-            let _ = result.data.ensure_column_decoded(
-                *idx,
-                self.context.config.tz,
-                &self.context.columns_info[*idx],
-            );
+            let _ = result
+                .data
+                .ensure_column_decoded(*idx, self.context.cfg.tz, &schema[*idx]);
             // TODO: what if ensure_column_decoded failed?
             // TODO: We should trim length of all columns to 0 when there is a decoding error.
         }
@@ -82,7 +86,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
 
         for condition in &self.conditions {
             condition.eval_as_mysql_bools(
-                &mut self.rt_context,
+                &mut self.context,
                 rows_len,
                 &result.data,
                 head_retain_map.as_mut_slice(),
@@ -93,7 +97,7 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         }
 
         result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
-        result.warnings.merge(&mut self.rt_context.warnings);
+        result.warnings.merge(&mut self.context.warnings);
         result
     }
 

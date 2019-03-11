@@ -13,7 +13,8 @@
 
 //! For demo purpose.
 
-use super::types::{RpnFnCallPayload, RpnRuntimeContext};
+use super::types::RpnFnCallPayload;
+use crate::coprocessor::dag::expr::EvalContext;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnDummy0ArgFunc;
@@ -22,7 +23,7 @@ impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut RpnRuntimeContext, _payload: RpnFnCallPayload) -> Option<i64> {
+    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload) -> Option<i64> {
         Some(7)
     }
 }
@@ -34,11 +35,7 @@ impl_template_fn! { 1 arg @ RpnFnDummy1ArgFunc }
 
 impl RpnFnDummy1ArgFunc {
     #[inline(always)]
-    fn call(
-        _ctx: &mut RpnRuntimeContext,
-        _payload: RpnFnCallPayload,
-        _: &Option<i64>,
-    ) -> Option<i64> {
+    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload, _: &Option<i64>) -> Option<i64> {
         Some(5)
     }
 }
@@ -51,7 +48,7 @@ impl_template_fn! { 2 arg @ RpnFnDummy2ArgFunc }
 impl RpnFnDummy2ArgFunc {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         _: &Option<i64>,
         _: &Option<f64>,
@@ -68,7 +65,7 @@ impl_template_fn! { 3 arg @ RpnFnDummy3ArgFunc }
 impl RpnFnDummy3ArgFunc {
     #[inline(always)]
     fn call(
-        _ctx: &mut RpnRuntimeContext,
+        _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload,
         _: &Option<i64>,
         _: &Option<f64>,

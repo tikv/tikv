@@ -134,15 +134,14 @@ impl DAGBuilder {
         executor_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
-        eval_config: EvalConfig,
-    ) -> Result<(Box<dyn BatchExecutor>, BatchExecutorContext)> {
+        config: Arc<EvalConfig>,
+    ) -> Result<Box<dyn BatchExecutor>> {
         // Shared in multiple executors, so wrap with Rc.
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("No executors")))?;
 
-        let executor_context;
         let mut executor: Box<dyn BatchExecutor>;
 
         match first_ed.get_tp() {
@@ -151,11 +150,11 @@ impl DAGBuilder {
                 COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
 
                 let mut descriptor = first_ed.take_tbl_scan();
-                executor_context =
-                    BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
+                let columns_info = descriptor.take_columns().into_vec();
                 executor = box BatchTableScanExecutor::new(
                     store,
-                    executor_context.clone(),
+                    config.clone(),
+                    columns_info,
                     ranges,
                     descriptor.get_desc(),
                 )?;
@@ -164,11 +163,11 @@ impl DAGBuilder {
                 COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
 
                 let mut descriptor = first_ed.take_idx_scan();
-                executor_context =
-                    BatchExecutorContext::new(descriptor.take_columns().into_vec(), eval_config);
+                let columns_info = descriptor.take_columns().into_vec();
                 executor = box BatchIndexScanExecutor::new(
                     store,
-                    executor_context.clone(),
+                    config.clone(),
+                    columns_info,
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
@@ -194,7 +193,7 @@ impl DAGBuilder {
                     COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
 
                     Box::new(BatchSelectionExecutor::new(
-                        executor_context.clone(),
+                        config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into_vec(),
                     )?)
@@ -209,7 +208,7 @@ impl DAGBuilder {
             executor = new_executor;
         }
 
-        Ok((executor, executor_context))
+        Ok(executor)
     }
 
     /// Builds a normal executor pipeline.
