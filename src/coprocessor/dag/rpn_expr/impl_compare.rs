@@ -13,6 +13,7 @@
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::Result;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnEQReal;
@@ -27,13 +28,13 @@ impl RpnFnEQReal {
         _payload: RpnFnCallPayload,
         arg0: &Option<f64>,
         arg1: &Option<f64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // FIXME: It really should be a `Result<Option<f64>>`.
-        match (arg0, arg1) {
+        Ok(match (arg0, arg1) {
             (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
             // TODO: Use `partial_cmp`.
             _ => None,
-        }
+        })
     }
 }
 
@@ -49,12 +50,12 @@ impl RpnFnEQInt {
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-        match (arg0, arg1) {
+        Ok(match (arg0, arg1) {
             (Some(ref arg0), Some(ref arg1)) => Some((*arg0 == *arg1) as i64),
             _ => None,
-        }
+        })
     }
 }
 
@@ -70,12 +71,12 @@ impl RpnFnGTInt {
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-        match (arg0, arg1) {
+        Ok(match (arg0, arg1) {
             (Some(ref arg0), Some(ref arg1)) => Some((*arg0 > *arg1) as i64),
             _ => None,
-        }
+        })
     }
 }
 
@@ -91,11 +92,11 @@ impl RpnFnLTInt {
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // FIXME: The algorithm here is incorrect. We should care about unsigned and signed.
-        match (arg0, arg1) {
+        Ok(match (arg0, arg1) {
             (Some(ref arg0), Some(ref arg1)) => Some((*arg0 < *arg1) as i64),
             _ => None,
-        }
+        })
     }
 }

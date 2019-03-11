@@ -266,7 +266,7 @@ impl RpnExpressionNodeVec {
         context: &mut EvalContext,
         rows: usize,
         columns: &'a LazyBatchColumnVec,
-    ) -> RpnStackNode<'a> {
+    ) -> Result<RpnStackNode<'a>> {
         let mut stack = Vec::with_capacity(self.0.len());
         for node in &self.0 {
             match node {
@@ -304,7 +304,7 @@ impl RpnExpressionNodeVec {
                         raw_args: stack_slice,
                         ret_field_type: field_type,
                     };
-                    let ret = func.eval(rows, context, call_info);
+                    let ret = func.eval(rows, context, call_info)?;
                     stack.truncate(stack_slice_begin);
                     stack.push(RpnStackNode::Vector {
                         value: RpnStackNodeVectorValue::Owned(Box::new(ret)),
@@ -315,7 +315,7 @@ impl RpnExpressionNodeVec {
         }
 
         assert_eq!(stack.len(), 1);
-        stack.into_iter().next().unwrap()
+        Ok(stack.into_iter().next().unwrap())
     }
 
     /// Evaluates the expression into a boolean vector.
@@ -331,14 +331,14 @@ impl RpnExpressionNodeVec {
         rows: usize,
         columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
-    ) {
+    ) -> Result<()> {
         use crate::coprocessor::codec::data_type::AsMySQLBool;
 
         assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, columns);
+        let values = self.eval(context, rows, columns)?;
         match values {
             RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_mysql_bool();
+                let b = value.as_mysql_bool(context)?;
                 for i in 0..rows {
                     outputs[i] = b;
                 }
@@ -346,9 +346,10 @@ impl RpnExpressionNodeVec {
             RpnStackNode::Vector { value, .. } => {
                 let vec_ref = value.as_ref();
                 assert_eq!(vec_ref.len(), rows);
-                vec_ref.eval_as_mysql_bools(outputs);
+                vec_ref.eval_as_mysql_bools(context, outputs)?;
             }
         }
+        Ok(())
     }
 
     /// Transforms eval tree nodes into RPN nodes.
@@ -674,8 +675,8 @@ mod tests {
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload,
             v: &Option<i64>,
-        ) -> Option<f64> {
-            v.map(|v| v as f64)
+        ) -> Result<Option<f64>> {
+            Ok(v.map(|v| v as f64))
         }
     }
 
@@ -692,11 +693,11 @@ mod tests {
             _payload: RpnFnCallPayload,
             v1: &Option<f64>,
             v2: &Option<f64>,
-        ) -> Option<i64> {
+        ) -> Result<Option<i64>> {
             if v1.is_none() || v2.is_none() {
-                return None;
+                return Ok(None);
             }
-            Some((v1.as_ref().unwrap() + v2.as_ref().unwrap()) as i64)
+            Ok(Some((v1.as_ref().unwrap() + v2.as_ref().unwrap()) as i64))
         }
     }
 
@@ -714,11 +715,13 @@ mod tests {
             v1: &Option<i64>,
             v2: &Option<i64>,
             v3: &Option<i64>,
-        ) -> Option<i64> {
+        ) -> Result<Option<i64>> {
             if v1.is_none() || v2.is_none() || v3.is_none() {
-                return None;
+                return Ok(None);
             }
-            Some(v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap())
+            Ok(Some(
+                v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap(),
+            ))
         }
     }
 
@@ -736,11 +739,13 @@ mod tests {
             v1: &Option<f64>,
             v2: &Option<f64>,
             v3: &Option<f64>,
-        ) -> Option<f64> {
+        ) -> Result<Option<f64>> {
             if v1.is_none() || v2.is_none() || v3.is_none() {
-                return None;
+                return Ok(None);
             }
-            Some(v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap())
+            Ok(Some(
+                v1.as_ref().unwrap() + v2.as_ref().unwrap() + v3.as_ref().unwrap(),
+            ))
         }
     }
 
@@ -1056,7 +1061,7 @@ mod tests {
 
         let cols = LazyBatchColumnVec::from(vec![col]);
         let mut ctx = EvalContext::default();
-        let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols);
+        let ret = rpn_nodes.eval(&mut ctx, cols.rows_len(), &cols).unwrap();
         assert_eq!(ret.field_type().tp(), FieldTypeTp::LongLong);
         assert_eq!(
             ret.vector_value().unwrap().as_int_slice(),

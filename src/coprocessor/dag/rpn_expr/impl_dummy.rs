@@ -15,6 +15,7 @@
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::Result;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnDummy0ArgFunc;
@@ -23,8 +24,8 @@ impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload) -> Option<i64> {
-        Some(7)
+    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload) -> Result<Option<i64>> {
+        Ok(Some(7))
     }
 }
 
@@ -35,8 +36,12 @@ impl_template_fn! { 1 arg @ RpnFnDummy1ArgFunc }
 
 impl RpnFnDummy1ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload, _: &Option<i64>) -> Option<i64> {
-        Some(5)
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload,
+        _: &Option<i64>,
+    ) -> Result<Option<i64>> {
+        Ok(Some(5))
     }
 }
 
@@ -52,8 +57,8 @@ impl RpnFnDummy2ArgFunc {
         _payload: RpnFnCallPayload,
         _: &Option<i64>,
         _: &Option<f64>,
-    ) -> Option<f64> {
-        Some(11.0)
+    ) -> Result<Option<f64>> {
+        Ok(Some(11.0))
     }
 }
 
@@ -70,8 +75,8 @@ impl RpnFnDummy3ArgFunc {
         _: &Option<i64>,
         _: &Option<f64>,
         _: &Option<i64>,
-    ) -> Option<f64> {
-        Some(13.5)
+    ) -> Result<Option<f64>> {
+        Ok(Some(13.5))
     }
 }
 

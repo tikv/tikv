@@ -14,6 +14,7 @@
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::Result;
 
 /// A trait for all RPN functions.
 pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
@@ -32,7 +33,7 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
         rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue;
+    ) -> Result<VectorValue>;
 }
 
 impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
@@ -52,7 +53,7 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
         rows: usize,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue {
+    ) -> Result<VectorValue> {
         (**self).eval(rows, context, payload)
     }
 }
@@ -69,18 +70,18 @@ impl Helper {
         mut f: F,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 0);
 
         let mut result = Vec::with_capacity(rows);
         for _ in 0..rows {
-            result.push(f(context, payload));
+            result.push(f(context, payload)?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
@@ -92,11 +93,11 @@ impl Helper {
         mut f: F,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -104,16 +105,16 @@ impl Helper {
         if payload.raw_arg_at(0).is_scalar() {
             let v = Arg0::borrow_scalar_value(payload.raw_arg_at(0).scalar_value().unwrap());
             for _ in 0..rows {
-                result.push(f(context, payload, v));
+                result.push(f(context, payload, v)?);
             }
         } else {
             let v = Arg0::borrow_vector_value(payload.raw_arg_at(0).vector_value().unwrap());
             assert_eq!(rows, v.len());
             for i in 0..rows {
-                result.push(f(context, payload, &v[i]));
+                result.push(f(context, payload, &v[i])?);
             }
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
@@ -125,12 +126,12 @@ impl Helper {
         f: F,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -185,20 +186,20 @@ impl Helper {
         payload: RpnFnCallPayload,
         lhs: &ScalarValue,
         rhs: &ScalarValue,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
         let rhs = Arg1::borrow_scalar_value(rhs);
         for _ in 0..rows {
-            result.push(f(context, payload, lhs, rhs));
+            result.push(f(context, payload, lhs, rhs)?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     #[inline(always)]
@@ -209,21 +210,21 @@ impl Helper {
         payload: RpnFnCallPayload,
         lhs: &ScalarValue,
         rhs: &VectorValue,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
         let rhs = Arg1::borrow_vector_value(rhs);
         for i in 0..rows {
-            result.push(f(context, payload, lhs, &rhs[i]));
+            result.push(f(context, payload, lhs, &rhs[i])?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     #[inline(always)]
@@ -234,21 +235,21 @@ impl Helper {
         payload: RpnFnCallPayload,
         lhs: &VectorValue,
         rhs: &ScalarValue,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_vector_value(lhs);
         let rhs = Arg1::borrow_scalar_value(rhs);
         for i in 0..rows {
-            result.push(f(context, payload, &lhs[i], rhs));
+            result.push(f(context, payload, &lhs[i], rhs)?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     #[inline(always)]
@@ -259,12 +260,12 @@ impl Helper {
         payload: RpnFnCallPayload,
         lhs: &VectorValue,
         rhs: &VectorValue,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -272,9 +273,9 @@ impl Helper {
         let lhs = Arg0::borrow_vector_value(lhs);
         let rhs = Arg1::borrow_vector_value(rhs);
         for i in 0..rows {
-            result.push(f(context, payload, &lhs[i], &rhs[i]));
+            result.push(f(context, payload, &lhs[i], &rhs[i])?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 
     /// Evaluates a function with 3 scalar or vector arguments to produce a vector value.
@@ -287,13 +288,13 @@ impl Helper {
         mut f: F,
         context: &mut EvalContext,
         payload: RpnFnCallPayload,
-    ) -> VectorValue
+    ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1, &Arg2) -> Ret,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 3);
 
@@ -302,9 +303,9 @@ impl Helper {
         let arg1 = Arg1::borrow_vector_like_specialized(payload.raw_arg_at(1).as_vector_like());
         let arg2 = Arg2::borrow_vector_like_specialized(payload.raw_arg_at(2).as_vector_like());
         for i in 0..rows {
-            result.push(f(context, payload, &arg0[i], &arg1[i], &arg2[i]));
+            result.push(f(context, payload, &arg0[i], &arg1[i], &arg2[i])?);
         }
-        Ret::into_vector_value(result)
+        Ok(Ret::into_vector_value(result))
     }
 }
 
@@ -344,7 +345,8 @@ macro_rules! impl_template_fn {
                 rows: usize,
                 context: &mut $crate::coprocessor::dag::expr::EvalContext,
                 payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
-            ) -> $crate::coprocessor::codec::data_type::VectorValue {
+            ) -> $crate::coprocessor::Result<$crate::coprocessor::codec::data_type::VectorValue>
+            {
                 $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(
                     rows,
                     Self::call,

@@ -85,12 +85,17 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         let mut head_retain_map = vec![false; rows_len];
 
         for condition in &self.conditions {
-            condition.eval_as_mysql_bools(
+            let r = condition.eval_as_mysql_bools(
                 &mut self.context,
                 rows_len,
                 &result.data,
                 head_retain_map.as_mut_slice(),
             );
+            if let Err(e) = r {
+                // TODO: We should not return error when it comes from unused rows.
+                result.is_drained = result.is_drained.and(Err(e));
+                return result;
+            }
             for i in 0..rows_len {
                 base_retain_map[i] &= head_retain_map[i];
             }

@@ -13,6 +13,7 @@
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::Result;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RpnFnLogicalAnd;
@@ -26,9 +27,9 @@ impl RpnFnLogicalAnd {
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // Intentionally not merging `None` and `Some(0)` conditions to be clear.
-        match arg0 {
+        Ok(match arg0 {
             None => match arg1 {
                 Some(0) => Some(0),
                 _ => None,
@@ -39,7 +40,7 @@ impl RpnFnLogicalAnd {
                 Some(0) => Some(0),
                 Some(_) => Some(1),
             },
-        }
+        })
     }
 }
 
@@ -55,9 +56,9 @@ impl RpnFnLogicalOr {
         _payload: RpnFnCallPayload,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>> {
         // Intentionally not merging `None` and `Some(0)` conditions to be clear.
-        match arg0 {
+        Ok(match arg0 {
             None => match arg1 {
                 None => None,
                 Some(0) => None,
@@ -69,6 +70,6 @@ impl RpnFnLogicalOr {
                 Some(_) => Some(1),
             },
             Some(_) => Some(1),
-        }
+        })
     }
 }
