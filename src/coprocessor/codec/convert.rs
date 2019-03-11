@@ -482,8 +482,9 @@ mod tests {
         }
 
         // Secondly, make sure warnings are attached when the float string cannot be casted to a valid int string
-        assert_eq!(ctx.take_warnings().warnings.len(), 2);
-        for warning in ctx.take_warnings().warnings {
+        let warnings = ctx.take_warnings().warnings;
+        assert_eq!(warnings.len(), 2);
+        for warning in warnings {
             assert_eq!(warning.get_code(), ERR_DATA_OUT_OF_RANGE);
         }
     }
