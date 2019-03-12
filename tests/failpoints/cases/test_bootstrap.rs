@@ -11,21 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use kvproto::{metapb, raft_serverpb};
-use tempdir::TempDir;
 
 use test_raftstore::*;
-use tikv::import::SSTImporter;
 use tikv::pd::PdClient;
-use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{fsm, keys, Engines, Peekable, SnapManager};
-use tikv::server::{Node, Result};
-use tikv::storage::ALL_CFS;
-use tikv::util::rocksdb_util;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv::raftstore::store::{keys, Peekable};
 
 fn test_boostrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));

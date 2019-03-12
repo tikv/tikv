@@ -34,11 +34,11 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // now  at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
     cluster.shutdown();
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
 }
 

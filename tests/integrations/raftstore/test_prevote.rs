@@ -102,7 +102,7 @@ fn test_prevote<T: Simulator>(
         FailureType::Reboot(peers) => {
             cluster.clear_send_filters();
             peers.iter().for_each(|&peer| {
-                cluster.run_node(peer);
+                cluster.run_node(peer).unwrap();
             });
         }
     };
