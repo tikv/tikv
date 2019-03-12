@@ -46,7 +46,7 @@ num-import-jobs = 24
 # maximum duration to prepare regions.
 # max-prepare-duration = "5m"
 # split regions into this size according to the importing data.
-# region-split-size = "96MB"
+# region-split-size = "512MB"
 # stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
 # maximum number of open engines

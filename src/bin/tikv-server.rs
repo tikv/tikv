@@ -109,9 +109,9 @@ fn pre_start(cfg: &TiKvConfig) {
     check_system_config(&cfg);
     check_environment_variables();
 
-    if cfg.panic_when_key_exceed_bound {
-        info!("panic-when-key-exceed-bound is on");
-        tikv_util::set_panic_when_key_exceed_bound(true);
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
     }
 }
 
@@ -492,6 +492,7 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
     // Do some prepare works before start.
     pre_start(&config);
 
