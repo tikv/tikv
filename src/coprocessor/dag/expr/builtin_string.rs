@@ -11,21 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use base64;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::i64;
 use std::iter;
 
+use base64;
 use hex::{self, FromHex};
+use safemem;
 
 use cop_datatype;
 use cop_datatype::prelude::*;
 
-use super::{EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::{datum, Datum};
-use safemem;
+
+use super::{EvalContext, Result, ScalarFunc};
 
 const SPACE: u8 = 0o40u8;
 
@@ -933,6 +934,69 @@ impl ScalarFunc {
             .map(|i| 1 + i as i64)
             .or(Some(0)))
     }
+
+    // See https://dev.mysql.com/doc/refman/5.6/en/string-functions.html#function_insert
+    #[inline]
+    pub fn insert_binary<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s: Cow<'_, [u8]> = try_opt!(self.children[0].eval_string(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let s_len = s.len() as i64;
+        if pos < 1 || pos > s_len {
+            return Ok(Some(s));
+        }
+        let mut len = try_opt!(self.children[2].eval_int(ctx, row));
+        let remaining_len = s_len - pos + 1;
+        if len < 0 || len > remaining_len {
+            len = remaining_len
+        }
+        let new_str: Cow<'_, [u8]> = try_opt!(self.children[3].eval_string(ctx, row));
+
+        // now, pos > 0 and len >=0.
+        let mut t = s.to_vec();
+        drop(t.splice(
+            (pos - 1) as usize..(pos - 1 + len) as usize,
+            new_str.iter().cloned(),
+        ));
+        Ok(Some(Cow::Owned(t)))
+    }
+
+    // See https://dev.mysql.com/doc/refman/5.6/en/string-functions.html#function_insert
+    #[inline]
+    pub fn insert<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s: Cow<'_, str> = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        let pos = try_opt!(self.children[1].eval_int(ctx, row));
+        let char_len = s.chars().count() as i64;
+        if pos < 1 || pos > char_len {
+            return match s {
+                Cow::Borrowed(v) => Ok(Some(Cow::Borrowed(v.as_bytes()))),
+                Cow::Owned(v) => Ok(Some(Cow::Owned(v.into_bytes()))),
+            };
+        }
+        let mut len = try_opt!(self.children[2].eval_int(ctx, row));
+        let remaining_len = char_len - pos + 1;
+        if len < 0 || len > remaining_len {
+            len = remaining_len
+        }
+
+        let new_str: Cow<'_, str> = try_opt!(self.children[3].eval_string_and_decode(ctx, row));
+        // now, pos > 0 and len >=0.
+        let mut t = s.chars().collect::<Vec<_>>();
+        drop(t.splice(
+            (pos - 1) as usize..(pos - 1 + len) as usize,
+            new_str.chars(),
+        ));
+        Ok(Some(Cow::Owned(
+            t.into_iter().collect::<String>().into_bytes(),
+        )))
+    }
 }
 
 // when target_len is 0, return Some(0), means the pad function should return empty string
@@ -1079,17 +1143,20 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 
 #[cfg(test)]
 mod tests {
-    use super::{encoded_size, TrimDirection};
-    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
-    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use std::{f64, i64};
+
     use tipb::expression::{Expr, ScalarFuncSig};
 
+    use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
+
+    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
+
+    use super::{encoded_size, TrimDirection};
 
     #[test]
     fn test_length() {
@@ -3476,4 +3543,243 @@ mod tests {
             assert_eq!(got, exp);
         }
     }
+
+    #[test]
+    fn test_insert_binary() {
+        let cases = vec![
+            (Some("abc"), Some(0), Some(-1), Some("def"), Some("abc")),
+            (Some("abc"), Some(0), Some(0), Some("def"), Some("abc")),
+            (Some("abc"), Some(0), Some(3), Some("def"), Some("abc")),
+            (Some("abc"), Some(0), Some(4), Some("def"), Some("abc")),
+            (Some("abc"), Some(1), Some(-1), Some("def"), Some("def")),
+            (Some("abc"), Some(1), Some(0), Some("def"), Some("defabc")),
+            (Some("abc"), Some(1), Some(1), Some("def"), Some("defbc")),
+            (Some("abc"), Some(1), Some(3), Some("def"), Some("def")),
+            (Some("abc"), Some(1), Some(4), Some("def"), Some("def")),
+            (Some("abc"), Some(2), Some(-1), Some("def"), Some("adef")),
+            (Some("abc"), Some(2), Some(0), Some("def"), Some("adefbc")),
+            (Some("abc"), Some(2), Some(1), Some("def"), Some("adefc")),
+            (Some("abc"), Some(2), Some(2), Some("def"), Some("adef")),
+            (Some("abc"), Some(2), Some(3), Some("def"), Some("adef")),
+            (Some("abc"), Some(3), Some(-1), Some("def"), Some("abdef")),
+            (Some("abc"), Some(3), Some(0), Some("def"), Some("abdefc")),
+            (Some("abc"), Some(3), Some(1), Some("def"), Some("abdef")),
+            (Some("abc"), Some(3), Some(2), Some("def"), Some("abdef")),
+            (None, Some(3), Some(2), Some("def"), None),
+            (Some("abc"), None, Some(2), Some("def"), None),
+            (Some("abc"), Some(3), None, Some("def"), None),
+            (Some("abc"), Some(3), Some(2), None, None),
+        ];
+        for (s, pos, len, new_str, expected) in cases {
+            let got: Datum = eval_func(
+                ScalarFuncSig::InsertBinary,
+                &[
+                    s.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec())),
+                    pos.map_or(Datum::Null, Datum::I64),
+                    len.map_or(Datum::Null, Datum::I64),
+                    new_str.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec())),
+                ],
+            )
+            .unwrap();
+            assert_eq!(
+                got,
+                expected.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec()))
+            );
+        }
+
+        let illformed_cases = vec![
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"aaa".to_vec()),
+                Datum::Bytes(b"def".to_vec()),
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                Datum::Bytes(b"abc".to_vec()),
+                Datum::I64(4),
+                Datum::Bytes(b"aaa".to_vec()),
+                Datum::Bytes(b"def".to_vec()),
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+        ];
+        for (s, pos, len, new_str, expected) in illformed_cases {
+            let got: Datum =
+                eval_func(ScalarFuncSig::InsertBinary, &[s, pos, len, new_str]).unwrap();
+            assert_eq!(got, expected);
+        }
+    }
+    #[test]
+    fn test_insert() {
+        let cases = vec![
+            (
+                Some("你好，"),
+                Some(0),
+                Some(-1),
+                Some("世界"),
+                Some("你好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(0),
+                Some(0),
+                Some("世界"),
+                Some("你好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(0),
+                Some(3),
+                Some("世界"),
+                Some("你好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(0),
+                Some(4),
+                Some("世界"),
+                Some("你好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(1),
+                Some(-1),
+                Some("世界"),
+                Some("世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(1),
+                Some(0),
+                Some("世界"),
+                Some("世界你好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(1),
+                Some(1),
+                Some("世界"),
+                Some("世界好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(1),
+                Some(3),
+                Some("世界"),
+                Some("世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(1),
+                Some(4),
+                Some("世界"),
+                Some("世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(2),
+                Some(-1),
+                Some("世界"),
+                Some("你世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(2),
+                Some(0),
+                Some("世界"),
+                Some("你世界好，"),
+            ),
+            (
+                Some("你好，"),
+                Some(2),
+                Some(1),
+                Some("世界"),
+                Some("你世界，"),
+            ),
+            (
+                Some("你好，"),
+                Some(2),
+                Some(2),
+                Some("世界"),
+                Some("你世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(2),
+                Some(3),
+                Some("世界"),
+                Some("你世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(3),
+                Some(-1),
+                Some("世界"),
+                Some("你好世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(3),
+                Some(0),
+                Some("世界"),
+                Some("你好世界，"),
+            ),
+            (
+                Some("你好，"),
+                Some(3),
+                Some(1),
+                Some("世界"),
+                Some("你好世界"),
+            ),
+            (
+                Some("你好，"),
+                Some(3),
+                Some(2),
+                Some("世界"),
+                Some("你好世界"),
+            ),
+            (None, Some(3), Some(2), Some("世界"), None),
+            (Some("你好，"), None, Some(2), Some("世界"), None),
+            (Some("你好，"), Some(3), None, Some("世界"), None),
+            (Some("你好，"), Some(3), Some(2), None, None),
+        ];
+        for (s, pos, len, new_str, expected) in cases {
+            let got: Datum = eval_func(
+                ScalarFuncSig::Insert,
+                &[
+                    s.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec())),
+                    pos.map_or(Datum::Null, Datum::I64),
+                    len.map_or(Datum::Null, Datum::I64),
+                    new_str.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec())),
+                ],
+            )
+            .unwrap();
+            assert_eq!(
+                got,
+                expected.map_or(Datum::Null, |d| Datum::Bytes(d.as_bytes().to_vec()))
+            );
+        }
+
+        let illformed_cases = vec![
+            (
+                Datum::Bytes("你好，".as_bytes().to_vec()),
+                Datum::I64(-1),
+                Datum::Bytes(b"aaa".to_vec()),
+                Datum::Bytes("世界".as_bytes().to_vec()),
+                Datum::Bytes("你好，".as_bytes().to_vec()),
+            ),
+            (
+                Datum::Bytes("你好，".as_bytes().to_vec()),
+                Datum::I64(4),
+                Datum::Bytes(b"aaa".to_vec()),
+                Datum::Bytes("世界".as_bytes().to_vec()),
+                Datum::Bytes("你好，".as_bytes().to_vec()),
+            ),
+        ];
+        for (s, pos, len, new_str, expected) in illformed_cases {
+            let got: Datum = eval_func(ScalarFuncSig::Insert, &[s, pos, len, new_str]).unwrap();
+            assert_eq!(got, expected);
+        }
+    }
+
 }

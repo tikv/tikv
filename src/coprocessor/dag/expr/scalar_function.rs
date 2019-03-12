@@ -319,6 +319,8 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Replace => (3, 3),
 
+            ScalarFuncSig::InsertBinary | ScalarFuncSig::Insert => (4, 4),
+
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
             ScalarFuncSig::CoalesceDecimal
@@ -418,8 +420,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetFormat
             | ScalarFuncSig::GetParamString
             | ScalarFuncSig::GetVar
-            | ScalarFuncSig::Insert
-            | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
@@ -980,6 +980,9 @@ dispatch_call! {
         Compress => compress,
         Uncompress => uncompress,
 
+        InsertBinary => insert_binary,
+        Insert => insert,
+
         Conv => conv,
         Trim1Arg => trim_1_arg,
         Trim2Args => trim_2_args,
@@ -1367,6 +1370,11 @@ mod tests {
                 3,
             ),
             (
+                vec![ScalarFuncSig::InsertBinary, ScalarFuncSig::Insert],
+                4,
+                4,
+            ),
+            (
                 vec![ScalarFuncSig::JsonArraySig, ScalarFuncSig::JsonObjectSig],
                 0,
                 usize::MAX,
@@ -1507,8 +1515,6 @@ mod tests {
             ScalarFuncSig::GetFormat,
             ScalarFuncSig::GetParamString,
             ScalarFuncSig::GetVar,
-            ScalarFuncSig::Insert,
-            ScalarFuncSig::InsertBinary,
             ScalarFuncSig::IntAnyValue,
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
