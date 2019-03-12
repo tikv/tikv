@@ -470,8 +470,11 @@ impl ApplyContext {
 /// Calls the callback of `cmd` when the Region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     debug!(
-        "[region {}] {} is removed, notify cmd at [index: {}, term: {}]",
-        region_id, peer_id, cmd.index, cmd.term
+        "region is removed, notify commands";
+        "region_id" => region_id,
+        "peer_id" => peer_id,
+        "index" => cmd.index,
+        "term" => cmd.term
     );
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
 }
