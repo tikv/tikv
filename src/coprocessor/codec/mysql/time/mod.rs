@@ -907,6 +907,13 @@ impl Time {
     }
 }
 
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Time {
+    #[inline]
+    fn as_mysql_bool(&self) -> bool {
+        !self.is_zero()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
