@@ -22,17 +22,14 @@ use tikv::import::SSTImporter;
 use tikv::pd::PdClient;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{fsm, keys, Engines, Peekable, SnapManager};
-use tikv::server::Node;
+use tikv::server::{Node, Result};
 use tikv::storage::ALL_CFS;
 use tikv::util::rocksdb_util;
 use tikv::util::worker::{FutureWorker, Worker};
 
 fn test_boostrap_half_way_failure(fp: &str) {
-    // create a node
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let cfg = new_tikv_config(0);
-
-    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine = Arc::new(
@@ -45,58 +42,46 @@ fn test_boostrap_half_way_failure(fp: &str) {
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
-    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
-    let pd_worker = FutureWorker::new("test-pd-worker");
-    let local_reader = Worker::new("test-local-reader");
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_router());
-    let importer = {
-        let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
+    let try_start_node = || -> Result<()> {
+        let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
+        let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
+        let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let local_reader = Worker::new("test-local-reader");
+        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_router());
+        let importer = {
+            let dir = tmp_path.path().join("import-sst");
+            Arc::new(SSTImporter::new(dir).unwrap())
+        };
+        node.start(
+            engines.clone(),
+            simulate_trans.clone(),
+            snap_mgr,
+            pd_worker,
+            local_reader,
+            coprocessor_host,
+            importer,
+        )?;
+        node.stop();
+        Ok(())
     };
 
+    // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();
-    // try to start this node, return after write store ident.
-    let _ = node.start(
-        engines.clone(),
-        simulate_trans.clone(),
-        snap_mgr.clone(),
-        pd_worker,
-        local_reader,
-        coprocessor_host,
-        importer,
-    );
-    node.stop();
+    let _ = try_start_node();
+
+    // Check whether it can bootstrap cluster successfully.
     fail::remove(fp);
-
-    let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
-    let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
-    let pd_worker = FutureWorker::new("test-pd-worker");
-    let local_reader = Worker::new("test-local-reader");
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
-    let importer = {
-        let dir = tmp_path.path().join("import-sst");
-        Arc::new(SSTImporter::new(dir).unwrap())
-    };
-    node.start(
-        engines.clone(),
-        simulate_trans,
-        snap_mgr,
-        pd_worker,
-        local_reader,
-        coprocessor_host,
-        importer,
-    )
-    .unwrap();
-    node.stop();
-
-    // Check whether it bootstrap cluster successfully.
+    try_start_node().unwrap();
     assert!(engines
         .kv
         .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_none());
     assert!(pd_client.is_cluster_bootstrapped().unwrap());
+
+    // Create a 5 nodes cluster to test whether it can works after recovering
+    // from a bootstrap failure.
     let ident = engines
         .kv
         .get_msg::<raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)

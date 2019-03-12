@@ -128,9 +128,7 @@ where
             store_id = self.bootstrap_store(&engines)?;
             fail_point!("node_after_bootstrap_store", |_| Ok(()));
         }
-        // inform pd.
         self.store.set_id(store_id);
-        self.pd_client.put_store(self.store.clone())?;
 
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
             info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
@@ -138,6 +136,9 @@ where
             fail_point!("node_after_prepare_bootstrap_cluster", |_| Ok(()));
             self.bootstrap_cluster(&engines, first_region)?;
         }
+
+        // Put store only if the cluster is bootstrapped.
+        self.pd_client.put_store(self.store.clone())?;
 
         self.start_store(
             store_id,
@@ -233,10 +234,7 @@ where
         engines: &Engines,
         store_id: u64,
     ) -> Result<Option<metapb::Region>> {
-        if let Some(first_region) = engines
-            .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?
-        {
+        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
             Ok(Some(first_region))
         } else {
             if self.check_cluster_bootstrapped()? {
