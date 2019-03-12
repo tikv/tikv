@@ -914,7 +914,6 @@ impl ApplyDelegate {
                         "epoch not match";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
-                        "tag" => &self.tag,
                         "err" => ?e
                     ),
                     _ => error!(
