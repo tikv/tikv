@@ -486,8 +486,10 @@ pub fn notify_req_region_removed(region_id: u64, cb: Callback) {
 fn notify_stale_command(region_id: u64, peer_id: u64, term: u64, mut cmd: PendingCmd) {
     info!(
         "command is stale, skip";
-        "region_id" => region_id, "peer_id" => peer_id,
-        "index" => cmd.index, "term" => cmd.term
+        "region_id" => region_id,
+        "peer_id" => peer_id,
+        "index" => cmd.index,
+        "term" => cmd.term
     );
     notify_stale_req(term, cmd.cb.take().unwrap());
 }
@@ -1081,7 +1083,8 @@ impl ApplyDelegate {
                 CmdType::Snap | CmdType::Get => {
                     warn!(
                         "skip readonly command: {:?}", req;
-                        "region_id" => self.region_id(), "peer_id" => self.id(),
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.id(),
                     );
                     continue;
                 }
