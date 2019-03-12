@@ -14,15 +14,13 @@
 use std::sync::{Arc, RwLock};
 
 use kvproto::{metapb, raft_serverpb};
-
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::{keys, Peekable};
 
 fn test_boostrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
-    let mut cluster = Cluster::new(0, 1, sim.clone(), pd_client.clone());
+    let mut cluster = Cluster::new(0, 5, sim.clone(), pd_client.clone());
 
     // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();
@@ -44,24 +42,11 @@ fn test_boostrap_half_way_failure(fp: &str) {
     fail::remove(fp);
     cluster.start().unwrap();
 
-    drop(cluster);
     assert!(engines
         .kv
         .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
         .unwrap()
         .is_none());
-    let region = pd_client.get_region(b"").unwrap();
-
-    // Create a 5 nodes cluster to test whether it can works after recovering
-    // from a bootstrap failure.
-    let mut cluster = Cluster::new(0, 5, sim, pd_client.clone());
-    cluster.dbs.push(engines.clone());
-    cluster.paths.push(tmp_path);
-    cluster.engines.insert(store_id, engines);
-    cluster.start().unwrap();
-
-    let region1 = pd_client.get_region(b"").unwrap();
-    assert_eq!(region.get_id(), region1.get_id());
 
     let k = b"k1";
     let v = b"v1";
