@@ -2376,7 +2376,7 @@ impl ApplyFsm {
             ctx.flush();
         }
         info!(
-            "remove from apply delegates";
+            "remove delegate from apply delegates";
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );
