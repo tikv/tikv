@@ -23,9 +23,13 @@ pub use self::reader::{BackwardScanner, BackwardScannerBuilder};
 pub use self::reader::{ForwardScanner, ForwardScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
+
 use std::error;
 use std::io;
+
 use util::escape;
+use util::metrics::CRITICAL_ERROR;
+use util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 quick_error! {
     #[derive(Debug)]
@@ -67,6 +71,10 @@ quick_error! {
             description("write conflict")
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
              start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+        }
+        DefaultNotFound { key: Vec<u8>, write: Write } {
+            description("write cf corresponding value not found in default cf")
+            display("default not found: key:{:?}, write:{:?}, maybe read truncated/dropped table data?", escape(key), write)
         }
         KeyVersion {description("bad format key(version)")}
         Other(err: Box<error::Error + Sync + Send>) {
@@ -118,6 +126,10 @@ impl Error {
                 key: key.to_owned(),
                 primary: primary.to_owned(),
             }),
+            Error::DefaultNotFound { ref key, ref write } => Some(Error::DefaultNotFound {
+                key: key.to_owned(),
+                write: write.clone(),
+            }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
             Error::Io(_) | Error::Other(_) => None,
@@ -126,6 +138,30 @@ impl Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+
+/// Generates `DefaultNotFound` error or panic directly based on config.
+pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error {
+    CRITICAL_ERROR
+        .with_label_values(&["default value not found"])
+        .inc();
+    if panic_when_unexpected_key_or_data() {
+        set_panic_mark();
+        panic!(
+            "default value not found for key {:?}, write: {:?} when {}",
+            escape(&key),
+            write,
+            hint,
+        );
+    } else {
+        error!(
+            "default value not found for key {:?}, write: {:?} when {}",
+            escape(&key),
+            write,
+            hint,
+        );
+        Error::DefaultNotFound { key, write }
+    }
+}
 
 #[cfg(test)]
 pub mod tests {
