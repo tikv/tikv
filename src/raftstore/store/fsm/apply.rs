@@ -1024,11 +1024,12 @@ impl ApplyDelegate {
         let cmd_type = request.get_cmd_type();
         if cmd_type != AdminCmdType::CompactLog && cmd_type != AdminCmdType::CommitMerge {
             info!(
-                "execute admin command {:?}", request;
+                "execute admin command";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "term" => ctx.exec_ctx.as_ref().unwrap().term,
                 "index" => ctx.exec_ctx.as_ref().unwrap().index,
+                "command" => ?request
             );
         }
 
@@ -1082,9 +1083,10 @@ impl ApplyDelegate {
                 // hence there is no callback to be called.
                 CmdType::Snap | CmdType::Get => {
                     warn!(
-                        "skip readonly command: {:?}", req;
+                        "skip readonly command";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
+                        "command" => ?req
                     );
                     continue;
                 }
@@ -1275,9 +1277,11 @@ impl ApplyDelegate {
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(
-                 "ingest {:?} to region {:?}", sst, self.region;
+                 "ingest fail";
                  "region_id" => self.region_id(),
                  "peer_id" => self.id(),
+                 "sst" => ?sst,
+                 "region" => ?&self.region,
                  "err" => ?e
             );
             // This file is not valid, we can delete it here.
@@ -1322,10 +1326,11 @@ impl ApplyDelegate {
             |_| panic!("should not use return")
         );
         info!(
-            "exec ConfChange with epoch: {:?}", region.get_region_epoch();
+            "exec ConfChange";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
-            "type" => util::conf_change_type_str(change_type)
+            "type" => util::conf_change_type_str(change_type),
+            "epoch" => ?region.get_region_epoch(),
         );
 
         // TODO: we should need more check, like peer validation, duplicated id, etc.
@@ -1352,9 +1357,11 @@ impl ApplyDelegate {
                     exists = true;
                     if !p.get_is_learner() || p.get_id() != peer.get_id() {
                         error!(
-                            "can't add duplicated peer {:?} to region {:?}", peer, self.region;
+                            "can't add duplicated peer";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
+                            "peer" => ?peer,
+                            "region" => ?&self.region
                         );
                         return Err(box_err!(
                             "can't add duplicated peer {:?} to region {:?}",
@@ -1374,9 +1381,11 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "success"])
                     .inc();
                 info!(
-                    "add peer {:?} to region {:?}", peer, self.region;
+                    "add peer success";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
+                    "peer" => ?peer,
+                    "region" => ?&self.region
                 );
             }
             ConfChangeType::RemoveNode => {
@@ -1388,9 +1397,11 @@ impl ApplyDelegate {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
-                            "remove unmatched peer: expect: {:?}, get {:?}, ignore", peer, p;
+                            "ignore remove unmatched peer ignore";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
+                            "expect_peer" => ?peer,
+                            "get_peeer" => ?p
                         );
                         return Err(box_err!(
                             "remove unmatched peer: expect: {:?}, get {:?}, ignore",
@@ -1406,9 +1417,11 @@ impl ApplyDelegate {
                     }
                 } else {
                     error!(
-                        "remove missing peer {:?} from region {:?}", peer, self.region;
+                        "remove missing peer";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region,
                     );
                     return Err(box_err!(
                         "remove missing peer {:?} from region {:?}",
@@ -1421,9 +1434,11 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
                 info!(
-                    "remove {} from region:{:?}", peer.get_id(), self.region;
+                    "remove peer success";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
+                    "peer" => ?peer,
+                    "region" => ?&self.region
                 );
             }
             ConfChangeType::AddLearnerNode => {
@@ -1433,9 +1448,11 @@ impl ApplyDelegate {
 
                 if util::find_peer(&region, store_id).is_some() {
                     error!(
-                        "can't add duplicated learner {:?} to region {:?}", peer, self.region;
+                        "can't add duplicated learner";
                         "region_id" => self.region_id(),
                         "peer_id" => self.id(),
+                        "peer" => ?peer,
+                        "region" => ?&self.region
                     );
                     return Err(box_err!(
                         "can't add duplicated learner {:?} to region {:?}",
@@ -1449,9 +1466,11 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "success"])
                     .inc();
                 info!(
-                    "add learner {:?} to region {:?}", peer, self.region;
+                    "add learner success";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
+                    "peer" => ?peer,
+                    "region" => ?&self.region,
                 );
             }
         }
@@ -1553,9 +1572,11 @@ impl ApplyDelegate {
         util::check_key_in_region(keys.back().unwrap(), &self.region)?;
 
         info!(
-            "split region {:?} with {:?}", derived, keys;
+            "split region";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
+            "region" => ?derived,
+            "keys" => ?keys
         );
         let new_version = derived.get_region_epoch().get_version() + new_region_cnt as u64;
         derived.mut_region_epoch().set_version(new_version);
@@ -1777,13 +1798,14 @@ impl ApplyDelegate {
         }
 
         info!(
-            "execute CommitMerge for region {:?}", source_region;
+            "execute CommitMerge";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
             "commit" => merge.get_commit(),
             "entries" => merge.get_entries().len(),
             "term" => ctx.exec_ctx.as_ref().unwrap().term,
-            "index" => ctx.exec_ctx.as_ref().unwrap().index
+            "index" => ctx.exec_ctx.as_ref().unwrap().index,
+            "source_region" => ?source_region
         );
 
         self.ready_source_region_id = 0;
@@ -1942,9 +1964,10 @@ impl ApplyDelegate {
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!(
-                "compact term missing in {:?}, skip.", req.get_compact_log();
+                "compact term missing, skip.";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
+                "command" => ?req.get_compact_log()
             );
             // old format compact log command, safe to ignore.
             return Err(box_err!(
