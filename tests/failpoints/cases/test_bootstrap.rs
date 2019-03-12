@@ -29,81 +29,53 @@ use tikv::util::worker::{FutureWorker, Worker};
 
 fn test_boostrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
-    let cfg = new_tikv_config(0);
-    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
-    let tmp_path = TempDir::new("test_cluster").unwrap();
-    let engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
-    );
-    let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
-    );
-    let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
-    let tmp_mgr = TempDir::new("test_cluster").unwrap();
-
-    let try_start_node = || -> Result<()> {
-        let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
-        let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
-        let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
-        let pd_worker = FutureWorker::new("test-pd-worker");
-        let local_reader = Worker::new("test-local-reader");
-        let coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_router());
-        let importer = {
-            let dir = tmp_path.path().join("import-sst");
-            Arc::new(SSTImporter::new(dir).unwrap())
-        };
-        node.start(
-            engines.clone(),
-            simulate_trans.clone(),
-            snap_mgr,
-            pd_worker,
-            local_reader,
-            coprocessor_host,
-            importer,
-        )?;
-        node.stop();
-        Ok(())
-    };
+    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let mut cluster = Cluster::new(0, 1, sim.clone(), pd_client.clone());
 
     // Try to start this node, return after persisted some keys.
     fail::cfg(fp, "return").unwrap();
-    let _ = try_start_node();
+    cluster.start().unwrap_err();
 
-    // Check whether it can bootstrap cluster successfully.
-    fail::remove(fp);
-    try_start_node().unwrap();
-    assert!(engines
-        .kv
-        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
-        .unwrap()
-        .is_none());
-    assert!(pd_client.is_cluster_bootstrapped().unwrap());
-
-    // Create a 5 nodes cluster to test whether it can works after recovering
-    // from a bootstrap failure.
+    let engines = cluster.dbs[0].clone();
+    let tmp_path = cluster.paths.pop().unwrap();
+    debug!("tmp path: {:?}", tmp_path.path().to_str().unwrap());
     let ident = engines
         .kv
         .get_msg::<raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)
         .unwrap()
         .unwrap();
     let store_id = ident.get_store_id();
-    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    let mut cluster = Cluster::new(0, 5, sim, pd_client);
-    cluster.create_engines();
-    cluster.dbs[0] = engines.clone();
-    cluster.paths[0] = tmp_path;
+    debug!("store id {:?}", store_id);
+    assert!(cluster.engines.insert(store_id, engines.clone()).is_none());
+
+    // Check whether it can bootstrap cluster successfully.
+    fail::remove(fp);
+    cluster.start().unwrap();
+
+    drop(cluster);
+    assert!(engines
+        .kv
+        .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
+        .unwrap()
+        .is_none());
+    let region = pd_client.get_region(b"").unwrap();
+
+    // Create a 5 nodes cluster to test whether it can works after recovering
+    // from a bootstrap failure.
+    let mut cluster = Cluster::new(0, 5, sim, pd_client.clone());
+    cluster.dbs.push(engines.clone());
+    cluster.paths.push(tmp_path);
     cluster.engines.insert(store_id, engines);
-    cluster.start();
+    cluster.start().unwrap();
+
+    let region1 = pd_client.get_region(b"").unwrap();
+    assert_eq!(region.get_id(), region1.get_id());
 
     let k = b"k1";
     let v = b"v1";
     cluster.must_put(k, v);
     must_get_equal(&cluster.get_engine(store_id), k, v);
     for id in cluster.engines.keys() {
-        if *id == store_id {
-            continue;
-        }
         must_get_equal(&cluster.get_engine(*id), k, v);
     }
 }

@@ -28,9 +28,10 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::fsm::RaftRouter;
+use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
+use tikv::server::Result as ServerResult;
 use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::{escape, rocksdb_util, HandyRwLock};
@@ -52,8 +53,10 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        _: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>);
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn async_command_on_node(
@@ -133,7 +136,7 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    pub fn create_engines(&mut self) {
+    fn create_engines(&mut self) {
         for _ in 0..self.count {
             let path = TempDir::new("test_cluster").unwrap();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
@@ -153,21 +156,24 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> ServerResult<()> {
         // Try recover from last shutdown.
         let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         for node_id in node_ids {
-            self.run_node(node_id);
+            self.run_node(node_id)?;
         }
 
         // Try start new nodes.
+        let mut sim = self.sim.wl();
         for _ in 0..self.count - self.engines.len() {
-            let mut sim = self.sim.wl();
-            let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
+            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
             self.dbs.push(engines.clone());
-            self.engines.insert(node_id, engines);
             self.paths.push(path.unwrap());
+            let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
+            self.engines.insert(node_id, engines);
         }
+        Ok(())
     }
 
     pub fn compact_data(&self) {
@@ -182,7 +188,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run(&mut self) {
         self.create_engines();
         self.bootstrap_region().unwrap();
-        self.start();
+        self.start().unwrap();
     }
 
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
@@ -190,7 +196,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_conf_change(&mut self) -> u64 {
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
-        self.start();
+        self.start().unwrap();
         region_id
     }
 
@@ -198,13 +204,16 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_node_ids()
     }
 
-    pub fn run_node(&mut self, node_id: u64) {
+    pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
+        let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, self.cfg.clone(), Some(engines));
+            .run_node(node_id, self.cfg.clone(), engines, router, system)?;
         debug!("node {} started", node_id);
+        Ok(())
     }
 
     pub fn stop_node(&mut self, node_id: u64) {

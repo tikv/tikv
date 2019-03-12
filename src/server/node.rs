@@ -126,14 +126,18 @@ where
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.bootstrap_store(&engines)?;
-            fail_point!("node_after_bootstrap_store", |_| Ok(()));
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
         }
         self.store.set_id(store_id);
 
         if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
             info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
-            fail_point!("node_after_prepare_bootstrap_cluster", |_| Ok(()));
+            fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
+                "injected error: node_after_prepare_bootstrap_cluster"
+            )));
             self.bootstrap_cluster(&engines, first_region)?;
         }
 
@@ -254,9 +258,11 @@ where
                 .bootstrap_cluster(self.store.clone(), first_region.clone())
             {
                 Ok(_) => {
-                    fail_point!("node_after_bootstrap_cluster", |_| Ok(()));
-                    store::clear_prepare_bootstrap_key(engines)?;
                     info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
+                    fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
+                        "injected error: node_after_prepare_bootstrap_cluster"
+                    )));
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
                 Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
