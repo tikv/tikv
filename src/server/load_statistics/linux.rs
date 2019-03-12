@@ -113,7 +113,10 @@ mod tests {
     #[test]
     fn test_thread_load_statistic() {
         // OS thread name is truncated to 16 bytes, including the last '\0'.
-        let thread_name = thread::current().name().unwrap()[0..15].to_owned();
+        let t = thread::current();
+        let thread_name = t.name().unwrap();
+        let end = ::std::cmp::min(thread_name.len(), 15);
+        let thread_name = thread_name[..end].to_owned();
 
         let load = Arc::new(ThreadLoad::with_threshold(80));
         let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
