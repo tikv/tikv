@@ -140,7 +140,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
-            | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -1183,7 +1182,6 @@ mod tests {
                     ScalarFuncSig::SubDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
-                    ScalarFuncSig::InstrBinary,
                 ],
                 2,
                 2,
