@@ -347,14 +347,14 @@
 ## 1. rate-bytes-per-sec is the only parameter you want to set most of the time. It controls the
 ##    total write rate of compaction and flush in bytes per second. Currently, RocksDB does not
 ##    enforce rate limit for anything other than flush and compaction, e.g. write to WAL.
-## 2. rate-limiter-mod indicates which types of operations count against the limit.
+## 2. rate-limiter-mode indicates which types of operations count against the limit.
 ##    1 : ReadOnly
 ##    2 : WriteOnly
 ##    3 : AllIo
 ## 3. auto_tuned enables dynamic adjustment of rate limit within the range
 ##    [rate_bytes_per_sec / 20, rate_bytes_per_sec], according to the recent demand for background I/O.
 # rate-bytes-per-sec = 0
-# rate-limiter-mod = 2
+# rate-limiter-mode = 2
 # auto-tuned = false
 
 

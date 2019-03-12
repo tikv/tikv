@@ -244,7 +244,7 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod! {rate_limiter_mod_serde DBRateLimiterMode {
+numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
     ReadOnly = 1,
     WriteOnly = 2,
     AllIo = 3,
