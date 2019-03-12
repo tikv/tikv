@@ -103,8 +103,8 @@ pub struct Cluster<T: Simulator> {
     leaders: HashMap<u64, metapb::Peer>,
     count: usize,
 
+    paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
-    pub paths: Vec<TempDir>,
     pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,

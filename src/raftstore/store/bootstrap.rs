@@ -123,7 +123,7 @@ mod tests {
 
     use super::*;
     use crate::raftstore::store::engine::Peekable;
-    use crate::raftstore::store::{keys, util::new_peer, Engines};
+    use crate::raftstore::store::{keys, Engines};
     use crate::storage::CF_DEFAULT;
     use crate::util::rocksdb_util;
 
@@ -145,14 +145,7 @@ mod tests {
                 .unwrap(),
         );
         let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
-
-        let mut region = metapb::Region::new();
-        region.set_id(1);
-        region.set_start_key(keys::EMPTY_KEY.to_vec());
-        region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
-        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-        region.mut_peers().push(new_peer(1, 1));
+        let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());

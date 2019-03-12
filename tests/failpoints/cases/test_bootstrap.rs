@@ -27,8 +27,6 @@ fn test_boostrap_half_way_failure(fp: &str) {
     cluster.start().unwrap_err();
 
     let engines = cluster.dbs[0].clone();
-    let tmp_path = cluster.paths.pop().unwrap();
-    debug!("tmp path: {:?}", tmp_path.path().to_str().unwrap());
     let ident = engines
         .kv
         .get_msg::<raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)

@@ -271,7 +271,7 @@ where
                             store::clear_prepare_bootstrap_key(engines)?;
                             return Ok(());
                         } else {
-                            error!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
+                            info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
                             store::clear_prepare_bootstrap_cluster(engines, region_id)?;
                             return Ok(());
                         }
