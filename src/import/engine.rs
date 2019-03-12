@@ -14,10 +14,13 @@
 use std::cmp;
 use std::fmt;
 use std::i32;
+use std::io::Read;
+use std::mem::uninitialized;
 use std::ops::Deref;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::Arc;
 
+use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
@@ -42,6 +45,7 @@ use crate::util::rocksdb_util::{
 
 use super::common::*;
 use super::Result;
+use crate::import::stream::SSTFile;
 use crate::util::security;
 use crate::util::security::SecurityConfig;
 
@@ -176,6 +180,33 @@ impl LazySSTInfo {
         Ok(self
             .env
             .new_sequential_file(self.file_path.to_str().unwrap(), EnvOptions::new())?)
+    }
+
+    pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
+        let mut seq_file = self.open()?;
+        let mut buf: [u8; 65536] = unsafe { uninitialized() };
+
+        // TODO: If we can compute the CRC simultaneously with upload, we don't
+        // need to open() and read() the file twice.
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        let mut length = 0u64;
+        loop {
+            let size = seq_file.read(&mut buf)?;
+            if size == 0 {
+                break;
+            }
+            digest.write(&buf[..size]);
+            length += size as u64;
+        }
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(self.range.clone());
+        meta.set_crc32(digest.sum32());
+        meta.set_length(length);
+        meta.set_cf_name(self.cf_name.to_owned());
+
+        Ok(SSTFile { meta, info: self })
     }
 }
 

@@ -12,11 +12,8 @@
 // limitations under the License.
 
 use std::fmt;
-use std::io::Read;
-use std::mem::uninitialized;
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::*;
@@ -112,35 +109,6 @@ impl<Client: ImportClient> SSTFileStream<Client> {
 
         let infos = w.finish()?;
         Ok(Some((range, infos)))
-    }
-}
-
-impl LazySSTInfo {
-    pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
-        let mut seq_file = self.open()?;
-        let mut buf: [u8; 65536] = unsafe { uninitialized() };
-
-        // TODO: If we can compute the CRC simultaneously with upload, we don't
-        // need to open() and read() the file twice.
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        let mut length = 0u64;
-        loop {
-            let size = seq_file.read(&mut buf)?;
-            if size == 0 {
-                break;
-            }
-            digest.write(&buf[..size]);
-            length += size as u64;
-        }
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(self.range.clone());
-        meta.set_crc32(digest.sum32());
-        meta.set_length(length);
-        meta.set_cf_name(self.cf_name.to_owned());
-
-        Ok(SSTFile { meta, info: self })
     }
 }
 

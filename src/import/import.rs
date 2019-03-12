@@ -225,10 +225,10 @@ impl<Client: ImportClient> SubImportJob<Client> {
             .spawn(move || {
                 'OUTER_LOOP: while let Ok((range, ssts)) = rx.lock().unwrap().recv() {
                     for lazy_sst in ssts {
-                        let mut sst = lazy_sst.into_sst_file().unwrap();
+                        let sst = lazy_sst.into_sst_file().unwrap();
                         let id = counter.fetch_add(1, Ordering::SeqCst);
                         let tag = format!("[ImportSSTJob {}:{}:{}]", engine.uuid(), sub_id, id);
-                        let mut job = ImportSSTJob::new(tag, &mut sst, Arc::clone(&client));
+                        let mut job = ImportSSTJob::new(tag, sst, Arc::clone(&client));
                         if job.run().is_err() {
                             num_errors.fetch_add(1, Ordering::SeqCst);
                             continue 'OUTER_LOOP;
@@ -243,14 +243,14 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
 /// ImportSSTJob is responsible for importing `sst` to all replicas of the
 /// specific Region
-struct ImportSSTJob<'a, Client> {
+struct ImportSSTJob<Client> {
     tag: String,
-    sst: &'a mut SSTFile,
+    sst: SSTFile,
     client: Arc<Client>,
 }
 
-impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
-    fn new(tag: String, sst: &'a mut SSTFile, client: Arc<Client>) -> Self {
+impl<Client: ImportClient> ImportSSTJob<Client> {
+    fn new(tag: String, sst: SSTFile, client: Arc<Client>) -> Self {
         ImportSSTJob { tag, sst, client }
     }
 
