@@ -44,14 +44,14 @@ pub mod time;
 pub mod timer;
 pub mod worker;
 
-static PANIC_WHEN_KEY_EXCEED_BOUND: AtomicBool = AtomicBool::new(false);
+static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
-pub fn panic_when_key_exceed_bound() -> bool {
-    PANIC_WHEN_KEY_EXCEED_BOUND.load(Ordering::SeqCst)
+pub fn panic_when_unexpected_key_or_data() -> bool {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
 }
 
-pub fn set_panic_when_key_exceed_bound(flag: bool) {
-    PANIC_WHEN_KEY_EXCEED_BOUND.store(flag, Ordering::SeqCst);
+pub fn set_panic_when_unexpected_key_or_data(flag: bool) {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.store(flag, Ordering::SeqCst);
 }
 
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
