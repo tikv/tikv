@@ -16,7 +16,7 @@ use std::fmt;
 use std::i32;
 use std::io::Read;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, MAIN_SEPARATOR};
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -93,7 +93,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.opts)
+        SSTWriter::new(&self.opts, self.db.path())
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -161,18 +161,19 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(cfg: &DbConfig) -> Result<SSTWriter> {
-        let env = Arc::new(Env::new_mem());
+    pub fn new(cfg: &DbConfig, path: &str) -> Result<SSTWriter> {
+        let env = Arc::new(Env::default());
+        let uuid = Uuid::new_v4().to_string();
 
         let mut default_opts = cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
-        default.open(CF_DEFAULT)?;
+        default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         let mut write_opts = cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
-        write.open(CF_WRITE)?;
+        write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
         Ok(SSTWriter {
             env,
@@ -351,7 +352,7 @@ mod tests {
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg).unwrap();
+        let mut w = SSTWriter::new(&cfg, temp_dir.path().to_str().unwrap()).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];
