@@ -87,7 +87,7 @@ impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
             panic!(
-                "callback of pending command at [index: {}, term: {}] is leak.",
+                "callback of pending command at [index: {}, term: {}] is leak",
                 self.index, self.term
             );
         }
@@ -470,7 +470,7 @@ impl ApplyContext {
 /// Calls the callback of `cmd` when the Region is removed.
 fn notify_region_removed(region_id: u64, peer_id: u64, mut cmd: PendingCmd) {
     debug!(
-        "[region {}] {} is removed, notify cmd at [index: {}, term: {}].",
+        "[region {}] {} is removed, notify cmd at [index: {}, term: {}]",
         region_id, peer_id, cmd.index, cmd.term
     );
     notify_req_region_removed(region_id, cmd.cb.take().unwrap());
@@ -1381,7 +1381,7 @@ impl ApplyDelegate {
                     .with_label_values(&["add_peer", "success"])
                     .inc();
                 info!(
-                    "add peer success";
+                    "add peer successfully";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -1397,7 +1397,7 @@ impl ApplyDelegate {
                     // Considering `is_learner` flag in `Peer` here is by design.
                     if &p != peer {
                         error!(
-                            "ignore remove unmatched peer ignore";
+                            "ignore remove unmatched peer";
                             "region_id" => self.region_id(),
                             "peer_id" => self.id(),
                             "expect_peer" => ?peer,
@@ -1434,7 +1434,7 @@ impl ApplyDelegate {
                     .with_label_values(&["remove_peer", "success"])
                     .inc();
                 info!(
-                    "remove peer success";
+                    "remove peer successfully";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -1466,7 +1466,7 @@ impl ApplyDelegate {
                     .with_label_values(&["add_learner", "success"])
                     .inc();
                 info!(
-                    "add learner success";
+                    "add learner successfully";
                     "region_id" => self.region_id(),
                     "peer_id" => self.id(),
                     "peer" => ?peer,
@@ -1504,7 +1504,7 @@ impl ApplyDelegate {
         req: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult)> {
         info!(
-            "split is deprecated, redirect to use batch split.";
+            "split is deprecated, redirect to use batch split";
             "region_id" => self.region_id(),
             "peer_id" => self.id(),
         );
@@ -1654,7 +1654,7 @@ impl ApplyDelegate {
         if index < first_index {
             // We filter `CompactLog` command before.
             panic!(
-                "{} first index {} > min_index {}, skip pre merge.",
+                "{} first index {} > min_index {}, skip pre merge",
                 self.tag, first_index, index
             );
         }
@@ -1778,9 +1778,10 @@ impl ApplyDelegate {
                 );
             }
             info!(
-                "asking source region {} delegate to stop.", source_region_id;
+                "asking delegate to stop";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
+                "source_region_id" => source_region_id
             );
 
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
@@ -1964,14 +1965,14 @@ impl ApplyDelegate {
         // TODO: add unit tests to cover all the message integrity checks.
         if compact_term == 0 {
             info!(
-                "compact term missing, skip.";
+                "compact term missing, skip";
                 "region_id" => self.region_id(),
                 "peer_id" => self.id(),
                 "command" => ?req.get_compact_log()
             );
             // old format compact log command, safe to ignore.
             return Err(box_err!(
-                "command format is outdated, please upgrade leader."
+                "command format is outdated, please upgrade leader"
             ));
         }
 
@@ -2374,7 +2375,8 @@ impl ApplyFsm {
             // Flush before destroying to avoid reordering messages.
             ctx.flush();
         }
-        info!("remove from apply delegates";
+        info!(
+            "remove from apply delegates";
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );
@@ -2408,7 +2410,7 @@ impl ApplyFsm {
                 self.delegate.ready_source_region_id = source_region_id;
             }
             None => panic!(
-                "{} is not in waiting state, can't be resume.",
+                "{} is not in waiting state, can't be resume",
                 self.delegate.tag
             ),
         }
@@ -2441,7 +2443,7 @@ impl ApplyFsm {
             }
             None => {
                 info!(
-                    "all pending logs are applied.";
+                    "all pending logs are applied";
                     "region_id" => self.delegate.region_id(),
                     "peer_id" => self.delegate.id(),
                 );
@@ -2504,7 +2506,7 @@ impl ApplyFsm {
             .ready_to_merge
             .store(region_id, Ordering::SeqCst);
         info!(
-            "logs are all applied now.";
+            "logs are all applied now";
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );
@@ -2704,7 +2706,7 @@ impl ApplyRouter {
                 Msg::Registration(reg) => reg,
                 Msg::Proposal(props) => {
                     info!(
-                        "target region is not found, drop proposals.";
+                        "target region is not found, drop proposals";
                         "region_id" => region_id
                     );
                     for p in props.props {
@@ -2715,7 +2717,7 @@ impl ApplyRouter {
                 }
                 Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
                     info!(
-                        "target region is not found, drop messages.";
+                        "target region is not found, drop messages";
                         "region_id" => region_id
                     );
                     return;
