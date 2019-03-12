@@ -2,7 +2,6 @@ log-level = "debug"
 log-file = "foo"
 log-rotation-timespan = "24h"
 panic-when-unexpected-key-or-data = true
-
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
