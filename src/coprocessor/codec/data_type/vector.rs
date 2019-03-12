@@ -222,6 +222,24 @@ impl VectorValue {
         }
     }
 
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+        VectorLikeValueRef::Vector(self)
+    }
+
+    /// Evaluates values into MySQL logic values.
+    ///
+    /// The caller must provide an output buffer which is large enough for holding values.
+    pub fn eval_as_mysql_bools(&self, outputs: &mut [bool]) {
+        assert!(outputs.len() >= self.len());
+        match_self!(ref self, v, {
+            let l = self.len();
+            for i in 0..l {
+                outputs[i] = v[i].as_mysql_bool();
+            }
+        });
+    }
+
     /// Pushes a value into the column by decoding the datum and converting to current
     /// column's type.
     ///
