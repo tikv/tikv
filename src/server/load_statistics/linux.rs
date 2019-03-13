@@ -111,6 +111,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // FIXME(#4364) Flaky test - on CI gets 0 cpu usages, but passes locally.
+    #[ignore]
     fn test_thread_load_statistic() {
         // OS thread name is truncated to 16 bytes, including the last '\0'.
         let t = thread::current();
