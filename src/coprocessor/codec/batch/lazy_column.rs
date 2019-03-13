@@ -190,7 +190,7 @@ impl LazyBatchColumn {
     /// The field type is needed because we use the same `DateTime` structure when handling
     /// Date, Time or Timestamp.
     // TODO: Maybe it's a better idea to assign different eval types for different date types.
-    pub fn decode(&mut self, time_zone: Tz, field_type: &FieldType) -> Result<()> {
+    pub fn decode(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
         }
@@ -311,7 +311,7 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.decode(Tz::utc(), &ft).unwrap();
+            col.decode(&Tz::utc(), &ft).unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
@@ -351,7 +351,7 @@ mod tests {
             assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         }
         // Non-empty raw to non-empty decoded.
-        col.decode(Tz::utc(), &ft).unwrap();
+        col.decode(&Tz::utc(), &ft).unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
@@ -480,7 +480,7 @@ mod benches {
         ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
-        column.decode(tz, &ft).unwrap();
+        column.decode(&tz, &ft).unwrap();
 
         b.iter(|| {
             test::black_box(test::black_box(&column).clone());
@@ -510,7 +510,7 @@ mod benches {
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.decode(test::black_box(tz), test::black_box(&ft))
+            col.decode(test::black_box(&tz), test::black_box(&ft))
                 .unwrap();
             test::black_box(&col);
         });
@@ -537,11 +537,11 @@ mod benches {
         ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
-        column.decode(tz, &ft).unwrap();
+        column.decode(&tz, &ft).unwrap();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.decode(test::black_box(tz), test::black_box(&ft))
+            col.decode(test::black_box(&tz), test::black_box(&ft))
                 .unwrap();
             test::black_box(&col);
         });
