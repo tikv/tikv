@@ -150,7 +150,7 @@ pub struct LazySSTInfo {
 }
 
 impl fmt::Debug for LazySSTInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LazySSTInfo")
             .field("file_path", &self.file_path)
             .field("file_size", &self.file_size)
