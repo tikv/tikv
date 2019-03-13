@@ -149,7 +149,7 @@ fn test_node_merge_restart() {
     let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
-    cluster.start();
+    cluster.start().unwrap();
 
     // Wait till merge is finished.
     let timer = Instant::now();
@@ -212,7 +212,7 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     fail::remove(skip_destroy_fp);
     cluster.clear_send_filters();
-    cluster.start();
+    cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
 }
