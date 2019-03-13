@@ -181,12 +181,12 @@ fn test_node_cluster_region_info_accessor() {
     cluster
         .sim
         .wl()
-        .post_create_coprocessor_host(box move |id, host| {
+        .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
                 let c = RegionInfoAccessor::new(host);
                 tx.send(c).unwrap();
             }
-        });
+        }));
     cluster.run_conf_change();
     let c = rx.recv().unwrap();
     c.start();

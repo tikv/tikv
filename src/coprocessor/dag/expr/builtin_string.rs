@@ -1081,9 +1081,9 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
 #[inline]
 fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
     let r = match direction {
-        TrimDirection::Leading => s.trim_left_matches(pat),
-        TrimDirection::Trailing => s.trim_right_matches(pat),
-        _ => s.trim_left_matches(pat).trim_right_matches(pat),
+        TrimDirection::Leading => s.trim_start_matches(pat),
+        TrimDirection::Trailing => s.trim_end_matches(pat),
+        _ => s.trim_start_matches(pat).trim_end_matches(pat),
     };
     Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
@@ -1891,7 +1891,11 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes(
+                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                            .as_bytes()
+                            .to_vec(),
+                    ),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1945,7 +1949,11 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes(
+                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                            .as_bytes()
+                            .to_vec(),
+                    ),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"

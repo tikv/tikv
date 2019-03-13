@@ -262,13 +262,13 @@ impl PartitionFilterFactory {
 impl FilterFactory for PartitionFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if self.s1.contains(&node_id) {
-            return vec![box PartitionFilter {
+            return vec![Box::new(PartitionFilter {
                 node_ids: self.s2.clone(),
-            }];
+            })];
         }
-        return vec![box PartitionFilter {
+        return vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        }];
+        })];
     }
 }
 
@@ -285,11 +285,11 @@ impl IsolationFilterFactory {
 impl FilterFactory for IsolationFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if node_id == self.node_id {
-            return vec![box DropPacketFilter { rate: 100 }];
+            return vec![Box::new(DropPacketFilter { rate: 100 })];
         }
-        vec![box PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: vec![self.node_id],
-        }]
+        })]
     }
 }
 

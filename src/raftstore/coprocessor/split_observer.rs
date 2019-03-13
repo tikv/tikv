@@ -65,7 +65,11 @@ impl SplitObserver {
         }
     }
 
-    fn on_split(&self, ctx: &mut ObserverContext, splits: &mut Vec<SplitRequest>) -> Result<()> {
+    fn on_split(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        splits: &mut Vec<SplitRequest>,
+    ) -> Result<()> {
         let (mut i, mut j) = (0, 0);
         let mut last_valid_key: Option<Vec<u8>> = None;
         let region_id = ctx.region().get_id();
@@ -119,7 +123,7 @@ impl Coprocessor for SplitObserver {}
 impl AdminObserver for SplitObserver {
     fn pre_propose_admin(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         req: &mut AdminRequest,
     ) -> CopResult<()> {
         match req.get_cmd_type() {

@@ -40,7 +40,7 @@ impl SSTFile {
 }
 
 impl fmt::Debug for SSTFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uuid = Uuid::from_bytes(self.meta.get_uuid()).unwrap();
         f.debug_struct("SSTFile")
             .field("uuid", &uuid)

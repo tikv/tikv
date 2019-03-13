@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use crate::grpc::{EnvBuilder, Error as GrpcError};
+use grpcio::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
