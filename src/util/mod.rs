@@ -53,6 +53,16 @@ pub mod worker;
 pub use self::rocksdb::properties;
 pub use self::rocksdb::stats as rocksdb_stats;
 
+static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
+
+pub fn panic_when_unexpected_key_or_data() -> bool {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
+}
+
+pub fn set_panic_when_unexpected_key_or_data(flag: bool) {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.store(flag, Ordering::SeqCst);
+}
+
 static PANIC_MARK: AtomicBool = AtomicBool::new(false);
 
 pub fn set_panic_mark() {

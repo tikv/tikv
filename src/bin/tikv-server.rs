@@ -98,6 +98,17 @@ fn check_system_config(config: &TiKvConfig) {
     }
 }
 
+fn pre_start(cfg: &TiKvConfig) {
+    // Before any startup, check system configuration and environment variables.
+    check_system_config(&cfg);
+    check_environment_variables();
+
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
+    }
+}
+
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
@@ -434,10 +445,8 @@ fn main() {
         serde_json::to_string_pretty(&config).unwrap()
     );
 
-    // Before any startup, check system configuration.
-    check_system_config(&config);
-
-    check_environment_variables();
+    // Do some prepare works before start.
+    pre_start(&config);
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
