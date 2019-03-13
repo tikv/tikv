@@ -6,14 +6,12 @@ authors = ["Brian Anderson <andersrb@gmail.com>"]
 publish = false
 
 [features]
-default = ["jemallocator"]
+default = ["jemalloc"]
+jemalloc = ["jemallocator"]
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
 mem-profiling = ["jemallocator/profiling"]
-
-# Don't build jemalloc; use the system allocator.
-no-jemalloc = []
 
 [dependencies]
 libc = "0.2"
@@ -26,4 +24,8 @@ tempdir = "0.3"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms"]
 version = "0.1.9"
+
+[dependencies.tcmalloc]
+optional = true
+version = "0.2.0"
 
