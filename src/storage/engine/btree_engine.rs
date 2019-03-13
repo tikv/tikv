@@ -101,14 +101,14 @@ impl Engine for BTreeEngine {
 }
 
 impl Display for BTreeEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "BTreeEngine",)
     }
 }
 
 impl Debug for BTreeEngine {
     // TODO: Provide more debug info.
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "BTreeEngine",)
     }
 }
