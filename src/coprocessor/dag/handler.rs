@@ -57,24 +57,25 @@ impl DAGRequestHandler {
 
     fn build_batch_dag<S: Store + 'static>(
         deadline: Deadline,
-        eval_config: EvalConfig,
+        config: EvalConfig,
         mut req: DAGRequest,
         ranges: Vec<KeyRange>,
         store: S,
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
 
-        let (out_most_executor, executor_context) = super::builder::DAGBuilder::build_batch(
+        let config = Arc::new(config);
+        let out_most_executor = super::builder::DAGBuilder::build_batch(
             req.take_executors().into_vec(),
             store,
             ranges,
-            eval_config,
+            config.clone(),
         )?;
         Ok(super::batch_handler::BatchDAGHandler::new(
             deadline,
             out_most_executor,
             req.take_output_offsets(),
-            executor_context,
+            config,
             ranges_len,
         ))
     }
