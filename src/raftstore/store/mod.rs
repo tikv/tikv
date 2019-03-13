@@ -56,7 +56,7 @@ pub use self::snap::{
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::Engines;
-pub use self::worker::{KeyEntry, ReadTask};
+pub use self::worker::{KeyEntry, ReadTask, RegionTask};
 
 // Only used in tests
 #[cfg(test)]

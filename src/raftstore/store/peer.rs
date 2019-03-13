@@ -1067,7 +1067,11 @@ impl Peer {
             self.raft_log_size_hint = 0;
         }
 
-        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
+        let (apply_snap_result, gen_snap_task) = self.mut_store().post_ready(invoke_ctx);
+        if let Some(gen_task) = gen_snap_task {
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        }
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
