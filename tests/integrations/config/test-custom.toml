@@ -1,7 +1,7 @@
 log-level = "debug"
 log-file = "foo"
 log-rotation-timespan = "1d"
-panic-when-key-exceed-bound = true
+panic-when-unexpected-key-or-data = true
 
 [readpool.storage]
 high-concurrency = 1

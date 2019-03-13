@@ -16,7 +16,7 @@ use std::fmt;
 use std::i32;
 use std::io::Read;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, MAIN_SEPARATOR};
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -105,7 +105,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.db_cfg, &self.security_cfg)
+        SSTWriter::new(&self.db_cfg, &self.security_cfg, self.db.path())
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -174,29 +174,28 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig) -> Result<SSTWriter> {
-        // Using a memory environment to generate SST in memory
-        let mut env = Arc::new(Env::new_mem());
+    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
+        let mut env = Arc::new(Env::default());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));
             env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
+        let uuid = Uuid::new_v4().to_string();
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
-
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
-        default.open(CF_DEFAULT)?;
+        default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
-        write.open(CF_WRITE)?;
+        write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
         Ok(SSTWriter {
             env,
@@ -411,7 +410,7 @@ mod tests {
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg, &security_cfg).unwrap();
+        let mut w = SSTWriter::new(&cfg, &security_cfg, temp_dir.path().to_str().unwrap()).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];
