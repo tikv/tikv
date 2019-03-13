@@ -205,7 +205,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 self.is_column_filled[self.handle_index] = true;
             }
             // TODO: Shall we just returns error when met
-            // `self.unsafe_raw_rows_cache_filled[self.handle_index] == true`?
+            // `self.is_column_filled[self.handle_index] == true`?
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -222,7 +222,8 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 remaining = &remaining[1..];
                 let column_id = box_try!(number::decode_var_i64(&mut remaining));
                 let (val, new_remaining) = datum::split_datum(remaining, false)?;
-                // FIXME: The columns may be not in the same length if there is error.
+                // Note: The produced columns may be not in the same length if there is error due
+                // to corrupted data. It will be handled in `ScanExecutor`.
                 let some_index = self.column_id_index.get(&column_id);
                 if let Some(index) = some_index {
                     let index = *index;
@@ -232,7 +233,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                         self.is_column_filled[index] = true;
                     }
                     // TODO: Shall we just returns error when met
-                    // `self.unsafe_raw_rows_cache_filled[index] == true`?
+                    // `self.is_column_filled[index] == true`?
                 }
                 remaining = new_remaining;
             }
@@ -271,115 +272,540 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use std::i64;
-
-    use kvproto::kvrpcpb::IsolationLevel;
-
-    use crate::storage::SnapshotStore;
-
-    use super::*;
-    use crate::coprocessor::dag::executor::scanner::tests::{
-        get_point_range, get_range, prepare_table_data, TestStore,
-    };
-
-    const TABLE_ID: i64 = 1;
-    const KEY_NUMBER: usize = 100;
-
-    #[test]
-    fn test_point_get() {
-        let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-        let mut test_store = TestStore::new(&test_data.kv_data);
-        let columns_info = test_data.get_prev_2_cols();
-
-        const HANDLE: i64 = 0;
-
-        // point get returns none
-        let r1 = get_point_range(TABLE_ID, i64::MIN);
-        // point get return something
-        let r2 = get_point_range(TABLE_ID, HANDLE);
-        let ranges = vec![r1, r2];
-
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = BatchTableScanExecutor::new(
-            store,
-            Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            ranges,
-            false,
-        )
-        .unwrap();
-
-        let result = table_scanner.next_batch(10);
-        assert!(result.is_drained.as_ref().unwrap(), true);
-        assert_eq!(result.data.columns_len(), 2);
-        assert_eq!(result.data.rows_len(), 1);
-
-        let expect_row = &test_data.expect_rows[HANDLE as usize];
-        for (idx, col) in columns_info.iter().enumerate() {
-            let cid = col.get_column_id();
-            let v = &result.data[idx].raw()[0];
-            assert_eq!(expect_row[&cid].as_slice(), v.as_slice());
-        }
-    }
+    use crate::coprocessor::codec::datum::encode_value;
+    use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::codec::table;
+    use crate::coprocessor::codec::{datum, Datum};
+    use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
+    use crate::coprocessor::dag::batch_executor::table_scan_executor::BatchTableScanExecutor;
+    use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::coprocessor::util::convert_to_prefix_next;
+    use crate::storage::{FixtureStore, Key};
+    use cop_datatype::FieldTypeAccessor;
+    use cop_datatype::FieldTypeTp;
+    use kvproto::coprocessor::KeyRange;
+    use std::sync::Arc;
+    use tipb::expression::FieldType;
+    use tipb::schema::ColumnInfo;
 
     #[test]
-    fn test_multiple_ranges() {
-        use rand::Rng;
+    fn test_basic() {
+        // Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
+        // Column id:    1,            2,         4
 
-        let test_data = prepare_table_data(KEY_NUMBER, TABLE_ID);
-        let mut test_store = TestStore::new(&test_data.kv_data);
-        let mut columns_info = test_data.get_prev_2_cols();
-        columns_info.push(test_data.get_col_pk());
+        const TABLE_ID: i64 = 7;
 
-        let r1 = get_range(TABLE_ID, i64::MIN, 0);
-        let r2 = get_range(TABLE_ID, 0, (KEY_NUMBER / 2) as i64);
-        let r3 = get_point_range(TABLE_ID, (KEY_NUMBER / 2) as i64);
-        let r4 = get_range(TABLE_ID, (KEY_NUMBER / 2) as i64 + 1, i64::MAX);
-        let ranges = vec![r1, r2, r3, r4];
+        // [(row_id, columns)] where each column: (column id, datum)
+        let data = vec![
+            (
+                1,
+                vec![
+                    // A full row.
+                    (2, Datum::I64(10)),
+                    (4, Datum::F64(5.2)),
+                ],
+            ),
+            (
+                3,
+                vec![
+                    (4, Datum::Null),
+                    // Bar column is null, even if default value is provided the final result
+                    // should be null.
+                    (2, Datum::I64(-5)),
+                    // Orders should not matter.
+                ],
+            ),
+            (
+                4,
+                vec![
+                    (2, Datum::Null),
+                    // Bar column is missing, default value should be used.
+                ],
+            ),
+            (
+                5,
+                vec![
+                    // Foo column is missing, NULL should be used.
+                    (4, Datum::F64(0.1)),
+                ],
+            ),
+            (
+                6,
+                vec![
+                    // Empty row
+                ],
+            ),
+        ];
 
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner = BatchTableScanExecutor::new(
-            store,
-            Arc::new(EvalConfig::default()),
-            columns_info.clone(),
-            ranges,
-            false,
-        )
-        .unwrap();
+        // The point range representation for each row in `data`.
+        let range_each_row: Vec<_> = data
+            .iter()
+            .map(|(row_id, _)| {
+                let mut r = KeyRange::new();
+                r.set_start(table::encode_row_key(TABLE_ID, *row_id));
+                r.set_end(r.get_start().to_vec());
+                convert_to_prefix_next(r.mut_end());
+                r
+            })
+            .collect();
 
-        let mut data = table_scanner.next_batch(1).data;
+        // The column info for each column in `data`.
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_pk_handle(true);
+                ci.set_column_id(1);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(2);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
+                ci.set_column_id(4);
+                ci.set_default_val(encode_value(&[Datum::F64(4.5)]).unwrap());
+                ci
+            },
+        ];
+
+        // The schema of these columns.
+        let schema = vec![
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
+                ft
+            },
+        ];
+
+        let store = {
+            let kv = data
+                .into_iter()
+                .map(|(row_id, columns)| {
+                    let key = Key::from_raw(&table::encode_row_key(TABLE_ID, row_id));
+                    let value = {
+                        let row = columns.iter().map(|(_, datum)| datum.clone()).collect();
+                        let col_ids: Vec<_> = columns.iter().map(|(id, _)| *id).collect();
+                        table::encode_row(row, &col_ids).unwrap()
+                    };
+                    (key, Ok(value))
+                })
+                .collect();
+            FixtureStore::new(kv)
+        };
+
+        let key_ranges_point = vec![
+            range_each_row[2].clone(),
+            range_each_row[3].clone(),
+            range_each_row[1].clone(),
+            range_each_row[0].clone(),
+            range_each_row[4].clone(),
+        ];
+
+        // Case 1: Point scan PK
         {
-            let mut rng = rand::thread_rng();
-            loop {
-                let mut result = table_scanner.next_batch(rng.gen_range(1, KEY_NUMBER / 5));
-                assert!(result.is_drained.is_ok());
-                data.append(&mut result.data);
-                if result.is_drained.unwrap() {
-                    break;
-                }
-            }
-        }
-        assert_eq!(data.columns_len(), 3);
-        assert_eq!(data.rows_len(), KEY_NUMBER);
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone()],
+                key_ranges_point.clone(),
+                false,
+            )
+            .unwrap();
 
-        for row_index in 0..KEY_NUMBER {
-            // data[2] should be PK column, let's check it first.
+            // First, let's fetch 1 row. There should be 4 rows remaining.
+            let result = executor.next_batch(1);
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 1);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(4)]);
+
+            // Then, fetch all remaining rows using a larger batch size.
+            let result = executor.next_batch(10);
+            // This time it should be drained.
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 4);
+            assert!(result.data[0].is_decoded());
             assert_eq!(
-                data[2].decoded().as_int_slice()[row_index],
-                Some(row_index as i64)
+                result.data[0].decoded().as_int_slice(),
+                &[Some(5), Some(3), Some(1), Some(6)]
             );
-            // check rest columns
-            let expect_row = &test_data.expect_rows[row_index];
-            for (col_index, col) in columns_info.iter().enumerate() {
-                if col.get_pk_handle() {
-                    continue;
-                }
-                let cid = col.get_column_id();
-                let v = &data[col_index].raw()[row_index];
-                assert_eq!(expect_row[&cid].as_slice(), v.as_slice());
-            }
+        }
+
+        // Case 2: Point scan column foo, which does not have default value.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[1].clone()],
+                key_ranges_point.clone(),
+                false,
+            )
+            .unwrap();
+
+            // First, fetch 2 rows. 3 rows remaining.
+            let mut result = executor.next_batch(2);
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 2);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[None, None]);
+
+            // Then, fetch 3 rows. 0 rows remaining (but we allow that is_drained == false).
+            let mut result = executor.next_batch(3);
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 3);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_int_slice(),
+                &[Some(-5), Some(10), None]
+            );
+
+            // Finally, even if we want only 1 row, the executor should be drained.
+            let result = executor.next_batch(1);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 0);
+        }
+
+        // Case 3: Point scan column bar, which has default values.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[2].clone()],
+                key_ranges_point.clone(),
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 5);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_real_slice(),
+                &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
+            );
+        }
+
+        // Case 4: Point scan multiple columns
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone(), columns_info[2].clone()],
+                key_ranges_point.clone(),
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 5);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(
+                result.data[0].decoded().as_int_slice(),
+                &[Some(4), Some(5), Some(3), Some(1), Some(6)]
+            );
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[1].decoded().as_real_slice(),
+                &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
+            );
+        }
+
+        let key_ranges_all = vec![{
+            let mut range = KeyRange::new();
+            range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
+            range.set_end(table::encode_row_key(TABLE_ID, std::i64::MAX));
+            range
+        }];
+
+        // Case 5: Range scan PK
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone()],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            // First, let's fetch 1 row. There should be 4 rows remaining.
+            let result = executor.next_batch(1);
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 1);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(1)]);
+
+            // Then, fetch 4 rows. There should be 0 remaining rows.
+            let result = executor.next_batch(4);
+            // This time it should be drained.
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 4);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(
+                result.data[0].decoded().as_int_slice(),
+                &[Some(3), Some(4), Some(5), Some(6)]
+            );
+
+            // There should be no more results and the executor is drained.
+            let result = executor.next_batch(1);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 0);
+        }
+
+        // Case 6: Range scan multiple columns
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[2].clone(),
+                    columns_info[0].clone(),
+                    columns_info[1].clone(),
+                ],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            // First, let's fetch 3 rows. There should be 2 rows remaining.
+            let mut result = executor.next_batch(3);
+            assert!(!result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 3);
+            assert_eq!(result.data.rows_len(), 3);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_real_slice(),
+                &[Some(5.2), None, Some(4.5)]
+            );
+            assert!(result.data[1].is_decoded());
+            assert_eq!(
+                result.data[1].decoded().as_int_slice(),
+                &[Some(1), Some(3), Some(4)]
+            );
+            assert!(result.data[2].is_raw());
+            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(
+                result.data[2].decoded().as_int_slice(),
+                &[Some(10), Some(-5), None]
+            );
+
+            // Fetch 3 rows. We should only get 2 rows and the executor should be drained.
+            let mut result = executor.next_batch(3);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 3);
+            assert_eq!(result.data.rows_len(), 2);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_real_slice(),
+                &[Some(0.1), Some(4.5)]
+            );
+            assert!(result.data[1].is_decoded());
+            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(6)]);
+            assert!(result.data[2].is_raw());
+            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[2].decoded().as_int_slice(), &[None, None]);
+        }
+
+        // Case 7. Mixed range scan and point scan
+        {
+            let key_ranges = vec![
+                {
+                    let mut range = KeyRange::new();
+                    range.set_start(table::encode_row_key(TABLE_ID, std::i64::MIN));
+                    range.set_end(table::encode_row_key(TABLE_ID, 3));
+                    range
+                },
+                {
+                    let mut range = KeyRange::new();
+                    range.set_start(table::encode_row_key(TABLE_ID, 3));
+                    range.set_end(table::encode_row_key(TABLE_ID, 4));
+                    range
+                },
+                {
+                    let mut range = KeyRange::new();
+                    range.set_start(table::encode_row_key(TABLE_ID, 4));
+                    range.set_end(table::encode_row_key(TABLE_ID, std::i64::MAX));
+                    range
+                },
+            ];
+
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[2].clone()],
+                key_ranges.clone(),
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 1);
+            assert_eq!(result.data.rows_len(), 5);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_real_slice(),
+                &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
+            );
         }
     }
+
+    #[test]
+    fn test_corrupted_data() {
+        const TABLE_ID: i64 = 5;
+
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_pk_handle(true);
+                ci.set_column_id(1);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(2);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(3);
+                ci
+            },
+        ];
+
+        let schema = vec![
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+        ];
+
+        let mut kv = vec![];
+        {
+            // row 0, which is not corrupted
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 0));
+            let value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
+            kv.push((key, Ok(value)));
+        }
+        {
+            // row 1, which is not corrupted
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 1));
+            let value = vec![];
+            kv.push((key, Ok(value)));
+        }
+        {
+            // row 2, which is partially corrupted
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 2));
+            let mut value = table::encode_row(vec![Datum::I64(5), Datum::I64(7)], &[2, 3]).unwrap();
+            // resize the value to make it partially corrupted
+            value.truncate(value.len() - 3);
+            kv.push((key, Ok(value)));
+        }
+        {
+            // row 3, which is totally corrupted due to invalid datum flag for column id
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 3));
+            // this datum flag does not exist
+            let value = vec![255];
+            kv.push((key, Ok(value)));
+        }
+        {
+            // row 4, which is totally corrupted due to missing datum for column value
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 4));
+            let value = datum::encode_value(&[Datum::I64(2)]).unwrap(); // col_id = 2
+            kv.push((key, Ok(value)));
+        }
+
+        let key_range_point: Vec<_> = kv
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let mut r = KeyRange::new();
+                r.set_start(table::encode_row_key(TABLE_ID, index as i64));
+                r.set_end(r.get_start().to_vec());
+                convert_to_prefix_next(r.mut_end());
+                r
+            })
+            .collect();
+
+        let store = FixtureStore::new(kv.into_iter().collect());
+
+        // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
+        for corrupted_row_index in 2..=4 {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![
+                    key_range_point[0].clone(),
+                    key_range_point[1].clone(),
+                    key_range_point[corrupted_row_index].clone(),
+                ],
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 3);
+            assert_eq!(result.data.rows_len(), 2);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
+            assert!(result.data[2].is_raw());
+            result.data[2].decode(Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
+        }
+    }
+
+    // TODO: Test locked
 }
