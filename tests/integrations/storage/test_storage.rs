@@ -982,7 +982,7 @@ const BACK_OFF_CAP: u64 = 100;
 // See: http://www.awsarchitectureblog.com/2015/03/backoff.html.
 fn backoff(attempts: usize) {
     let upper_ms = match attempts {
-        0...6 => 2u64.pow(attempts as u32),
+        0..=6 => 2u64.pow(attempts as u32),
         _ => BACK_OFF_CAP,
     };
     thread::sleep(Duration::from_millis(random::<u64>() % upper_ms))

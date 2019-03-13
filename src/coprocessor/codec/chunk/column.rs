@@ -338,7 +338,7 @@ impl Column {
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tp: &dyn FieldTypeAccessor) -> Result<Column> {
+    pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
         use crate::util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;
         let mut col = Column::new(tp, length);

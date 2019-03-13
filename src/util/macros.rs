@@ -144,10 +144,10 @@ macro_rules! wait_op {
     (IMPL $expr:expr, $timeout:expr) => {{
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel();
-        let cb = box move |res| {
+        let cb = Box::new(move |res| {
             // we don't care error actually.
             let _ = tx.send(res);
-        };
+        });
         $expr(cb)?;
         match $timeout {
             None => rx.recv().ok(),
