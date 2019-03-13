@@ -112,10 +112,10 @@ pub use crate::imp::*;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 // The TCMalloc Allocator
-#[cfg(all(unix, not(fuzzing), not(feature = "jemalloc"), feature = "tcmalloc"))]
+#[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
 use tcmalloc::TCMalloc;
 
-#[cfg(all(unix, not(fuzzing), not(feature = "jemalloc"), feature = "tcmalloc"))]
+#[cfg(all(unix, not(fuzzing),  feature = "tcmalloc"))]
 #[global_allocator]
 static ALLOC: TCMalloc = tcmalloc::TCMalloc;
 
