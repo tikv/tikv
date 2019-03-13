@@ -54,7 +54,7 @@ impl ScalarValue {
     }
 
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Scalar(self)
     }
 }

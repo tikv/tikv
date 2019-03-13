@@ -88,9 +88,6 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
-extern crate jemallocator;
-extern crate libc;
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;

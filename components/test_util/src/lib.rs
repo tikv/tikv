@@ -15,12 +15,6 @@
 #[cfg(test)]
 extern crate test;
 
-extern crate rand;
-extern crate slog;
-extern crate time;
-
-extern crate tikv;
-
 mod kv_generator;
 mod logging;
 mod macros;

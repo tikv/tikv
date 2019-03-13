@@ -16,7 +16,7 @@ use std::fmt;
 use std::i32;
 use std::io::Read;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, MAIN_SEPARATOR};
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -105,7 +105,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.db_cfg, &self.security_cfg)
+        SSTWriter::new(&self.db_cfg, &self.security_cfg, self.db.path())
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -129,7 +129,7 @@ impl Deref for Engine {
 }
 
 impl fmt::Debug for Engine {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Engine")
             .field("uuid", &self.uuid())
             .field("path", &self.path().to_owned())
@@ -174,29 +174,28 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig) -> Result<SSTWriter> {
-        // Using a memory environment to generate SST in memory
-        let mut env = Arc::new(Env::new_mem());
+    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
+        let mut env = Arc::new(Env::default());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));
             env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
+        let uuid = Uuid::new_v4().to_string();
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
-
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
-        default.open(CF_DEFAULT)?;
+        default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
-        write.open(CF_WRITE)?;
+        write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
         Ok(SSTWriter {
             env,
@@ -281,7 +280,7 @@ pub fn get_approximate_ranges(
     ranges
 }
 
-fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
+fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     const DISABLED: i32 = i32::MAX;
 
     let mut db_opts = DBOptions::new();
@@ -292,9 +291,10 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     // RocksDB preserves `max_background_jobs/4` for flush.
     db_opts.set_max_background_jobs(opts.max_background_jobs);
 
+    // Put index and filter in block cache to restrict memory usage.
     let mut block_base_opts = BlockBasedOptions::new();
-    // Use a large block size for sequential access.
-    block_base_opts.set_block_size(MB as usize);
+    block_base_opts.set_lru_cache(128 * MB as usize, -1, 0, 0.0);
+    block_base_opts.set_cache_index_and_filter_blocks(true);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
@@ -410,7 +410,7 @@ mod tests {
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg, &security_cfg).unwrap();
+        let mut w = SSTWriter::new(&cfg, &security_cfg, temp_dir.path().to_str().unwrap()).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];

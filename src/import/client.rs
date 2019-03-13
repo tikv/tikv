@@ -45,7 +45,7 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
         unimplemented!()
     }
 
-    fn upload_sst(&self, _: u64, _: UploadStream) -> Result<UploadResponse> {
+    fn upload_sst(&self, _: u64, _: UploadStream<'_>) -> Result<UploadResponse> {
         unimplemented!()
     }
 
@@ -199,7 +199,7 @@ impl ImportClient for Client {
         self.pd.scatter_region(region.clone()).map_err(Error::from)
     }
 
-    fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
+    fn upload_sst(&self, store_id: u64, req: UploadStream<'_>) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
         let (tx, rx) = client.upload_opt(self.option(Duration::from_secs(30)))?;
@@ -226,7 +226,7 @@ pub struct UploadStream<'a> {
 }
 
 impl<'a> UploadStream<'a> {
-    pub fn new(meta: SSTMeta, data: &[u8]) -> UploadStream {
+    pub fn new(meta: SSTMeta, data: &[u8]) -> UploadStream<'_> {
         UploadStream {
             meta: Some(meta),
             size: data.len(),

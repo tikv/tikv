@@ -791,7 +791,7 @@ impl Ord for Time {
 }
 
 impl Display for Time {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             if self.time_type == TimeType::Date {
                 return f.write_str(ZERO_DATE_STR);
@@ -851,7 +851,7 @@ pub trait TimeEncoder: NumberEncoder {
 
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
-    pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
         use num_traits::FromPrimitive;
 
         let year = i32::from(number::decode_u16(data)?);
