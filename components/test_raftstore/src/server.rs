@@ -25,7 +25,7 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftRouter};
+use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, Engines, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
@@ -33,6 +33,7 @@ use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
@@ -109,10 +110,10 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>) {
-        assert!(node_id == 0 || !self.metas.contains_key(&node_id));
-
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
@@ -127,18 +128,12 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        // Initialize raftstore channels.
-        let (router, system) = create_raft_batch_system(&cfg.raft_store);
-
         // Create localreader.
         let local_reader = Worker::new("test-local-reader");
         let local_ch = local_reader.scheduler();
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         let sim_router = SimulateTransport::new(raft_router);
-
-        // Create engine
-        let (engines, path) = create_test_engine(engines, router.clone(), &cfg);
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-future-worker");
@@ -152,8 +147,7 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
-        )
-        .unwrap();
+        )?;
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
@@ -235,8 +229,7 @@ impl Simulator for ServerCluster {
             local_reader,
             coprocessor_host,
             importer,
-        )
-        .unwrap();
+        )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
@@ -258,7 +251,7 @@ impl Simulator for ServerCluster {
         );
         self.addrs.insert(node_id, format!("{}", addr));
 
-        (node_id, engines, path)
+        Ok(node_id)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
@@ -272,7 +265,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
-            meta.node.stop().unwrap();
+            meta.node.stop();
             meta.worker.stop().unwrap().join().unwrap();
         }
     }

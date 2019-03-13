@@ -319,8 +319,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     metrics_flusher.stop();
 
-    node.stop()
-        .unwrap_or_else(|e| fatal!("failed to stop node: {}", e));
+    node.stop();
 
     region_info_accessor.stop();
 

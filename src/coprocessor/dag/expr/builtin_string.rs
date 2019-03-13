@@ -259,6 +259,25 @@ impl ScalarFunc {
         }
     }
 
+    pub fn replace<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        raw: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, raw));
+        let from_str = try_opt!(self.children[1].eval_string_and_decode(ctx, raw));
+        let to_str = try_opt!(self.children[2].eval_string_and_decode(ctx, raw));
+        if from_str.is_empty() {
+            return match s {
+                Cow::Borrowed(v) => Ok(Some(Cow::Borrowed(v.as_bytes()))),
+                Cow::Owned(v) => Ok(Some(Cow::Owned(v.into_bytes()))),
+            };
+        }
+        Ok(Some(Cow::Owned(
+            s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes(),
+        )))
+    }
+
     pub fn left<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -1966,6 +1985,92 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let e = Expression::build(&ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_replace() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::Bytes(b"www.mysql.com".to_vec()),
+                    Datum::Bytes(b"mysql".to_vec()),
+                    Datum::Bytes(b"pingcap".to_vec()),
+                ],
+                Datum::Bytes(b"www.pingcap.com".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"www.mysql.com".to_vec()),
+                    Datum::Bytes(b"w".to_vec()),
+                    Datum::Bytes(b"1".to_vec()),
+                ],
+                Datum::Bytes(b"111.mysql.com".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"1234".to_vec()),
+                    Datum::Bytes(b"2".to_vec()),
+                    Datum::Bytes(b"55".to_vec()),
+                ],
+                Datum::Bytes(b"15534".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"d".to_vec()),
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"aaa".to_vec()),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Null,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (row, exp) in cases {
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
+            let expr = scalar_func_expr(ScalarFuncSig::Replace, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);

@@ -47,8 +47,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // Restart 1, 2
-    cluster.run_node(1);
-    cluster.run_node(2);
+    cluster.run_node(1).unwrap();
+    cluster.run_node(2).unwrap();
     wait_down_peers(cluster, 0, None);
 
     cluster.stop_node(1);
