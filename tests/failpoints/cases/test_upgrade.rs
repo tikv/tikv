@@ -23,12 +23,12 @@ use tempdir::TempDir;
 use test_raftstore::*;
 use tikv::config::DbConfig;
 use tikv::pd::PdClient;
+use tikv::raftstore::store::{
+    keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER, RAFT_INIT_LOG_INDEX,
+    RAFT_INIT_LOG_TERM,
+};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb_util;
-use tikv::raftstore::store::{
-     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
-};
 
 fn test_upgrade_from_v2_to_v3(fp: &str) {
     let tmp_path = TempDir::new("test_upgrade").unwrap();
@@ -288,7 +288,7 @@ fn test_upgrade_2_3_boostrap(fp: &str) {
     // Create a raft engine.
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap()
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
 
     let cluster_id = 1000_000_000;
@@ -373,7 +373,6 @@ fn test_upgrade_2_3_boostrap(fp: &str) {
     );
 
     // create a v3.x. node
-
 
     let pd_client = Arc::new(TestPdClient::new(0, false));
     for _ in 0..peer_id {

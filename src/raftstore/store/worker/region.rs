@@ -58,6 +58,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -223,15 +225,18 @@ struct SnapContext {
 
 impl SnapContext {
     /// Generates the snapshot of the Region.
-    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
+    fn generate_snap(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) -> Result<()> {
         // do we need to check leader here?
-        let raw_raft_snap = Snapshot::new(Arc::clone(&self.engines.raft));
-        let raw_kv_snap = Snapshot::new(Arc::clone(&self.engines.kv));
-
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raw_raft_snap,
-            &raw_kv_snap,
+            &raft_snap,
+            &kv_snap,
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -248,14 +253,20 @@ impl SnapContext {
     }
 
     /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
-    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
+    fn handle_gen(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
             .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, notifier) {
+        if let Err(e) = self.generate_snap(region_id, raft_snap, kv_snap, notifier) {
             error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
@@ -573,13 +584,15 @@ impl Runnable<Task> for Runner {
         match task {
             Task::Gen {
                 region_id,
+                raft_snap,
+                kv_snap,
                 notifier,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.
@@ -653,7 +666,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::raftstore::store::engine::{Mutable, Peekable};
+    use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
@@ -796,6 +809,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
+                    raft_snap: Snapshot::new(engines.raft.clone()),
+                    kv_snap: Snapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();

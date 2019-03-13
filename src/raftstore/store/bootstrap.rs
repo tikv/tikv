@@ -13,7 +13,9 @@
 
 use super::engine::{Iterable, Mutable};
 use super::keys;
-use super::peer_storage::{write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_VER,  INIT_EPOCH_CONF_VER};
+use super::peer_storage::{
+    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+};
 use super::util::{new_peer, Engines};
 use crate::raftstore::Result;
 use crate::storage::CF_DEFAULT;
@@ -125,7 +127,6 @@ mod tests {
         );
         let region = initial_region(1, 1, 1);
         let engines = Engines::new(kv_engine, raft_engine);
-
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());

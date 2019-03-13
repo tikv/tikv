@@ -45,7 +45,9 @@ use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
-use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
+use crate::raftstore::store::peer_storage::{
+    self, write_initial_apply_state, write_peer_state, GenSnapTask,
+};
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
 use crate::raftstore::{Error, Result};
@@ -347,7 +349,8 @@ impl ApplyContext {
     ///
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
-    /// After all delegates are handled, `write_to_db` method should be called.
+    /// After all delegates are handled, `write_to_db` or `finish_for_snapshot`
+    /// method should be called.
     pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.kv_wb.is_none() {
             self.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_KV_WB_SIZE));
@@ -433,6 +436,11 @@ impl ApplyContext {
             applied_index_term: delegate.applied_index_term,
             merged: false,
         });
+    }
+
+    /// Finishes `Snapshot`s for the delegate.
+    pub fn finish_for_snapshot(&mut self) {
+        self.cbs.clear()
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -2228,6 +2236,7 @@ pub enum Msg {
     CatchUpLogs(CatchUpLogs),
     LogsUpToDate(u64),
     Destroy(Destroy),
+    Snapshot(GenSnapTask),
     #[cfg(test)]
     Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
 }
@@ -2260,6 +2269,9 @@ impl Debug for Msg {
             Msg::CatchUpLogs(cul) => write!(f, "{:?}", cul.merge),
             Msg::LogsUpToDate(region_id) => write!(f, "[region {}] logs are updated", region_id),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Snapshot(GenSnapTask { region_id, .. }) => {
+                write!(f, "[region {}] requests a snapshot", region_id)
+            }
             #[cfg(test)]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2535,6 +2547,20 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        apply_ctx.prepare_for(&mut self.delegate);
+        // persistent all pending changes
+        apply_ctx.commit_opt(&mut self.delegate, true);
+        if let Err(e) = snap_task.generate_snapshot(&apply_ctx.engines) {
+            error!("schedule snapshot failed"; "error" => ?e);
+        }
+        apply_ctx.finish_for_snapshot();
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2555,6 +2581,7 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
+                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f.call_box((&self.delegate,)),
                 None => break,
@@ -2742,6 +2769,9 @@ impl ApplyRouter {
                     );
                     return;
                 }
+                Msg::Snapshot(_) => {
+                    panic!("[region {}] is removed before taking snapshot", region_id,)
+                }
                 Msg::CatchUpLogs(cul) => panic!(
                     "[region {}] is removed before merged, failed to schedule {:?}",
                     region_id, cul.merge
@@ -2793,19 +2823,21 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use crate::raftstore::coprocessor::*;
-    use crate::raftstore::store::msg::WriteResponse;
-    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
-    use crate::raftstore::store::util::{new_learner_peer, new_peer};
-    use crate::raftstore::store::Config;
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
     use rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
-    use super::*;
     use crate::import::test_helpers::*;
+    use crate::raftstore::coprocessor::*;
+    use crate::raftstore::store::msg::WriteResponse;
+    use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
+    use crate::raftstore::store::util::{new_learner_peer, new_peer};
+    use crate::raftstore::store::{Config, RegionTask};
+    use crate::util::worker::dummy_scheduler;
+
+    use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
@@ -3030,7 +3062,16 @@ mod tests {
             e => panic!("unexpected apply result: {:?}", e),
         };
         assert_eq!(apply_res.region_id, 2);
-        let apply_state: RaftApplyState = engines.raft.get_msg(&apply_state_key).unwrap().unwrap();
+
+        let (region_scheduler, snapshot_rx) = dummy_scheduler();
+        let (tx, _) = mpsc::sync_channel(0);
+        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx, region_scheduler)));
+        let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(Some(RegionTask::Gen { raft_snap, .. })) => {
+                raft_snap.get_msg(&apply_state_key).unwrap().unwrap()
+            }
+            e => panic!("unexpected apply result: {:?}", e),
+        };
         assert_eq!(apply_res.apply_state, apply_state);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
