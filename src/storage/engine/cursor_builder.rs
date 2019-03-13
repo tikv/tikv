@@ -16,7 +16,7 @@ use crate::storage::engine::Result;
 use crate::storage::{CfName, Cursor, Key, ScanMode, Snapshot};
 
 /// A handy utility to build a snapshot cursor according to various configurations.
-pub struct CursorBuilder<'a, S: 'a + Snapshot> {
+pub struct CursorBuilder<'a, S: Snapshot> {
     snapshot: &'a S,
     cf: CfName,
 

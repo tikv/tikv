@@ -21,7 +21,7 @@ use rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
@@ -314,13 +314,7 @@ impl<T: Simulator> Cluster<T> {
             .get_region_by_id(region_id)
             .wait()
             .unwrap()
-            .map(|region| {
-                region
-                    .get_peers()
-                    .iter()
-                    .map(|p| p.get_store_id())
-                    .collect()
-            })
+            .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
     }
 
     pub fn query_leader(

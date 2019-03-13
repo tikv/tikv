@@ -48,7 +48,10 @@ fn test_follower_slow_split() {
             .allow(1),
         tx: Mutex::new(range_tx),
     };
-    cluster.sim.wl().add_send_filter(1, box prevote_filter);
+    cluster
+        .sim
+        .wl()
+        .add_send_filter(1, Box::new(prevote_filter));
 
     // Ensure pre-vote response is really sended.
     let (tx, rx) = mpsc::channel();

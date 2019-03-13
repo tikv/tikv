@@ -95,7 +95,7 @@ impl Drop for PendingCmd {
 }
 
 impl Debug for PendingCmd {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "PendingCmd [index: {}, term: {}, has_cb: {}]",
@@ -566,7 +566,7 @@ struct WaitSourceMergeState {
 }
 
 impl Debug for WaitSourceMergeState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WaitSourceMergeState")
             .field("pending_entries", &self.pending_entries.len())
             .field("pending_msgs", &self.pending_msgs.len())
@@ -2229,7 +2229,7 @@ impl Msg {
 }
 
 impl Debug for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Msg::Apply { apply, .. } => write!(f, "[region {}] async apply", apply.region_id),
             Msg::Proposal(ref p) => write!(f, "[region {}] {} region proposal", p.region_id, p.id),
@@ -2471,11 +2471,7 @@ impl ApplyFsm {
             ctx.timer = Some(SlowTimer::new());
         }
         let apply_index = self.delegate.apply_state.get_applied_index();
-        'check: {
-            if apply_index >= catch_up_logs.merge.get_commit() {
-                break 'check;
-            }
-
+        if apply_index < catch_up_logs.merge.get_commit() {
             let entries =
                 self.delegate
                     .load_entries_for_merge(ctx, &catch_up_logs.merge, apply_index);
@@ -2559,7 +2555,7 @@ impl Fsm for ApplyFsm {
     }
 
     #[inline]
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -2932,9 +2928,9 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
-            }),
+            })),
         );
         let region_proposal = RegionProposal::new(1, 1, vec![p]);
         router.schedule_task(1, Msg::Proposal(region_proposal));
@@ -2950,9 +2946,9 @@ mod tests {
                 true,
                 3,
                 0,
-                Callback::Write(box move |write: WriteResponse| {
+                Callback::Write(Box::new(move |write: WriteResponse| {
                     cc_tx.send(write.response).unwrap();
-                }),
+                })),
             ),
         ];
         let region_proposal = RegionProposal::new(1, 2, pops);
@@ -3047,9 +3043,9 @@ mod tests {
             false,
             1,
             0,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 resp_tx.send(resp.response).unwrap();
-            }),
+            })),
         );
         let region_proposal = RegionProposal::new(1, 2, vec![p]);
         router.schedule_task(2, Msg::Proposal(region_proposal));
@@ -3091,9 +3087,9 @@ mod tests {
                 false,
                 self.entry.get_index(),
                 self.entry.get_term(),
-                Callback::Write(box move |resp: WriteResponse| {
+                Callback::Write(Box::new(move |resp: WriteResponse| {
                     tx.send(resp.response).unwrap();
-                }),
+                })),
             );
             router.schedule_task(
                 region_id,
@@ -3207,11 +3203,11 @@ mod tests {
     impl Coprocessor for ApplyObserver {}
 
     impl QueryObserver for ApplyObserver {
-        fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {
+        fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {
             self.pre_query_count.fetch_add(1, Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {
+        fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {
             self.post_query_count.fetch_add(1, Ordering::SeqCst);
         }
     }
