@@ -115,7 +115,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
 use tcmalloc::TCMalloc;
 
-#[cfg(all(unix, not(fuzzing),  feature = "tcmalloc"))]
+#[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
 #[global_allocator]
 static ALLOC: TCMalloc = tcmalloc::TCMalloc;
 
