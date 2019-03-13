@@ -3290,6 +3290,8 @@ mod tests {
             ("cd", "abcdefg", 3),
             (" ", "abcdefg", 0),
             ("", "", 1),
+            (" ", "", 0),
+            ("", " ", 1),
             ("eFg", "abcdefg", 0),
             ("deF", "abcdefg", 0),
             (
