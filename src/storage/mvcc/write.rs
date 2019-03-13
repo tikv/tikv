@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::ReadBytesExt;
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
-use storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
-use super::super::types::Value;
+use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use byteorder::ReadBytesExt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -50,8 +50,8 @@ impl WriteType {
         }
     }
 
-    fn to_u8(&self) -> u8 {
-        match *self {
+    fn to_u8(self) -> u8 {
+        match self {
             WriteType::Put => FLAG_PUT,
             WriteType::Delete => FLAG_DELETE,
             WriteType::Lock => FLAG_LOCK,
@@ -70,9 +70,9 @@ pub struct Write {
 impl Write {
     pub fn new(write_type: WriteType, start_ts: u64, short_value: Option<Value>) -> Write {
         Write {
-            write_type: write_type,
-            start_ts: start_ts,
-            short_value: short_value,
+            write_type,
+            start_ts,
+            short_value,
         }
     }
 
@@ -92,17 +92,15 @@ impl Write {
         if b.is_empty() {
             return Err(Error::BadFormatWrite);
         }
-        let write_type = WriteType::from_u8(b.read_u8()?)
-            .ok_or(Error::BadFormatWrite)?;
-        let start_ts = b.decode_var_u64()?;
+        let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
+        let start_ts = number::decode_var_u64(&mut b)?;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
         }
 
         let flag = b.read_u8()?;
         assert_eq!(
-            flag,
-            SHORT_VALUE_PREFIX,
+            flag, SHORT_VALUE_PREFIX,
             "invalid flag [{:?}] in write",
             flag
         );
@@ -116,6 +114,10 @@ impl Write {
             );
         }
         Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
+    }
+
+    pub fn parse_type(mut b: &[u8]) -> Result<WriteType> {
+        WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)
     }
 }
 
@@ -136,34 +138,22 @@ mod tests {
             if lock_type.is_some() {
                 let wt = WriteType::from_lock_type(lock_type.unwrap());
                 assert_eq!(
-                    wt,
-                    write_type,
+                    wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",
-                    i,
-                    lock_type,
-                    write_type,
-                    wt
+                    i, lock_type, write_type, wt
                 );
             }
             let f = write_type.to_u8();
             assert_eq!(
-                f,
-                flag,
+                f, flag,
                 "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                i,
-                write_type,
-                flag,
-                f
+                i, write_type, flag, f
             );
             let wt = WriteType::from_u8(flag).unwrap();
             assert_eq!(
-                wt,
-                write_type,
+                wt, write_type,
                 "#{}, expect from_u8({:?}) returns {:?}, but got {:?}",
-                i,
-                flag,
-                write_type,
-                wt
+                i, flag, write_type, wt
             );
         }
     }
@@ -179,6 +169,7 @@ mod tests {
             let v = write.to_bytes();
             let w = Write::parse(&v[..]).unwrap_or_else(|e| panic!("#{} parse() err: {:?}", i, e));
             assert_eq!(w, write, "#{} expect {:?}, but got {:?}", i, write, w);
+            assert_eq!(Write::parse_type(&v).unwrap(), w.write_type);
         }
 
         // Test `Write::parse()` handles incorrect input.
@@ -187,5 +178,6 @@ mod tests {
         let lock = Write::new(WriteType::Lock, 1, Some(b"short_value".to_vec()));
         let v = lock.to_bytes();
         assert!(Write::parse(&v[..1]).is_err());
+        assert_eq!(Write::parse_type(&v).unwrap(), lock.write_type);
     }
 }

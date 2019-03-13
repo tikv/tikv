@@ -11,101 +11,145 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock};
+use std::i32;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
-use grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
-use kvproto::tikvpb_grpc::*;
+use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
+use kvproto::import_sstpb_grpc::create_import_sst;
+use kvproto::tikvpb_grpc::*;
+use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
+use tokio_timer::timer::Handle;
 
-use util::worker::{FutureScheduler, Worker};
-use storage::Storage;
-use raftstore::store::{Engines, SnapManager};
+use crate::coprocessor::Endpoint;
+use crate::import::ImportSSTService;
+use crate::raftstore::store::{Engines, SnapManager};
+use crate::storage::{Engine, Storage};
+use crate::util::security::SecurityManager;
+use crate::util::timer::GLOBAL_TIMER_HANDLE;
+use crate::util::worker::Worker;
+use crate::util::Either;
 
-use super::{Config, Result};
-use coprocessor::{EndPointHost, EndPointTask};
-use super::service::*;
-use super::transport::{RaftStoreRouter, ServerTransport};
-use super::resolve::StoreAddrResolver;
-use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::load_statistics::*;
 use super::raft_client::RaftClient;
-use pd::PdTask;
+use super::resolve::StoreAddrResolver;
+use super::service::*;
+use super::snap::{Runner as SnapHandler, Task as SnapTask};
+use super::transport::{RaftStoreRouter, ServerTransport};
+use super::{Config, Result};
 
-const DEFAULT_COPROCESSOR_BATCH: usize = 256;
-const MAX_GRPC_RECV_MSG_LEN: usize = 10 * 1024 * 1024;
+const LOAD_STATISTICS_SLOTS: usize = 4;
+const LOAD_STATISTICS_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
+pub const GRPC_THREAD_PREFIX: &str = "grpc-server";
+pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
+/// The TiKV server
+///
+/// It hosts various internal components, including gRPC, the raftstore router
+/// and a snapshot worker.
 pub struct Server<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> {
     env: Arc<Environment>,
-    // Grpc server.
-    grpc_server: GrpcServer,
+    /// A GrpcServer builder or a GrpcServer.
+    ///
+    /// If the listening port is configured, the server will be started lazily.
+    builder_or_server: Option<Either<ServerBuilder, GrpcServer>>,
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<T, S>,
     raft_router: T,
-    // The kv storage.
-    storage: Storage,
-    // For handling coprocessor requests.
-    end_point_worker: Worker<EndPointTask>,
     // For sending/receiving snapshots.
     snap_mgr: SnapManager,
     snap_worker: Worker<SnapTask>,
-    pd_scheduler: FutureScheduler<PdTask>,
+
+    // Currently load statistics is done in the thread.
+    stats_pool: Option<ThreadPool>,
+    thread_load: Arc<ThreadLoad>,
+    timer: Handle,
 }
 
 impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
-    #[allow(too_many_arguments)]
-    pub fn new(
-        cfg: &Config,
-        region_split_size: usize,
-        storage: Storage,
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<E: Engine>(
+        cfg: &Arc<Config>,
+        security_mgr: &Arc<SecurityManager>,
+        storage: Storage<E>,
+        cop: Endpoint<E>,
         raft_router: T,
         resolver: S,
         snap_mgr: SnapManager,
-        pd_scheduler: FutureScheduler<PdTask>,
         debug_engines: Option<Engines>,
-    ) -> Result<Server<T, S>> {
+        import_service: Option<ImportSSTService<T>>,
+    ) -> Result<Self> {
+        // A helper thread (or pool) for transport layer.
+        let stats_pool = ThreadPoolBuilder::new()
+            .pool_size(cfg.stats_concurrency)
+            .name_prefix(STATS_THREAD_PREFIX)
+            .build();
+        let thread_load = Arc::new(ThreadLoad::with_threshold(cfg.heavy_load_threshold));
+
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(cfg.grpc_concurrency)
-                .name_prefix(thd_name!("grpc-server"))
+                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
                 .build(),
         );
-        let raft_client = Arc::new(RwLock::new(RaftClient::new(env.clone(), cfg.clone())));
-        let end_point_worker = Worker::new("end-point-worker");
         let snap_worker = Worker::new("snap-handler");
 
         let kv_service = KvService::new(
-            storage.clone(),
-            end_point_worker.scheduler(),
+            storage,
+            cop,
             raft_router.clone(),
             snap_worker.scheduler(),
-            cfg.end_point_recursion_limit,
+            stats_pool.sender().clone(),
+            Arc::clone(&thread_load),
         );
-        let addr = SocketAddr::from_str(&cfg.addr)?;
-        info!("listening on {}", addr);
+
+        let mut addr = SocketAddr::from_str(&cfg.addr)?;
+        info!("listening on addr"; "addr" => addr);
         let ip = format!("{}", addr.ip());
-        let channel_args = ChannelBuilder::new(env.clone())
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as usize)
+        let channel_args = ChannelBuilder::new(Arc::clone(&env))
+            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .max_concurrent_stream(cfg.grpc_concurrent_stream)
             .max_receive_message_len(MAX_GRPC_RECV_MSG_LEN)
-            .max_send_message_len(region_split_size as usize * 4)
+            .max_send_message_len(-1)
+            .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .build_args();
-        let grpc_server = {
-            let mut sb = ServerBuilder::new(env.clone())
-                .bind(ip, addr.port())
+        let builder_or_server = {
+            let mut sb = ServerBuilder::new(Arc::clone(&env))
                 .channel_args(channel_args)
                 .register_service(create_tikv(kv_service));
+            sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
-                sb = sb.register_service(create_debug(DebugService::new(engines)));
+                let debug_service = DebugService::new(engines, raft_router.clone());
+                sb = sb.register_service(create_debug(debug_service));
             }
-            sb.build()?
+            if let Some(service) = import_service {
+                sb = sb.register_service(create_import_sst(service));
+            }
+            // When port is 0, it has to be binded now to get a valid address, which
+            // is then reported to PD before the server is up. 0 is usually used in tests.
+            if addr.port() == 0 {
+                let server = sb.build()?;
+                let (ref host, port) = server.bind_addrs()[0];
+                addr = SocketAddr::new(IpAddr::from_str(host)?, port as u16);
+                Either::Right(server)
+            } else {
+                Either::Left(sb)
+            }
         };
 
-        let addr = {
-            let (ref host, port) = grpc_server.bind_addrs()[0];
-            SocketAddr::new(IpAddr::from_str(host)?, port as u16)
-        };
+        let raft_client = Arc::new(RwLock::new(RaftClient::new(
+            Arc::clone(&env),
+            Arc::clone(cfg),
+            Arc::clone(security_mgr),
+            Arc::clone(&thread_load),
+            stats_pool.sender().clone(),
+        )));
 
         let trans = ServerTransport::new(
             raft_client,
@@ -115,16 +159,16 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
 
         let svr = Server {
-            env: env.clone(),
-            grpc_server: grpc_server,
+            env: Arc::clone(&env),
+            builder_or_server: Some(builder_or_server),
             local_addr: addr,
-            trans: trans,
-            raft_router: raft_router,
-            storage: storage,
-            end_point_worker: end_point_worker,
-            snap_mgr: snap_mgr,
-            snap_worker: snap_worker,
-            pd_scheduler: pd_scheduler,
+            trans,
+            raft_router,
+            snap_mgr,
+            snap_worker,
+            stats_pool: Some(stats_pool),
+            thread_load,
+            timer: GLOBAL_TIMER_HANDLE.clone(),
         };
 
         Ok(svr)
@@ -134,35 +178,51 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         self.trans.clone()
     }
 
-    pub fn start(&mut self, cfg: &Config) -> Result<()> {
-        let end_point = EndPointHost::new(
-            self.storage.get_engine(),
-            self.end_point_worker.scheduler(),
-            cfg,
-            self.pd_scheduler.clone(),
-        );
-        box_try!(
-            self.end_point_worker
-                .start_batch(end_point, DEFAULT_COPROCESSOR_BATCH)
-        );
+    /// Starts the TiKV server.
+    pub fn start(&mut self, cfg: Arc<Config>, security_mgr: Arc<SecurityManager>) -> Result<()> {
         let snap_runner = SnapHandler::new(
-            self.env.clone(),
+            Arc::clone(&self.env),
             self.snap_mgr.clone(),
             self.raft_router.clone(),
+            security_mgr,
+            Arc::clone(&cfg),
         );
         box_try!(self.snap_worker.start(snap_runner));
-        self.grpc_server.start();
+        let builder_or_server = self.builder_or_server.take().unwrap();
+        let mut grpc_server = match builder_or_server {
+            Either::Left(builder) => builder.build()?,
+            Either::Right(server) => server,
+        };
+        grpc_server.start();
+        self.builder_or_server = Some(Either::Right(grpc_server));
+
+        let mut load_stats = {
+            let tl = Arc::clone(&self.thread_load);
+            ThreadLoadStatistics::new(LOAD_STATISTICS_SLOTS, GRPC_THREAD_PREFIX, tl)
+        };
+        self.stats_pool.as_ref().unwrap().spawn(
+            self.timer
+                .interval(Instant::now(), LOAD_STATISTICS_INTERVAL)
+                .map_err(|_| ())
+                .for_each(move |i| {
+                    load_stats.record(i);
+                    Ok(())
+                }),
+        );
+
         info!("TiKV is ready to serve");
         Ok(())
     }
 
+    /// Stops the TiKV server.
     pub fn stop(&mut self) -> Result<()> {
-        self.end_point_worker.stop();
         self.snap_worker.stop();
-        if let Err(e) = self.storage.stop() {
-            error!("failed to stop store: {:?}", e);
+        if let Some(Either::Right(mut server)) = self.builder_or_server.take() {
+            server.shutdown();
         }
-        self.grpc_server.shutdown();
+        if let Some(pool) = self.stats_pool.take() {
+            let _ = pool.shutdown_now().wait();
+        }
         Ok(())
     }
 
@@ -176,28 +236,31 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-    use std::sync::*;
-    use std::sync::mpsc::*;
     use std::sync::atomic::*;
-    use std::net::SocketAddr;
+    use std::sync::mpsc::*;
+    use std::sync::*;
+    use std::time::Duration;
 
     use super::*;
-    use super::super::{Config, Result};
-    use super::super::transport::RaftStoreRouter;
+
     use super::super::resolve::{Callback as ResolveCallback, StoreAddrResolver};
-    use storage::{Config as StorageConfig, Storage};
+    use super::super::transport::RaftStoreRouter;
+    use super::super::{Config, Result};
+    use crate::coprocessor;
+    use crate::raftstore::store::transport::Transport;
+    use crate::raftstore::store::*;
+    use crate::raftstore::Result as RaftStoreResult;
+    use crate::server::readpool::{self, ReadPool};
+    use crate::storage::TestStorageBuilder;
+    use crate::util::security::SecurityConfig;
+    use crate::util::worker::FutureWorker;
+    use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
-    use raftstore::Result as RaftStoreResult;
-    use raftstore::store::Msg as StoreMsg;
-    use raftstore::store::*;
-    use raftstore::store::transport::Transport;
-    use util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {
         quick_fail: Arc<AtomicBool>,
-        addr: Arc<Mutex<Option<SocketAddr>>>,
+        addr: Arc<Mutex<Option<String>>>,
     }
 
     impl StoreAddrResolver for MockResolver {
@@ -205,7 +268,11 @@ mod tests {
             if self.quick_fail.load(Ordering::SeqCst) {
                 return Err(box_err!("quick fail"));
             }
-            cb.call_box((self.addr.lock().unwrap().ok_or(box_err!("not set")),));
+            let addr = self.addr.lock().unwrap();
+            cb(addr
+                .as_ref()
+                .map(|s| s.to_owned())
+                .ok_or(box_err!("not set")));
             Ok(())
         }
     }
@@ -217,18 +284,23 @@ mod tests {
     }
 
     impl RaftStoreRouter for TestRaftStoreRouter {
-        fn send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
-        fn try_send(&self, _: StoreMsg) -> RaftStoreResult<()> {
+        fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
         }
 
-        fn significant_send(&self, msg: SignificantMsg) -> RaftStoreResult<()> {
+        fn significant_send(&self, _: u64, msg: SignificantMsg) -> RaftStoreResult<()> {
             self.significant_msg_sender.send(msg).unwrap();
+            Ok(())
+        }
+
+        fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+            self.tx.send(1).unwrap();
             Ok(())
         }
     }
@@ -241,39 +313,50 @@ mod tests {
     }
 
     #[test]
+    // if this failed, unset the environmental variables 'http_proxy' and 'https_proxy', and retry.
     fn test_peer_resolve() {
         let mut cfg = Config::default();
-        let storage_cfg = StorageConfig::default();
         cfg.addr = "127.0.0.1:0".to_owned();
 
-        let mut storage = Storage::new(&storage_cfg).unwrap();
-        storage.start(&storage_cfg).unwrap();
+        let storage = TestStorageBuilder::new().build().unwrap();
 
         let (tx, rx) = mpsc::channel();
         let (significant_msg_sender, significant_msg_receiver) = mpsc::channel();
         let router = TestRaftStoreRouter {
-            tx: tx,
-            significant_msg_sender: significant_msg_sender,
+            tx,
+            significant_msg_sender,
         };
 
-        let addr = Arc::new(Mutex::new(None));
         let quick_fail = Arc::new(AtomicBool::new(false));
-        let pd_worker = FutureWorker::new("pd worker");
+        let cfg = Arc::new(cfg);
+        let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
+
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let cop_read_pool = ReadPool::new(
+            "cop-readpool",
+            &readpool::Config::default_for_test(),
+            || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
+        );
+        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
+
+        let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
             &cfg,
-            1024,
+            &security_mgr,
             storage,
+            cop,
             router,
             MockResolver {
-                quick_fail: quick_fail.clone(),
-                addr: addr.clone(),
+                quick_fail: Arc::clone(&quick_fail),
+                addr: Arc::clone(&addr),
             },
             SnapManager::new("", None),
-            pd_worker.scheduler(),
             None,
-        ).unwrap();
+            None,
+        )
+        .unwrap();
 
-        server.start(&cfg).unwrap();
+        server.start(cfg, security_mgr).unwrap();
 
         let mut trans = server.transport();
         trans.report_unreachable(RaftMessage::new());
@@ -287,7 +370,7 @@ mod tests {
         resp = significant_msg_receiver.try_recv().unwrap();
         assert!(is_unreachable_to(&resp, 1, 0), "{:?}", resp);
 
-        *addr.lock().unwrap() = Some(server.listening_addr());
+        *addr.lock().unwrap() = Some(format!("{}", server.listening_addr()));
 
         trans.send(msg.clone()).unwrap();
         trans.flush();

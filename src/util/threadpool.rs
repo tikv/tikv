@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::usize;
-use std::time::Duration;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{Builder, JoinHandle};
-use std::marker::PhantomData;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::fmt::Write;
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{Builder, JoinHandle};
+use std::time::Duration;
+use std::usize;
 
 pub const DEFAULT_TASKS_PER_TICK: usize = 10000;
 const DEFAULT_QUEUE_CAPACITY: usize = 1000;
@@ -51,7 +51,7 @@ impl<C: Context + Default> ContextFactory<C> for DefaultContextFactory {
 }
 
 pub struct Task<C> {
-    task: Box<FnBox(&mut C) + Send>,
+    task: Box<dyn FnBox(&mut C) + Send>,
 }
 
 impl<C: Context> Task<C> {
@@ -110,11 +110,11 @@ impl<C: Context + Default + 'static> ThreadPoolBuilder<C, DefaultContextFactory>
 impl<C: Context + 'static, F: ContextFactory<C>> ThreadPoolBuilder<C, F> {
     pub fn new(name: String, factory: F) -> ThreadPoolBuilder<C, F> {
         ThreadPoolBuilder {
-            name: name,
+            name,
             thread_count: DEFAULT_THREAD_COUNT,
             tasks_per_tick: DEFAULT_TASKS_PER_TICK,
             stack_size: None,
-            factory: factory,
+            factory,
             _ctx: PhantomData,
         }
     }
@@ -150,14 +150,47 @@ struct ScheduleState<Ctx> {
     stopped: bool,
 }
 
+pub struct Scheduler<Ctx> {
+    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
+    task_count: Arc<AtomicUsize>,
+}
+
+impl<Ctx> Scheduler<Ctx> {
+    pub fn schedule<F>(&self, job: F)
+    where
+        F: FnOnce(&mut Ctx) + Send + 'static,
+        Ctx: Context,
+    {
+        let task = Task::new(job);
+        let &(ref lock, ref cvar) = &*self.state;
+        {
+            let mut state = lock.lock().unwrap();
+            if state.stopped {
+                return;
+            }
+            state.queue.push(task);
+            cvar.notify_one();
+        }
+        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+    }
+}
+
+impl<Ctx> Clone for Scheduler<Ctx> {
+    fn clone(&self) -> Self {
+        Scheduler {
+            state: self.state.clone(),
+            task_count: self.task_count.clone(),
+        }
+    }
+}
+
 /// `ThreadPool` is used to execute tasks in parallel.
 /// Each task would be pushed into the pool, and when a thread
 /// is ready to process a task, it will get a task from the pool
 /// according to the `ScheduleQueue` provided in initialization.
 pub struct ThreadPool<Ctx> {
-    state: Arc<(Mutex<ScheduleState<Ctx>>, Condvar)>,
     threads: Vec<JoinHandle<()>>,
-    task_count: Arc<AtomicUsize>,
+    scheduler: Scheduler<Ctx>,
 }
 
 impl<Ctx> ThreadPool<Ctx>
@@ -181,25 +214,30 @@ where
         let task_count = Arc::new(AtomicUsize::new(0));
         // Threadpool threads
         for _ in 0..num_threads {
-            let state = state.clone();
-            let task_num = task_count.clone();
+            let state = Arc::clone(&state);
+            let task_num = Arc::clone(&task_count);
             let ctx = f.create();
             let mut tb = Builder::new().name(name.clone());
             if let Some(stack_size) = stack_size {
                 tb = tb.stack_size(stack_size);
             }
-            let thread = tb.spawn(move || {
-                let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
-                worker.run();
-            }).unwrap();
+            let thread = tb
+                .spawn(move || {
+                    let mut worker = Worker::new(state, task_num, tasks_per_tick, ctx);
+                    worker.run();
+                })
+                .unwrap();
             threads.push(thread);
         }
 
         ThreadPool {
-            state: state,
-            threads: threads,
-            task_count: task_count,
+            threads,
+            scheduler: Scheduler { state, task_count },
         }
+    }
+
+    pub fn scheduler(&self) -> Scheduler<Ctx> {
+        self.scheduler.clone()
     }
 
     pub fn execute<F>(&self, job: F)
@@ -207,26 +245,16 @@ where
         F: FnOnce(&mut Ctx) + Send + 'static,
         Ctx: Context,
     {
-        let task = Task::new(job);
-        let &(ref lock, ref cvar) = &*self.state;
-        {
-            let mut state = lock.lock().unwrap();
-            if state.stopped {
-                return;
-            }
-            state.queue.push(task);
-            cvar.notify_one();
-        }
-        self.task_count.fetch_add(1, AtomicOrdering::SeqCst);
+        self.scheduler.schedule(job)
     }
 
     #[inline]
     pub fn get_task_count(&self) -> usize {
-        self.task_count.load(AtomicOrdering::SeqCst)
+        self.scheduler.task_count.load(AtomicOrdering::SeqCst)
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        let &(ref lock, ref cvar) = &*self.state;
+        let &(ref lock, ref cvar) = &*self.scheduler.state;
         {
             let mut state = lock.lock().unwrap();
             state.stopped = true;
@@ -265,11 +293,11 @@ where
         ctx: C,
     ) -> Worker<C> {
         Worker {
-            state: state,
-            task_count: task_count,
-            tasks_per_tick: tasks_per_tick,
+            state,
+            task_count,
+            tasks_per_tick,
             task_counter: 0,
-            ctx: ctx,
+            ctx,
         }
     }
 
@@ -321,13 +349,13 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::mpsc::{channel, Sender};
     use std::sync::{Arc, Mutex};
-    use std::sync::atomic::{AtomicIsize, Ordering};
+    use std::time::Duration;
 
     #[test]
     fn test_get_task_count() {
@@ -340,7 +368,7 @@ mod test {
         let group_num = 4;
         let mut task_num = 0;
         for gid in 0..group_num {
-            let rxer = receiver.clone();
+            let rxer = Arc::clone(&receiver);
             let ftx = ftx.clone();
             task_pool.execute(move |_: &mut DefaultContext| {
                 let rx = rxer.lock().unwrap();
@@ -363,6 +391,27 @@ mod test {
             );
             task_num -= 1;
         }
+        task_pool.stop().unwrap();
+    }
+
+    #[test]
+    fn test_scheduler() {
+        let name = thd_name!("test_scheduler");
+        let mut task_pool = ThreadPoolBuilder::with_default_factory(name).build();
+        let scheduler = task_pool.scheduler();
+        let (tx, rx) = channel();
+
+        for _ in 0..10 {
+            let t = tx.clone();
+            scheduler.schedule(move |_: &mut DefaultContext| {
+                t.send(()).unwrap();
+            });
+        }
+
+        for _ in 0..10 {
+            rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        }
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
         task_pool.stop().unwrap();
     }
 
@@ -394,7 +443,7 @@ mod test {
         impl ContextFactory<TestContext> for TestContextFactory {
             fn create(&self) -> TestContext {
                 TestContext {
-                    counter: self.counter.clone(),
+                    counter: Arc::clone(&self.counter),
                     tx: self.tx.clone(),
                 }
             }
@@ -404,7 +453,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_with_contexts");
@@ -446,7 +495,7 @@ mod test {
         impl ContextFactory<TestContext> for TestContextFactory {
             fn create(&self) -> TestContext {
                 TestContext {
-                    counter: self.counter.clone(),
+                    counter: Arc::clone(&self.counter),
                     tx: self.tx.clone(),
                 }
             }
@@ -456,7 +505,7 @@ mod test {
 
         let f = TestContextFactory {
             counter: Arc::new(AtomicIsize::new(0)),
-            tx: tx,
+            tx,
         };
         let ctx = f.create();
         let name = thd_name!("test_tasks_tick");

@@ -54,7 +54,7 @@ impl Lock {
     /// Creates a lock.
     pub fn new(required_slots: Vec<usize>) -> Lock {
         Lock {
-            required_slots: required_slots,
+            required_slots,
             owned_count: 0,
         }
     }
@@ -114,12 +114,14 @@ impl Latches {
 
             let front = latch.waiting.front().cloned();
             match front {
-                Some(cid) => if cid == who {
-                    acquired_count += 1;
-                } else {
-                    latch.waiting.push_back(who);
-                    break;
-                },
+                Some(cid) => {
+                    if cid == who {
+                        acquired_count += 1;
+                    } else {
+                        latch.waiting.push_back(who);
+                        break;
+                    }
+                }
                 None => {
                     latch.waiting.push_back(who);
                     acquired_count += 1;
@@ -232,6 +234,5 @@ mod tests {
         // finally c acquire lock success
         acquired_c = latches.acquire(&mut lock_c, cid_c);
         assert_eq!(acquired_c, true);
-
     }
 }

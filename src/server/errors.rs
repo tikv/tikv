@@ -12,27 +12,27 @@
 // limitations under the License.
 
 use std::error;
-use std::result;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
+use std::result;
 
+use crate::grpc::Error as GrpcError;
 use futures::Canceled;
+use hyper::Error as HttpError;
 use protobuf::ProtobufError;
-use grpc::Error as GrpcError;
 
-use util::codec::Error as CodecError;
-use util::worker::Stopped;
-use raftstore::Error as RaftServerError;
-use storage::engine::Error as EngineError;
-use storage::Error as StorageError;
-use pd::Error as PdError;
 use super::snap::Task as SnapTask;
-use coprocessor::EndPointTask;
+use crate::pd::Error as PdError;
+use crate::raftstore::Error as RaftServerError;
+use crate::storage::engine::Error as EngineError;
+use crate::storage::Error as StorageError;
+use crate::util::codec::Error as CodecError;
+use crate::util::worker::ScheduleError;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -92,11 +92,7 @@ quick_error!{
             display("{:?}", err)
             description(err.description())
         }
-        SnapWorkerStopped(err: Stopped<SnapTask>) {
-            from()
-            display("{:?}", err)
-        }
-        EndPointStopped(err: Stopped<EndPointTask>) {
+        SnapWorkerStopped(err: ScheduleError<SnapTask>) {
             from()
             display("{:?}", err)
         }
@@ -109,8 +105,13 @@ quick_error!{
             display("{:?}", err)
             description(err.description())
         }
+        Http(err: HttpError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
     }
 }
-
 
 pub type Result<T> = result::Result<T, Error>;

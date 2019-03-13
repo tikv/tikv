@@ -13,9 +13,9 @@
 
 use std::mem;
 
-use super::Json;
-use super::path_expr::{PathExpression, PathLeg};
 use super::super::Result;
+use super::path_expr::{PathExpression, PathLeg};
+use super::Json;
 
 /// `ModifyType` is for modify a JSON.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,9 +105,9 @@ impl Json {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
     use super::super::path_expr::parse_json_path_expr;
+    use super::*;
 
     #[test]
     fn test_json_modify() {
@@ -138,7 +138,6 @@ mod test {
                 r#"{"a": [3, 4]}"#,
                 true,
             ),
-
             (
                 r#"{"a": [3]}"#,
                 "$[0]",
@@ -147,7 +146,6 @@ mod test {
                 r#"4"#,
                 true,
             ),
-
             (
                 r#"{"a": [3]}"#,
                 "$[1]",
@@ -156,7 +154,6 @@ mod test {
                 r#"[{"a": [3]}, 4]"#,
                 true,
             ),
-
             // Nothing changed because the path is empty and we want to insert.
             (r#"{}"#, "$", r#"1"#, ModifyType::Insert, r#"{}"#, true),
             // Nothing changed because the path without last leg doesn't exist.
@@ -195,7 +192,6 @@ mod test {
                 r#"{"a": [3, 4]}"#,
                 true,
             ),
-
             // Bad path expression.
             (r#"null"#, "$.*", r#"{}"#, ModifyType::Set, r#"null"#, false),
             (

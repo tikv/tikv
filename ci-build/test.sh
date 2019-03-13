@@ -26,24 +26,18 @@ fi
 
 trap 'kill $(jobs -p) &> /dev/null || true' EXIT
 
-if [[ "$ENABLE_FEATURES" = "" ]]; then
-    export ENABLE_FEATURES=dev
-fi
 export LOG_FILE=tests.log
 if [[ "$TRAVIS" = "true" ]]; then
     export RUST_TEST_THREADS=2
 fi
 export RUSTFLAGS=-Dwarnings
 
-if [[ `uname` == "Linux" ]]; then
-    export EXTRA_CARGO_ARGS="-j 2"
-fi
+make clippy || panic "\e[35mplease fix the errors!!!\e[0m"
 
 if [[ "$SKIP_TESTS" != "true" ]]; then
     make test 2>&1 | tee tests.out
 else
-    export EXTRA_CARGO_ARGS="$EXTRA_CARGO_ARGS --no-run"
-    make test
+    EXTRA_CARGO_ARGS="--no-run" make test
     exit $?
 fi
 status=$?

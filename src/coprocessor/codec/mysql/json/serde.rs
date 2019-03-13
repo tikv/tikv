@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::ser::{Serialize, SerializeMap, SerializeTuple, Serializer};
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::ser::{Serialize, SerializeMap, SerializeTuple, Serializer};
 use serde_json;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::{str, f64};
 use std::str::FromStr;
+use std::{f64, str};
 
-use coprocessor::codec::Error;
 use super::Json;
+use crate::coprocessor::codec::Error;
 
 impl Json {
     pub fn to_string(&self) -> String {
@@ -150,7 +150,7 @@ impl<'de> Deserialize<'de> for Json {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

@@ -31,279 +31,126 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
-use std::fmt::{self, Debug, Formatter};
-use std::sync::mpsc::Receiver;
-use std::time::Duration;
-use std::thread;
-use std::hash::{Hash, Hasher};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::u64;
-use std::mem;
 
+use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
-use storage::{Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-              Statistics, StatisticsSummary, StorageCb};
-use storage::mvcc::{Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, WriteType,
-                    MAX_TXN_WRITE_SIZE};
-use storage::{Key, KvPair, MvccInfo, Value, CMD_TAG_GC};
-use storage::engine::{self, Callback as EngineCallback, CbContext, Error as EngineError, Modify,
-                      Result as EngineResult};
-use raftstore::store::engine::IterOption;
-use util::transport::{Error as TransportError, SyncSendCh};
-use util::threadpool::{Context as ThreadContext, ThreadPool, ThreadPoolBuilder};
-use util::time::SlowTimer;
-use util::collections::HashMap;
+use crate::storage::engine::Result as EngineResult;
+use crate::storage::Key;
+use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
+use crate::util::worker::{self, Runnable};
 
-use super::Result;
-use super::Error;
-use super::store::SnapshotStore;
-use super::latch::{Latches, Lock};
 use super::super::metrics::*;
+use super::latch::{Latches, Lock};
+use super::process::{
+    execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
+};
+use super::Error;
 
-// TODO: make it configurable.
-pub const GC_BATCH_SIZE: usize = 512;
-
-// To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
-// The write batch will be around 32KB if we scan 256 keys each time.
-pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
-
-/// Process result of a command.
-pub enum ProcessResult {
-    Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MultiKvpairs { pairs: Vec<StorageResult<KvPair>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Value { value: Option<Value> },
-    Locks { locks: Vec<LockInfo> },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
-}
-
-type SnapshotResult = (Vec<u64>, CbContext, EngineResult<Box<Snapshot>>);
+pub const CMD_BATCH_SIZE: usize = 256;
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
     Quit,
-    RawCmd { cmd: Command, cb: StorageCb },
-    RetryGetSnapshots(Vec<(Context, Vec<u64>)>),
-    SnapshotFinished {
-        cids: Vec<u64>,
-        cb_ctx: CbContext,
-        snapshot: EngineResult<Box<Snapshot>>,
-    },
-    BatchSnapshotFinished { batch: Vec<SnapshotResult> },
-    ReadFinished { cid: u64, pr: ProcessResult },
-    WritePrepareFinished {
-        cid: u64,
+    RawCmd {
         cmd: Command,
-        pr: ProcessResult,
-        to_be_write: Vec<Modify>,
-        rows: usize,
+        cb: StorageCb,
     },
-    WritePrepareFailed { cid: u64, err: Error },
+    ReadFinished {
+        cid: u64,
+        pr: ProcessResult,
+        tag: &'static str,
+    },
     WriteFinished {
         cid: u64,
         pr: ProcessResult,
-        cb_ctx: CbContext,
         result: EngineResult<()>,
+        tag: &'static str,
+    },
+    FinishedWithErr {
+        cid: u64,
+        err: Error,
+        tag: &'static str,
     },
 }
 
 /// Debug for messages.
 impl Debug for Msg {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+/// Display for messages.
+impl Display for Msg {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
-            Msg::RetryGetSnapshots(ref tasks) => write!(f, "RetryGetSnapshots {:?}", tasks),
-            Msg::SnapshotFinished { ref cids, .. } => {
-                write!(f, "SnapshotFinished [cids={:?}]", cids)
-            }
-            Msg::BatchSnapshotFinished { ref batch } => {
-                let ids: Vec<&Vec<_>> = batch.iter().map(|&(ref ids, _, _)| ids).collect();
-                write!(f, "BatchSnapshotFinished cids: {:?}", ids)
-            }
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
-            Msg::WritePrepareFinished { cid, ref cmd, .. } => {
-                write!(f, "WritePrepareFinished [cid={}, cmd={:?}]", cid, cmd)
-            }
-            Msg::WritePrepareFailed { cid, ref err } => {
-                write!(f, "WritePrepareFailed [cid={}, err={:?}]", cid, err)
-            }
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
+            Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
         }
     }
 }
 
-/// Delivers the process result of a command to the storage callback.
-fn execute_callback(callback: StorageCb, pr: ProcessResult) {
-    match callback {
-        StorageCb::Boolean(cb) => match pr {
-            ProcessResult::Res => cb(Ok(())),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::Booleans(cb) => match pr {
-            ProcessResult::MultiRes { results } => cb(Ok(results)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::SingleValue(cb) => match pr {
-            ProcessResult::Value { value } => cb(Ok(value)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::KvPairs(cb) => match pr {
-            ProcessResult::MultiKvpairs { pairs } => cb(Ok(pairs)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::MvccInfoByKey(cb) => match pr {
-            ProcessResult::MvccKey { mvcc } => cb(Ok(mvcc)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::MvccInfoByStartTs(cb) => match pr {
-            ProcessResult::MvccStartTs { mvcc } => cb(Ok(mvcc)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-        StorageCb::Locks(cb) => match pr {
-            ProcessResult::Locks { locks } => cb(Ok(locks)),
-            ProcessResult::Failed { err } => cb(Err(err)),
-            _ => panic!("process result mismatch"),
-        },
-    }
-}
-
-/// Context for a running command.
-pub struct RunningCtx {
-    cid: u64,
-    cmd: Option<Command>,
-    write_bytes: usize,
+// It stores context of a task.
+struct TaskContext {
     lock: Lock,
-    callback: Option<StorageCb>,
+    cb: StorageCb,
+    write_bytes: usize,
     tag: &'static str,
-    ts: u64,
-    region_id: u64,
+    // How long it waits on latches.
     latch_timer: Option<HistogramTimer>,
-    _timer: HistogramTimer,
-    slow_timer: SlowTimer,
+    // Total duration of a command.
+    _cmd_timer: HistogramTimer,
 }
 
-impl RunningCtx {
-    /// Creates a context for a running command.
-    pub fn new(cid: u64, cmd: Command, lock: Lock, cb: StorageCb) -> RunningCtx {
-        let tag = cmd.tag();
-        let ts = cmd.ts();
-        let region_id = cmd.get_context().get_region_id();
-        let write_bytes = cmd.write_bytes();
-        RunningCtx {
-            cid: cid,
-            cmd: Some(cmd),
-            write_bytes: write_bytes,
-            lock: lock,
-            callback: Some(cb),
-            tag: tag,
-            ts: ts,
-            region_id: region_id,
+impl TaskContext {
+    fn new(lock: Lock, cb: StorageCb, cmd: &Command) -> TaskContext {
+        let write_bytes = if lock.is_write_lock() {
+            cmd.write_bytes()
+        } else {
+            0
+        };
+
+        TaskContext {
+            lock,
+            cb,
+            write_bytes,
+            tag: cmd.tag(),
             latch_timer: Some(
                 SCHED_LATCH_HISTOGRAM_VEC
-                    .with_label_values(&[tag])
+                    .with_label_values(&[cmd.tag()])
                     .start_coarse_timer(),
             ),
-            _timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[tag])
+            _cmd_timer: SCHED_HISTOGRAM_VEC
+                .with_label_values(&[cmd.tag()])
                 .start_coarse_timer(),
-            slow_timer: SlowTimer::new(),
         }
     }
-}
 
-impl Drop for RunningCtx {
-    fn drop(&mut self) {
-        slow_log!(
-            self.slow_timer,
-            "[region {}] scheduler handle command: {}, ts: {}",
-            self.region_id,
-            self.tag,
-            self.ts
-        );
+    fn on_schedule(&mut self) {
+        self.latch_timer.take();
     }
 }
-
-/// Creates a callback to receive async results of write prepare from the storage engine.
-fn make_engine_cb(
-    cmd: &'static str,
-    cid: u64,
-    pr: ProcessResult,
-    ch: SyncSendCh<Msg>,
-    rows: usize,
-) -> EngineCallback<()> {
-    Box::new(move |(cb_ctx, result)| {
-        match ch.send(Msg::WriteFinished {
-            cid: cid,
-            pr: pr,
-            cb_ctx: cb_ctx,
-            result: result,
-        }) {
-            Ok(_) => {
-                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                    .with_label_values(&[cmd])
-                    .observe(rows as f64);
-            }
-            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-            Err(e) => {
-                panic!(
-                    "send write finished to scheduler failed cid={}, err:{:?}",
-                    cid,
-                    e
-                );
-            }
-        }
-    })
-}
-
-#[derive(Clone)]
-struct HashableContext(Context);
-
-impl PartialEq for HashableContext {
-    fn eq(&self, other: &HashableContext) -> bool {
-        // k1 == k2 ⇒ hash(k1) == hash(k2)
-        self.0.get_region_id() == other.0.get_region_id() &&
-            self.0.get_region_epoch().get_version() == other.0.get_region_epoch().get_version() &&
-            self.0.get_peer().get_id() == other.0.get_peer().get_id()
-    }
-}
-
-impl Hash for HashableContext {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let key = {
-            let ctx = &self.0;
-            (
-                ctx.get_region_id(),
-                ctx.get_region_epoch().get_version(),
-                ctx.get_peer().get_id(),
-            )
-        };
-        Hash::hash(&key, state);
-    }
-}
-
-impl Eq for HashableContext {}
 
 /// Scheduler which schedules the execution of `storage::Command`s.
-pub struct Scheduler {
-    engine: Box<Engine>,
+pub struct Scheduler<E: Engine> {
+    engine: E,
 
-    // cid -> RunningCtx
-    cmd_ctxs: HashMap<u64, RunningCtx>,
-    // Context -> cids
-    grouped_cmds: Option<HashMap<HashableContext, Vec<u64>>>,
+    /// cid -> Task
+    pending_tasks: HashMap<u64, Task>,
 
-    schedch: SyncSendCh<Msg>,
+    // cid -> TaskContext
+    task_contexts: HashMap<u64, TaskContext>,
+
+    // actual scheduler to schedule the execution of commands
+    scheduler: worker::Scheduler<Msg>,
 
     // cmd id generator
     id_alloc: u64,
@@ -312,854 +159,145 @@ pub struct Scheduler {
     latches: Latches,
 
     // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
+    /// speed of recent write requests.
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool<ScheContext>,
+    worker_pool: ThreadPool<SchedContext<E>>,
 
     // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<ScheContext>,
-
-    has_gc_command: bool,
+    high_priority_pool: ThreadPool<SchedContext<E>>,
 
     // used to control write flow
     running_write_bytes: usize,
 }
 
-// Make clippy happy.
-type MultipleReturnValue = (Option<MvccLock>, Vec<(u64, Write)>, Vec<(u64, bool, Value)>);
-
-fn find_mvcc_infos_by_key(
-    reader: &mut MvccReader,
-    key: &Key,
-    mut ts: u64,
-) -> Result<MultipleReturnValue> {
-    let mut writes = vec![];
-    let mut values = vec![];
-    let lock = reader.load_lock(key)?;
-    loop {
-        let opt = reader.seek_write(key, ts)?;
-        let short_value: Option<Value>;
-        match opt {
-            Some((commit_ts, mut write)) => {
-                ts = commit_ts - 1;
-                let write_type = write.write_type;
-                short_value = write.short_value.take();
-                writes.push((commit_ts, write));
-                if write_type != WriteType::Put {
-                    continue;
-                }
-            }
-            None => break,
-        };
-        let write = &writes[writes.len() - 1].1;
-        if let Some(v) = short_value {
-            values.push((write.start_ts, true, v));
-        }
-    }
-    for (ts, v) in reader.scan_values_in_default(key)? {
-        values.push((ts, false, v));
-    }
-    Ok((lock, writes, values))
-}
-
-impl Scheduler {
+impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
-        engine: Box<Engine>,
-        schedch: SyncSendCh<Msg>,
+        engine: E,
+        scheduler: worker::Scheduler<Msg>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
-    ) -> Scheduler {
+    ) -> Self {
+        let factory = SchedContextFactory::new(engine.clone());
         Scheduler {
-            engine: engine,
-            cmd_ctxs: Default::default(),
-            grouped_cmds: Some(HashMap::with_capacity_and_hasher(
-                CMD_BATCH_SIZE,
-                Default::default(),
-            )),
-            schedch: schedch,
+            engine,
+            // TODO: GC these two maps.
+            pending_tasks: Default::default(),
+            task_contexts: Default::default(),
+            scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
-            sched_pending_write_threshold: sched_pending_write_threshold,
-            worker_pool: ThreadPoolBuilder::with_default_factory(thd_name!("sched-worker-pool"))
+            sched_pending_write_threshold,
+            worker_pool: ThreadPoolBuilder::new(thd_name!("sched-worker-pool"), factory.clone())
                 .thread_count(worker_pool_size)
                 .build(),
-            high_priority_pool: ThreadPoolBuilder::with_default_factory(
-                thd_name!("sched-high-pri-pool"),
-            ).build(),
-            has_gc_command: false,
+            high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
+                .build(),
             running_write_bytes: 0,
         }
     }
-}
 
-/// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
-/// event loop.
-fn process_read(
-    cid: u64,
-    mut cmd: Command,
-    ch: SyncSendCh<Msg>,
-    snapshot: Box<Snapshot>,
-) -> Statistics {
-    debug!("process read cmd(cid={}) in worker pool.", cid);
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "read"])
-        .inc();
-    let tag = cmd.tag();
-
-    let mut statistics = Statistics::default();
-
-    let pr = match cmd {
-        // Gets from the snapshot.
-        Command::Get {
-            ref ctx,
-            ref key,
-            start_ts,
-            ..
-        } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .observe(1f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.get(key, &mut statistics);
-            match res {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        // Batch gets from the snapshot.
-        Command::BatchGet {
-            ref ctx,
-            ref keys,
-            start_ts,
-            ..
-        } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .observe(keys.len() as f64);
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store.batch_get(keys, &mut statistics);
-            match res {
-                Ok(results) => {
-                    let mut res = vec![];
-                    for (k, v) in keys.into_iter().zip(results) {
-                        match v {
-                            Ok(Some(x)) => res.push(Ok((k.raw().unwrap(), x))),
-                            Ok(None) => {}
-                            Err(e) => res.push(Err(StorageError::from(e))),
-                        }
-                    }
-                    ProcessResult::MultiKvpairs { pairs: res }
-                }
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        // Scans a range starting with `start_key` up to `limit` rows from the snapshot.
-        Command::Scan {
-            ref ctx,
-            ref start_key,
-            limit,
-            start_ts,
-            ref options,
-            ..
-        } => {
-            let snap_store = SnapshotStore::new(
-                snapshot,
-                start_ts,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let res = snap_store
-                .scanner(ScanMode::Forward, options.key_only, None)
-                .and_then(|mut scanner| {
-                    let res = scanner.scan(start_key.clone(), limit);
-                    statistics.add(scanner.get_statistics());
-                    res
-                })
-                .and_then(|mut results| {
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                        .with_label_values(&[tag])
-                        .observe(results.len() as f64);
-                    Ok(
-                        results
-                            .drain(..)
-                            .map(|x| x.map_err(StorageError::from))
-                            .collect(),
-                    )
-                });
-
-            match res {
-                Ok(pairs) => ProcessResult::MultiKvpairs { pairs: pairs },
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
-        Command::MvccByKey { ref ctx, ref key } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = match find_mvcc_infos_by_key(&mut reader, key, u64::MAX) {
-                Ok((lock, writes, values)) => ProcessResult::MvccKey {
-                    mvcc: MvccInfo {
-                        lock: lock,
-                        writes: writes,
-                        values: values,
-                    },
-                },
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            };
-            statistics.add(reader.get_statistics());
-            res
-        }
-        Command::MvccByStartTs { ref ctx, start_ts } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = match reader.seek_ts(start_ts).map_err(StorageError::from) {
-                Err(e) => ProcessResult::Failed { err: e.into() },
-                Ok(opt) => match opt {
-                    Some(key) => match find_mvcc_infos_by_key(&mut reader, &key, u64::MAX) {
-                        Ok((lock, writes, values)) => ProcessResult::MvccStartTs {
-                            mvcc: Some((
-                                key,
-                                MvccInfo {
-                                    lock: lock,
-                                    writes: writes,
-                                    values: values,
-                                },
-                            )),
-                        },
-                        Err(e) => ProcessResult::Failed { err: e.into() },
-                    },
-                    None => ProcessResult::MvccStartTs { mvcc: None },
-                },
-            };
-            statistics.add(reader.get_statistics());
-            res
-        }
-        // Scans locks with timestamp <= `max_ts`
-        Command::ScanLock {
-            ref ctx, max_ts, ..
-        } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = reader
-                .scan_lock(None, |lock| lock.ts <= max_ts, None)
-                .map_err(Error::from)
-                .and_then(|(v, _)| {
-                    let mut locks = vec![];
-                    for (key, lock) in v {
-                        let mut lock_info = LockInfo::new();
-                        lock_info.set_primary_lock(lock.primary);
-                        lock_info.set_lock_version(lock.ts);
-                        lock_info.set_key(key.raw()?);
-                        locks.push(lock_info);
-                    }
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                        .with_label_values(&[tag])
-                        .observe(locks.len() as f64);
-                    Ok(locks)
-                });
-            statistics.add(reader.get_statistics());
-            match res {
-                Ok(locks) => ProcessResult::Locks { locks: locks },
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
-        Command::ResolveLock {
-            ref ctx,
-            ref mut txn_status,
-            ref mut scan_key,
-            ..
-        } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                ctx.get_isolation_level(),
-            );
-            let res = reader
-                .scan_lock(
-                    scan_key.take(),
-                    |lock| txn_status.contains_key(&lock.ts),
-                    Some(RESOLVE_LOCK_BATCH_SIZE),
-                )
-                .map_err(Error::from)
-                .and_then(|(v, next_scan_key)| {
-                    let key_locks: Vec<_> = v.into_iter().map(|x| x).collect();
-                    KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                        .with_label_values(&[tag])
-                        .observe(key_locks.len() as f64);
-                    if key_locks.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(Command::ResolveLock {
-                            ctx: ctx.clone(),
-                            txn_status: mem::replace(txn_status, Default::default()),
-                            scan_key: next_scan_key,
-                            key_locks: key_locks,
-                        }))
-                    }
-                });
-            statistics.add(reader.get_statistics());
-            match res {
-                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
-                Ok(None) => ProcessResult::Res,
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
-        // Collects garbage.
-        Command::Gc {
-            ref ctx,
-            safe_point,
-            ratio_threshold,
-            ref mut scan_key,
-            ..
-        } => {
-            let mut reader = MvccReader::new(
-                snapshot,
-                Some(ScanMode::Forward),
-                !ctx.get_not_fill_cache(),
-                None,
-                ctx.get_isolation_level(),
-            );
-            // scan_key is used as start_key here,and Range start gc with scan_key=none.
-            let is_range_start_gc = scan_key.is_none();
-            // This is an optimization to skip gc before scanning all data.
-            let need_gc = if is_range_start_gc {
-                reader.need_gc(safe_point, ratio_threshold)
-            } else {
-                true
-            };
-            let res = if !need_gc {
-                KV_COMMAND_GC_SKIPPED_COUNTER.inc();
-                Ok(None)
-            } else {
-                reader
-                    .scan_keys(scan_key.take(), GC_BATCH_SIZE)
-                    .map_err(Error::from)
-                    .and_then(|(keys, next_start)| {
-                        KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                            .with_label_values(&[tag])
-                            .observe(keys.len() as f64);
-                        if keys.is_empty() {
-                            // empty range
-                            if is_range_start_gc {
-                                KV_COMMAND_GC_EMPTY_RANGE_COUNTER.inc();
-                            }
-                            Ok(None)
-                        } else {
-                            Ok(Some(Command::Gc {
-                                ctx: ctx.clone(),
-                                safe_point: safe_point,
-                                ratio_threshold: ratio_threshold,
-                                scan_key: next_start,
-                                keys: keys,
-                            }))
-                        }
-                    })
-            };
-            statistics.add(reader.get_statistics());
-            match res {
-                Ok(Some(cmd)) => ProcessResult::NextCommand { cmd: cmd },
-                Ok(None) => ProcessResult::Res,
-                Err(e) => ProcessResult::Failed { err: e.into() },
-            }
-        }
-        Command::RawGet { ref key, .. } => {
-            KV_COMMAND_KEYREAD_HISTOGRAM_VEC
-                .with_label_values(&[tag])
-                .observe(1f64);
-            match snapshot.get(key) {
-                Ok(val) => ProcessResult::Value { value: val },
-                Err(e) => ProcessResult::Failed {
-                    err: StorageError::from(e),
-                },
-            }
-        }
-        Command::RawScan {
-            ref start_key,
-            limit,
-            ..
-        } => match process_rawscan(snapshot, start_key, limit, &mut statistics) {
-            Ok(val) => ProcessResult::MultiKvpairs { pairs: val },
-            Err(e) => ProcessResult::Failed {
-                err: StorageError::from(e),
-            },
-        },
-        Command::Pause { duration, .. } => {
-            thread::sleep(Duration::from_millis(duration));
-            ProcessResult::Res
-        }
-        _ => panic!("unsupported read command"),
-    };
-
-    if let Err(e) = ch.send(Msg::ReadFinished { cid: cid, pr: pr }) {
-        // Todo: if this happens we need to clean up command's context
-        panic!("send read finished failed, cid={}, err={:?}", cid, e);
-    }
-    statistics
-}
-
-fn process_rawscan(
-    snapshot: Box<Snapshot>,
-    start_key: &Key,
-    limit: usize,
-    stats: &mut Statistics,
-) -> Result<Vec<StorageResult<KvPair>>> {
-    let mut cursor = snapshot.iter(IterOption::default(), ScanMode::Forward)?;
-    if !cursor.seek(start_key, &mut stats.data)? {
-        return Ok(vec![]);
-    }
-    let mut pairs = vec![];
-    while cursor.valid() && pairs.len() < limit {
-        pairs.push(Ok((cursor.key().to_owned(), cursor.value().to_owned())));
-        cursor.next(&mut stats.data);
-    }
-    Ok(pairs)
-}
-
-/// Processes a write command within a worker thread, then posts either a `WritePrepareFinished`
-/// message if successful or a `WritePrepareFailed` message back to the event loop.
-fn process_write(
-    cid: u64,
-    cmd: Command,
-    ch: SyncSendCh<Msg>,
-    snapshot: Box<Snapshot>,
-) -> Statistics {
-    SCHED_WORKER_COUNTER_VEC
-        .with_label_values(&[cmd.tag(), "write"])
-        .inc();
-
-    let mut statistics = Statistics::default();
-    if let Err(e) = process_write_impl(cid, cmd, ch.clone(), snapshot, &mut statistics) {
-        if let Err(err) = ch.send(Msg::WritePrepareFailed { cid: cid, err: e }) {
-            // Todo: if this happens, lock will hold for ever
-            panic!(
-                "send WritePrepareFailed message to channel failed. cid={}, err={:?}",
-                cid,
-                err
-            );
-        }
-    }
-    statistics
-}
-
-fn process_write_impl(
-    cid: u64,
-    mut cmd: Command,
-    ch: SyncSendCh<Msg>,
-    snapshot: Box<Snapshot>,
-    statistics: &mut Statistics,
-) -> Result<()> {
-    let (pr, modifies, rows) = match cmd {
-        Command::Prewrite {
-            ref ctx,
-            ref mutations,
-            ref primary,
-            start_ts,
-            ref options,
-            ..
-        } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let mut locks = vec![];
-            let rows = mutations.len();
-            for m in mutations {
-                match txn.prewrite(m.clone(), primary, options) {
-                    Ok(_) => {}
-                    e @ Err(MvccError::KeyIsLocked { .. }) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
-                    }
-                    Err(e) => return Err(Error::from(e)),
-                }
-            }
-
-            statistics.add(txn.get_statistics());
-            if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
-                let modifies = txn.into_modifies();
-                (pr, modifies, rows)
-            } else {
-                // Skip write stage if some keys are locked.
-                let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0)
-            }
-        }
-        Command::Commit {
-            ref ctx,
-            ref keys,
-            lock_ts,
-            commit_ts,
-            ..
-        } => {
-            if commit_ts <= lock_ts {
-                return Err(Error::InvalidTxnTso {
-                    start_ts: lock_ts,
-                    commit_ts: commit_ts,
-                });
-            }
-            let mut txn = MvccTxn::new(
-                snapshot,
-                lock_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let rows = keys.len();
-            for k in keys {
-                txn.commit(k, commit_ts)?;
-            }
-
-            statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows)
-        }
-        Command::Cleanup {
-            ref ctx,
-            ref key,
-            start_ts,
-            ..
-        } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            txn.rollback(key)?;
-
-            statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.into_modifies(), 1)
-        }
-        Command::Rollback {
-            ref ctx,
-            ref keys,
-            start_ts,
-            ..
-        } => {
-            let mut txn = MvccTxn::new(
-                snapshot,
-                start_ts,
-                None,
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let rows = keys.len();
-            for k in keys {
-                txn.rollback(k)?;
-            }
-
-            statistics.add(txn.get_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows)
-        }
-        Command::ResolveLock {
-            ref ctx,
-            ref mut txn_status,
-            ref mut scan_key,
-            ref key_locks,
-        } => {
-            let mut scan_key = scan_key.take();
-            let mut modifies: Vec<Modify> = vec![];
-            let mut write_size = 0;
-            let rows = key_locks.len();
-            for &(ref current_key, ref current_lock) in key_locks {
-                let mut txn = MvccTxn::new(
-                    snapshot.clone(),
-                    current_lock.ts,
-                    None,
-                    ctx.get_isolation_level(),
-                    !ctx.get_not_fill_cache(),
-                );
-                let status = txn_status.get(&current_lock.ts);
-                let commit_ts = match status {
-                    Some(ts) => *ts,
-                    None => panic!("txn status not found."),
-                };
-                if commit_ts > 0 {
-                    if current_lock.ts >= commit_ts {
-                        return Err(Error::InvalidTxnTso {
-                            start_ts: current_lock.ts,
-                            commit_ts: commit_ts,
-                        });
-                    }
-                    txn.commit(current_key, commit_ts)?;
-                } else {
-                    txn.rollback(current_key)?;
-                }
-                write_size += txn.write_size();
-
-                statistics.add(txn.get_statistics());
-                modifies.append(&mut txn.into_modifies());
-
-                if write_size >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(current_key.to_owned());
-                    break;
-                }
-            }
-            let pr = if scan_key.is_none() {
-                ProcessResult::Res
-            } else {
-                ProcessResult::NextCommand {
-                    cmd: Command::ResolveLock {
-                        ctx: ctx.clone(),
-                        txn_status: mem::replace(txn_status, Default::default()),
-                        scan_key: scan_key.take(),
-                        key_locks: vec![],
-                    },
-                }
-            };
-            (pr, modifies, rows)
-        }
-        Command::Gc {
-            ref ctx,
-            safe_point,
-            ratio_threshold,
-            ref mut scan_key,
-            ref keys,
-        } => {
-            let mut scan_key = scan_key.take();
-            let mut txn = MvccTxn::new(
-                snapshot,
-                0,
-                Some(ScanMode::Forward),
-                ctx.get_isolation_level(),
-                !ctx.get_not_fill_cache(),
-            );
-            let rows = keys.len();
-            for k in keys {
-                txn.gc(k, safe_point)?;
-                if txn.write_size() >= MAX_TXN_WRITE_SIZE {
-                    scan_key = Some(k.to_owned());
-                    break;
-                }
-            }
-
-            statistics.add(txn.get_statistics());
-            let pr = if scan_key.is_none() {
-                ProcessResult::Res
-            } else {
-                ProcessResult::NextCommand {
-                    cmd: Command::Gc {
-                        ctx: ctx.clone(),
-                        safe_point: safe_point,
-                        ratio_threshold: ratio_threshold,
-                        scan_key: scan_key.take(),
-                        keys: vec![],
-                    },
-                }
-            };
-            (pr, txn.into_modifies(), rows)
-        }
-        _ => panic!("unsupported write command"),
-    };
-
-    box_try!(ch.send(Msg::WritePrepareFinished {
-        cid: cid,
-        cmd: cmd,
-        pr: pr,
-        to_be_write: modifies,
-        rows: rows,
-    }));
-
-    Ok(())
-}
-
-#[derive(Default)]
-struct ScheContext {
-    stats: HashMap<&'static str, StatisticsSummary>,
-}
-
-impl ScheContext {
-    fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
-        let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
-        entry.add_statistics(stat);
-    }
-}
-
-impl ThreadContext for ScheContext {
-    fn on_tick(&mut self) {
-        for (cmd, stat) in self.stats.drain() {
-            for (cf, details) in stat.stat.details() {
-                for (tag, count) in details {
-                    KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as f64)
-                        .unwrap();
-                }
-            }
-        }
-    }
-}
-
-impl Scheduler {
     /// Generates the next command ID.
     fn gen_id(&mut self) -> u64 {
         self.id_alloc += 1;
         self.id_alloc
     }
 
-    fn insert_ctx(&mut self, ctx: RunningCtx) {
-        if ctx.lock.is_write_lock() {
-            self.running_write_bytes += ctx.write_bytes;
-        }
-        if ctx.tag == CMD_TAG_GC {
-            self.has_gc_command = true;
-        }
-        let cid = ctx.cid;
-        if self.cmd_ctxs.insert(cid, ctx).is_some() {
+    fn dequeue_task(&mut self, cid: u64) -> Task {
+        let task = self.pending_tasks.remove(&cid).unwrap();
+        assert_eq!(task.cid, cid);
+        task
+    }
+
+    fn enqueue_task(&mut self, task: Task, callback: StorageCb) {
+        let cid = task.cid;
+
+        let tctx = {
+            let cmd = task.cmd();
+            let lock = self.gen_lock(cmd);
+            TaskContext::new(lock, callback, cmd)
+        };
+
+        self.running_write_bytes += tctx.write_bytes;
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+
+        if self.pending_tasks.insert(cid, task).is_some() {
             panic!("command cid={} shouldn't exist", cid);
         }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
-    }
-
-    fn remove_ctx(&mut self, cid: u64) -> RunningCtx {
-        let ctx = self.cmd_ctxs.remove(&cid).unwrap();
-        assert_eq!(ctx.cid, cid);
-        if ctx.lock.is_write_lock() {
-            self.running_write_bytes -= ctx.write_bytes;
+        SCHED_CONTEX_GAUGE.set(self.pending_tasks.len() as i64);
+        if self.task_contexts.insert(cid, tctx).is_some() {
+            panic!("TaskContext cid={} shouldn't exist", cid);
         }
-        if ctx.tag == CMD_TAG_GC {
-            self.has_gc_command = false;
-        }
-        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as f64);
-        SCHED_CONTEX_GAUGE.set(self.cmd_ctxs.len() as f64);
-        ctx
     }
 
-    fn get_ctx_tag(&self, cid: u64) -> &'static str {
-        let ctx = &self.cmd_ctxs[&cid];
-        ctx.tag
+    fn dequeue_task_context(&mut self, cid: u64) -> TaskContext {
+        let tctx = self.task_contexts.remove(&cid).unwrap();
+
+        self.running_write_bytes -= tctx.write_bytes;
+        SCHED_WRITING_BYTES_GAUGE.set(self.running_write_bytes as i64);
+        SCHED_CONTEX_GAUGE.set(self.pending_tasks.len() as i64);
+
+        tctx
     }
 
-    fn fetch_worker_pool(&self, priority: CommandPri) -> &ThreadPool<ScheContext> {
-        match priority {
+    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E> {
+        let pool = match priority {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
-        }
-    }
-
-    /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(&mut self, cid: u64, cb_ctx: CbContext, snapshot: Box<Snapshot>) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "process"])
-            .inc();
-        debug!(
-            "process cmd with snapshot, cid={}, cb_ctx={:?}",
-            cid,
-            cb_ctx
-        );
-        let mut cmd = {
-            let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
-            assert_eq!(ctx.cid, cid);
-            ctx.cmd.take().unwrap()
         };
-        if let Some(term) = cb_ctx.term {
-            cmd.mut_context().set_term(term);
-        }
-        let ch = self.schedch.clone();
-        let readcmd = cmd.readonly();
-        let worker_pool = self.fetch_worker_pool(cmd.priority());
-        let tag = cmd.tag();
-        if readcmd {
-            worker_pool.execute(move |ctx: &mut ScheContext| {
-                let s = process_read(cid, cmd, ch, snapshot);
-                ctx.add_statistics(tag, &s);
-            });
-        } else {
-            worker_pool.execute(move |ctx: &mut ScheContext| {
-                let s = process_write(cid, cmd, ch, snapshot);
-                ctx.add_statistics(tag, &s);
-            });
-        }
-    }
-
-    /// Calls the callback with an error.
-    fn finish_with_err(&mut self, cid: u64, err: Error) {
-        debug!("command cid={}, finished with error", cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "error"])
-            .inc();
-
-        let mut ctx = self.remove_ctx(cid);
-        let cb = ctx.callback.take().unwrap();
-        let pr = ProcessResult::Failed {
-            err: StorageError::from(err),
-        };
-        execute_callback(cb, pr);
-
-        self.release_lock(&ctx.lock, cid);
-    }
-
-    /// Extracts the context of a command.
-    fn extract_context(&self, cid: u64) -> &Context {
-        let ctx = &self.cmd_ctxs[&cid];
-        assert_eq!(ctx.cid, cid);
-        ctx.cmd.as_ref().unwrap().get_context()
+        let pool_scheduler = pool.scheduler();
+        let scheduler = self.scheduler.clone();
+        Executor::new(scheduler, pool_scheduler)
     }
 
     /// Event handler for new command.
     ///
     /// This method will try to acquire all the necessary latches. If all the necessary latches are
-    /// acquired,  the method initiates a get snapshot operation for furthur processing; otherwise,
-    /// the method adds the command to the waiting queue(s).   The command will be handled later in
-    /// `lock_and_register_get_snapshot` when its turn comes.
+    /// acquired, the method initiates a get snapshot operation for furthur processing; otherwise,
+    /// the method adds the command to the waiting queue(s). The command will be handled later in
+    /// `try_to_wake_up` when its turn comes.
     ///
     /// Note that once a command is ready to execute, the snapshot is always up-to-date during the
     /// execution because 1) all the conflicting commands (if any) must be in the waiting queues;
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
+        let cid = self.gen_id();
+        debug!("received new command"; "cid" => cid, "cmd" => %cmd);
+
+        let tag = cmd.tag();
+        let priority_tag = cmd.priority_tag();
+        let task = Task::new(cid, cmd);
+        // TODO: enqueue_task should return an reference of the tctx.
+        self.enqueue_task(task, callback);
+        self.try_to_wake_up(cid);
+
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[cmd.tag(), "new"])
+            .with_label_values(&[tag, "new"])
             .inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC
-            .with_label_values(&[cmd.priority_tag()])
+            .with_label_values(&[priority_tag])
             .inc();
-        let cid = self.gen_id();
-        debug!("received new command, cid={}, cmd={}", cid, cmd);
-        let lock = gen_command_lock(&self.latches, &cmd);
-        let ctx = RunningCtx::new(cid, cmd, lock, callback);
-        self.insert_ctx(ctx);
-        self.lock_and_register_get_snapshot(cid);
+    }
+
+    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
+    /// the method initiates a get snapshot operation for furthur processing.
+    fn try_to_wake_up(&mut self, cid: u64) {
+        let wake = if let Some(tctx) = self.acquire_lock(cid) {
+            tctx.on_schedule();
+            true
+        } else {
+            false
+        };
+        if wake {
+            self.get_snapshot(cid);
+        }
     }
 
     fn too_busy(&self) -> bool {
+        fail_point!("txn_scheduler_busy", |_| true);
         self.running_write_bytes >= self.sched_pending_write_threshold
     }
 
@@ -1177,373 +315,168 @@ impl Scheduler {
             );
             return;
         }
-        // Allow 1 GC command at the same time.
-        if cmd.tag() == CMD_TAG_GC && self.has_gc_command {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag()])
-                .inc();
-            execute_callback(
-                callback,
-                ProcessResult::Failed {
-                    err: StorageError::SchedTooBusy,
-                },
-            );
-            return;
-
-        }
         self.schedule_command(cmd, callback);
-    }
-
-    /// Tries to acquire all the required latches for a command.
-    ///
-    /// Returns true if successful; returns false otherwise.
-    fn acquire_lock(&mut self, cid: u64) -> bool {
-        let ctx = &mut self.cmd_ctxs.get_mut(&cid).unwrap();
-        assert_eq!(ctx.cid, cid);
-        let ok = self.latches.acquire(&mut ctx.lock, cid);
-        if ok {
-            ctx.latch_timer.take();
-        }
-        ok
     }
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&mut self, ctx: &Context, cids: Vec<u64>) {
-        for cid in &cids {
+    fn get_snapshot(&mut self, cid: u64) {
+        let task = self.dequeue_task(cid);
+        let tag = task.tag;
+        let ctx = task.context().clone();
+        let executor = self.fetch_executor(task.priority());
+
+        let cb = box move |(cb_ctx, snapshot)| {
+            executor.execute(cb_ctx, snapshot, task);
+        };
+        if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
+                .with_label_values(&[tag, "async_snapshot_err"])
+                .inc();
+
+            error!("engine async_snapshot failed"; "err" => ?e);
+            self.finish_with_err(cid, e.into());
+        } else {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[tag, "snapshot"])
                 .inc();
         }
-        let cids1 = cids.clone();
-        let ch = self.schedch.clone();
-        let cb = box move |(cb_ctx, snapshot)| match ch.send(Msg::SnapshotFinished {
-            cids: cids1,
-            cb_ctx: cb_ctx,
-            snapshot: snapshot,
-        }) {
-            Ok(_) => {}
-            e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-            Err(e) => panic!("send SnapshotFinish failed, err {:?}", e),
+    }
+
+    /// Calls the callback with an error.
+    fn finish_with_err(&mut self, cid: u64, err: Error) {
+        debug!("command finished with error"; "cid" => cid);
+        let tctx = self.dequeue_task_context(cid);
+
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[tctx.tag, "error"])
+            .inc();
+
+        let pr = ProcessResult::Failed {
+            err: StorageError::from(err),
         };
+        execute_callback(tctx.cb, pr);
 
-        if let Err(e) = self.engine.async_snapshot(ctx, cb) {
-            for cid in cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
-                    .inc();
-
-                let e = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot failed for cid={}, error {:?}", cid, e);
-                    EngineError::Other(box_err!("{:?}", e))
-                });
-                self.finish_with_err(cid, Error::from(e));
-            }
-        }
-    }
-
-    /// Initiates an async operation to batch get snapshot from the storage engine, then posts a
-    /// `BatchSnapshotFinished` message back to the event loop when it finishes, also it posts a
-    /// `RetryGetSnapshots` message if there are any `None` responses.
-    fn batch_get_snapshot(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        let mut all_cids = Vec::with_capacity(batch.iter().map(|&(_, ref cids)| cids.len()).sum());
-        for &(_, ref cids) in &batch {
-            for cid in cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot"])
-                    .inc();
-            }
-            all_cids.extend(cids);
-        }
-
-        let batch1 = batch.iter().map(|&(ref ctx, _)| ctx.clone()).collect();
-        let ch = self.schedch.clone();
-        let on_finished: engine::BatchCallback<Box<Snapshot>> = box move |results: Vec<_>| {
-            let mut ready = Vec::with_capacity(results.len());
-            let mut retry = Vec::new();
-            for ((ctx, cids), snapshot) in batch.into_iter().zip(results) {
-                match snapshot {
-                    Some((cb_ctx, snapshot)) => {
-                        ready.push((cids, cb_ctx, snapshot));
-                    }
-                    None => {
-                        retry.push((ctx, cids));
-                    }
-                }
-            }
-            if !ready.is_empty() {
-                match ch.send(Msg::BatchSnapshotFinished { batch: ready }) {
-                    Ok(_) => {}
-                    e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                    Err(e) => {
-                        panic!("send BatchSnapshotFinish failed err {:?}", e);
-                    }
-                }
-            }
-            if !retry.is_empty() {
-                BATCH_COMMANDS
-                    .with_label_values(&["retry"])
-                    .observe(retry.len() as f64);
-                match ch.send(Msg::RetryGetSnapshots(retry)) {
-                    Ok(_) => {}
-                    e @ Err(TransportError::Closed) => info!("channel closed, err {:?}", e),
-                    Err(e) => {
-                        panic!("send RetryGetSnapshots failed err {:?}", e);
-                    }
-                }
-            }
-        };
-
-        if let Err(e) = self.engine.async_batch_snapshot(batch1, on_finished) {
-            for cid in all_cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "async_snap_err"])
-                    .inc();
-                let e = e.maybe_clone().unwrap_or_else(|| {
-                    error!("async snapshot failed for cid={}, error {:?}", cid, e);
-                    EngineError::Other(box_err!("{:?}", e))
-                });
-                self.finish_with_err(cid, Error::from(e));
-            }
-        }
-    }
-
-    fn on_retry_get_snapshots(&mut self, batch: Vec<(Context, Vec<u64>)>) {
-        for (ctx, cids) in batch {
-            for cid in &cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(*cid), "snapshot_retry"])
-                    .inc();
-            }
-            self.get_snapshot(&ctx, cids);
-        }
-    }
-
-    /// Event handler for the completion of get snapshot.
-    ///
-    /// Delivers the command along with the snapshot to a worker thread to execute.
-    fn on_snapshot_finished(
-        &mut self,
-        cids: Vec<u64>,
-        cb_ctx: CbContext,
-        snapshot: EngineResult<Box<Snapshot>>,
-    ) {
-        debug!(
-            "receive snapshot finish msg for cids={:?}, cb_ctx={:?}",
-            cids,
-            cb_ctx
-        );
-        match snapshot {
-            Ok(snapshot) => for cid in cids {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[self.get_ctx_tag(cid), "snapshot_ok"])
-                    .inc();
-                self.process_by_worker(cid, cb_ctx.clone(), snapshot.clone());
-            },
-            Err(ref e) => {
-                error!("get snapshot failed for cids={:?}, error {:?}", cids, e);
-                for cid in cids {
-                    SCHED_STAGE_COUNTER_VEC
-                        .with_label_values(&[self.get_ctx_tag(cid), "snapshot_err"])
-                        .inc();
-                    let e = e.maybe_clone()
-                        .unwrap_or_else(|| EngineError::Other(box_err!("{:?}", e)));
-                    self.finish_with_err(cid, Error::from(e));
-                }
-            }
-        }
+        self.release_lock(&tctx.lock, cid);
     }
 
     /// Event handler for the success of read.
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&mut self, cid: u64, pr: ProcessResult) {
-        debug!("read command(cid={}) finished", cid);
-        let mut ctx = self.remove_ctx(cid);
+    fn on_read_finished(&mut self, cid: u64, pr: ProcessResult, tag: &str) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[ctx.tag, "read_finish"])
+            .with_label_values(&[tag, "read_finish"])
             .inc();
-        let cb = ctx.callback.take().unwrap();
+
+        debug!("read command finished"; "cid" => cid);
+        let tctx = self.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[ctx.tag, "next_cmd"])
+                .with_label_values(&[tag, "next_cmd"])
                 .inc();
-            self.schedule_command(cmd, cb);
+            self.schedule_command(cmd, tctx.cb);
         } else {
-            execute_callback(cb, pr);
+            execute_callback(tctx.cb, pr);
         }
 
-        self.release_lock(&ctx.lock, cid);
-    }
-
-    /// Event handler for the failure of write prepare.
-    ///
-    /// Write prepare failure typically means conflicting transactions are detected. Delivers the
-    /// error to the callback, and releases the latches.
-    fn on_write_prepare_failed(&mut self, cid: u64, e: Error) {
-        debug!("write command(cid={}) failed at prewrite.", cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "prepare_write_err"])
-            .inc();
-        self.finish_with_err(cid, e);
-    }
-
-    /// Event handler for the success of write prepare.
-    ///
-    /// Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
-    /// message when it finishes.
-    fn on_write_prepare_finished(
-        &mut self,
-        cid: u64,
-        cmd: Command,
-        pr: ProcessResult,
-        to_be_write: Vec<Modify>,
-        rows: usize,
-    ) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "write"])
-            .inc();
-        if to_be_write.is_empty() {
-            return self.on_write_finished(cid, pr, Ok(()));
-        }
-        let engine_cb = make_engine_cb(cmd.tag(), cid, pr, self.schedch.clone(), rows);
-        if let Err(e) = self.engine
-            .async_write(cmd.get_context(), to_be_write, engine_cb)
-        {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[self.get_ctx_tag(cid), "async_write_err"])
-                .inc();
-            self.finish_with_err(cid, Error::from(e));
-        }
+        self.release_lock(&tctx.lock, cid);
     }
 
     /// Event handler for the success of write.
-    fn on_write_finished(&mut self, cid: u64, pr: ProcessResult, result: EngineResult<()>) {
+    fn on_write_finished(
+        &mut self,
+        cid: u64,
+        pr: ProcessResult,
+        result: EngineResult<()>,
+        tag: &str,
+    ) {
         SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[self.get_ctx_tag(cid), "write_finish"])
+            .with_label_values(&[tag, "write_finish"])
             .inc();
-        debug!("write finished for command, cid={}", cid);
-        let mut ctx = self.remove_ctx(cid);
-        let cb = ctx.callback.take().unwrap();
+
+        debug!("write finished for command"; "cid" => cid);
+        let tctx = self.dequeue_task_context(cid);
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
-                err: ::storage::Error::from(e),
+                err: crate::storage::Error::from(e),
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[ctx.tag, "next_cmd"])
+                .with_label_values(&[tag, "next_cmd"])
                 .inc();
-            self.schedule_command(cmd, cb);
+            self.schedule_command(cmd, tctx.cb);
         } else {
-            execute_callback(cb, pr);
+            execute_callback(tctx.cb, pr);
         }
 
-        self.release_lock(&ctx.lock, cid);
+        self.release_lock(&tctx.lock, cid);
+    }
+
+    /// Generates the lock for a command.
+    ///
+    /// Basically, read-only commands require no latches, write commands require latches hashed
+    /// by the referenced keys.
+    fn gen_lock(&self, cmd: &Command) -> Lock {
+        gen_command_lock(&self.latches, cmd)
+    }
+
+    /// Tries to acquire all the required latches for a command.
+    ///
+    /// Returns `Some(TaskContext)` if successful; returns `None` otherwise.
+    fn acquire_lock(&mut self, cid: u64) -> Option<&mut TaskContext> {
+        let tctx = self.task_contexts.get_mut(&cid).unwrap();
+        if self.latches.acquire(&mut tctx.lock, cid) {
+            Some(tctx)
+        } else {
+            None
+        }
     }
 
     /// Releases all the latches held by a command.
     fn release_lock(&mut self, lock: &Lock, cid: u64) {
         let wakeup_list = self.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.lock_and_register_get_snapshot(wcid);
+            self.try_to_wake_up(wcid);
         }
-    }
-
-    /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
-    /// the method initiates a get snapshot operation for furthur processing.
-    fn lock_and_register_get_snapshot(&mut self, cid: u64) {
-        if self.acquire_lock(cid) {
-            let ctx = self.extract_context(cid).clone();
-            let group = self.grouped_cmds
-                .as_mut()
-                .unwrap()
-                .entry(HashableContext(ctx))
-                .or_insert_with(Vec::new);
-            group.push(cid);
-        }
-    }
-
-    pub fn run(&mut self, receiver: Receiver<Msg>) -> Result<()> {
-        let mut msgs = Vec::with_capacity(CMD_BATCH_SIZE);
-        loop {
-            let msg = box_try!(receiver.recv());
-            msgs.push(msg);
-            while let Ok(msg) = receiver.try_recv() {
-                msgs.push(msg);
-                if msgs.len() >= CMD_BATCH_SIZE {
-                    break;
-                }
-            }
-
-            for msg in msgs.drain(..) {
-                match msg {
-                    Msg::Quit => return self.shutdown(),
-                    Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                    Msg::RetryGetSnapshots(batch) => self.on_retry_get_snapshots(batch),
-                    Msg::SnapshotFinished {
-                        cids,
-                        cb_ctx,
-                        snapshot,
-                    } => self.on_snapshot_finished(cids, cb_ctx, snapshot),
-                    Msg::BatchSnapshotFinished { batch } => for (cids, cb_ctx, snapshot) in batch {
-                        self.on_snapshot_finished(cids, cb_ctx, snapshot)
-                    },
-                    Msg::ReadFinished { cid, pr } => self.on_read_finished(cid, pr),
-                    Msg::WritePrepareFinished {
-                        cid,
-                        cmd,
-                        pr,
-                        to_be_write,
-                        rows,
-                    } => self.on_write_prepare_finished(cid, cmd, pr, to_be_write, rows),
-                    Msg::WritePrepareFailed { cid, err } => self.on_write_prepare_failed(cid, err),
-                    Msg::WriteFinished {
-                        cid, pr, result, ..
-                    } => self.on_write_finished(cid, pr, result),
-                }
-            }
-
-            if self.grouped_cmds.as_ref().unwrap().is_empty() {
-                continue;
-            }
-
-            if let Some(cmds) = self.grouped_cmds.take() {
-                self.grouped_cmds = Some(HashMap::with_capacity_and_hasher(
-                    CMD_BATCH_SIZE,
-                    Default::default(),
-                ));
-                let batch = cmds.into_iter().map(|(hash_ctx, cids)| {
-                    BATCH_COMMANDS
-                        .with_label_values(&["all"])
-                        .observe(cids.len() as f64);
-                    (hash_ctx.0, cids)
-                });
-                self.batch_get_snapshot(batch.collect());
-            }
-        }
-    }
-
-    fn shutdown(&mut self) -> Result<()> {
-        if let Err(e) = self.worker_pool.stop() {
-            return Err(Error::Other(box_err!("{:?}", e)));
-        }
-        if let Err(e) = self.high_priority_pool.stop() {
-            return Err(Error::Other(box_err!("{:?}", e)));
-        }
-        Ok(())
     }
 }
 
-const CMD_BATCH_SIZE: usize = 256;
+impl<E: Engine> Runnable<Msg> for Scheduler<E> {
+    fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
+        for msg in msgs.drain(..) {
+            match msg {
+                Msg::Quit => {
+                    self.shutdown();
+                    return;
+                }
+                Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
+                Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
+                Msg::WriteFinished {
+                    cid,
+                    tag,
+                    pr,
+                    result,
+                } => self.on_write_finished(cid, pr, result, tag),
+                Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+            }
+        }
+    }
 
-/// Generates the lock for a command.
-///
-/// Basically, read-only commands require no latches, write commands require latches hashed
-/// by the referenced keys.
-pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
+    fn shutdown(&mut self) {
+        if let Err(e) = self.worker_pool.stop() {
+            error!("scheduler run err when worker pool stop"; "err" => ?e);
+        }
+        if let Err(e) = self.high_priority_pool.stop() {
+            error!("scheduler run err when high priority pool stop"; "err" => ?e);
+        }
+        info!("scheduler stopped");
+    }
+}
+
+fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
     match *cmd {
         Command::Prewrite { ref mutations, .. } => {
             let keys: Vec<&Key> = mutations.iter().map(|x| x.key()).collect();
@@ -1557,6 +490,7 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             latches.gen_lock(keys)
         }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
+        Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         _ => Lock::new(vec![]),
     }
 }
@@ -1564,37 +498,22 @@ pub fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::mvcc;
+    use crate::storage::txn::latch::*;
+    use crate::storage::{Command, Key, Mutation, Options};
+    use crate::util::collections::HashMap;
     use kvproto::kvrpcpb::Context;
-    use util::collections::HashMap;
-    use storage::txn::latch::*;
-    use storage::{make_key, Command, Mutation, Options};
-    use storage::mvcc;
 
     #[test]
     fn test_command_latches() {
         let mut temp_map = HashMap::default();
         temp_map.insert(10, 20);
         let readonly_cmds = vec![
-            Command::Get {
-                ctx: Context::new(),
-                key: make_key(b"k"),
-                start_ts: 25,
-            },
-            Command::BatchGet {
-                ctx: Context::new(),
-                keys: vec![make_key(b"k")],
-                start_ts: 25,
-            },
-            Command::Scan {
-                ctx: Context::new(),
-                start_key: make_key(b"k"),
-                limit: 100,
-                start_ts: 25,
-                options: Options::default(),
-            },
             Command::ScanLock {
                 ctx: Context::new(),
                 max_ts: 5,
+                start_key: None,
+                limit: 0,
             },
             Command::ResolveLock {
                 ctx: Context::new(),
@@ -1602,16 +521,9 @@ mod tests {
                 scan_key: None,
                 key_locks: vec![],
             },
-            Command::Gc {
-                ctx: Context::new(),
-                safe_point: 5,
-                ratio_threshold: 0.0,
-                scan_key: None,
-                keys: vec![make_key(b"k")],
-            },
             Command::MvccByKey {
                 ctx: Context::new(),
-                key: make_key(b"k"),
+                key: Key::from_raw(b"k"),
             },
             Command::MvccByStartTs {
                 ctx: Context::new(),
@@ -1621,37 +533,35 @@ mod tests {
         let write_cmds = vec![
             Command::Prewrite {
                 ctx: Context::new(),
-                mutations: vec![Mutation::Put((make_key(b"k"), b"v".to_vec()))],
+                mutations: vec![Mutation::Put((Key::from_raw(b"k"), b"v".to_vec()))],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {
                 ctx: Context::new(),
-                keys: vec![make_key(b"k")],
+                keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
             },
             Command::Cleanup {
                 ctx: Context::new(),
-                key: make_key(b"k"),
+                key: Key::from_raw(b"k"),
                 start_ts: 10,
             },
             Command::Rollback {
                 ctx: Context::new(),
-                keys: vec![make_key(b"k")],
+                keys: vec![Key::from_raw(b"k")],
                 start_ts: 10,
             },
             Command::ResolveLock {
                 ctx: Context::new(),
                 txn_status: temp_map.clone(),
                 scan_key: None,
-                key_locks: vec![
-                    (
-                        make_key(b"k"),
-                        mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
-                    ),
-                ],
+                key_locks: vec![(
+                    Key::from_raw(b"k"),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
+                )],
             },
         ];
 

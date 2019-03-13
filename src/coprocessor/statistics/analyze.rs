@@ -13,59 +13,115 @@
 
 use std::mem;
 
-use rand::{thread_rng, Rng, ThreadRng};
-use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::{KeyRange, Response};
+use protobuf::{Message, RepeatedField};
+use rand::{thread_rng, Rng, ThreadRng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
-use tipb::schema::ColumnInfo;
 use tipb::executor::TableScan;
 
-use coprocessor::dag::executor::{Executor, IndexScanExecutor, TableScanExecutor};
-use coprocessor::endpoint::ReqContext;
-use coprocessor::codec::datum;
-use coprocessor::{Error, Result};
-use storage::{Snapshot, SnapshotStore, Statistics};
+use crate::storage::{Snapshot, SnapshotStore};
+
+use crate::coprocessor::codec::datum;
+use crate::coprocessor::dag::executor::{
+    Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor,
+};
+use crate::coprocessor::*;
+
+use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
-pub struct AnalyzeContext {
+pub struct AnalyzeContext<S: Snapshot> {
     req: AnalyzeReq,
-    snap: Option<SnapshotStore>,
+    snap: Option<SnapshotStore<S>>,
     ranges: Vec<KeyRange>,
+    metrics: ExecutorMetrics,
 }
 
-impl AnalyzeContext {
+impl<S: Snapshot> AnalyzeContext<S> {
     pub fn new(
         req: AnalyzeReq,
         ranges: Vec<KeyRange>,
-        snap: Box<Snapshot>,
+        snap: S,
         req_ctx: &ReqContext,
-    ) -> AnalyzeContext {
+    ) -> Result<Self> {
         let snap = SnapshotStore::new(
             snap,
             req.get_start_ts(),
-            req_ctx.isolation_level,
-            req_ctx.fill_cache,
+            req_ctx.context.get_isolation_level(),
+            !req_ctx.context.get_not_fill_cache(),
         );
-        AnalyzeContext {
-            req: req,
+        Ok(Self {
+            req,
             snap: Some(snap),
-            ranges: ranges,
-        }
+            ranges,
+            metrics: ExecutorMetrics::default(),
+        })
     }
 
-    pub fn handle_request(mut self, stats: &mut Statistics) -> Result<Response> {
+    // handle_column is used to process `AnalyzeColumnsReq`
+    // it would build a histogram for the primary key(if needed) and
+    // collectors for each column value.
+    fn handle_column(builder: &mut SampleBuilder<S>) -> Result<Vec<u8>> {
+        let (collectors, pk_builder) = builder.collect_columns_stats()?;
+
+        let pk_hist = pk_builder.into_proto();
+        let cols: Vec<analyze::SampleCollector> =
+            collectors.into_iter().map(|col| col.into_proto()).collect();
+
+        let res_data = {
+            let mut res = analyze::AnalyzeColumnsResp::new();
+            res.set_collectors(RepeatedField::from_vec(cols));
+            res.set_pk_hist(pk_hist);
+            box_try!(res.write_to_bytes())
+        };
+        Ok(res_data)
+    }
+
+    // handle_index is used to handle `AnalyzeIndexReq`,
+    // it would build a histogram and count-min sketch of index values.
+    fn handle_index(
+        req: AnalyzeIndexReq,
+        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
+    ) -> Result<Vec<u8>> {
+        let mut hist = Histogram::new(req.get_bucket_size() as usize);
+        let mut cms = CMSketch::new(
+            req.get_cmsketch_depth() as usize,
+            req.get_cmsketch_width() as usize,
+        );
+        while let Some(row) = scanner.next()? {
+            let row = row.take_origin();
+            let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
+            hist.append(bytes);
+            if let Some(c) = cms.as_mut() {
+                for end_offset in end_offsets {
+                    c.insert(&bytes[..end_offset])
+                }
+            }
+        }
+        let mut res = analyze::AnalyzeIndexResp::new();
+        res.set_hist(hist.into_proto());
+        if let Some(c) = cms {
+            res.set_cms(c.into_proto());
+        }
+        let dt = box_try!(res.write_to_bytes());
+        Ok(dt)
+    }
+}
+
+impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
+    fn handle_request(&mut self) -> Result<Response> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = IndexScanExecutor::new_with_cols_len(
-                    req.get_num_columns() as i64,
+                    i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.snap.take().unwrap(),
-                );
+                )?;
                 let res = AnalyzeContext::handle_index(req, &mut scanner);
-                scanner.collect_statistics_into(stats);
+                scanner.collect_metrics_into(&mut self.metrics);
                 res
             }
 
@@ -75,7 +131,7 @@ impl AnalyzeContext {
                 let ranges = mem::replace(&mut self.ranges, Vec::new());
                 let mut builder = SampleBuilder::new(col_req, snap, ranges)?;
                 let res = AnalyzeContext::handle_column(&mut builder);
-                builder.data.collect_statistics_into(stats);
+                builder.data.collect_metrics_into(&mut self.metrics);
                 res
             }
         };
@@ -94,61 +150,32 @@ impl AnalyzeContext {
         }
     }
 
-    // handle_column is used to process `AnalyzeColumnsReq`
-    // it would build a histogram for the primary key(if needed) and
-    // collectors for each column value.
-    fn handle_column(builder: &mut SampleBuilder) -> Result<Vec<u8>> {
-        let (collectors, pk_builder) = builder.collect_samples_and_estimate_ndvs()?;
-
-        let pk_hist = pk_builder.into_proto();
-        let cols: Vec<analyze::SampleCollector> =
-            collectors.into_iter().map(|col| col.into_proto()).collect();
-
-        let res_data = {
-            let mut res = analyze::AnalyzeColumnsResp::new();
-            res.set_collectors(RepeatedField::from_vec(cols));
-            res.set_pk_hist(pk_hist);
-            box_try!(res.write_to_bytes())
-        };
-        Ok(res_data)
-    }
-
-    // handle_index is used to handle `AnalyzeIndexReq`,
-    // it would build a histogram of index values.
-    fn handle_index(req: AnalyzeIndexReq, scanner: &mut IndexScanExecutor) -> Result<Vec<u8>> {
-        let mut hist = Histogram::new(req.get_bucket_size() as usize);
-        while let Some(row) = scanner.next()? {
-            let bytes = row.data.get_column_values();
-            hist.append(bytes);
-        }
-        let mut res = analyze::AnalyzeIndexResp::new();
-        res.set_hist(hist.into_proto());
-        let dt = box_try!(res.write_to_bytes());
-        Ok(dt)
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        metrics.merge(&mut self.metrics);
     }
 }
 
-
-struct SampleBuilder {
-    data: TableScanExecutor,
-    cols: Vec<ColumnInfo>,
+struct SampleBuilder<S: Snapshot> {
+    data: TableScanExecutor<SnapshotStore<S>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
     max_bucket_size: usize,
     max_sample_size: usize,
-    max_sketch_size: usize,
+    max_fm_sketch_size: usize,
+    cm_sketch_depth: usize,
+    cm_sketch_width: usize,
 }
 
 /// `SampleBuilder` is used to analyze columns. It collects sample from
-/// the result set using Reservoir Sampling algorithm, and estimates NDVs
-/// using FM Sketch during the collecting process.
-impl SampleBuilder {
+/// the result set using Reservoir Sampling algorithm, estimates NDVs
+/// using FM Sketch during the collecting process, and builds count-min sketch.
+impl<S: Snapshot> SampleBuilder<S> {
     fn new(
         mut req: AnalyzeColumnsReq,
-        snap: SnapshotStore,
+        snap: SnapshotStore<S>,
         ranges: Vec<KeyRange>,
-    ) -> Result<SampleBuilder> {
+    ) -> Result<Self> {
         let cols_info = req.take_columns_info();
         if cols_info.is_empty() {
             return Err(box_err!("empty columns_info"));
@@ -161,26 +188,36 @@ impl SampleBuilder {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(&meta, ranges, snap);
-        Ok(SampleBuilder {
+        let table_scanner = TableScanExecutor::new(meta, ranges, snap, false)?;
+        Ok(Self {
             data: table_scanner,
-            cols: meta.take_columns().to_vec(),
-            col_len: col_len,
+            col_len,
             max_bucket_size: req.get_bucket_size() as usize,
-            max_sketch_size: req.get_sketch_size() as usize,
+            max_fm_sketch_size: req.get_sketch_size() as usize,
             max_sample_size: req.get_sample_size() as usize,
+            cm_sketch_depth: req.get_cmsketch_depth() as usize,
+            cm_sketch_width: req.get_cmsketch_width() as usize,
         })
     }
 
-    // `collect_samples_and_estimate_ndvs` returns the sample collectors which contain total count,
-    // null count and distinct values count. And it also returns the statistic builder for PK
-    // which contains the histogram. See https://en.wikipedia.org/wiki/Reservoir_sampling
-    fn collect_samples_and_estimate_ndvs(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
+    // `collect_columns_stats` returns the sample collectors which contain total count,
+    // null count, distinct values count and count-min sketch. And it also returns the statistic
+    // builder for PK which contains the histogram.
+    // See https://en.wikipedia.org/wiki/Reservoir_sampling
+    fn collect_columns_stats(&mut self) -> Result<(Vec<SampleCollector>, Histogram)> {
         let mut pk_builder = Histogram::new(self.max_bucket_size);
-        let mut collectors =
-            vec![SampleCollector::new(self.max_sample_size, self.max_sketch_size); self.col_len];
+        let mut collectors = vec![
+            SampleCollector::new(
+                self.max_sample_size,
+                self.max_fm_sketch_size,
+                self.cm_sketch_depth,
+                self.cm_sketch_width
+            );
+            self.col_len
+        ];
         while let Some(row) = self.data.next()? {
-            let cols = row.get_binary_cols(&self.cols)?;
+            let row = row.take_origin();
+            let cols = row.get_binary_cols()?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();
             if self.col_len != retrieve_len {
@@ -196,26 +233,35 @@ impl SampleBuilder {
     }
 }
 
-/// `SampleCollector` will collect Samples and calculate the count and ndv of an attribute.
+/// `SampleCollector` will collect Samples and calculate the count, ndv and total size of an attribute.
 #[derive(Clone)]
 struct SampleCollector {
     samples: Vec<Vec<u8>>,
     null_count: u64,
     count: u64,
     max_sample_size: usize,
-    sketch: FMSketch,
+    fm_sketch: FMSketch,
+    cm_sketch: Option<CMSketch>,
     rng: ThreadRng,
+    total_size: u64,
 }
 
 impl SampleCollector {
-    fn new(max_sample_size: usize, max_sketch_size: usize) -> SampleCollector {
+    fn new(
+        max_sample_size: usize,
+        max_fm_sketch_size: usize,
+        cm_sketch_depth: usize,
+        cm_sketch_width: usize,
+    ) -> SampleCollector {
         SampleCollector {
             samples: Default::default(),
             null_count: 0,
             count: 0,
-            max_sample_size: max_sample_size,
-            sketch: FMSketch::new(max_sketch_size),
+            max_sample_size,
+            fm_sketch: FMSketch::new(max_fm_sketch_size),
+            cm_sketch: CMSketch::new(cm_sketch_depth, cm_sketch_width),
             rng: thread_rng(),
+            total_size: 0,
         }
     }
 
@@ -223,8 +269,12 @@ impl SampleCollector {
         let mut s = analyze::SampleCollector::new();
         s.set_null_count(self.null_count as i64);
         s.set_count(self.count as i64);
-        s.set_sketch(self.sketch.into_proto());
+        s.set_fm_sketch(self.fm_sketch.into_proto());
         s.set_samples(RepeatedField::from_vec(self.samples));
+        if let Some(c) = self.cm_sketch {
+            s.set_cm_sketch(c.into_proto())
+        }
+        s.set_total_size(self.total_size as i64);
         s
     }
 
@@ -234,7 +284,11 @@ impl SampleCollector {
             return;
         }
         self.count += 1;
-        self.sketch.insert(&data);
+        self.fm_sketch.insert(&data);
+        if let Some(c) = self.cm_sketch.as_mut() {
+            c.insert(&data)
+        }
+        self.total_size += data.len() as u64;
         if self.samples.len() < self.max_sample_size {
             self.samples.push(data);
             return;
@@ -247,16 +301,23 @@ impl SampleCollector {
 }
 
 #[cfg(test)]
-mod test {
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
+mod tests {
     use super::*;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
 
     #[test]
     fn test_sample_collector() {
         let max_sample_size = 3;
-        let max_sketch_size = 10;
-        let mut sample = SampleCollector::new(max_sample_size, max_sketch_size);
+        let max_fm_sketch_size = 10;
+        let cm_sketch_depth = 2;
+        let cm_sketch_width = 16;
+        let mut sample = SampleCollector::new(
+            max_sample_size,
+            max_fm_sketch_size,
+            cm_sketch_depth,
+            cm_sketch_width,
+        );
         let cases = vec![Datum::I64(1), Datum::Null, Datum::I64(2), Datum::I64(5)];
 
         for data in cases {
@@ -265,5 +326,7 @@ mod test {
         assert_eq!(sample.samples.len(), max_sample_size);
         assert_eq!(sample.null_count, 1);
         assert_eq!(sample.count, 3);
+        assert_eq!(sample.cm_sketch.unwrap().count(), 3);
+        assert_eq!(sample.total_size, 6)
     }
 }

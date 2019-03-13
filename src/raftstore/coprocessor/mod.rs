@@ -11,25 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DB;
-use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
+use raft::StateRole;
+use rocksdb::DB;
 
-pub mod dispatcher;
-pub mod split_observer;
 pub mod config;
-mod region_snapshot;
+pub mod dispatcher;
 mod error;
 mod metrics;
+pub mod region_info_accessor;
 mod split_check;
+pub mod split_observer;
 
 pub use self::config::Config;
-pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::split_check::{SizeCheckObserver, Status as SplitCheckStatus, TableCheckObserver,
-                            SIZE_CHECK_OBSERVER_PRIORITY, TABLE_CHECK_OBSERVER_PRIORITY};
+pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor};
+pub use self::split_check::{
+    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
+    TableCheckObserver,
+};
+
+pub use crate::raftstore::store::KeyEntry;
 
 /// Coprocessor is used to provide a convient way to inject code to
 /// KV processing.
@@ -48,7 +54,7 @@ pub struct ObserverContext<'a> {
 impl<'a> ObserverContext<'a> {
     pub fn new(region: &Region) -> ObserverContext {
         ObserverContext {
-            region: region,
+            region,
             bypass: false,
         }
     }
@@ -90,23 +96,56 @@ pub trait QueryObserver: Coprocessor {
     fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {}
 }
 
-pub trait SplitCheckObserver: Coprocessor {
-    /// Hook to call before handle split region task. If it returns a None,
-    /// then `on_split_check` can be skippped.
-    //
-    // This is a workaround for preserving status for split check observers.
-    // TODO: Refactor RegionObserver, requires Send + Clone,
-    //       so that ervery threads has its own RegionObservers.
-    fn new_split_check_status(&self, _: &mut ObserverContext, _: &mut SplitCheckStatus, _: &DB) {}
+/// SplitChecker is invoked during a split check scan, and decides to use
+/// which keys to split a region.
+pub trait SplitChecker {
+    /// Hook to call for every kv scanned during split.
+    ///
+    /// Return true to abort scan early.
+    fn on_kv(&mut self, _: &mut ObserverContext, _: &KeyEntry) -> bool {
+        false
+    }
 
-    /// Hook to call for every check during split.
-    fn on_split_check(
+    /// Get the desired split keys.
+    fn split_keys(&mut self) -> Vec<Vec<u8>>;
+
+    /// Get approximate split keys without scan.
+    fn approximate_split_keys(&mut self, _: &Region, _: &DB) -> Result<Vec<Vec<u8>>> {
+        Ok(vec![])
+    }
+
+    /// Get split policy.
+    fn policy(&self) -> CheckPolicy;
+}
+
+pub trait SplitCheckObserver: Coprocessor {
+    /// Add a checker for a split scan.
+    fn add_checker(
         &self,
         _: &mut ObserverContext,
-        _: &mut SplitCheckStatus,
-        _: &[u8],
-        _: u64,
-    ) -> Option<Vec<u8>> {
-        None
-    }
+        _: &mut SplitCheckerHost,
+        _: &DB,
+        policy: CheckPolicy,
+    );
+}
+
+pub trait RoleObserver: Coprocessor {
+    /// Hook to call when role of a peer changes.
+    ///
+    /// Please note that, this hook is not called at realtime. There maybe a
+    /// situation that the hook is not called yet, however the role of some peers
+    /// have changed.
+    fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegionChangeEvent {
+    Create,
+    Update,
+    Destroy,
+}
+
+pub trait RegionChangeObserver: Coprocessor {
+    /// Hook to call when a region changed on this TiKV
+    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {}
 }

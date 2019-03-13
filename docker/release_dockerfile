@@ -8,9 +8,9 @@ RUN yum update -y
 RUN yum install -y devtoolset-4-gcc-c++ python27
 RUN yum clean all
 
-RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2017-08-09 --disable-sudo -y --channel=nightly
+RUN curl -sSf https://static.rust-lang.org/rustup.sh |  sh -s -- --date=2018-04-06 --disable-sudo -y --channel=nightly
 
-ADD https://github.com/pingcap/tikv/archive/master.tar.gz /master.tar.gz
+ADD https://github.com/tikv/tikv/archive/master.tar.gz /master.tar.gz
 
 # cache dep package
 RUN tar xf master.tar.gz && \

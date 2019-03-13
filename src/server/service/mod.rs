@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod kv;
 mod debug;
+mod kv;
 
-pub use self::kv::Service as KvService;
 pub use self::debug::Service as DebugService;
+pub use self::kv::Service as KvService;

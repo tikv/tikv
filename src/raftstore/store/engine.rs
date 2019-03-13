@@ -11,19 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::option::Option;
-use std::ops::Deref;
-use std::sync::Arc;
 use std::fmt::{self, Debug, Formatter};
+use std::ops::Deref;
+use std::option::Option;
+use std::sync::Arc;
 
-use rocksdb::{CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch, DB};
-use rocksdb::rocksdb_options::UnsafeSnap;
-use protobuf;
+use crate::util::rocksdb_util;
 use byteorder::{BigEndian, ByteOrder};
-use util::rocksdb;
+use protobuf;
+use rocksdb::{
+    rocksdb_options::UnsafeSnap, CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch,
+    DB,
+};
 
-use raftstore::Result;
-use raftstore::Error;
+use crate::raftstore::Error;
+use crate::raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -52,7 +54,7 @@ impl SyncSnapshot {
     }
 
     pub fn clone(&self) -> SyncSnapshot {
-        SyncSnapshot(self.0.clone())
+        SyncSnapshot(Arc::clone(&self.0))
     }
 }
 
@@ -61,7 +63,7 @@ impl Snapshot {
         unsafe {
             Snapshot {
                 snap: db.unsafe_snap(),
-                db: db,
+                db,
             }
         }
     }
@@ -75,11 +77,11 @@ impl Snapshot {
     }
 
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
-        rocksdb::get_cf_handle(&self.db, cf).map_err(Error::from)
+        rocksdb_util::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
 
     pub fn get_db(&self) -> Arc<DB> {
-        self.db.clone()
+        Arc::clone(&self.db)
     }
 
     pub fn db_iterator(&self, iter_opt: IterOption) -> DBIterator<Arc<DB>> {
@@ -87,16 +89,16 @@ impl Snapshot {
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        DBIterator::new(self.db.clone(), opt)
+        DBIterator::new(Arc::clone(&self.db), opt)
     }
 
     pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
-        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
+        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
         }
-        Ok(DBIterator::new_cf(self.db.clone(), handle, opt))
+        Ok(DBIterator::new_cf(Arc::clone(&self.db), handle, opt))
     }
 }
 
@@ -119,10 +121,7 @@ pub trait Peekable {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
 
-    fn get_msg<M>(&self, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg<M: protobuf::Message>(&self, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value(key)?;
 
         if value.is_none() {
@@ -134,10 +133,7 @@ pub trait Peekable {
         Ok(Some(m))
     }
 
-    fn get_msg_cf<M>(&self, cf: &str, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    fn get_msg_cf<M: protobuf::Message>(&self, cf: &str, key: &[u8]) -> Result<Option<M>> {
         let value = self.get_value_cf(cf, key)?;
 
         if value.is_none() {
@@ -181,6 +177,7 @@ enum SeekMode {
 }
 
 pub struct IterOption {
+    lower_bound: Option<Vec<u8>>,
     upper_bound: Option<Vec<u8>>,
     prefix_same_as_start: bool,
     fill_cache: bool,
@@ -188,11 +185,16 @@ pub struct IterOption {
 }
 
 impl IterOption {
-    pub fn new(upper_bound: Option<Vec<u8>>, fill_cache: bool) -> IterOption {
+    pub fn new(
+        lower_bound: Option<Vec<u8>>,
+        upper_bound: Option<Vec<u8>>,
+        fill_cache: bool,
+    ) -> IterOption {
         IterOption {
-            upper_bound: upper_bound,
+            lower_bound,
+            upper_bound,
             prefix_same_as_start: false,
-            fill_cache: fill_cache,
+            fill_cache,
             seek_mode: SeekMode::TotalOrder,
         }
     }
@@ -209,14 +211,23 @@ impl IterOption {
     }
 
     #[inline]
+    pub fn lower_bound(&self) -> Option<&[u8]> {
+        self.lower_bound.as_ref().map(|v| v.as_slice())
+    }
+
+    #[inline]
+    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
+        self.lower_bound = Some(bound);
+    }
+
+    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
     #[inline]
-    pub fn set_upper_bound(mut self, bound: Vec<u8>) -> IterOption {
+    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
         self.upper_bound = Some(bound);
-        self
     }
 
     #[inline]
@@ -233,6 +244,9 @@ impl IterOption {
         } else if self.prefix_same_as_start {
             opts.set_prefix_same_as_start(true);
         }
+        if let Some(ref key) = self.lower_bound {
+            opts.set_iterate_lower_bound(key);
+        }
         if let Some(ref key) = self.upper_bound {
             opts.set_iterate_upper_bound(key);
         }
@@ -243,6 +257,7 @@ impl IterOption {
 impl Default for IterOption {
     fn default() -> IterOption {
         IterOption {
+            lower_bound: None,
             upper_bound: None,
             prefix_same_as_start: false,
             fill_cache: true,
@@ -254,14 +269,15 @@ impl Default for IterOption {
 // TODO: refactor this trait into rocksdb trait.
 pub trait Iterable {
     fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
-    fn new_iterator_cf(&self, &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
+    fn new_iterator_cf(&self, _: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
     // scan scans database using an iterator in range [start_key, end_key), calls function f for
     // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: &mut F) -> Result<()>
+    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
@@ -272,12 +288,13 @@ pub trait Iterable {
         start_key: &[u8],
         end_key: &[u8],
         fill_cache: bool,
-        f: &mut F,
+        f: F,
     ) -> Result<()>
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt = IterOption::new(Some(end_key.to_vec()), fill_cache);
+        let iter_opt =
+            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
         scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -296,7 +313,7 @@ pub trait Iterable {
     }
 }
 
-fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], f: &mut F) -> Result<()>
+fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<()>
 where
     F: FnMut(&[u8], &[u8]) -> Result<bool>,
 {
@@ -319,7 +336,7 @@ impl Peekable for DB {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = rocksdb::get_cf_handle(self, cf)?;
+        let handle = rocksdb_util::get_cf_handle(self, cf)?;
         let v = self.get_cf(handle, key)?;
         Ok(v)
     }
@@ -331,7 +348,7 @@ impl Iterable for DB {
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
-        let handle = rocksdb::get_cf_handle(self, cf)?;
+        let handle = rocksdb_util::get_cf_handle(self, cf)?;
         let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
@@ -348,7 +365,7 @@ impl Peekable for Snapshot {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
+        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -368,7 +385,7 @@ impl Iterable for Snapshot {
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
-        let handle = rocksdb::get_cf_handle(&self.db, cf)?;
+        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -412,29 +429,29 @@ impl Mutable for WriteBatch {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use tempdir::TempDir;
-    use rocksdb::Writable;
     use super::*;
     use kvproto::metapb::Region;
+    use rocksdb::Writable;
+    use std::sync::Arc;
+    use tempdir::TempDir;
 
     #[test]
     fn test_base() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         );
 
         let mut r = Region::new();
         r.set_id(10);
 
         let key = b"key";
-        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let handle = rocksdb_util::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(handle, key, &r).unwrap();
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);
@@ -459,7 +476,7 @@ mod tests {
         assert_eq!(engine.get_i64(key).unwrap(), Some(-1));
         assert!(engine.get_i64(b"missing_key").unwrap().is_none());
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
         assert_eq!(snap.get_i64(key).unwrap(), Some(-1));
         assert!(snap.get_i64(b"missing_key").unwrap().is_none());
 
@@ -472,7 +489,8 @@ mod tests {
     fn test_peekable() {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
-        let engine = rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap();
+        let engine =
+            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -488,7 +506,7 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[cf]).unwrap(),
+            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         );
         let handle = engine.cf_handle(cf).unwrap();
 
@@ -499,7 +517,7 @@ mod tests {
 
         let mut data = vec![];
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -514,7 +532,7 @@ mod tests {
         data.clear();
 
         engine
-            .scan_cf(cf, b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan_cf(cf, b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 Ok(true)
             })
@@ -537,7 +555,7 @@ mod tests {
 
         let mut index = 0;
         engine
-            .scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+            .scan(b"", &[0xFF, 0xFF], false, |key, value| {
                 data.push((key.to_vec(), value.to_vec()));
                 index += 1;
                 Ok(index != 1)
@@ -546,7 +564,7 @@ mod tests {
 
         assert_eq!(data.len(), 1);
 
-        let snap = Snapshot::new(engine.clone());
+        let snap = Snapshot::new(Arc::clone(&engine));
 
         engine.put(b"a3", b"v3").unwrap();
         assert!(engine.seek(b"a3").unwrap().is_some());
@@ -557,10 +575,11 @@ mod tests {
 
         data.clear();
 
-        snap.scan(b"", &[0xFF, 0xFF], false, &mut |key, value| {
+        snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(data.len(), 2);
     }

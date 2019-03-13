@@ -8,10 +8,12 @@ RUN yum install -y epel-release
 RUN yum makecache \
 	&& yum update -y \
 	&& yum install -y tar wget git which file unzip python-pip \
-	&& yum install -y make cmake gcc gcc-c++ libstdc++-static pkg-config psmisc \
-	&& yum install -y libzstd-devel lz4-devel zlib-devel bzip2-devel snappy-devel libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
+	&& yum install -y make cmake3 gcc gcc-c++ libstdc++-static pkg-config psmisc \
+	&& yum install -y libdwarf-devel elfutils-libelf-devel elfutils-devel binutils-devel \
 	&& yum install -y openssl-devel \
 	&& yum clean all
+
+RUN ln -s /usr/bin/cmake3 /usr/bin/cmake
 
 RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar.gz \
 	&& tar xf gflags.tar.gz \
@@ -21,15 +23,9 @@ RUN curl -L https://github.com/gflags/gflags/archive/v2.1.2.tar.gz -o gflags.tar
 	&& make install \
 	&& rm -rf /gflags.tar.gz /gflags-2.1.2
 
-RUN curl -L https://github.com/facebook/rocksdb/archive/v5.6.2.tar.gz -o rocksdb.tar.gz \
-	&& tar xf rocksdb.tar.gz \
-	&& cd rocksdb-5.6.2 \
-	&& make -j install-shared \
-	&& rm -rf /rocksdb.tar.gz /rocksdb-5.6.2
-
-ENV GOLANG_VERSION 1.8
+ENV GOLANG_VERSION 1.10.2
 ENV GOLANG_DOWNLOAD_URL https://golang.org/dl/go$GOLANG_VERSION.linux-amd64.tar.gz
-ENV GOLANG_DOWNLOAD_SHA256 53ab94104ee3923e228a2cb2116e5e462ad3ebaeea06ff04463479d7f12d27ca
+ENV GOLANG_DOWNLOAD_SHA256 4b677d698c65370afa33757b6954ade60347aaca310ea92a63ed717d7cb0c2ff
 
 RUN curl -fsSL "$GOLANG_DOWNLOAD_URL" -o golang.tar.gz \
 	&& echo "$GOLANG_DOWNLOAD_SHA256  golang.tar.gz" | sha256sum -c - \
@@ -40,21 +36,34 @@ ENV GOPATH /go
 ENV GOROOT /usr/local/go
 ENV PATH $GOPATH/bin:$GOROOT/bin:$PATH
 
-RUN go get golang.org/x/tools/go/gcimporter15 \
-	&& go get github.com/golang/lint/golint
+RUN go get golang.org/x/tools/go/gcexportdata \
+        && go get github.com/golang/lint/golint
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain nightly-2017-08-09 -y \
-	&& /root/.cargo/bin/rustup default nightly-2017-08-09 \
-	&& cargo install --vers 0.2.1 --force rustfmt-nightly
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
 
-# cache dep package
-RUN curl -L https://github.com/pingcap/tikv/archive/master.tar.gz -o /root/master.tar.gz \
-	&& cd /root && tar xf master.tar.gz && cd tikv-master && /root/.cargo/bin/cargo fetch \
-	&& cd /root && rm -rf master.tar.gz tikv-master
+RUN curl -L https://github.com/tikv/tikv/archive/master.tar.gz -o /root/master.tar.gz \
+	&& cd /root && tar xf master.tar.gz \
+	&& cd /root && rm -rf master.tar.gz
+
+RUN cd /root/tikv-master \
+	&& /root/.cargo/bin/rustup default $(tail -n 1 rust-toolchain) \
+	&& /root/.cargo/bin/rustup component add rustfmt-preview --toolchain $(tail -n 1 rust-toolchain) \
+	&& /root/.cargo/bin/cargo fetch \
+	&& rm -rf /root/tikv-master
 
 ENV PATH /root/.cargo/bin/:$PATH
 ENV LIBRARY_PATH /usr/local/lib:$LIBRARY_PATH
 ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+
+# A proper PID 1 that will handle Ctrl+C, etc
+ENV TINI_VERSION v0.17.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini.asc /tini.asc
+RUN gpg --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 595E85A6B1B4779EA4DAAEC70B588DFF0527A9B7 \
+ && gpg --verify /tini.asc \
+ && rm /tini.asc
+RUN chmod +x /tini && mv /tini /sbin/tini
+ENTRYPOINT ["/sbin/tini", "--"]
 
 CMD ["/bin/bash"]
 

@@ -14,18 +14,18 @@
 use std::error::Error;
 use std::fmt::{self, Write};
 use std::fs;
-use std::path::Path;
-use std::str::{self, FromStr};
-use std::ascii::AsciiExt;
-use std::time::Duration;
 use std::net::{SocketAddrV4, SocketAddrV6};
 use std::ops::{Div, Mul};
+use std::path::Path;
+use std::str::{self, FromStr};
+use std::time::Duration;
 
-use url;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::{self, Unexpected, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use url;
 
-use util;
+use crate::util;
+use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
@@ -46,15 +46,47 @@ quick_error! {
             description(msg)
             display("config value error: {}", msg)
         }
+        FileSystem(msg: String) {
+            description(msg)
+            display("config fs: {}", msg)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompressionType {
+    No,
+    Snappy,
+    Zlib,
+    Bz2,
+    Lz4,
+    Lz4hc,
+    Zstd,
+    ZstdNotFinal,
+}
+
+impl Into<DBCompressionType> for CompressionType {
+    fn into(self) -> DBCompressionType {
+        match self {
+            CompressionType::No => DBCompressionType::No,
+            CompressionType::Snappy => DBCompressionType::Snappy,
+            CompressionType::Zlib => DBCompressionType::Zlib,
+            CompressionType::Bz2 => DBCompressionType::Bz2,
+            CompressionType::Lz4 => DBCompressionType::Lz4,
+            CompressionType::Lz4hc => DBCompressionType::Lz4hc,
+            CompressionType::Zstd => DBCompressionType::Zstd,
+            CompressionType::ZstdNotFinal => DBCompressionType::ZstdNotFinal,
+        }
     }
 }
 
 pub mod compression_type_level_serde {
     use std::fmt;
 
-    use serde::{Deserializer, Serializer};
     use serde::de::{Error, SeqAccess, Unexpected, Visitor};
     use serde::ser::SerializeSeq;
+    use serde::{Deserializer, Serializer};
 
     use rocksdb::DBCompressionType;
 
@@ -119,7 +151,7 @@ pub mod compression_type_level_serde {
                             return Err(S::Error::invalid_value(
                                 Unexpected::Str(&value),
                                 &"invalid compression type",
-                            ))
+                            ));
                         }
                     };
                     i += 1;
@@ -132,72 +164,6 @@ pub mod compression_type_level_serde {
         }
 
         deserializer.deserialize_seq(SeqVisitor)
-    }
-}
-
-pub mod order_map_serde {
-    use std::fmt;
-    use std::hash::Hash;
-    use std::marker::PhantomData;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use serde::de::{MapAccess, Visitor};
-    use serde::ser::SerializeMap;
-
-    use util::collections::HashMap;
-
-    pub fn serialize<S, K, V>(m: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-        K: Serialize + Hash + Eq,
-        V: Serialize,
-    {
-        let mut s = serializer.serialize_map(Some(m.len()))?;
-        for (k, v) in m {
-            s.serialize_entry(k, v)?;
-        }
-        s.end()
-    }
-
-    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
-    where
-        D: Deserializer<'de>,
-        K: Deserialize<'de> + Eq + Hash,
-        V: Deserialize<'de>,
-    {
-        struct MapVisitor<K, V> {
-            phantom: PhantomData<HashMap<K, V>>,
-        }
-
-        impl<'de, K, V> Visitor<'de> for MapVisitor<K, V>
-        where
-            K: Deserialize<'de> + Eq + Hash,
-            V: Deserialize<'de>,
-        {
-            type Value = HashMap<K, V>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a map")
-            }
-
-            fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                let mut map = HashMap::with_capacity_and_hasher(
-                    access.size_hint().unwrap_or(0),
-                    Default::default(),
-                );
-                while let Some((key, value)) = access.next_entry()? {
-                    map.insert(key, value);
-                }
-                Ok(map)
-            }
-        }
-
-        deserializer.deserialize_map(MapVisitor {
-            phantom: PhantomData,
-        })
     }
 }
 
@@ -271,14 +237,19 @@ macro_rules! numeric_enum_mod {
     }
 }
 
-numeric_enum_mod!{compaction_pri_serde CompactionPriority {
+numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     ByCompensatedSize = 0,
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
 }}
 
-numeric_enum_mod!{recovery_mode_serde DBRecoveryMode {
+numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
+    Level = 0,
+    Universal = 1,
+}}
+
+numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
     TolerateCorruptedTailRecords = 0,
     AbsoluteConsistency = 1,
     PointInTime = 2,
@@ -297,10 +268,12 @@ const PB: u64 = (TB as u64) * (DATA_MAGNITUDE as u64);
 
 const TIME_MAGNITUDE_1: u64 = 1000;
 const TIME_MAGNITUDE_2: u64 = 60;
+const TIME_MAGNITUDE_3: u64 = 24;
 const MS: u64 = UNIT;
 const SECOND: u64 = MS * TIME_MAGNITUDE_1;
 const MINUTE: u64 = SECOND * TIME_MAGNITUDE_2;
 const HOUR: u64 = MINUTE * TIME_MAGNITUDE_2;
+const DAY: u64 = HOUR * TIME_MAGNITUDE_3;
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableSize(pub u64);
@@ -318,7 +291,7 @@ impl ReadableSize {
         ReadableSize(count * GB)
     }
 
-    pub fn as_mb(&self) -> u64 {
+    pub fn as_mb(self) -> u64 {
         self.0 / MB
     }
 }
@@ -468,6 +441,12 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
+impl Into<Duration> for ReadableDuration {
+    fn into(self) -> Duration {
+        self.0
+    }
+}
+
 impl ReadableDuration {
     pub fn secs(secs: u64) -> ReadableDuration {
         ReadableDuration(Duration::new(secs, 0))
@@ -497,31 +476,49 @@ impl ReadableDuration {
     }
 }
 
+impl fmt::Display for ReadableDuration {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut dur = util::time::duration_to_ms(self.0);
+        let mut written = false;
+        if dur >= DAY {
+            written = true;
+            write!(f, "{}d", dur / DAY)?;
+            dur %= DAY;
+        }
+        if dur >= HOUR {
+            written = true;
+            write!(f, "{}h", dur / HOUR)?;
+            dur %= HOUR;
+        }
+        if dur >= MINUTE {
+            written = true;
+            write!(f, "{}m", dur / MINUTE)?;
+            dur %= MINUTE;
+        }
+        if dur >= SECOND {
+            written = true;
+            write!(f, "{}s", dur / SECOND)?;
+            dur %= SECOND;
+        }
+        if dur > 0 {
+            written = true;
+            write!(f, "{}ms", dur)?;
+        }
+        if !written {
+            write!(f, "0s")?;
+        }
+        Ok(())
+    }
+}
+
 impl Serialize for ReadableDuration {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut dur = util::time::duration_to_ms(self.0);
         let mut buffer = String::new();
-        if dur >= HOUR {
-            write!(buffer, "{}h", dur / HOUR).unwrap();
-            dur %= HOUR;
-        }
-        if dur >= MINUTE {
-            write!(buffer, "{}m", dur / MINUTE).unwrap();
-            dur %= MINUTE;
-        }
-        if dur >= SECOND {
-            write!(buffer, "{}s", dur / SECOND).unwrap();
-            dur %= SECOND;
-        }
-        if dur > 0 {
-            write!(buffer, "{}ms", dur).unwrap();
-        }
-        if buffer.is_empty() && dur == 0 {
-            write!(buffer, "0s").unwrap();
-        }
+        write!(buffer, "{}", self).unwrap();
         serializer.serialize_str(&buffer)
     }
 }
@@ -548,17 +545,18 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                 if !dur_str.is_ascii() {
                     return Err(E::invalid_value(Unexpected::Str(dur_str), &"ascii string"));
                 }
-                let err_msg = "valid duration, only h, m, s, ms are supported.";
+                let err_msg = "valid duration, only d, h, m, s, ms are supported.";
                 let mut left = dur_str.as_bytes();
-                let mut last_unit = HOUR + 1;
+                let mut last_unit = DAY + 1;
                 let mut dur = 0f64;
-                while let Some(idx) = left.iter().position(|c| b"hms".contains(c)) {
+                while let Some(idx) = left.iter().position(|c| b"dhms".contains(c)) {
                     let (first, second) = left.split_at(idx);
                     let unit = if second.starts_with(b"ms") {
                         left = &left[idx + 2..];
                         MS
                     } else {
                         let u = match second[0] {
+                            b'd' => DAY,
                             b'h' => HOUR,
                             b'm' => MINUTE,
                             b's' => SECOND,
@@ -570,7 +568,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
                     if unit >= last_unit {
                         return Err(E::invalid_value(
                             Unexpected::Str(dur_str),
-                            &"h, m, s, ms should occur in giving order.",
+                            &"d, h, m, s, ms should occur in given order.",
                         ));
                     }
                     // do we need to check 12h360m?
@@ -600,11 +598,11 @@ impl<'de> Deserialize<'de> for ReadableDuration {
     }
 }
 
-pub fn canonicalize_path(path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_path(path: &str) -> Result<String, Box<dyn Error>> {
     canonicalize_sub_path(path, "")
 }
 
-pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<Error>> {
+pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<dyn Error>> {
     let parent = Path::new(path);
     let p = parent.join(Path::new(sub_path));
     if p.exists() && p.is_file() {
@@ -618,8 +616,8 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<E
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
-    use std::mem;
     use libc;
+    use std::mem;
 
     unsafe {
         let mut fd_limit = mem::zeroed();
@@ -644,8 +642,7 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
         Err(ConfigError::Limit(format!(
             "the maximum number of open file descriptors is too \
              small, got {}, expect greater or equal to {}",
-            prev_limit,
-            expect
+            prev_limit, expect
         )))
     }
 }
@@ -663,7 +660,7 @@ mod check_kernel {
     use super::ConfigError;
 
     // pub for tests.
-    pub type Checker = Fn(i64, i64) -> bool;
+    pub type Checker = dyn Fn(i64, i64) -> bool;
 
     // pub for tests.
     pub fn check_kernel_params(
@@ -674,16 +671,12 @@ mod check_kernel {
         let mut buffer = String::new();
         fs::File::open(param_path)
             .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| {
-                ConfigError::Limit(format!("check_kernel_params failed {}", e))
-            })?;
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let got = buffer
             .trim_matches('\n')
             .parse::<i64>()
-            .map_err(|e| {
-                ConfigError::Limit(format!("check_kernel_params failed {}", e))
-            })?;
+            .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let mut param = String::new();
         // skip 3, ["", "proc", "sys", ...]
@@ -696,13 +689,11 @@ mod check_kernel {
         if !checker(got, expect) {
             return Err(ConfigError::Limit(format!(
                 "kernel parameters {} got {}, expect {}",
-                param,
-                got,
-                expect
+                param, got, expect
             )));
         }
 
-        info!("kernel parameters {}: {}", param, got);
+        info!("kernel parameters"; "param" => param, "value" => got);
         Ok(())
     }
 
@@ -723,11 +714,9 @@ mod check_kernel {
                 got == expect
             }),
             // Check vm.swappiness.
-            (
-                "/proc/sys/vm/swappiness",
-                0,
-                box |got, expect| got == expect,
-            ),
+            ("/proc/sys/vm/swappiness", 0, box |got, expect| {
+                got == expect
+            }),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -747,6 +736,244 @@ pub use self::check_kernel::check_kernel;
 #[cfg(not(target_os = "linux"))]
 pub fn check_kernel() -> Vec<ConfigError> {
     Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+mod check_data_dir {
+    use libc;
+    use std::ffi::{CStr, CString};
+    use std::fs::{self, File};
+    use std::io::Read;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    use super::{canonicalize_path, ConfigError};
+
+    #[derive(Debug, Default)]
+    struct FsInfo {
+        tp: String,
+        opts: String,
+        mnt_dir: String,
+        fsname: String,
+    }
+
+    fn get_fs_info(path: &str, mnt_file: &str) -> Result<FsInfo, ConfigError> {
+        lazy_static! {
+            // According `man 3 getmntent`, The pointer returned by `getmntent` points
+            // to a static area of memory which is overwritten by subsequent calls.
+            // So we use a lock to protect it in order to avoid `make dev` fail.
+            static ref GETMNTENT_LOCK: Mutex<()> = Mutex::new(());
+        }
+
+        let op = "data-dir.fsinfo.get";
+
+        unsafe {
+            let _lock = GETMNTENT_LOCK.lock().unwrap();
+
+            let profile = CString::new(mnt_file).unwrap();
+            let retype = CString::new("r").unwrap();
+            let afile = libc::setmntent(profile.as_ptr(), retype.as_ptr());
+            let mut fs = FsInfo::default();
+            loop {
+                let ent = libc::getmntent(afile);
+                if ent.is_null() {
+                    break;
+                }
+                let ent = &*ent;
+                let cur_dir = CStr::from_ptr(ent.mnt_dir).to_str().unwrap();
+                if path.starts_with(&cur_dir) && cur_dir.len() >= fs.mnt_dir.len() {
+                    fs.tp = CStr::from_ptr(ent.mnt_type).to_str().unwrap().to_owned();
+                    fs.opts = CStr::from_ptr(ent.mnt_opts).to_str().unwrap().to_owned();
+                    fs.fsname = CStr::from_ptr(ent.mnt_fsname).to_str().unwrap().to_owned();
+                    fs.mnt_dir = cur_dir.to_owned();
+                }
+            }
+
+            libc::endmntent(afile);
+            if fs.mnt_dir.is_empty() {
+                return Err(ConfigError::FileSystem(format!(
+                    "{}: path: {:?} not find in mountable",
+                    op, path
+                )));
+            }
+            Ok(fs)
+        }
+    }
+
+    fn get_rotational_info(fsname: &str) -> Result<String, ConfigError> {
+        let op = "data-dir.rotation.get";
+        // get device path
+        let device = match fs::canonicalize(fsname) {
+            Ok(path) => format!("{}", path.display()),
+            Err(_) => String::from(fsname),
+        };
+        let dev = device.trim_left_matches("/dev/");
+        let block_dir = "/sys/block";
+        let mut device_dir = format!("{}/{}", block_dir, dev);
+        if !Path::new(&device_dir).exists() {
+            let dir = fs::read_dir(&block_dir).map_err(|e| {
+                ConfigError::FileSystem(format!(
+                    "{}: read block dir {:?} failed: {:?}",
+                    op, block_dir, e
+                ))
+            })?;
+            let mut find = false;
+            for entry in dir {
+                if entry.is_err() {
+                    continue;
+                }
+                let entry = entry.unwrap();
+                let mut cur_path = entry.path();
+                cur_path.push(dev);
+                if cur_path.exists() {
+                    device_dir = entry.path().to_str().unwrap().to_owned();
+                    find = true;
+                    break;
+                }
+            }
+            if !find {
+                return Err(ConfigError::FileSystem(format!(
+                    "{}: {:?} no device find in block",
+                    op, fsname
+                )));
+            }
+        }
+
+        let rota_path = format!("{}/queue/rotational", device_dir);
+        if !Path::new(&rota_path).exists() {
+            return Err(ConfigError::FileSystem(format!(
+                "{}: block {:?} has no rotational file",
+                op, device_dir
+            )));
+        }
+
+        let mut buffer = String::new();
+        File::open(&rota_path)
+            .and_then(|mut f| f.read_to_string(&mut buffer))
+            .map_err(|e| {
+                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
+            })?;
+        Ok(buffer.trim_matches('\n').to_owned())
+    }
+
+    // check device && fs
+    pub fn check_data_dir(data_path: &str, mnt_file: &str) -> Result<(), ConfigError> {
+        let op = "data-dir.check";
+        let real_path = match canonicalize_path(data_path) {
+            Ok(path) => path,
+            Err(e) => {
+                return Err(ConfigError::FileSystem(format!(
+                    "{}: path: {:?} canonicalize failed: {:?}",
+                    op, data_path, e
+                )));
+            }
+        };
+
+        // TODO check ext4 nodelalloc
+        let fs_info = get_fs_info(&real_path, mnt_file)?;
+        info!("check data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+
+        if get_rotational_info(&fs_info.fsname)? != "0" {
+            warn!("not on SSD device"; "data_path" => data_path);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::fs::File;
+        use std::io::Write;
+        use std::os::unix::fs::symlink;
+        use tempdir::TempDir;
+
+        use super::*;
+
+        fn create_file(fpath: &str, buf: &[u8]) {
+            let mut file = File::create(fpath).unwrap();
+            file.write_all(buf).unwrap();
+            file.flush().unwrap();
+        }
+
+        #[test]
+        fn test_get_fs_info() {
+            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let mninfo = br#"tmpfs /home tmpfs rw,nosuid,noexec,relatime,size=1628744k,mode=755 0 0
+/dev/sda4 /home/shirly ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+/dev/sdb /data1 ext4 rw,relatime,errors=remount-ro,data=ordered 0 0
+securityfs /sys/kernel/security securityfs rw,nosuid,nodev,noexec,relatime 0 0
+"#;
+            let mnt_file = format!("{}", tmp_dir.into_path().join("mnt.txt").display());
+            create_file(&mnt_file, mninfo);
+            let f = get_fs_info("/home/shirly/1111", &mnt_file).unwrap();
+            assert_eq!(f.fsname, "/dev/sda4");
+            assert_eq!(f.mnt_dir, "/home/shirly");
+
+            // not found
+            let f2 = get_fs_info("/tmp", &mnt_file);
+            assert!(f2.is_err());
+        }
+
+        #[test]
+        fn test_get_rotational_info() {
+            // test device not exist
+            let ret = get_rotational_info("/dev/invalid");
+            assert!(ret.is_err());
+        }
+
+        #[test]
+        fn test_check_data_dir() {
+            // test invalid data_path
+            let ret = check_data_dir("/sys/invalid", "/proc/mounts");
+            assert!(ret.is_err());
+            // get real path's fs_info
+            let tmp_dir = TempDir::new("test-get-fs-info").unwrap();
+            let data_path = format!("{}/data1", tmp_dir.path().display());
+            let fs_info = get_fs_info(&data_path, "/proc/mounts").unwrap();
+
+            // data_path may not mountted on a normal device on container
+            if !fs_info.fsname.starts_with("/dev") {
+                return;
+            }
+
+            // test with real path
+            let ret = check_data_dir(&data_path, "/proc/mounts");
+            assert!(ret.is_ok());
+
+            // test with device mapper
+            // get real_path's rotational info
+            let expect = get_rotational_info(&fs_info.fsname).unwrap();
+            // ln -s fs_info.fsname tmp_device
+            let tmp_device = format!("{}/tmp_device", tmp_dir.path().display());
+            // /dev/xxx may not exists in container.
+            if !Path::new(&fs_info.fsname).exists() {
+                return;
+            }
+            symlink(&fs_info.fsname, &tmp_device).unwrap();
+            // mount info: data_path=>tmp_device
+            let mninfo = format!(
+                "{} {} ext4 rw,relatime,errors=remount-ro,data=ordered 0 0",
+                &tmp_device, &data_path
+            );
+            let mnt_file = format!("{}/mnt.txt", tmp_dir.path().display());
+            create_file(&mnt_file, mninfo.as_bytes());
+            // check info
+            let res = check_data_dir(&data_path, &mnt_file);
+            assert!(res.is_ok());
+            // check rotational info
+            let get = get_rotational_info(&tmp_device).unwrap();
+            assert_eq!(expect, get);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn check_data_dir(data_path: &str) -> Result<(), ConfigError> {
+    self::check_data_dir::check_data_dir(data_path, "/proc/mounts")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_data_dir(_data_path: &str) -> Result<(), ConfigError> {
+    Ok(())
 }
 
 /// `check_addr` validates an address. Addresses are formed like "Host:Port".
@@ -770,16 +997,15 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
     }
 
     // Check Port.
-    let port: u16 = parts[1]
-        .parse()
-        .map_err(|_| {
-            ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
-        })?;
+    let port: u16 = parts[1].parse().map_err(|_| {
+        ConfigError::Address(format!("invalid addr, parse port failed: {:?}", addr))
+    })?;
     // Port = 0 is invalid.
     if port == 0 {
-        return Err(ConfigError::Address(
-            format!("invalid addr, port can not be 0: {:?}", addr),
-        ));
+        return Err(ConfigError::Address(format!(
+            "invalid addr, port can not be 0: {:?}",
+            addr
+        )));
     }
 
     // Check Host.
@@ -791,7 +1017,7 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::fs::File;
     use std::path::Path;
 
@@ -800,8 +1026,6 @@ mod test {
     use rocksdb::DBCompressionType;
     use tempdir::TempDir;
     use toml;
-
-    use util::collections::HashMap;
 
     #[test]
     fn test_readable_size() {
@@ -876,46 +1100,12 @@ mod test {
         }
 
         let illegal_cases = vec![
-            "0.5kb",
-            "0.5kB",
-            "0.5Kb",
-            "0.5k",
-            "0.5g",
-            "b",
-            "gb",
-            "1b",
-            "B",
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
             assert!(toml::from_str::<SizeHolder>(&src_str).is_err(), "{}", src);
         }
-    }
-
-    #[test]
-    fn test_parse_hash_map() {
-        #[derive(Serialize, Deserialize)]
-        struct MapHolder {
-            #[serde(with = "super::order_map_serde")]
-            m: HashMap<String, String>,
-        }
-
-        let legal_cases = vec![
-            (map![], ""),
-            (map!["k1".to_owned() => "v1".to_owned()], "k1 = \"v1\"\n"),
-        ];
-
-        for (src, exp) in legal_cases {
-            let m = MapHolder { m: src };
-            let res_str = toml::to_string(&m).unwrap();
-            let exp_str = format!("[m]\n{}", exp);
-            assert_eq!(res_str, exp_str);
-            let exp_m: MapHolder = toml::from_str(&exp_str).unwrap();
-            assert_eq!(m.m, exp_m.m);
-        }
-        // inline table should be supported.
-        let m: MapHolder = toml::from_str(r#"m = {"k1" = "v1"}"#).unwrap();
-        assert_eq!(&m.m["k1"], "v1");
     }
 
     #[test]
@@ -949,10 +1139,14 @@ mod test {
             (0, 0, "0s"),
             (0, 1, "1ms"),
             (2, 0, "2s"),
+            (24 * 3600, 0, "1d"),
+            (2 * 24 * 3600, 10, "2d10ms"),
             (4 * 60, 0, "4m"),
             (5 * 3600, 0, "5h"),
             (3600 + 2 * 60, 0, "1h2m"),
+            (5 * 24 * 3600 + 3600 + 2 * 60, 0, "5d1h2m"),
             (3600 + 2, 5, "1h2s5ms"),
+            (3 * 24 * 3600 + 7 * 3600 + 2, 5, "3d7h2s5ms"),
         ];
         for (secs, ms, exp) in legal_cases {
             let d = DurHolder {
@@ -1016,21 +1210,19 @@ mod test {
 
         // length is wrong.
         assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "no", "no"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
         // value is wrong.
-        assert!(
-            toml::from_str::<CompressionTypeHolder>(
-                r#"tp = [
+        assert!(toml::from_str::<CompressionTypeHolder>(
+            r#"tp = [
             "no", "no", "no", "no", "no", "no", "yes"
         ]"#
-            ).is_err()
-        );
+        )
+        .is_err());
     }
 
     #[test]
@@ -1061,8 +1253,8 @@ mod test {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_check_kernel() {
-        use std::i64;
         use super::check_kernel::{check_kernel_params, Checker};
+        use std::i64;
 
         // The range of vm.swappiness is from 0 to 100.
         let table: Vec<(&str, i64, Box<Checker>, bool)> = vec![
@@ -1072,7 +1264,6 @@ mod test {
                 Box::new(|got, expect| got == expect),
                 false,
             ),
-
             (
                 "/proc/sys/vm/swappiness",
                 i64::MAX,
@@ -1094,21 +1285,18 @@ mod test {
             ("localhost:8080", true),
             ("pingcap.com:8080", true),
             ("funnydomain:8080", true),
-
             ("127.0.0.1", false),
             ("[::1]", false),
             ("localhost", false),
             ("pingcap.com", false),
             ("funnydomain", false),
             ("funnydomain:", false),
-
             ("root@google.com:8080", false),
             ("http://google.com:8080", false),
             ("google.com:8080/path", false),
             ("http://google.com:8080/path", false),
             ("http://google.com:8080/path?lang=en", false),
             ("http://google.com:8080/path?lang=en#top", false),
-
             ("ftp://ftp.is.co.za/rfc/rfc1808.txt", false),
             ("http://www.ietf.org/rfc/rfc2396.txt", false),
             ("ldap://[2001:db8::7]/c=GB?objectClass?one", false),
@@ -1117,7 +1305,6 @@ mod test {
             ("tel:+1-816-555-1212", false),
             ("telnet://192.0.2.16:80/", false),
             ("urn:oasis:names:specification:docbook:dtd:xml:4.1.2", false),
-
             (":8080", false),
             ("8080", false),
             ("8080:", false),

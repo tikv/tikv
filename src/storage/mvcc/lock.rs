@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::ReadBytesExt;
-use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::number::{MAX_VAR_U64_LEN, NumberDecoder, NumberEncoder};
-use util::codec::bytes::{BytesEncoder, CompactBytesDecoder};
-use super::{Error, Result};
 use super::super::types::Value;
+use super::{Error, Result};
+use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::util::codec::bytes::{self, BytesEncoder};
+use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use byteorder::ReadBytesExt;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -32,7 +32,7 @@ const FLAG_LOCK: u8 = b'L';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
         match *mutation {
-            Mutation::Put(_) => LockType::Put,
+            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
             Mutation::Delete(_) => LockType::Delete,
             Mutation::Lock(_) => LockType::Lock,
         }
@@ -47,8 +47,8 @@ impl LockType {
         }
     }
 
-    fn to_u8(&self) -> u8 {
-        match *self {
+    fn to_u8(self) -> u8 {
+        match self {
             LockType::Put => FLAG_PUT,
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
@@ -74,11 +74,11 @@ impl Lock {
         short_value: Option<Value>,
     ) -> Lock {
         Lock {
-            lock_type: lock_type,
-            primary: primary,
-            ts: ts,
-            ttl: ttl,
-            short_value: short_value,
+            lock_type,
+            primary,
+            ts,
+            ttl,
+            short_value,
         }
     }
 
@@ -103,9 +103,13 @@ impl Lock {
             return Err(Error::BadFormatLock);
         }
         let lock_type = LockType::from_u8(b.read_u8()?).ok_or(Error::BadFormatLock)?;
-        let primary = b.decode_compact_bytes()?;
-        let ts = b.decode_var_u64()?;
-        let ttl = if b.is_empty() { 0 } else { b.decode_var_u64()? };
+        let primary = bytes::decode_compact_bytes(&mut b)?;
+        let ts = number::decode_var_u64(&mut b)?;
+        let ttl = if b.is_empty() {
+            0
+        } else {
+            number::decode_var_u64(&mut b)?
+        };
 
         if b.is_empty() {
             return Ok(Lock::new(lock_type, primary, ts, ttl, None));
@@ -113,8 +117,7 @@ impl Lock {
 
         let flag = b.read_u8()?;
         assert_eq!(
-            flag,
-            SHORT_VALUE_PREFIX,
+            flag, SHORT_VALUE_PREFIX,
             "invalid flag [{:?}] in write",
             flag
         );
@@ -134,55 +137,47 @@ impl Lock {
 
 #[cfg(test)]
 mod tests {
-    use storage::{make_key, Mutation};
     use super::*;
+    use crate::storage::{Key, Mutation};
 
     #[test]
     fn test_lock_type() {
         let (key, value) = (b"key", b"value");
         let mut tests = vec![
             (
-                Mutation::Put((make_key(key), value.to_vec())),
+                Mutation::Put((Key::from_raw(key), value.to_vec())),
                 LockType::Put,
                 FLAG_PUT,
             ),
             (
-                Mutation::Delete(make_key(key)),
+                Mutation::Delete(Key::from_raw(key)),
                 LockType::Delete,
                 FLAG_DELETE,
             ),
-            (Mutation::Lock(make_key(key)), LockType::Lock, FLAG_LOCK),
+            (
+                Mutation::Lock(Key::from_raw(key)),
+                LockType::Lock,
+                FLAG_LOCK,
+            ),
         ];
         for (i, (mutation, lock_type, flag)) in tests.drain(..).enumerate() {
             let lt = LockType::from_mutation(&mutation);
             assert_eq!(
-                lt,
-                lock_type,
+                lt, lock_type,
                 "#{}, expect from_mutation({:?}) returns {:?}, but got {:?}",
-                i,
-                mutation,
-                lock_type,
-                lt
+                i, mutation, lock_type, lt
             );
             let f = lock_type.to_u8();
             assert_eq!(
-                f,
-                flag,
+                f, flag,
                 "#{}, expect {:?}.to_u8() returns {:?}, but got {:?}",
-                i,
-                lock_type,
-                flag,
-                f
+                i, lock_type, flag, f
             );
             let lt = LockType::from_u8(flag).unwrap();
             assert_eq!(
-                lt,
-                lock_type,
+                lt, lock_type,
                 "#{}, expect from_u8({:?}) returns {:?}, but got {:?})",
-                i,
-                flag,
-                lock_type,
-                lt
+                i, flag, lock_type, lt
             );
         }
     }

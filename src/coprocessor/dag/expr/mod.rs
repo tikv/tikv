@@ -11,158 +11,113 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod column;
-mod constant;
-mod fncall;
-mod builtin_cast;
-mod builtin_control;
-mod builtin_op;
-mod compare;
-mod arithmetic;
-mod math;
-mod json;
-
-use std::{error, io, str};
 use std::borrow::Cow;
-use std::string::FromUtf8Error;
-use std::str::Utf8Error;
+use std::cell::RefCell;
+use std::convert::TryInto;
+use std::str;
+
+use rand::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Res, Time, MAX_FSP};
-use coprocessor::codec::mysql::decimal::DecimalDecoder;
-use coprocessor::codec::mysql::json::JsonDecoder;
-use coprocessor::codec::mysql::{charset, types};
-use coprocessor::codec::Datum;
-use util;
-use util::codec::number::NumberDecoder;
-use util::codec::Error as CError;
+use crate::coprocessor::codec::mysql::charset;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::{self, Datum};
+use crate::util::codec::number;
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeFlag;
 
-pub use coprocessor::select::xeval::EvalContext as StatementContext;
+mod builtin_arithmetic;
+mod builtin_cast;
+mod builtin_compare;
+mod builtin_control;
+mod builtin_encryption;
+mod builtin_json;
+mod builtin_like;
+mod builtin_math;
+mod builtin_miscellaneous;
+mod builtin_op;
+mod builtin_other;
+mod builtin_string;
+mod builtin_time;
+mod column;
+mod constant;
+mod ctx;
+mod scalar_function;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Io(err: io::Error) {
-            from()
-            description("io error")
-            display("I/O error: {}", err)
-            cause(err)
-        }
-        Type { has: &'static str, expected: &'static str } {
-            description("type error")
-            display("type error: cannot get {:?} result from {:?} expression", expected, has)
-        }
-        Codec(err: util::codec::Error) {
-            from()
-            description("codec error")
-            display("codec error: {}", err)
-            cause(err)
-        }
-        ColumnOffset(offset: usize) {
-            description("column offset not found")
-            display("illegal column offset: {}", offset)
-        }
-        UnknownSignature(sig: ScalarFuncSig) {
-            description("Unknown signature")
-            display("Unknown signature: {:?}", sig)
-        }
-        Truncated {
-            description("Truncated")
-            display("error Truncated")
-        }
-        Overflow {
-            description("Overflow")
-            display("error Overflow")
-        }
-        Other(err: Box<error::Error + Send + Sync>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("unknown error {:?}", err)
-        }
-    }
-}
-
-impl From<FromUtf8Error> for Error {
-    fn from(err: FromUtf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.utf8_error().into()))
-    }
-}
-impl From<Utf8Error> for Error {
-    fn from(err: Utf8Error) -> Error {
-        Error::Codec(CError::Encoding(err.into()))
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, Error>;
-
-impl<T> Into<Result<T>> for Res<T> {
-    fn into(self) -> Result<T> {
-        match self {
-            Res::Ok(t) => Ok(t),
-            Res::Truncated(_) => Err(Error::Truncated),
-            Res::Overflow(_) => Err(Error::Overflow),
-        }
-    }
-}
+pub use self::ctx::*;
+pub use crate::coprocessor::codec::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     ColumnRef(Column),
-    ScalarFn(FnCall),
+    ScalarFn(ScalarFunc),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Column {
     offset: usize,
-    tp: FieldType,
+    field_type: FieldType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Constant {
     val: Datum,
-    tp: FieldType,
+    field_type: FieldType,
 }
 
 /// A single scalar function call
 #[derive(Debug, Clone, PartialEq)]
-pub struct FnCall {
+pub struct ScalarFunc {
     sig: ScalarFuncSig,
     children: Vec<Expression>,
-    tp: FieldType,
+    field_type: FieldType,
+    cus_rng: CusRng,
+}
+
+#[derive(Clone)]
+struct CusRng {
+    rng: RefCell<Option<XorShiftRng>>,
+}
+
+impl std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "()")
+    }
+}
+
+impl PartialEq for CusRng {
+    fn eq(&self, other: &CusRng) -> bool {
+        self == other
+    }
 }
 
 impl Expression {
-    fn new_const(v: Datum, field_type: FieldType) -> Expression {
-        Expression::Constant(Constant {
-            val: v,
-            tp: field_type,
-        })
+    fn new_const(val: Datum, field_type: FieldType) -> Expression {
+        Expression::Constant(Constant { val, field_type })
     }
 
     #[inline]
-    fn get_tp(&self) -> &FieldType {
+    fn field_type(&self) -> &FieldType {
         match *self {
-            Expression::Constant(ref c) => &c.tp,
-            Expression::ColumnRef(ref c) => &c.tp,
-            Expression::ScalarFn(ref c) => &c.tp,
+            Expression::Constant(ref c) => &c.field_type,
+            Expression::ColumnRef(ref c) => &c.field_type,
+            Expression::ScalarFn(ref c) => &c.field_type,
         }
     }
 
     #[cfg(test)]
     #[inline]
-    fn mut_tp(&mut self) -> &mut FieldType {
+    fn mut_field_type(&mut self) -> &mut FieldType {
         match *self {
-            Expression::Constant(ref mut c) => &mut c.tp,
-            Expression::ColumnRef(ref mut c) => &mut c.tp,
-            Expression::ScalarFn(ref mut c) => &mut c.tp,
+            Expression::Constant(ref mut c) => &mut c.field_type,
+            Expression::ColumnRef(ref mut c) => &mut c.field_type,
+            Expression::ScalarFn(ref mut c) => &mut c.field_type,
         }
     }
 
-    #[allow(match_same_arms)]
-    fn eval_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    fn eval_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_int(),
             Expression::ColumnRef(ref column) => column.eval_int(row),
@@ -170,7 +125,7 @@ impl Expression {
         }
     }
 
-    fn eval_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    fn eval_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_real(),
             Expression::ColumnRef(ref column) => column.eval_real(row),
@@ -178,10 +133,9 @@ impl Expression {
         }
     }
 
-    #[allow(match_same_arms)]
     fn eval_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         match *self {
@@ -193,36 +147,36 @@ impl Expression {
 
     fn eval_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         match *self {
             Expression::Constant(ref constant) => constant.eval_string(),
-            Expression::ColumnRef(ref column) => column.eval_string(row),
+            Expression::ColumnRef(ref column) => column.eval_string(ctx, row),
             Expression::ScalarFn(ref f) => f.eval_bytes(ctx, row),
         }
     }
 
     fn eval_string_and_decode<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, str>>> {
         let bytes = try_opt!(self.eval_string(ctx, row));
-        let chrst = self.get_tp().get_charset();
-        if charset::UTF8_CHARSETS.contains(&chrst) {
+        let charset = self.field_type().get_charset();
+        if charset::UTF8_CHARSETS.contains(&charset) {
             let s = match bytes {
                 Cow::Borrowed(bs) => str::from_utf8(bs).map_err(Error::from).map(Cow::Borrowed),
                 Cow::Owned(bs) => String::from_utf8(bs).map_err(Error::from).map(Cow::Owned),
             };
             return s.map(Some);
         }
-        Err(box_err!("unsupported charset: {}", chrst))
+        Err(box_err!("unsupported charset: {}", charset))
     }
 
     fn eval_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         match *self {
@@ -234,7 +188,7 @@ impl Expression {
 
     fn eval_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         match *self {
@@ -246,7 +200,7 @@ impl Expression {
 
     fn eval_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         match *self {
@@ -256,28 +210,14 @@ impl Expression {
         }
     }
 
-    /// IsHybridType checks whether a ClassString expression is a hybrid type value which will
-    /// return different types of value in different context.
-    /// For ENUM/SET which is consist of a string attribute `Name` and an int attribute `Value`,
-    /// it will cause an error if we convert ENUM/SET to int as a string value.
-    /// For Bit/Hex, we will get a wrong result if we convert it to int as a string value.
-    /// For example, when convert `0b101` to int, the result should be 5, but we will get
-    /// 101 if we regard it as a string.
-    fn is_hybrid_type(&self) -> bool {
-        match self.get_tp().get_tp() as u8 {
-            types::ENUM | types::BIT | types::SET => {
-                return true;
-            }
-            _ => {}
-        }
-        // TODO:For a constant, the field type will be inferred as `VARCHAR`
-        // when the kind of it is `HEX` or `BIT`.
-        false
+    #[inline]
+    pub fn is_unsigned(&self) -> bool {
+        self.field_type().flag().contains(FieldTypeFlag::UNSIGNED)
     }
 }
 
 impl Expression {
-    pub fn eval(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Datum> {
+    pub fn eval(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Datum> {
         match *self {
             Expression::Constant(ref constant) => Ok(constant.eval()),
             Expression::ColumnRef(ref column) => Ok(column.eval(row)),
@@ -285,7 +225,7 @@ impl Expression {
         }
     }
 
-    pub fn batch_build(ctx: &StatementContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
+    pub fn batch_build(ctx: &EvalContext, exprs: Vec<Expr>) -> Result<Vec<Self>> {
         let mut data = Vec::with_capacity(exprs.len());
         for expr in exprs {
             let ex = Expression::build(ctx, expr)?;
@@ -294,73 +234,70 @@ impl Expression {
         Ok(data)
     }
 
-    pub fn build(ctx: &StatementContext, mut expr: Expr) -> Result<Self> {
-        let tp = expr.take_field_type();
+    pub fn build(ctx: &EvalContext, mut expr: Expr) -> Result<Self> {
+        debug!(
+            "build-expr";
+            "expr" => ?expr
+        );
+        let field_type = expr.take_field_type();
         match expr.get_tp() {
-            ExprType::Null => Ok(Expression::new_const(Datum::Null, tp)),
-            ExprType::Int64 => expr.get_val()
-                .decode_i64()
+            ExprType::Null => Ok(Expression::new_const(Datum::Null, field_type)),
+            ExprType::Int64 => number::decode_i64(&mut expr.get_val())
                 .map(Datum::I64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::Uint64 => expr.get_val()
-                .decode_u64()
+            ExprType::Uint64 => number::decode_u64(&mut expr.get_val())
                 .map(Datum::U64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::String | ExprType::Bytes => {
-                Ok(Expression::new_const(Datum::Bytes(expr.take_val()), tp))
-            }
-            ExprType::Float32 | ExprType::Float64 => expr.get_val()
-                .decode_f64()
+            ExprType::String | ExprType::Bytes => Ok(Expression::new_const(
+                Datum::Bytes(expr.take_val()),
+                field_type,
+            )),
+            ExprType::Float32 | ExprType::Float64 => number::decode_f64(&mut expr.get_val())
                 .map(Datum::F64)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::MysqlTime => expr.get_val()
-                .decode_u64()
+            ExprType::MysqlTime => number::decode_u64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|i| {
-                    let fsp = tp.get_decimal() as i8;
-                    let t = tp.get_tp() as u8;
-                    Time::from_packed_u64(i, t, fsp, &ctx.tz)
+                    let fsp = field_type.decimal() as i8;
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
                 })
-                .map(|t| Expression::new_const(Datum::Time(t), tp))
-                .map_err(Error::from),
-            ExprType::MysqlDuration => expr.get_val()
-                .decode_i64()
+                .map(|t| Expression::new_const(Datum::Time(t), field_type)),
+            ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
+                .map_err(Error::from)
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
-                .map(|e| Expression::new_const(e, tp))
-                .map_err(Error::from),
-            ExprType::MysqlDecimal => expr.get_val()
-                .decode_decimal()
+                .map(|e| Expression::new_const(e, field_type)),
+            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
                 .map(Datum::Dec)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::MysqlJson => expr.get_val()
-                .decode_json()
+            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
                 .map(Datum::Json)
-                .map(|e| Expression::new_const(e, tp))
+                .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
             ExprType::ScalarFunc => {
-                FnCall::check_args(expr.get_sig(), expr.get_children().len())?;
+                ScalarFunc::check_args(expr.get_sig(), expr.get_children().len())?;
                 expr.take_children()
                     .into_iter()
                     .map(|child| Expression::build(ctx, child))
                     .collect::<Result<Vec<_>>>()
                     .map(|children| {
-                        Expression::ScalarFn(FnCall {
+                        Expression::ScalarFn(ScalarFunc {
                             sig: expr.get_sig(),
-                            children: children,
-                            tp: tp,
+                            children,
+                            field_type,
+                            cus_rng: CusRng {
+                                rng: RefCell::new(None),
+                            },
                         })
                     })
             }
             ExprType::ColumnRef => {
-                let offset = expr.get_val().decode_i64().map_err(Error::from)? as usize;
-                let column = Column {
-                    offset: offset,
-                    tp: tp,
-                };
+                let offset = number::decode_i64(&mut expr.get_val()).map_err(Error::from)? as usize;
+                let column = Column { offset, field_type };
                 Ok(Expression::ColumnRef(column))
             }
             unhandled => Err(box_err!("can't handle {:?} expr in DAG mode", unhandled)),
@@ -368,14 +305,38 @@ impl Expression {
     }
 }
 
+#[inline]
+pub fn eval_arith<F>(ctx: &mut EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
+where
+    F: FnOnce(Datum, &mut EvalContext, Datum) -> codec::Result<Datum>,
+{
+    let left = left.into_arith(ctx)?;
+    let right = right.into_arith(ctx)?;
+
+    let (left, right) = Datum::coerce(left, right)?;
+    if left == Datum::Null || right == Datum::Null {
+        return Ok(Datum::Null);
+    }
+
+    f(left, ctx, right).map_err(From::from)
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
+    use std::sync::Arc;
     use std::{i64, u64};
-    use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{types, Decimal, Duration, Json, Time};
-    use coprocessor::select::xeval::evaluator::test::col_expr;
+
+    use cop_datatype::{self, Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
-    use super::{Error, Expression, StatementContext};
+
+    use super::{Error, EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
+    use crate::coprocessor::codec::mysql::json::JsonEncoder;
+    use crate::coprocessor::codec::mysql::{
+        charset, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
+    use crate::coprocessor::codec::{mysql, Datum};
+    use crate::util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {
@@ -389,13 +350,23 @@ mod test {
 
     #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
+        if e.code() == ERR_DATA_OUT_OF_RANGE {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 
-    pub fn fncall_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
+    #[inline]
+    pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
+        if e.code() == ERR_DIVISION_BY_ZERO {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn scalar_func_expr(sig: ScalarFuncSig, children: &[Expr]) -> Expr {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
@@ -406,10 +377,153 @@ mod test {
         expr
     }
 
+    pub fn col_expr(col_id: i64) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(ExprType::ColumnRef);
+        let mut buf = Vec::with_capacity(8);
+        buf.encode_i64(col_id).unwrap();
+        expr.set_val(buf);
+        expr
+    }
+
+    pub fn string_datum_expr_with_tp(
+        datum: Datum,
+        tp: FieldTypeTp,
+        flag: FieldTypeFlag,
+        flen: isize,
+        charset: String,
+        collate: Collation,
+    ) -> Expr {
+        let mut expr = Expr::new();
+        match datum {
+            Datum::Bytes(bs) => {
+                expr.set_tp(ExprType::Bytes);
+                expr.set_val(bs);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_tp(tp)
+                    .set_flag(flag)
+                    .set_flen(flen)
+                    .set_collation(collate);
+                expr.mut_field_type().set_charset(charset);
+            }
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
+        }
+        expr
+    }
+
+    pub fn datum_expr(datum: Datum) -> Expr {
+        let mut expr = Expr::new();
+        match datum {
+            Datum::I64(i) => {
+                expr.set_tp(ExprType::Int64);
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
+                buf.encode_i64(i).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::U64(u) => {
+                expr.set_tp(ExprType::Uint64);
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
+                buf.encode_u64(u).unwrap();
+                expr.set_val(buf);
+                expr.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
+            }
+            Datum::Bytes(bs) => {
+                expr.set_tp(ExprType::Bytes);
+                expr.set_val(bs);
+                expr.mut_field_type()
+                    .set_charset(charset::CHARSET_UTF8.to_owned());
+            }
+            Datum::F64(f) => {
+                expr.set_tp(ExprType::Float64);
+                let mut buf = Vec::with_capacity(number::F64_SIZE);
+                buf.encode_f64(f).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dur(d) => {
+                expr.set_tp(ExprType::MysqlDuration);
+                let mut buf = Vec::with_capacity(number::I64_SIZE);
+                buf.encode_i64(d.to_nanos()).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Dec(d) => {
+                expr.set_tp(ExprType::MysqlDecimal);
+                let (prec, frac) = d.prec_and_frac();
+                let mut buf = Vec::with_capacity(mysql::dec_encoded_len(&[prec, frac]).unwrap());
+                buf.encode_decimal(&d, prec, frac).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Time(t) => {
+                expr.set_tp(ExprType::MysqlTime);
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor()
+                    .set_tp(t.get_time_type().into())
+                    .set_decimal(isize::from(t.get_fsp()));
+                expr.set_field_type(ft);
+                let u = t.to_packed_u64();
+                let mut buf = Vec::with_capacity(number::U64_SIZE);
+                buf.encode_u64(u).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Json(j) => {
+                expr.set_tp(ExprType::MysqlJson);
+                let mut buf = Vec::new();
+                buf.encode_json(&j).unwrap();
+                expr.set_val(buf);
+            }
+            Datum::Null => expr.set_tp(ExprType::Null),
+            d => panic!("unsupport datum: {:?}", d),
+        };
+        expr
+    }
+
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let got = eval_func(ScalarFuncSig::TruncateInt, &[Datum::I64(1028), Datum::I64(-2)]).unwrap();
+    /// assert_eq!(got, Datum::I64(1000));
+    /// ```
+    pub fn eval_func(sig: ScalarFuncSig, args: &[Datum]) -> super::Result<Datum> {
+        eval_func_with(sig, args, |_, _| {})
+    }
+
+    /// dispatch ScalarFuncSig with the args, return the result by calling eval.
+    /// f is used to setup the Expression before calling eval, like the set flag of the FieldType.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let x = Datum::U64(18446744073709551615);
+    /// let d = Datum::I64(-2);
+    /// let exp = Datum::U64(18446744073709551600);
+    /// let got = eval_func_with(ScalarFuncSig::TruncateInt, &[x, d], |op, args| {
+    ///     if mysql::has_unsigned_flag(args[0].get_field_type().get_flag()) {
+    ///         op.mut_tp().set_flag(types::UNSIGNED_FLAG as u32);
+    ///     }
+    /// }).unwrap();
+    /// assert_eq!(got, exp);
+    /// ```
+    pub fn eval_func_with<F: FnOnce(&mut Expression, &[Expr]) -> ()>(
+        sig: ScalarFuncSig,
+        args: &[Datum],
+        f: F,
+    ) -> super::Result<Datum> {
+        let mut ctx = EvalContext::default();
+        let args: Vec<Expr> = args.iter().map(|arg| datum_expr(arg.clone())).collect();
+        let expr = scalar_func_expr(sig, &args);
+        let mut op = Expression::build(&ctx, expr).unwrap();
+        f(&mut op, &args);
+        op.eval(&mut ctx, &[])
+    }
+
     #[test]
     fn test_expression_eval() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 ScalarFuncSig::CastStringAsReal,
@@ -443,14 +557,17 @@ mod test {
             ),
         ];
         for (sig, cols, exp) in cases {
-            let col_expr = col_expr(0);
-            let mut ex = fncall_expr(sig, &[col_expr]);
+            let mut col_expr = col_expr(0);
+            col_expr
+                .mut_field_type()
+                .set_charset(charset::CHARSET_UTF8.to_owned());
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
             ex.mut_field_type()
-                .set_decimal(convert::UNSPECIFIED_LENGTH as i32);
-            ex.mut_field_type()
-                .set_flen(convert::UNSPECIFIED_LENGTH as i32);
+                .as_mut_accessor()
+                .set_decimal(cop_datatype::UNSPECIFIED_LENGTH)
+                .set_flen(cop_datatype::UNSPECIFIED_LENGTH);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval(&ctx, &cols).unwrap();
+            let res = e.eval(&mut ctx, &cols).unwrap();
             if let Datum::F64(_) = exp {
                 assert_eq!(format!("{}", res), format!("{}", exp));
             } else {
@@ -460,7 +577,7 @@ mod test {
         // cases for integer
         let cases = vec![
             (
-                Some(types::UNSIGNED_FLAG),
+                Some(FieldTypeFlag::UNSIGNED),
                 vec![Datum::U64(u64::MAX)],
                 Datum::U64(u64::MAX),
             ),
@@ -469,12 +586,14 @@ mod test {
         ];
         for (flag, cols, exp) in cases {
             let col_expr = col_expr(0);
-            let mut ex = fncall_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastIntAsInt, &[col_expr]);
             if flag.is_some() {
-                ex.mut_field_type().set_flag(flag.unwrap() as u32);
+                ex.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval(&ctx, &cols).unwrap();
+            let res = e.eval(&mut ctx, &cols).unwrap();
             assert_eq!(res, exp);
         }
     }

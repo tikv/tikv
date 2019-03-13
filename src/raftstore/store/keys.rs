@@ -11,41 +11,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
+use byteorder::{BigEndian, ByteOrder};
 
-use raftstore::Result;
-use util::escape;
+use crate::raftstore::Result;
+use crate::util::escape;
 use kvproto::metapb::Region;
 use std::mem;
 
-pub const MIN_KEY: &'static [u8] = &[];
-pub const MAX_KEY: &'static [u8] = &[0xFF];
+pub const MIN_KEY: &[u8] = &[];
+pub const MAX_KEY: &[u8] = &[0xFF];
 
-pub const EMPTY_KEY: &'static [u8] = &[];
+pub const EMPTY_KEY: &[u8] = &[];
 
 // local is in (0x01, 0x02);
 pub const LOCAL_PREFIX: u8 = 0x01;
-pub const LOCAL_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX];
-pub const LOCAL_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX + 1];
+pub const LOCAL_MIN_KEY: &[u8] = &[LOCAL_PREFIX];
+pub const LOCAL_MAX_KEY: &[u8] = &[LOCAL_PREFIX + 1];
 
 pub const DATA_PREFIX: u8 = b'z';
-pub const DATA_PREFIX_KEY: &'static [u8] = &[DATA_PREFIX];
-pub const DATA_MIN_KEY: &'static [u8] = &[DATA_PREFIX];
-pub const DATA_MAX_KEY: &'static [u8] = &[DATA_PREFIX + 1];
+pub const DATA_PREFIX_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MIN_KEY: &[u8] = &[DATA_PREFIX];
+pub const DATA_MAX_KEY: &[u8] = &[DATA_PREFIX + 1];
 
 // Following keys are all local keys, so the first byte must be 0x01.
-pub const STORE_IDENT_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x01];
-pub const PREPARE_BOOTSTRAP_KEY: &'static [u8] = &[LOCAL_PREFIX, 0x02];
+pub const STORE_IDENT_KEY: &[u8] = &[LOCAL_PREFIX, 0x01];
+pub const PREPARE_BOOTSTRAP_KEY: &[u8] = &[LOCAL_PREFIX, 0x02];
 // We save two types region data in DB, for raft and other meta data.
 // When the store starts, we should iterate all region meta data to
 // construct peer, no need to travel large raft data, so we separate them
 // with different prefixes.
 pub const REGION_RAFT_PREFIX: u8 = 0x02;
-pub const REGION_RAFT_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
+pub const REGION_RAFT_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_RAFT_PREFIX];
 pub const REGION_META_PREFIX: u8 = 0x03;
-pub const REGION_META_PREFIX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
-pub const REGION_META_MIN_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
-pub const REGION_META_MAX_KEY: &'static [u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
+pub const REGION_META_PREFIX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MIN_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX];
+pub const REGION_META_MAX_KEY: &[u8] = &[LOCAL_PREFIX, REGION_META_PREFIX + 1];
 
 // Following are the suffix after the local prefix.
 // For region id
@@ -57,30 +57,29 @@ pub const SNAPSHOT_RAFT_STATE_SUFFIX: u8 = 0x04;
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
 
-pub fn store_ident_key() -> Vec<u8> {
-    STORE_IDENT_KEY.to_vec()
-}
-
-pub fn prepare_bootstrap_key() -> Vec<u8> {
-    PREPARE_BOOTSTRAP_KEY.to_vec()
-}
-
-fn make_region_id_key(region_id: u64, suffix: u8, extra_cap: usize) -> Vec<u8> {
-    let mut key = Vec::with_capacity(
-        REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>() + extra_cap,
-    );
-    key.extend_from_slice(REGION_RAFT_PREFIX_KEY);
-    // no need check error here, can't panic;
-    key.write_u64::<BigEndian>(region_id).unwrap();
-    key.push(suffix);
+#[inline]
+fn make_region_prefix(region_id: u64, suffix: u8) -> [u8; 11] {
+    let mut key = [0; 11];
+    key[..2].copy_from_slice(REGION_RAFT_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], region_id);
+    key[10] = suffix;
     key
 }
 
-pub fn region_raft_prefix(region_id: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>());
-    key.extend_from_slice(REGION_RAFT_PREFIX_KEY);
-    // no need check error here, can't panic;
-    key.write_u64::<BigEndian>(region_id).unwrap();
+#[inline]
+fn make_region_key(region_id: u64, suffix: u8, sub_id: u64) -> [u8; 19] {
+    let mut key = [0; 19];
+    key[..2].copy_from_slice(REGION_RAFT_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], region_id);
+    key[10] = suffix;
+    BigEndian::write_u64(&mut key[11..19], sub_id);
+    key
+}
+
+pub fn region_raft_prefix(region_id: u64) -> [u8; 10] {
+    let mut key = [0; 10];
+    key[0..2].copy_from_slice(REGION_RAFT_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], region_id);
     key
 }
 
@@ -89,29 +88,28 @@ pub fn region_raft_prefix_len() -> usize {
     REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>() + 1
 }
 
-pub fn raft_log_key(region_id: u64, log_index: u64) -> Vec<u8> {
-    let mut key = make_region_id_key(region_id, RAFT_LOG_SUFFIX, mem::size_of::<u64>());
-    // no need check error here, can't panic;
-    key.write_u64::<BigEndian>(log_index).unwrap();
-    key
+pub fn raft_log_key(region_id: u64, log_index: u64) -> [u8; 19] {
+    make_region_key(region_id, RAFT_LOG_SUFFIX, log_index)
 }
 
-pub fn raft_state_key(region_id: u64) -> Vec<u8> {
-    make_region_id_key(region_id, RAFT_STATE_SUFFIX, 0)
+pub fn raft_state_key(region_id: u64) -> [u8; 11] {
+    make_region_prefix(region_id, RAFT_STATE_SUFFIX)
 }
 
-pub fn snapshot_raft_state_key(region_id: u64) -> Vec<u8> {
-    make_region_id_key(region_id, SNAPSHOT_RAFT_STATE_SUFFIX, 0)
+pub fn snapshot_raft_state_key(region_id: u64) -> [u8; 11] {
+    make_region_prefix(region_id, SNAPSHOT_RAFT_STATE_SUFFIX)
 }
 
-pub fn apply_state_key(region_id: u64) -> Vec<u8> {
-    make_region_id_key(region_id, APPLY_STATE_SUFFIX, 0)
+pub fn apply_state_key(region_id: u64) -> [u8; 11] {
+    make_region_prefix(region_id, APPLY_STATE_SUFFIX)
 }
 
 /// Get the log index from raft log key generated by `raft_log_key`.
 pub fn raft_log_index(key: &[u8]) -> Result<u64> {
-    let expect_key_len = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>() +
-        mem::size_of::<u8>() + mem::size_of::<u64>();
+    let expect_key_len = REGION_RAFT_PREFIX_KEY.len()
+        + mem::size_of::<u64>()
+        + mem::size_of::<u8>()
+        + mem::size_of::<u64>();
     if key.len() != expect_key_len {
         return Err(box_err!("key {} is not a valid raft log key", escape(key)));
     }
@@ -124,8 +122,9 @@ pub fn raft_log_index(key: &[u8]) -> Result<u64> {
 pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
     let suffix_idx = REGION_RAFT_PREFIX_KEY.len() + mem::size_of::<u64>();
     let expect_key_len = suffix_idx + mem::size_of::<u8>() + mem::size_of::<u64>();
-    if key.len() != expect_key_len || !key.starts_with(REGION_RAFT_PREFIX_KEY) ||
-        key[suffix_idx] != RAFT_LOG_SUFFIX
+    if key.len() != expect_key_len
+        || !key.starts_with(REGION_RAFT_PREFIX_KEY)
+        || key[suffix_idx] != RAFT_LOG_SUFFIX
     {
         return Err(box_err!("key {} is not a valid raft log key", escape(key)));
     }
@@ -134,18 +133,16 @@ pub fn decode_raft_log_key(key: &[u8]) -> Result<(u64, u64)> {
     Ok((region_id, index))
 }
 
-pub fn raft_log_prefix(region_id: u64) -> Vec<u8> {
-    make_region_id_key(region_id, RAFT_LOG_SUFFIX, 0)
+pub fn raft_log_prefix(region_id: u64) -> [u8; 11] {
+    make_region_prefix(region_id, RAFT_LOG_SUFFIX)
 }
 
-fn make_region_meta_key(region_id: u64, suffix: u8) -> Vec<u8> {
-    let mut key = Vec::with_capacity(
-        REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>(),
-    );
-    key.extend_from_slice(REGION_META_PREFIX_KEY);
-    // no need to check error here, can't panic;
-    key.write_u64::<BigEndian>(region_id).unwrap();
-    key.push(suffix);
+#[inline]
+fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
+    let mut key = [0; 11];
+    key[0..2].copy_from_slice(REGION_META_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], region_id);
+    key[10] = suffix;
     key
 }
 
@@ -172,14 +169,14 @@ pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
     Ok((region_id, key[key.len() - 1]))
 }
 
-pub fn region_meta_prefix(region_id: u64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>());
-    key.extend_from_slice(REGION_META_PREFIX_KEY);
-    key.write_u64::<BigEndian>(region_id).unwrap();
+pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
+    let mut key = [0; 10];
+    key[0..2].copy_from_slice(REGION_META_PREFIX_KEY);
+    BigEndian::write_u64(&mut key[2..10], region_id);
     key
 }
 
-pub fn region_state_key(region_id: u64) -> Vec<u8> {
+pub fn region_state_key(region_id: u64) -> [u8; 11] {
     make_region_meta_key(region_id, REGION_STATE_SUFFIX)
 }
 
@@ -233,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let region_ids = vec![0, 1, 1024, ::std::u64::MAX];
+        let region_ids = vec![0, 1, 1024, std::u64::MAX];
         for region_id in region_ids {
             let prefix = region_raft_prefix(region_id);
 
@@ -317,15 +314,16 @@ mod tests {
             }
         }
 
-        let mut state_key = raft_state_key(1);
+        let state_key = raft_state_key(1);
         // invalid length
         assert!(decode_raft_log_key(&state_key).is_err());
 
+        let mut state_key = state_key.to_vec();
         state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid suffix
         assert!(decode_raft_log_key(&state_key).is_err());
 
-        let mut region_state_key = region_state_key(1);
+        let mut region_state_key = region_state_key(1).to_vec();
         region_state_key.write_u64::<BigEndian>(2).unwrap();
         // invalid prefix
         assert!(decode_raft_log_key(&region_state_key).is_err());
@@ -338,8 +336,8 @@ mod tests {
 
         let mut region = Region::new();
         // uninitialised region should not be passed in `enc_start_key` and `enc_end_key`.
-        assert!(recover_safe!(|| enc_start_key(&region)).is_err());
-        assert!(recover_safe!(|| enc_end_key(&region)).is_err());
+        assert!(::panic_hook::recover_safe(|| enc_start_key(&region)).is_err());
+        assert!(::panic_hook::recover_safe(|| enc_end_key(&region)).is_err());
 
         region.mut_peers().push(Peer::new());
         assert_eq!(enc_start_key(&region), vec![DATA_PREFIX]);

@@ -11,29 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// remove later
-#![allow(dead_code)]
-
 use tipb::executor::Limit;
 
-use coprocessor::Result;
-use coprocessor::metrics::*;
-use coprocessor::dag::executor::{Executor, Row};
-use storage::Statistics;
+use super::ExecutorMetrics;
+use crate::coprocessor::dag::executor::{Executor, Row};
+use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::Result;
 
+/// Retrieves rows from the source executor and only produces part of the rows.
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + 'a>,
+    src: Box<dyn Executor + Send + 'a>,
+    first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + 'a>) -> LimitExecutor {
-        COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,
-            src: src,
+            src,
+            first_collect: true,
         }
     }
 }
@@ -51,33 +50,49 @@ impl<'a> Executor for LimitExecutor<'a> {
         }
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
+    fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
+        // We do not know whether `limit` has consumed all of it's source, so just ignore it.
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.limit += 1;
+            self.first_collect = false;
+        }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
 
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::datum::Datum;
-    use storage::SnapshotStore;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::storage::SnapshotStore;
 
-    use super::*;
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
-    use super::super::topn::test::gen_table_data;
+    use super::super::topn::tests::gen_table_data;
+    use super::*;
 
     #[test]
     fn test_limit_executor() {
         // prepare data and store
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
         ];
         let raw_data = vec![
             vec![Datum::I64(1), Datum::Bytes(b"a".to_vec())],
@@ -101,7 +116,7 @@ mod test {
         // init TableScan
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
 
         // init Limit meta
         let mut limit_meta = Limit::default();
@@ -111,7 +126,7 @@ mod test {
         let mut limit_ect = LimitExecutor::new(limit_meta, Box::new(ts_ect));
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
-            limit_rows.push(row);
+            limit_rows.push(row.take_origin());
         }
         assert_eq!(limit_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 2, 3, 5, 6];

@@ -11,76 +11,76 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{EvalContext, Result, ScalarFunc};
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
+use crate::coprocessor::dag::expr::Expression;
 use std::borrow::Cow;
-use super::{FnCall, Result, StatementContext};
-use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::dag::expr::Expression;
 
-fn if_null<F, T>(f: F) -> Result<Option<T>>
+fn if_null<F, T>(mut f: F) -> Result<Option<T>>
 where
-    F: Fn(usize) -> Result<Option<T>>,
+    F: FnMut(usize) -> Result<Option<T>>,
 {
     let arg0 = f(0)?;
-    if !arg0.is_none() {
+    if arg0.is_some() {
         return Ok(arg0);
     }
     f(1)
 }
 
 fn if_condition<F, T>(
-    expr: &FnCall,
-    ctx: &StatementContext,
+    expr: &ScalarFunc,
+    ctx: &mut EvalContext,
     row: &[Datum],
-    f: F,
+    mut f: F,
 ) -> Result<Option<T>>
 where
-    F: Fn(usize) -> Result<Option<T>>,
+    F: FnMut(usize, &mut EvalContext) -> Result<Option<T>>,
 {
     let arg0 = expr.children[0].eval_int(ctx, row)?;
     if arg0.map_or(false, |arg| arg != 0) {
-        f(1)
+        f(1, ctx)
     } else {
-        f(2)
+        f(2, ctx)
     }
 }
 
-/// See https://dev.mysql.com/doc/refman/5.7/en/case.html
+/// See <https://dev.mysql.com/doc/refman/5.7/en/case.html>
 fn case_when<'a, F, T>(
-    expr: &'a FnCall,
-    ctx: &StatementContext,
+    expr: &'a ScalarFunc,
+    ctx: &mut EvalContext,
     row: &'a [Datum],
     f: F,
 ) -> Result<Option<T>>
 where
-    F: Fn(&'a Expression) -> Result<Option<T>>,
+    F: Fn(&'a Expression, &mut EvalContext) -> Result<Option<T>>,
 {
     for chunk in expr.children.chunks(2) {
         if chunk.len() == 1 {
             // else statement
-            return f(&chunk[0]);
+            return f(&chunk[0], ctx);
         }
         let cond = chunk[0].eval_int(ctx, row)?;
         if cond.unwrap_or(0) == 0 {
             continue;
         }
-        return f(&chunk[1]);
+        return f(&chunk[1], ctx);
     }
     Ok(None)
 }
 
-impl FnCall {
-    pub fn if_null_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+impl ScalarFunc {
+    pub fn if_null_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         if_null(|i| self.children[i].eval_int(ctx, row))
     }
 
-    pub fn if_null_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn if_null_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         if_null(|i| self.children[i].eval_real(ctx, row))
     }
 
     pub fn if_null_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         if_null(|i| self.children[i].eval_decimal(ctx, row))
@@ -88,7 +88,7 @@ impl FnCall {
 
     pub fn if_null_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         if_null(|i| self.children[i].eval_string(ctx, row))
@@ -96,7 +96,7 @@ impl FnCall {
 
     pub fn if_null_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         if_null(|i| self.children[i].eval_time(ctx, row))
@@ -104,7 +104,7 @@ impl FnCall {
 
     pub fn if_null_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         if_null(|i| self.children[i].eval_duration(ctx, row))
@@ -112,121 +112,130 @@ impl FnCall {
 
     pub fn if_null_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         if_null(|i| self.children[i].eval_json(ctx, row))
     }
 
-    pub fn if_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_int(ctx, row))
+    pub fn if_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        if_condition(self, ctx, row, |i, ctx| self.children[i].eval_int(ctx, row))
     }
 
-    pub fn if_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_real(ctx, row))
+    pub fn if_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_real(ctx, row)
+        })
     }
 
     pub fn if_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_decimal(ctx, row))
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_decimal(ctx, row)
+        })
     }
 
     pub fn if_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_string(ctx, row))
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_string(ctx, row)
+        })
     }
 
     pub fn if_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_time(ctx, row))
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_time(ctx, row)
+        })
     }
 
     pub fn if_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_duration(ctx, row))
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_duration(ctx, row)
+        })
     }
 
     pub fn if_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        if_condition(self, ctx, row, |i| self.children[i].eval_json(ctx, row))
+        if_condition(self, ctx, row, |i, ctx| {
+            self.children[i].eval_json(ctx, row)
+        })
     }
 
-    pub fn case_when_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        case_when(self, ctx, row, |v| v.eval_int(ctx, row))
+    pub fn case_when_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        case_when(self, ctx, row, |v, ctx| v.eval_int(ctx, row))
     }
 
-    pub fn case_when_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        case_when(self, ctx, row, |v| v.eval_real(ctx, row))
+    pub fn case_when_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        case_when(self, ctx, row, |v, ctx| v.eval_real(ctx, row))
     }
 
     pub fn case_when_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        case_when(self, ctx, row, |v| v.eval_decimal(ctx, row))
+        case_when(self, ctx, row, |v, ctx| v.eval_decimal(ctx, row))
     }
 
     pub fn case_when_string<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        case_when(self, ctx, row, |v| v.eval_string(ctx, row))
+        case_when(self, ctx, row, |v, ctx| v.eval_string(ctx, row))
     }
 
     pub fn case_when_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        case_when(self, ctx, row, |v| v.eval_time(ctx, row))
+        case_when(self, ctx, row, |v, ctx| v.eval_time(ctx, row))
     }
 
     pub fn case_when_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        case_when(self, ctx, row, |v| v.eval_duration(ctx, row))
+        case_when(self, ctx, row, |v, ctx| v.eval_duration(ctx, row))
     }
 
     pub fn case_when_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        case_when(self, ctx, row, |v| v.eval_json(ctx, row))
+        case_when(self, ctx, row, |v, ctx| v.eval_json(ctx, row))
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Duration, Json, Time};
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
-    use coprocessor::select::xeval::evaluator::test::datum_expr;
-    use coprocessor::select::xeval::evaluator::test::col_expr;
-
+    use crate::coprocessor::codec::mysql::{Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
 
     #[test]
     fn test_if_null() {
@@ -316,12 +325,12 @@ mod test {
                 Datum::Json(Json::String("hello".to_owned())),
             ),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (operator, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(branch1);
             let arg2 = datum_expr(branch2);
-            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1, arg2])).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2])).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -449,15 +458,16 @@ mod test {
                 Datum::Json(Json::String("hello".to_owned())),
             ),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (operator, cond, branch1, branch2, exp) in tests {
             let arg1 = datum_expr(cond);
             let arg2 = datum_expr(branch1);
             let arg3 = datum_expr(branch2);
             let expected = Expression::build(&ctx, datum_expr(exp)).unwrap();
-            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1, arg2, arg3])).unwrap();
-            let lhs = op.eval(&ctx, &[]).unwrap();
-            let rhs = expected.eval(&ctx, &[]).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(operator, &[arg1, arg2, arg3])).unwrap();
+            let lhs = op.eval(&mut ctx, &[]).unwrap();
+            let rhs = expected.eval(&mut ctx, &[]).unwrap();
             assert_eq!(lhs, rhs);
         }
     }
@@ -519,7 +529,7 @@ mod test {
             ),
         ];
 
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
 
         for (sig, row, exp) in cases {
             let children: Vec<Expr> = (0..row.len()).map(|id| col_expr(id as i64)).collect();
@@ -529,7 +539,7 @@ mod test {
 
             expr.set_children(RepeatedField::from_vec(children));
             let e = Expression::build(&ctx, expr).unwrap();
-            let res = e.eval(&ctx, &row).unwrap();
+            let res = e.eval(&mut ctx, &row).unwrap();
             assert_eq!(res, exp);
         }
     }

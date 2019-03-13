@@ -63,3 +63,18 @@ If the change affects many subsystems, you can use ```*``` instead, like ```*:``
 For the why part, if no specific reason for the change,
 you can use one of some generic reasons like "Improve documentation.",
 "Improve performance.", "Improve robustness.", "Improve test coverage."
+
+### Signing off the Commit
+
+The project now enables [DCO check](https://github.com/probot/dco#how-it-works) and the commit message must contain a `Signed-off-by` line for [Developer Certificate of Origin](https://developercertificate.org/)
+
+You can use option `-s` for `git commit` to automatically add a `Signed-off-by` to the commit message. 
+
+### Handling CI
+
+We use an ad-hoc jenkins CI deployment to test each PR. If you are submitting a
+PR for the first time, you will need someone of us to comment `/ok-to-test` to
+trigger the CI. After this, new changes on the branch will be able to trigger
+the test automatically. You will also be able to manually run the tests by commenting
+`/test`.
+

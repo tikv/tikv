@@ -11,17 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{Writable, WriteBatch, DB};
-use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use kvproto::metapb;
-use raftstore::Result;
-use super::keys;
 use super::engine::{Iterable, Mutable};
+use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use super::store::Engines;
-use util::rocksdb;
-use storage::{CF_DEFAULT, CF_RAFT};
-use raftengine::LogBatch;
+use super::util::Engines;
+use crate::raftstore::Result;
+use crate::storage::{CF_DEFAULT, CF_RAFT};
+use crate::util::rocksdb_util;
+use kvproto::metapb;
+use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
+use rocksdb::{Writable, WriteBatch, DB};
 
 const INIT_EPOCH_VER: u64 = 1;
 const INIT_EPOCH_CONF_VER: u64 = 1;
@@ -29,7 +28,7 @@ const INIT_EPOCH_CONF_VER: u64 = 1;
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
     let mut count: u32 = 0;
-    engine.scan_cf(cf, start_key, end_key, false, &mut |_, _| {
+    engine.scan_cf(cf, start_key, end_key, false, |_, _| {
         count += 1;
         Ok(false)
     })?;
@@ -41,23 +40,21 @@ fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Re
 pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Result<()> {
     let mut ident = StoreIdent::new();
 
-    if !is_range_empty(&engines.kv_engine, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !is_range_empty(&engines.kv, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!("kv store is not empty and has already had data."));
     }
 
-    if !engines.raft_engine.is_empty() {
+    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
         return Err(box_err!(
             "raft store is not empty and has already had data."
         ));
     }
 
-    let ident_key = keys::store_ident_key();
-
     ident.set_cluster_id(cluster_id);
     ident.set_store_id(store_id);
 
-    engines.kv_engine.put_msg(&ident_key, &ident)?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 
@@ -67,38 +64,40 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     state.set_region(region.clone());
 
     let wb = WriteBatch::new();
-    wb.put_msg(&keys::prepare_bootstrap_key(), region)?;
-    let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
+    wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, region)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
-    write_initial_apply_state(&engines.kv_engine, &wb, region.get_id())?;
-    engines.kv_engine.write(wb)?;
-    engines.kv_engine.sync_wal()?;
+    write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
+    engines.kv.write(wb)?;
+    engines.kv.sync_wal()?;
 
-    let mut raft_wb = LogBatch::default();
-    write_initial_raft_state(&mut raft_wb, region.get_id())?;
-    engines.raft_engine.write(raft_wb, true)?;
+    let raft_wb = WriteBatch::new();
+    write_initial_raft_state(&raft_wb, region.get_id())?;
+    engines.raft.write(raft_wb)?;
+    engines.raft.sync_wal()?;
     Ok(())
 }
 
 // Clear first region meta and prepare state.
 pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
-    engines.raft_engine.clean_region(region_id).unwrap();
+    engines.raft.delete(&keys::raft_state_key(region_id))?;
+    engines.raft.sync_wal()?;
 
     let wb = WriteBatch::new();
-    wb.delete(&keys::prepare_bootstrap_key())?;
+    wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     // should clear raft initial state too.
-    let handle = rocksdb::get_cf_handle(&engines.kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
-    engines.kv_engine.write(wb)?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.write(wb)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 
 // Clear prepare state
 pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
-    engines.kv_engine.delete(&keys::prepare_bootstrap_key())?;
-    engines.kv_engine.sync_wal()?;
+    engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+    engines.kv.sync_wal()?;
     Ok(())
 }
 
@@ -126,70 +125,72 @@ pub fn prepare_bootstrap(
     Ok(region)
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use tempdir::TempDir;
 
     use super::*;
-    use util::rocksdb;
-    use raftstore::store::engine::Peekable;
-    use raftstore::store::{keys, Engines};
-    use storage::CF_DEFAULT;
-    use raftengine::{Config as RaftEngineCfg, RaftEngine};
+    use crate::raftstore::store::engine::Peekable;
+    use crate::raftstore::store::{keys, Engines};
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb_util;
 
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
         let raft_path = path.path().join("raft");
         let kv_engine = Arc::new(
-            rocksdb::new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT, CF_RAFT]).unwrap(),
+            rocksdb_util::new_engine(
+                path.path().to_str().unwrap(),
+                None,
+                &[CF_DEFAULT, CF_RAFT],
+                None,
+            )
+            .unwrap(),
         );
-        let mut cfg = RaftEngineCfg::new();
-        cfg.dir = raft_path.to_str().unwrap().to_string();
-        let raft_engine = Arc::new(RaftEngine::new(cfg));
-        let engines = Engines::new(kv_engine.clone(), raft_engine.clone());
+        let raft_engine = Arc::new(
+            rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                .unwrap(),
+        );
+        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
         assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
-        assert!(
-            kv_engine
-                .get_value(&keys::prepare_bootstrap_key())
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            kv_engine
-                .get_value_cf(CF_RAFT, &keys::region_state_key(1))
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            kv_engine
-                .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            raft_engine
-                .get(1, &keys::raft_state_key(1))
-                .unwrap()
-                .is_some()
-        );
+        assert!(kv_engine
+            .get_value(keys::PREPARE_BOOTSTRAP_KEY)
+            .unwrap()
+            .is_some());
+        assert!(kv_engine
+            .get_value_cf(CF_RAFT, &keys::region_state_key(1))
+            .unwrap()
+            .is_some());
+        assert!(kv_engine
+            .get_value_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .is_some());
+        assert!(raft_engine
+            .get_value(&keys::raft_state_key(1))
+            .unwrap()
+            .is_some());
 
         assert!(clear_prepare_bootstrap_state(&engines).is_ok());
         assert!(clear_prepare_bootstrap(&engines, 1).is_ok());
-        assert!(
-            is_range_empty(
-                &kv_engine,
-                CF_RAFT,
-                &keys::region_meta_prefix(1),
-                &keys::region_meta_prefix(2)
-            ).unwrap()
-        );
-        assert!(raft_engine.region_not_exist(1));
+        assert!(is_range_empty(
+            &kv_engine,
+            CF_RAFT,
+            &keys::region_meta_prefix(1),
+            &keys::region_meta_prefix(2)
+        )
+        .unwrap());
+        assert!(is_range_empty(
+            &raft_engine,
+            CF_DEFAULT,
+            &keys::region_raft_prefix(1),
+            &keys::region_raft_prefix(2)
+        )
+        .unwrap());
     }
 }

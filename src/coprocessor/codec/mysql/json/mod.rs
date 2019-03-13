@@ -16,25 +16,25 @@
 
 mod binary;
 mod comparison;
-mod serde;
 mod path_expr;
+mod serde;
 // json functions
 mod json_cast;
 mod json_extract;
 mod json_merge;
 mod json_modify;
+mod json_remove;
 mod json_type;
 mod json_unquote;
-mod json_remove;
 
-use std::collections::BTreeMap;
-pub use self::binary::{JsonDecoder, JsonEncoder};
-pub use self::path_expr::{parse_json_path_expr, PathExpression};
+pub use self::binary::JsonEncoder;
 pub use self::json_modify::ModifyType;
+pub use self::path_expr::{parse_json_path_expr, PathExpression};
+use std::collections::BTreeMap;
 
-use util::is_even;
 use super::super::datum::Datum;
 use super::super::{Error, Result};
+use crate::util::is_even;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
@@ -95,8 +95,16 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
     Ok(Json::Object(map))
 }
 
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Json {
+    #[inline]
+    fn as_mysql_bool(&self) -> bool {
+        // FIXME: Is it correct?
+        false
+    }
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

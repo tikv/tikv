@@ -11,14 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::i64;
 use std::borrow::Cow;
-use super::{Error, FnCall, Result, StatementContext};
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::Decimal;
+use std::i64;
 
-impl FnCall {
-    pub fn logical_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+use super::{Error, EvalContext, Result, ScalarFunc};
+use crate::coprocessor::codec::mysql::Decimal;
+use crate::coprocessor::codec::Datum;
+
+impl ScalarFunc {
+    pub fn logical_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v == 0) {
             return Ok(Some(0));
@@ -33,7 +34,7 @@ impl FnCall {
         Ok(Some(1))
     }
 
-    pub fn logical_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = self.children[0].eval_int(ctx, row)?;
         if arg0.map_or(false, |v| v != 0) {
             return Ok(Some(1));
@@ -46,147 +47,162 @@ impl FnCall {
         }
     }
 
-    pub fn logical_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn logical_xor(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg0 = try_opt!(self.children[0].eval_int(ctx, row));
         let arg1 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(((arg0 == 0) ^ (arg1 == 0)) as i64))
     }
 
-    pub fn int_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn int_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let v = self.children[0].eval_int(ctx, row)?;
         let ret = v.map_or(0, |v| (v != 0) as i64);
         Ok(Some(ret))
     }
 
-    pub fn real_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn real_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = self.children[0].eval_real(ctx, row)?;
         Ok(Some(input.map_or(0, |i| (i != 0f64) as i64)))
     }
 
-    pub fn decimal_is_true(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn decimal_is_true(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = self.children[0].eval_decimal(ctx, row)?;
         Ok(Some(input.map_or(0, |dec| !dec.is_zero() as i64)))
     }
 
-    pub fn int_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn int_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = self.children[0].eval_int(ctx, row)?;
         Ok(Some(input.map_or(0, |i| (i == 0) as i64)))
     }
 
-    pub fn real_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn real_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let v = self.children[0].eval_real(ctx, row)?;
         let ret = v.map_or(0, |v| (v == 0f64) as i64);
         Ok(Some(ret))
     }
 
-    pub fn decimal_is_false(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn decimal_is_false(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let v = self.children[0].eval_decimal(ctx, row)?;
         let ret = v.map_or(0, |v| v.is_zero() as i64);
         Ok(Some(ret))
     }
 
-    pub fn unary_not(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn unary_not(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some((arg == 0) as i64))
     }
 
-    pub fn unary_minus_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn unary_minus_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        if self.children[0].is_unsigned() {
             let uval = val as u64;
             if uval > i64::MAX as u64 + 1 {
-                return Err(Error::Overflow);
+                return Err(Error::overflow("BIGINT", &format!("-{}", uval)));
             } else if uval == i64::MAX as u64 + 1 {
                 return Ok(Some(i64::MIN));
             }
         } else if val == i64::MIN {
-            return Err(Error::Overflow);
+            return Err(Error::overflow("BIGINT", &format!("-{}", val)));
         }
         Ok(Some(-val))
     }
 
     pub fn unary_minus_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let dec = try_opt!(self.children[0].eval_decimal(ctx, row)).into_owned();
         Ok(Some(Cow::Owned(-dec)))
     }
 
-    pub fn unary_minus_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn unary_minus_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(-val))
     }
 
-    pub fn decimal_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn decimal_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_decimal(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn int_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn int_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_int(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn real_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn real_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_real(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn string_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn string_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_string(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn time_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn time_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_time(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn duration_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn duration_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_duration(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn json_is_null(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn json_is_null(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let arg = self.children[0].eval_json(ctx, row)?;
         Ok(Some(arg.is_none() as i64))
     }
 
-    pub fn bit_and(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn bit_and(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(lhs & rhs))
     }
 
-    pub fn bit_or(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn bit_or(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(lhs | rhs))
     }
 
-    pub fn bit_xor(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn bit_xor(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         let rhs = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(lhs ^ rhs))
     }
 
-    pub fn bit_neg(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn bit_neg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs = try_opt!(self.children[0].eval_int(ctx, row));
         Ok(Some(!lhs))
+    }
+
+    pub fn left_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let ret = (lhs as u64).checked_shl(rhs as u32).unwrap_or(0);
+        Ok(Some(ret as i64))
+    }
+
+    pub fn right_shift(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let lhs = try_opt!(self.children[0].eval_int(ctx, row));
+        let rhs = try_opt!(self.children[1].eval_int(ctx, row));
+        let ret = (lhs as u64).checked_shr(rhs as u32).unwrap_or(0);
+        Ok(Some(ret as i64))
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use crate::coprocessor::codec::mysql::Duration;
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, datum_expr, scalar_func_expr, str2dec,
+    };
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::i64;
     use tipb::expression::ScalarFuncSig;
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::Duration;
-    use coprocessor::dag::expr::{Error, Expression, StatementContext};
-    use coprocessor::dag::expr::test::{fncall_expr, str2dec};
-    use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[test]
     fn test_logic_op() {
@@ -280,19 +296,20 @@ mod test {
             (ScalarFuncSig::LogicalXor, Datum::I64(0), Datum::Null, None),
             (ScalarFuncSig::LogicalXor, Datum::Null, Datum::I64(1), None),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (op, lhs, rhs, exp) in tests {
             let arg1 = datum_expr(lhs);
             let arg2 = datum_expr(rhs);
             {
-                let op = Expression::build(&ctx, fncall_expr(op, &[arg1.clone(), arg2.clone()]))
-                    .unwrap();
-                let res = op.eval_int(&ctx, &[]).unwrap();
+                let op =
+                    Expression::build(&ctx, scalar_func_expr(op, &[arg1.clone(), arg2.clone()]))
+                        .unwrap();
+                let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
             {
-                let op = Expression::build(&ctx, fncall_expr(op, &[arg2, arg1])).unwrap();
-                let res = op.eval_int(&ctx, &[]).unwrap();
+                let op = Expression::build(&ctx, scalar_func_expr(op, &[arg2, arg1])).unwrap();
+                let res = op.eval_int(&mut ctx, &[]).unwrap();
                 assert_eq!(res, exp);
             }
         }
@@ -342,11 +359,11 @@ mod test {
             ),
             (ScalarFuncSig::UnaryMinusDecimal, Datum::Null, Datum::Null),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (operator, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&ctx, fncall_expr(operator, &[arg1])).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(operator, &[arg1])).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -400,19 +417,12 @@ mod test {
             ),
             (ScalarFuncSig::DurationIsNull, Datum::Null, Some(1)),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (op, arg, exp) in tests {
             let arg1 = datum_expr(arg);
-            let op = Expression::build(&ctx, fncall_expr(op, &[arg1])).unwrap();
-            let res = op.eval_int(&ctx, &[]).unwrap();
+            let op = Expression::build(&ctx, scalar_func_expr(op, &[arg1])).unwrap();
+            let res = op.eval_int(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
-        }
-    }
-
-    fn check_overflow(e: Error) -> Result<(), ()> {
-        match e {
-            Error::Overflow => Ok(()),
-            _ => Err(()),
         }
     }
 
@@ -425,11 +435,11 @@ mod test {
                 Datum::U64(i64::MAX as u64 + 2),
             ),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (op, argument) in tests {
             let arg = datum_expr(argument);
-            let op = Expression::build(&ctx, fncall_expr(op, &[arg])).unwrap();
-            let got = op.eval(&ctx, &[]).unwrap_err();
+            let op = Expression::build(&ctx, scalar_func_expr(op, &[arg])).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap_err();
             assert!(check_overflow(got).is_ok());
         }
     }
@@ -441,11 +451,12 @@ mod test {
             (Datum::I64(-123), Datum::I64(321), Datum::I64(257)),
             (Datum::Null, Datum::I64(1), Datum::Null),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitAndSig, args)).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitAndSig, args)).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -457,11 +468,12 @@ mod test {
             (Datum::I64(-123), Datum::I64(321), Datum::I64(-59)),
             (Datum::Null, Datum::I64(1), Datum::Null),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitOrSig, args)).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitOrSig, args)).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -473,11 +485,12 @@ mod test {
             (Datum::I64(-123), Datum::I64(321), Datum::I64(-316)),
             (Datum::Null, Datum::I64(1), Datum::Null),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (lhs, rhs, exp) in cases {
             let args = &[datum_expr(lhs), datum_expr(rhs)];
-            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitXorSig, args)).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitXorSig, args)).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }
@@ -489,11 +502,68 @@ mod test {
             (Datum::I64(-123), Datum::I64(122)),
             (Datum::Null, Datum::Null),
         ];
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (arg, exp) in cases {
             let args = &[datum_expr(arg)];
-            let op = Expression::build(&ctx, fncall_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
-            let res = op.eval(&ctx, &[]).unwrap();
+            let op =
+                Expression::build(&ctx, scalar_func_expr(ScalarFuncSig::BitNegSig, args)).unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_left_shift() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(2), Datum::I64(492)),
+            (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
+            (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+            (Datum::I64(123), Datum::Null, Datum::Null),
+            (
+                Datum::I64(-123),
+                Datum::I64(60),
+                Datum::I64(5764607523034234880),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (lhs, rhs, exp) in cases {
+            let lhs = datum_expr(lhs);
+            let rhs = datum_expr(rhs);
+            let op = Expression::build(
+                &ctx,
+                scalar_func_expr(ScalarFuncSig::LeftShift, &[lhs, rhs]),
+            )
+            .unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_right_shift() {
+        let cases = vec![
+            (Datum::I64(123), Datum::I64(2), Datum::I64(30)),
+            (Datum::I64(-123), Datum::I64(-1), Datum::I64(0)),
+            (Datum::I64(123), Datum::I64(0), Datum::I64(123)),
+            (Datum::Null, Datum::I64(1), Datum::Null),
+            (Datum::I64(123), Datum::Null, Datum::Null),
+            (
+                Datum::I64(-123),
+                Datum::I64(2),
+                Datum::I64(4611686018427387873),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (lhs, rhs, exp) in cases {
+            let lhs = datum_expr(lhs);
+            let rhs = datum_expr(rhs);
+            let op = Expression::build(
+                &ctx,
+                scalar_func_expr(ScalarFuncSig::RightShift, &[lhs, rhs]),
+            )
+            .unwrap();
+            let res = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
         }
     }

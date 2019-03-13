@@ -12,10 +12,10 @@
 // limitations under the License.
 
 use super::Result;
-use util::escape;
+use crate::util::escape;
 
-/// `UN_SPECIFIED_FSP` is the unspecified fractional seconds part.
-pub const UN_SPECIFIED_FSP: i8 = -1;
+/// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
+pub const UNSPECIFIED_FSP: i8 = -1;
 /// `MAX_FSP` is the maximum digit of fractional seconds part.
 pub const MAX_FSP: i8 = 6;
 /// `MIN_FSP` is the minimum digit of fractional seconds part.
@@ -25,7 +25,7 @@ pub const MIN_FSP: i8 = 0;
 pub const DEFAULT_FSP: i8 = 0;
 
 fn check_fsp(fsp: i8) -> Result<u8> {
-    if fsp == UN_SPECIFIED_FSP {
+    if fsp == UNSPECIFIED_FSP {
         return Ok(DEFAULT_FSP as u8);
     }
     if fsp > MAX_FSP || fsp < MIN_FSP {
@@ -44,9 +44,10 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     if s.iter().any(|&c| c < b'0' || c > b'9') {
         return Err(invalid_type!("{} contains invalid char", escape(s)));
     }
-    let res = s.iter()
+    let res = s
+        .iter()
         .take(fsp as usize + 1)
-        .fold(0, |l, r| l * 10 + (r - b'0') as u32);
+        .fold(0, |l, r| l * 10 + u32::from(r - b'0'));
     if s.len() > fsp as usize {
         if res % 10 >= 5 {
             Ok(res / 10 + 1)
@@ -58,25 +59,21 @@ fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
     }
 }
 
-mod duration;
-pub mod decimal;
 pub mod charset;
-pub mod types;
-mod time;
+pub mod decimal;
+pub mod duration;
 pub mod json;
+pub mod time;
 
-pub use self::duration::Duration;
-pub use self::decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res};
-pub use self::types::{has_is_boolean_flag, has_not_null_flag, has_parse_to_json_flag,
-                      has_unsigned_flag};
-pub use self::time::Time;
-pub use self::json::{parse_json_path_expr, Json, JsonDecoder, JsonEncoder, ModifyType,
-                     PathExpression};
+pub use self::decimal::{dec_encoded_len, Decimal, DecimalEncoder, Res, RoundMode};
+pub use self::duration::{Duration, DurationEncoder};
+pub use self::json::{parse_json_path_expr, Json, JsonEncoder, ModifyType, PathExpression};
+pub use self::time::{Time, TimeEncoder, TimeType, Tz};
 
 #[cfg(test)]
-mod test {
+mod tests {
     #[test]
-    fn test_parse_frace() {
+    fn test_parse_frac() {
         let cases = vec![
             ("1234567", 0, 0),
             ("1234567", 1, 1),

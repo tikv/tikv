@@ -13,9 +13,9 @@
 
 use std::borrow::Cow;
 
-use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use super::{Constant, Result};
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Datum {
     #[inline]
@@ -125,12 +125,12 @@ impl Constant {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::datum_expr;
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::select::xeval::evaluator::test::datum_expr;
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -156,7 +156,7 @@ mod test {
             datum_expr(Datum::F64(124.32)),
             datum_expr(Datum::Dec(dec.clone())),
             datum_expr(Datum::Bytes(s.clone())),
-            datum_expr(Datum::Dur(dur.clone())),
+            datum_expr(Datum::Dur(dur)),
         ];
 
         let expecteds = vec![
@@ -166,28 +166,33 @@ mod test {
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec.clone()), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur.clone()), None),
+            EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (case, expected) in tests.into_iter().zip(expecteds.into_iter()) {
             let e = Expression::build(&ctx, case).unwrap();
 
-            let i = e.eval_int(&ctx, &[]).unwrap_or(None);
-            let r = e.eval_real(&ctx, &[]).unwrap_or(None);
-            let dec = e.eval_decimal(&ctx, &[])
+            let i = e.eval_int(&mut ctx, &[]).unwrap_or(None);
+            let r = e.eval_real(&mut ctx, &[]).unwrap_or(None);
+            let dec = e
+                .eval_decimal(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e.eval_string(&ctx, &[])
+            let s = e
+                .eval_string(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e.eval_time(&ctx, &[])
+            let t = e
+                .eval_time(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&ctx, &[])
+            let dur = e
+                .eval_duration(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let j = e.eval_json(&ctx, &[])
+            let j = e
+                .eval_json(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 

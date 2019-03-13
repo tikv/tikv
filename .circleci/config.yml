@@ -1,0 +1,147 @@
+version: 2
+jobs:
+  test:
+    working_directory: ~/tikv-ci
+    machine: true
+    environment:
+      # CircleCI does not support env variable interpolation, set those later
+      # Variables used by cargo
+      RUST_TEST_THREADS: "1"
+      RUST_BACKTRACE: "1"
+      RUSTFLAGS: "-Dwarnings"
+      FAIL_POINT: "1"
+    steps:
+      - run:
+          name: Updating PATH and Define Environment Variable at Runtime
+          # Define variables that need interpolation
+          # As CircleCI's each `run` declaration starts a new shell, we need to persist them to $BASH_ENV
+          command: |
+            echo 'export PATH=$HOME/.local/cmake/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH' >> $BASH_ENV
+            echo 'export LD_RUN_PATH=$LD_RUN_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export DYLD_LIBRARY_PATH=$DYLD_LIBRARY_PATH:$HOME/.local/lib' >> $BASH_ENV
+            echo 'export LDFLAGS=-L$HOME/.local/lib' >> $BASH_ENV
+            echo 'export CPPFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export CXXFLAGS=-I$HOME/.local/include' >> $BASH_ENV
+            echo 'export LOCAL_PREFIX=$HOME/.local' >> $BASH_ENV
+      - checkout
+      - run:
+          name: Installing Build Dependencies
+          command: |
+            sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y;
+            sudo apt-get update -y;
+            sudo apt-get install -y g++-4.8 curl libdw-dev libelf-dev elfutils binutils-dev libssl-dev pkg-config zlib1g-dev
+      - restore_cache:
+          # Actually master does not need to download the cache. However we cannot make conditions here.
+          name: Downloading ~/.cargo and ~/.local Cache from master
+          keys:
+            - v3-cargo-master-{{ checksum "rust-toolchain" }}
+      - run:
+          name: Restoring ~/.cargo and ~/.local Cache (non-master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            else
+              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
+              tar xf ~/tikv_cache_cargo/cargo.tar -C ~/ || true
+            fi
+      - run:
+          name: Setting up Rust and the rest of the Build Environment
+          command: |
+            if [[ ! -e $HOME/.cargo ]]; then
+              curl https://sh.rustup.rs -sSf |
+                sh -s -- --no-modify-path --default-toolchain none -y;
+            fi
+
+            if [[ ! -f $HOME/.local/cmake/bin/cmake ]]; then
+              curl https://cmake.org/files/v3.10/cmake-3.10.0-Linux-x86_64.tar.gz -sSf | tar xzf -;
+              rm -rf $HOME/.local/cmake
+              mv cmake-3.10.0-Linux-x86_64 $HOME/.local/cmake
+            fi
+            # Print kernel config and log.
+            cat /boot/config-`uname -r`
+            dmesg
+            # Force a clock update and stop ntp.
+            sudo service ntp stop
+            sudo ntpd -gq
+      # check format first
+      - run:
+          name: Checking Format
+          command: make format && git diff-index --quiet HEAD -- || (git diff; echo please make format and run tests before creating a PR!; exit 1)
+      - run:
+          name: Installing tarpaulin
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              RUSTFLAGS="--cfg procmacro2_semver_exempt" cargo install cargo-tarpaulin --git https://github.com/xd009642/tarpaulin --tag 0.6.3 --force
+            fi
+      - restore_cache:
+          # Actually master does not need to download the cache. However we cannot make conditions here.
+          name: Downloading ./target Cache from master
+          keys:
+            - v3-target-master-{{ checksum "rust-toolchain" }}
+      - run:
+          name: Restoring ./target Cache (non-master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            else
+              echo "Current branch is $CIRCLE_BRANCH, restoring tar..."
+              tar xf ~/tikv_cache_build/target.tar || true
+            fi
+          no_output_timeout: 1800s
+      - run:
+          name: Building
+          command: env SKIP_TESTS=true make trace_test
+          no_output_timeout: 1800s
+      - run:
+          name: Caching ~/.cargo and ~/.local (master branch only)
+          command: |
+            rm -rf ~/tikv_cache_cargo
+            mkdir ~/tikv_cache_cargo
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, creating tar for ~/.cargo and ~/.local"
+              cd ~ && tar cf ~/tikv_cache_cargo/cargo.tar .cargo .local && cd -
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
+          no_output_timeout: 1800s
+      - save_cache:
+          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
+          name: Uploading ~/.cargo and ~/.local Cache (master branch only)
+          key: v3-cargo-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ~/tikv_cache_cargo
+      - run:
+          name: Caching ./target (master branch only)
+          command: |
+            rm -rf ~/tikv_cache_build
+            mkdir ~/tikv_cache_build
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              echo "Current branch is $CIRCLE_BRANCH, creating tar for ./target"
+              tar cf ~/tikv_cache_build/target.tar target/debug/.fingerprint target/debug/build target/debug/deps target/debug/incremental
+            else
+              echo "Current branch is $CIRCLE_BRANCH, skip"
+            fi
+          no_output_timeout: 1800s
+      - save_cache:
+          # This will be triggered for non-master as well. However the cache content is empty so it doesn't matter.
+          name: Uploading ./target Cache (master branch only)
+          key: v3-target-{{ .Branch }}-{{ checksum "rust-toolchain" }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - ~/tikv_cache_build
+      - run:
+          name: Testing
+          command: make trace_test
+          no_output_timeout: 1800s
+      - run:
+          name: Calculating code coverage (master branch only)
+          command: |
+            if [[ "${CIRCLE_BRANCH}" == "master" ]]; then
+              cargo tarpaulin --no-count --skip-clean --out Xml
+              bash <(curl -s https://codecov.io/bash)
+            fi
+          no_output_timeout: 1800s
+workflows:
+  version: 2
+  ci-test:
+      jobs:
+        - test

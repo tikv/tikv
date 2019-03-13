@@ -11,74 +11,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::worker::Runnable;
-use util::collections::HashSet;
-use raftengine::{RaftEngine, Result as RaftEngineResult};
+use crate::raftstore::store::engine::Iterable;
+use crate::raftstore::store::keys;
+use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use crate::util::worker::Runnable;
 
-use std::sync::Arc;
-use std::fmt::{self, Display, Formatter};
+use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
+use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
-
-pub enum Task {
-    RegionTask(RegionTask),
-    EngineTask(EngineTask),
-}
-
-impl Task {
-    pub fn region_task(raft_engine: Arc<RaftEngine>, region_id: u64, compact_to: u64) -> Task {
-        Task::RegionTask(RegionTask {
-            raft_engine: raft_engine,
-            region_id: region_id,
-            compact_to: compact_to,
-        })
-    }
-
-    pub fn engine_task(raft_engine: Arc<RaftEngine>) -> Task {
-        Task::EngineTask(EngineTask {
-            raft_engine: raft_engine,
-        })
-    }
+pub struct Task {
+    pub raft_engine: Arc<DB>,
+    pub region_id: u64,
+    pub start_idx: u64,
+    pub end_idx: u64,
 }
 
 pub struct TaskRes {
-    pub regions_need_compact: HashSet<u64>,
-}
-
-pub struct RegionTask {
-    pub raft_engine: Arc<RaftEngine>,
-    pub region_id: u64,
-    pub compact_to: u64,
-}
-
-#[derive(Debug)]
-pub struct EngineTask {
-    pub raft_engine: Arc<RaftEngine>,
+    pub collected: u64,
 }
 
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match *self {
-            Task::RegionTask(ref task) => write!(
-                f,
-                "GC Raft Log Task [region: {}, compact to: {}]",
-                task.region_id,
-                task.compact_to
-            ),
-            Task::EngineTask(ref task) => write!(
-                f,
-                "GC raft engine expired files Task, engine info {:?}",
-                task
-            ),
-        }
+        write!(
+            f,
+            "GC Raft Log Task [region: {}, from: {}, to: {}]",
+            self.region_id, self.start_idx, self.end_idx
+        )
     }
 }
 
 quick_error! {
     #[derive(Debug)]
     enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -93,132 +61,177 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(ch: Option<Sender<TaskRes>>) -> Runner {
-        Runner { ch: ch }
+        Runner { ch }
     }
 
-    /// Do the gc job and return the count of log collected.
-    fn gc_raft_log(&mut self, raft_engine: Arc<RaftEngine>, region_id: u64, idx: u64) -> u64 {
-        raft_engine.compact_to(region_id, idx)
+    /// Does the GC job and returns the count of logs collected.
+    fn gc_raft_log(
+        &mut self,
+        raft_engine: Arc<DB>,
+        region_id: u64,
+        start_idx: u64,
+        end_idx: u64,
+    ) -> Result<u64, Error> {
+        let mut first_idx = start_idx;
+        if first_idx == 0 {
+            let start_key = keys::raft_log_key(region_id, 0);
+            first_idx = end_idx;
+            if let Some((k, _)) = box_try!(raft_engine.seek(&start_key)) {
+                first_idx = box_try!(keys::raft_log_index(&k));
+            }
+        }
+        if first_idx >= end_idx {
+            info!("no need to gc"; "region_id" => region_id);
+            return Ok(0);
+        }
+        let mut raft_wb = WriteBatch::new();
+        for idx in first_idx..end_idx {
+            let key = keys::raft_log_key(region_id, idx);
+            box_try!(raft_wb.delete(&key));
+            if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
+                // Avoid large write batch to reduce latency.
+                raft_engine.write(raft_wb).unwrap();
+                raft_wb = WriteBatch::new();
+            }
+        }
+        // TODO: disable WAL here.
+        if !raft_wb.is_empty() {
+            raft_engine.write(raft_wb).unwrap();
+        }
+        Ok(end_idx - first_idx)
     }
 
-    fn gc_expired_files(&mut self, raft_engine: Arc<RaftEngine>) -> RaftEngineResult<()> {
-        // Rewrite inactive regions' entries to new file, so the old
-        // files can be dropped ASAP.
-        if raft_engine.rewrite_inactive() {
-            raft_engine.sync_data()?;
+    fn report_collected(&self, collected: u64) {
+        if self.ch.is_none() {
+            return;
         }
-
-        // Collect regions that need force compact.
-        if self.ch.is_some() {
-            let regions = raft_engine.regions_need_compact();
-            self.ch
-                .as_ref()
-                .unwrap()
-                .send(TaskRes {
-                    regions_need_compact: regions,
-                })
-                .unwrap();
-        }
-
-        // Evict old entries from cache, keep cache below limited size.
-        raft_engine.evict_old_from_cache();
-
-        // Purge old files.
-        raft_engine.purge_expired_files()
+        self.ch
+            .as_ref()
+            .unwrap()
+            .send(TaskRes { collected })
+            .unwrap();
     }
 }
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
-        match task {
-            Task::RegionTask(task) => {
-                let n = self.gc_raft_log(task.raft_engine, task.region_id, task.compact_to);
-                debug!("[region {}] collected {} log entries", task.region_id, n);
+        debug!(
+            "execute gc log";
+            "region_id" => task.region_id,
+            "end_index" => task.end_idx,
+        );
+        match self.gc_raft_log(
+            task.raft_engine,
+            task.region_id,
+            task.start_idx,
+            task.end_idx,
+        ) {
+            Err(e) => {
+                error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
+                self.report_collected(0);
             }
-            Task::EngineTask(task) => if let Err(e) = self.gc_expired_files(task.raft_engine) {
-                error!("GC expired files for raft engine error : {:?}", e);
-            },
+            Ok(n) => {
+                debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
+                self.report_collected(n);
+            }
         }
     }
 }
 
 #[cfg(test)]
-mod test {
-    use tempdir::TempDir;
-
-    use kvproto::eraftpb::Entry;
-
-    use raftengine::{Config as RaftEngineCfg, LogBatch, RaftEngine};
+mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
+    use crate::util::rocksdb_util::new_engine;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tempdir::TempDir;
 
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let mut cfg = RaftEngineCfg::new();
-        cfg.dir = path.path().to_str().unwrap().to_string();
-        let raft_engine = Arc::new(RaftEngine::new(cfg));
+        let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
+        let raft_db = Arc::new(raft_db);
 
-        let mut runner = Runner::new(None);
+        let (tx, rx) = mpsc::channel();
+        let mut runner = Runner::new(Some(tx));
 
         // generate raft logs
         let region_id = 1;
-        let mut ents = vec![];
+        let raft_wb = WriteBatch::new();
         for i in 0..100 {
-            let mut e = Entry::new();
-            e.set_index(i);
-            ents.push(e);
+            let k = keys::raft_log_key(region_id, i);
+            raft_wb.put(&k, b"entry").unwrap();
         }
-        let mut log_batch = LogBatch::default();
-        log_batch.add_entries(region_id, ents);
-        raft_engine.write(log_batch, false).unwrap();
+        raft_db.write(raft_wb).unwrap();
 
         let tbls = vec![
             (
-                Task::region_task(raft_engine.clone(), region_id, 10),
+                Task {
+                    raft_engine: Arc::clone(&raft_db),
+                    region_id,
+                    start_idx: 0,
+                    end_idx: 10,
+                },
+                10,
                 (0, 10),
                 (10, 100),
             ),
             (
-                Task::region_task(raft_engine.clone(), region_id, 50),
+                Task {
+                    raft_engine: Arc::clone(&raft_db),
+                    region_id,
+                    start_idx: 0,
+                    end_idx: 50,
+                },
+                40,
                 (0, 50),
                 (50, 100),
             ),
             (
-                Task::region_task(raft_engine.clone(), region_id, 50),
+                Task {
+                    raft_engine: Arc::clone(&raft_db),
+                    region_id,
+                    start_idx: 50,
+                    end_idx: 50,
+                },
+                0,
                 (0, 50),
                 (50, 100),
             ),
             (
-                Task::region_task(raft_engine.clone(), region_id, 60),
+                Task {
+                    raft_engine: Arc::clone(&raft_db),
+                    region_id,
+                    start_idx: 50,
+                    end_idx: 60,
+                },
+                10,
                 (0, 60),
                 (60, 100),
             ),
         ];
 
-        for (task, not_exist_range, exist_range) in tbls {
+        for (task, expected_collectd, not_exist_range, exist_range) in tbls {
             runner.run(task);
-            raft_log_must_not_exist(&raft_engine, 1, not_exist_range.0, not_exist_range.1);
-            raft_log_must_exist(&raft_engine, 1, exist_range.0, exist_range.1);
+            let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert_eq!(res.collected, expected_collectd);
+            raft_log_must_not_exist(&raft_db, 1, not_exist_range.0, not_exist_range.1);
+            raft_log_must_exist(&raft_db, 1, exist_range.0, exist_range.1);
         }
     }
 
-    fn raft_log_must_not_exist(
-        raft_engine: &RaftEngine,
-        region_id: u64,
-        start_idx: u64,
-        end_idx: u64,
-    ) {
-        for idx in start_idx..end_idx {
-            assert!(raft_engine.get_entry(region_id, idx).unwrap().is_none());
+    fn raft_log_must_not_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+        for i in start_idx..end_idx {
+            let k = keys::raft_log_key(region_id, i);
+            assert!(raft_engine.get(&k).unwrap().is_none());
         }
     }
 
-    fn raft_log_must_exist(raft_engine: &RaftEngine, region_id: u64, start_idx: u64, end_idx: u64) {
-        let mut vec = vec![];
-        raft_engine
-            .fetch_entries_to(region_id, start_idx, end_idx, None, &mut vec)
-            .unwrap();
-        assert_eq!(vec.len(), (end_idx - start_idx) as usize);
-
+    fn raft_log_must_exist(raft_engine: &DB, region_id: u64, start_idx: u64, end_idx: u64) {
+        for i in start_idx..end_idx {
+            let k = keys::raft_log_key(region_id, i);
+            assert!(raft_engine.get(&k).unwrap().is_some());
+        }
     }
 }

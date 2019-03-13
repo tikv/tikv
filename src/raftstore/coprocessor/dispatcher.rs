@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 use rocksdb::DB;
 
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use util::transport::{RetryableSendCh, Sender};
-use raftstore::store::msg::Msg;
+use crate::raftstore::store::CasualRouter;
 
 use super::*;
 
@@ -28,9 +27,11 @@ struct Entry<T> {
 }
 
 // TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
+pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
+pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
+pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
+pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -38,13 +39,18 @@ pub struct Registry {
     admin_observers: Vec<Entry<BoxAdminObserver>>,
     query_observers: Vec<Entry<BoxQueryObserver>>,
     split_check_observers: Vec<Entry<BoxSplitCheckObserver>>,
+    role_observers: Vec<Entry<BoxRoleObserver>>,
+    region_change_observers: Vec<Entry<BoxRegionChangeObserver>>,
     // TODO: add endpoint
 }
 
 macro_rules! push {
     ($p:expr, $t:ident, $vec:expr) => {
         $t.start();
-        let e = Entry { priority: $p, observer: $t };
+        let e = Entry {
+            priority: $p,
+            observer: $t,
+        };
         let vec = &mut $vec;
         vec.push(e);
         vec.sort_by(|l, r| l.priority.cmp(&r.priority));
@@ -63,6 +69,58 @@ impl Registry {
     pub fn register_split_check_observer(&mut self, priority: u32, sco: BoxSplitCheckObserver) {
         push!(priority, sco, self.split_check_observers);
     }
+
+    pub fn register_role_observer(&mut self, priority: u32, ro: BoxRoleObserver) {
+        push!(priority, ro, self.role_observers);
+    }
+
+    pub fn register_region_change_observer(&mut self, priority: u32, rlo: BoxRegionChangeObserver) {
+        push!(priority, rlo, self.region_change_observers);
+    }
+}
+
+/// A macro that loops over all observers and returns early when error is found or
+/// bypass is set. `try_loop_ob` is expected to be used for hook that returns a `Result`.
+macro_rules! try_loop_ob {
+    ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
+        loop_ob!(_imp _res, $r, $obs, $hook, $($args)*)
+    };
+}
+
+/// A macro that loops over all observers and returns early when bypass is set.
+///
+/// Using a macro so we don't need to write tests for every observers.
+macro_rules! loop_ob {
+    // Execute a hook, return early if error is found.
+    (_exec _res, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
+        $o.$hook($ctx, $($args)*)?
+    };
+    // Execute a hook.
+    (_exec _tup, $o:expr, $hook:ident, $ctx:expr, $($args:tt)*) => {
+        $o.$hook($ctx, $($args)*)
+    };
+    // When the try loop finishes successfully, the value to be returned.
+    (_done _res) => {
+        Ok(())
+    };
+    // When the loop finishes successfully, the value to be returned.
+    (_done _tup) => {{}};
+    // Actual implementation of the for loop.
+    (_imp $res_type:tt, $r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {{
+        let mut ctx = ObserverContext::new($r);
+        for o in $obs {
+            loop_ob!(_exec $res_type, o.observer, $hook, &mut ctx, $($args)*);
+            if ctx.bypass {
+                break;
+            }
+        }
+        loop_ob!(_done $res_type)
+    }};
+    // Loop over all observers and return early when bypass is set.
+    // This macro is expected to be used for hook that returns `()`.
+    ($r:expr, $obs:expr, $hook:ident, $($args:tt)*) => {
+        loop_ob!(_imp _tup, $r, $obs, $hook, $($args)*)
+    };
 }
 
 /// Admin and invoke all coprocessors.
@@ -72,118 +130,128 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + Sync + 'static>(
-        cfg: Config,
-        ch: RetryableSendCh<Msg, C>,
-    ) -> CoprocessorHost {
+    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
-        let split_size_check_observer =
-            SizeCheckObserver::new(cfg.region_max_size.0, cfg.region_split_size.0, ch);
+        let split_size_check_observer = SizeCheckObserver::new(
+            cfg.region_max_size.0,
+            cfg.region_split_size.0,
+            cfg.batch_split_limit,
+            ch.clone(),
+        );
+        registry.register_split_check_observer(200, Box::new(split_size_check_observer));
+
+        let split_keys_check_observer = KeysCheckObserver::new(
+            cfg.region_max_keys,
+            cfg.region_split_keys,
+            cfg.batch_split_limit,
+            ch,
+        );
+        registry.register_split_check_observer(200, Box::new(split_keys_check_observer));
+
+        // TableCheckObserver has higher priority than SizeCheckObserver.
         registry.register_split_check_observer(
-            SIZE_CHECK_OBSERVER_PRIORITY,
-            Box::new(split_size_check_observer),
+            100,
+            Box::new(HalfCheckObserver::new(cfg.region_max_size.0)),
         );
         if cfg.split_region_on_table {
-            registry.register_split_check_observer(
-                TABLE_CHECK_OBSERVER_PRIORITY,
-                Box::new(TableCheckObserver::default()),
-            );
+            registry.register_split_check_observer(400, Box::new(TableCheckObserver::default()));
         }
-        CoprocessorHost { registry: registry }
+        CoprocessorHost { registry }
     }
 
     /// Call all prepose hooks until bypass is set to true.
     pub fn pre_propose(&self, region: &Region, req: &mut RaftCmdRequest) -> Result<()> {
-        let mut ctx = ObserverContext::new(region);
         if !req.has_admin_request() {
-            for o in &self.registry.query_observers {
-                o.observer.pre_propose_query(&mut ctx, req.mut_requests())?;
-                if ctx.bypass {
-                    return Ok(());
-                }
-            }
+            let query = req.mut_requests();
+            try_loop_ob!(
+                region,
+                &self.registry.query_observers,
+                pre_propose_query,
+                query
+            )
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .pre_propose_admin(&mut ctx, req.mut_admin_request())?;
-                if ctx.bypass {
-                    return Ok(());
-                }
-            }
+            let admin = req.mut_admin_request();
+            try_loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                pre_propose_admin,
+                admin
+            )
         }
-        Ok(())
     }
 
     /// Call all pre apply hook until bypass is set to true.
     pub fn pre_apply(&self, region: &Region, req: &RaftCmdRequest) {
-        let mut ctx = ObserverContext::new(region);
         if !req.has_admin_request() {
-            for o in &self.registry.query_observers {
-                o.observer.pre_apply_query(&mut ctx, req.get_requests());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let query = req.get_requests();
+            loop_ob!(
+                region,
+                &self.registry.query_observers,
+                pre_apply_query,
+                query
+            );
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .pre_apply_admin(&mut ctx, req.get_admin_request());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let admin = req.get_admin_request();
+            loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                pre_apply_admin,
+                admin
+            );
         }
     }
 
     pub fn post_apply(&self, region: &Region, resp: &mut RaftCmdResponse) {
-        let mut ctx = ObserverContext::new(region);
         if !resp.has_admin_response() {
-            for o in &self.registry.query_observers {
-                o.observer.post_apply_query(&mut ctx, resp.mut_responses());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let query = resp.mut_responses();
+            loop_ob!(
+                region,
+                &self.registry.query_observers,
+                post_apply_query,
+                query
+            );
         } else {
-            for o in &self.registry.admin_observers {
-                o.observer
-                    .post_apply_admin(&mut ctx, resp.mut_admin_response());
-                if ctx.bypass {
-                    return;
-                }
-            }
+            let admin = resp.mut_admin_response();
+            loop_ob!(
+                region,
+                &self.registry.admin_observers,
+                post_apply_admin,
+                admin
+            );
         }
     }
 
-    pub fn new_split_check_status(&self, region: &Region, engine: &DB) -> SplitCheckStatus {
-        let mut ob_ctx = ObserverContext::new(region);
-        let mut split_status = SplitCheckStatus::default();
-        for entry in &self.registry.split_check_observers {
-            entry
-                .observer
-                .new_split_check_status(&mut ob_ctx, &mut split_status, engine);
-        }
-        split_status
-    }
-
-    /// Hook to call for every check during split.
-    pub fn on_split_check(
+    pub fn new_split_checker_host(
         &self,
         region: &Region,
-        split_status: &mut SplitCheckStatus,
-        key: &[u8],
-        value_size: u64,
-    ) -> Option<Vec<u8>> {
-        let mut ob_ctx = ObserverContext::new(region);
-        for entry in &self.registry.split_check_observers {
-            if let Some(split_key) = entry
-                .observer
-                .on_split_check(&mut ob_ctx, split_status, key, value_size)
-            {
-                return Some(split_key);
-            }
-        }
-        None
+        engine: &DB,
+        auto_split: bool,
+        policy: CheckPolicy,
+    ) -> SplitCheckerHost {
+        let mut host = SplitCheckerHost::new(auto_split);
+        loop_ob!(
+            region,
+            &self.registry.split_check_observers,
+            add_checker,
+            &mut host,
+            engine,
+            policy
+        );
+        host
+    }
+
+    pub fn on_role_change(&self, region: &Region, role: StateRole) {
+        loop_ob!(region, &self.registry.role_observers, on_role_change, role);
+    }
+
+    pub fn on_region_changed(&self, region: &Region, event: RegionChangeEvent, role: StateRole) {
+        loop_ob!(
+            region,
+            &self.registry.region_change_observers,
+            on_region_changed,
+            event,
+            role
+        );
     }
 
     pub fn shutdown(&self) {
@@ -200,15 +268,16 @@ impl CoprocessorHost {
 }
 
 #[cfg(test)]
-mod test {
-    use raftstore::coprocessor::*;
-    use std::sync::*;
-    use std::sync::atomic::*;
+mod tests {
+    use crate::raftstore::coprocessor::*;
     use protobuf::RepeatedField;
+    use std::sync::atomic::*;
+    use std::sync::*;
 
     use kvproto::metapb::Region;
-    use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse,
-                              Request, Response};
+    use kvproto::raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request, Response,
+    };
 
     #[derive(Clone, Default)]
     struct TestCoprocessor {
@@ -265,20 +334,34 @@ mod test {
         }
     }
 
+    impl RoleObserver for TestCoprocessor {
+        fn on_role_change(&self, ctx: &mut ObserverContext, _: StateRole) {
+            self.called.fetch_add(7, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
+    impl RegionChangeObserver for TestCoprocessor {
+        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {
+            self.called.fetch_add(8, Ordering::SeqCst);
+            ctx.bypass = self.bypass.load(Ordering::SeqCst);
+        }
+    }
+
     macro_rules! assert_all {
-        ($target:expr, $expect:expr) => ({
+        ($target:expr, $expect:expr) => {{
             for (c, e) in ($target).iter().zip($expect) {
                 assert_eq!(c.load(Ordering::SeqCst), *e);
             }
-        })
+        }};
     }
 
     macro_rules! set_all {
-        ($target:expr, $v:expr) => ({
+        ($target:expr, $v:expr) => {{
             for v in $target {
                 v.store($v, Ordering::SeqCst);
             }
-        })
+        }};
     }
 
     #[test]
@@ -289,6 +372,10 @@ mod test {
             .register_admin_observer(1, Box::new(ob.clone()));
         host.registry
             .register_query_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_role_observer(1, Box::new(ob.clone()));
+        host.registry
+            .register_region_change_observer(1, Box::new(ob.clone()));
         let region = Region::new();
         let mut admin_req = RaftCmdRequest::new();
         admin_req.set_admin_request(AdminRequest::new());
@@ -309,6 +396,12 @@ mod test {
         assert_all!(&[&ob.called], &[15]);
         host.post_apply(&region, &mut RaftCmdResponse::new());
         assert_all!(&[&ob.called], &[21]);
+
+        host.on_role_change(&region, StateRole::Leader);
+        assert_all!(&[&ob.called], &[28]);
+
+        host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
+        assert_all!(&[&ob.called], &[36]);
     }
 
     #[test]

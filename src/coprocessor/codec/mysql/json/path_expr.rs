@@ -34,20 +34,16 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.c[*]') -> [1, "2"]
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
-use std::ops::Index;
-use std::ascii::AsciiExt;
-use regex::Regex;
-use coprocessor::codec::Result;
 use super::json_unquote::unquote_string;
+use crate::coprocessor::codec::Result;
+use regex::Regex;
+use std::ops::Index;
 
-pub const PATH_EXPR_ASTERISK: &'static str = "*";
+pub const PATH_EXPR_ASTERISK: &str = "*";
 
 // [a-zA-Z_][a-zA-Z0-9_]* matches any identifier;
 // "[^"\\]*(\\.[^"\\]*)*" matches any string literal which can carry escaped quotes.
-const PATH_EXPR_LEG_RE_STR: &'static str =
+const PATH_EXPR_LEG_RE_STR: &str =
     r#"(\.\s*([a-zA-Z_][a-zA-Z0-9_]*|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)"#;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,7 +65,6 @@ pub type PathExpressionFlag = u8;
 pub const PATH_EXPRESSION_CONTAINS_ASTERISK: PathExpressionFlag = 0x01;
 pub const PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK: PathExpressionFlag = 0x02;
 
-
 #[derive(Clone, Default, Debug, PartialEq)]
 pub struct PathExpression {
     pub legs: Vec<PathLeg>,
@@ -78,9 +73,9 @@ pub struct PathExpression {
 
 impl PathExpression {
     pub fn contains_any_asterisk(&self) -> bool {
-        (self.flags &
-            (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK)) !=
-            0
+        (self.flags
+            & (PATH_EXPRESSION_CONTAINS_ASTERISK | PATH_EXPRESSION_CONTAINS_DOUBLE_ASTERISK))
+            != 0
     }
 }
 
@@ -109,9 +104,11 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
     let mut legs = vec![];
     let mut flags = PathExpressionFlag::default();
     let mut last_end = 0;
-    for (start, end) in RE.find_iter(expr) {
+    for m in RE.find_iter(expr) {
+        let (start, end) = (m.start(), m.end());
         // Check all characters between two legs are blank.
-        if expr.index(last_end..start)
+        if expr
+            .index(last_end..start)
             .char_indices()
             .any(|(_, c)| !c.is_ascii_whitespace())
         {
@@ -136,7 +133,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             let mut key = expr[start + 1..end].trim().to_owned();
             if key == PATH_EXPR_ASTERISK {
                 flags |= PATH_EXPRESSION_CONTAINS_ASTERISK;
-            } else if key.chars().next().unwrap() == '"' {
+            } else if key.starts_with('"') {
                 // We need to unquote the origin string.
                 key = unquote_string(&key[1..key.len() - 1])?;
             }
@@ -157,14 +154,11 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
             return Err(box_err!("Invalid JSON path: {}", path_expr));
         }
     }
-    Ok(PathExpression {
-        legs: legs,
-        flags: flags,
-    })
+    Ok(PathExpression { legs, flags })
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
@@ -239,12 +233,9 @@ mod test {
                 let got = r.unwrap();
                 let expected = expected.unwrap();
                 assert_eq!(
-                    got,
-                    expected,
+                    got, expected,
                     "#{} expect {:?} but got {:?}",
-                    i,
-                    expected,
-                    got
+                    i, expected, got
                 );
             } else {
                 assert!(r.is_err(), "#{} expect error but got {:?}", i, r);

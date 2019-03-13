@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Json;
-use super::path_expr::{PathExpression, PathLeg};
 use super::super::Result;
+use super::path_expr::{PathExpression, PathLeg};
+use super::Json;
 
 impl Json {
     // Remove elements from Json,
@@ -66,9 +66,9 @@ impl Json {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
     use super::super::path_expr::parse_json_path_expr;
+    use super::*;
 
     #[test]
     fn test_json_remove() {
@@ -85,7 +85,6 @@ mod test {
             (r#"{"a": [3, 4]}"#, "$.b[1]", r#"{"a": [3, 4]}"#, true),
             // Nothing changed because the path without last leg doesn't exist.
             (r#"{"a": [3, 4]}"#, "$.a[0].b", r#"{"a": [3, 4]}"#, true),
-
             // Bad path expression.
             (r#"null"#, "$.*", r#"null"#, false),
             (r#"null"#, "$[*]", r#"null"#, false),

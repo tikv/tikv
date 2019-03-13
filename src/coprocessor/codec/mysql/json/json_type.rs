@@ -13,14 +13,14 @@
 
 use super::Json;
 
-const JSON_TYPE_BOOLEAN: &'static [u8] = b"BOOLEAN";
-const JSON_TYPE_NONE: &'static [u8] = b"NULL";
-const JSON_TYPE_INTEGER: &'static [u8] = b"INTEGER";
-const JSON_TYPE_UNSIGNED_INTEGER: &'static [u8] = b"UNSIGNED INTEGER";
-const JSON_TYPE_DOUBLE: &'static [u8] = b"DOUBLE";
-const JSON_TYPE_STRING: &'static [u8] = b"STRING";
-const JSON_TYPE_OBJECT: &'static [u8] = b"OBJECT";
-const JSON_TYPE_ARRAY: &'static [u8] = b"ARRAY";
+const JSON_TYPE_BOOLEAN: &[u8] = b"BOOLEAN";
+const JSON_TYPE_NONE: &[u8] = b"NULL";
+const JSON_TYPE_INTEGER: &[u8] = b"INTEGER";
+const JSON_TYPE_UNSIGNED_INTEGER: &[u8] = b"UNSIGNED INTEGER";
+const JSON_TYPE_DOUBLE: &[u8] = b"DOUBLE";
+const JSON_TYPE_STRING: &[u8] = b"STRING";
+const JSON_TYPE_OBJECT: &[u8] = b"OBJECT";
+const JSON_TYPE_ARRAY: &[u8] = b"ARRAY";
 
 impl Json {
     // json_type is the implementation for
@@ -40,7 +40,7 @@ impl Json {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

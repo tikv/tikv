@@ -14,69 +14,80 @@
 use std::sync::Arc;
 
 use tipb::executor::Selection;
-use tipb::schema::ColumnInfo;
 
-use coprocessor::metrics::*;
-use coprocessor::select::xeval::EvalContext;
-use coprocessor::dag::expr::Expression;
-use coprocessor::Result;
-use storage::Statistics;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
-use super::{inflate_with_col_for_dag, Executor, ExprColumnRefVisitor, Row};
+use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
+/// Retrieves rows from the source executor and filter rows by expressions.
 pub struct SelectionExecutor {
     conditions: Vec<Expression>,
-    cols: Arc<Vec<ColumnInfo>>,
     related_cols_offset: Vec<usize>, // offset of related columns
-    ctx: Arc<EvalContext>,
-    src: Box<Executor>,
+    ctx: EvalContext,
+    src: Box<dyn Executor + Send>,
+    first_collect: bool,
 }
 
 impl SelectionExecutor {
     pub fn new(
         mut meta: Selection,
-        ctx: Arc<EvalContext>,
-        columns_info: Arc<Vec<ColumnInfo>>,
-        src: Box<Executor>,
+        eval_cfg: Arc<EvalConfig>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<SelectionExecutor> {
         let conditions = meta.take_conditions().into_vec();
-        let mut visitor = ExprColumnRefVisitor::new(columns_info.len());
+        let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
-        COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+        let ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            conditions: box_try!(Expression::batch_build(ctx.as_ref(), conditions)),
-            cols: columns_info,
+            conditions: Expression::batch_build(&ctx, conditions)?,
             related_cols_offset: visitor.column_offsets(),
-            ctx: ctx,
-            src: src,
+            ctx,
+            src,
+            first_collect: true,
         })
     }
 }
 
-#[allow(never_loop)]
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
-            let cols = inflate_with_col_for_dag(
-                &self.ctx,
-                &row.data,
-                self.cols.as_ref(),
-                &self.related_cols_offset,
-                row.handle,
-            )?;
+            let row = row.take_origin();
+            let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
-                let val = box_try!(filter.eval(&self.ctx, &cols));
-                if !box_try!(val.into_bool(&self.ctx)).unwrap_or(false) {
+                let val = filter.eval(&mut self.ctx, &cols)?;
+                if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {
                     continue 'next;
                 }
             }
-            return Ok(Some(row));
+            return Ok(Some(Row::Origin(row)));
         }
         Ok(None)
     }
 
-    fn collect_statistics_into(&mut self, statistics: &mut Statistics) {
-        self.src.collect_statistics_into(statistics);
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.src.collect_output_counts(counts);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.src.collect_metrics_into(metrics);
+        if self.first_collect {
+            metrics.executor_count.selection += 1;
+            self.first_collect = false;
+        }
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        if let Some(mut warnings) = self.src.take_eval_warnings() {
+            warnings.merge(&mut self.ctx.take_warnings());
+            Some(warnings)
+        } else {
+            Some(self.ctx.take_warnings())
+        }
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
     }
 }
 
@@ -85,20 +96,20 @@ mod tests {
     use std::i64;
     use std::sync::Arc;
 
+    use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
     use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use coprocessor::codec::mysql::types;
-    use coprocessor::codec::datum::Datum;
-    use storage::SnapshotStore;
-    use util::codec::number::NumberEncoder;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::storage::SnapshotStore;
+    use crate::util::codec::number::NumberEncoder;
 
-    use super::*;
-    use super::super::topn::test::gen_table_data;
-    use super::super::scanner::test::{get_range, new_col_info, TestStore};
+    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
     use super::super::table_scan::TableScanExecutor;
+    use super::super::topn::tests::gen_table_data;
+    use super::*;
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();
@@ -140,9 +151,9 @@ mod tests {
     fn test_selection_executor_simple() {
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::NEW_DECIMAL),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::NewDecimal),
         ];
         let raw_data = vec![
             vec![
@@ -194,7 +205,8 @@ mod tests {
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let inner_table_scan =
+            TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -203,14 +215,14 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Arc::new(EvalContext::default()),
-            Arc::new(cis),
+            Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row);
+            selection_rows.push(row.take_origin());
         }
 
         assert_eq!(selection_rows.len(), raw_data.len());
@@ -223,9 +235,9 @@ mod tests {
     fn test_selection_executor_condition() {
         let tid = 1;
         let cis = vec![
-            new_col_info(1, types::LONG_LONG),
-            new_col_info(2, types::VARCHAR),
-            new_col_info(3, types::LONG_LONG),
+            new_col_info(1, FieldTypeTp::LongLong),
+            new_col_info(2, FieldTypeTp::VarChar),
+            new_col_info(3, FieldTypeTp::LongLong),
         ];
         let raw_data = vec![
             vec![Datum::I64(1), Datum::Bytes(b"a".to_vec()), Datum::I64(7)],
@@ -248,7 +260,7 @@ mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan = TableScanExecutor::new(&table_scan, key_ranges, store);
+        let inner_table_scan = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
 
         // selection executor
         let mut selection = Selection::new();
@@ -257,14 +269,14 @@ mod tests {
 
         let mut selection_executor = SelectionExecutor::new(
             selection,
-            Arc::new(EvalContext::default()),
-            Arc::new(cis),
+            Arc::new(EvalConfig::default()),
             Box::new(inner_table_scan),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row);
+            selection_rows.push(row.take_origin());
         }
 
         let expect_row_handles = raw_data
@@ -276,5 +288,9 @@ mod tests {
         assert_eq!(selection_rows.len(), expect_row_handles.len());
         let result_row = selection_rows.iter().map(|r| r.handle).collect::<Vec<_>>();
         assert_eq!(result_row, expect_row_handles);
+        let expected_counts = vec![raw_data.len() as i64];
+        let mut counts = Vec::with_capacity(1);
+        selection_executor.collect_output_counts(&mut counts);
+        assert_eq!(expected_counts, counts);
     }
 }

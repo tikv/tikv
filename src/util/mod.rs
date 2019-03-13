@@ -11,44 +11,80 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-use std::ops::DerefMut;
-use std::io;
-use std::{slice, thread};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::time::Duration;
 use std::collections::hash_map::Entry;
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::vec_deque::{Iter, VecDeque};
-use std::u64;
+use std::fs::File;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Duration;
+use std::{env, slice, thread, u64};
 
-use prometheus;
-use rand::{self, ThreadRng};
 use protobuf::Message;
+use rand::{self, ThreadRng};
 
 #[macro_use]
 pub mod macros;
-pub mod logger;
-pub mod panic_hook;
-pub mod worker;
 pub mod codec;
-pub mod rocksdb;
-pub mod config;
-pub mod buf;
-pub mod transport;
-pub mod file;
-pub mod file_log;
-pub mod metrics;
-pub mod threadpool;
 pub mod collections;
+pub mod config;
+pub mod file;
+pub mod future;
+pub mod futurepool;
+pub mod io_limiter;
+pub mod logger;
+pub mod metrics;
+pub mod mpsc;
+pub mod rocksdb_util;
+pub mod security;
+pub mod sys;
+pub mod threadpool;
 pub mod time;
+pub mod timer;
+pub mod worker;
 
-pub use self::rocksdb::properties;
+static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "linux")]
-mod thread_metrics;
+pub fn panic_when_unexpected_key_or_data() -> bool {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.load(Ordering::SeqCst)
+}
+
+pub fn set_panic_when_unexpected_key_or_data(flag: bool) {
+    PANIC_WHEN_UNEXPECTED_KEY_OR_DATA.store(flag, Ordering::SeqCst);
+}
+
+static PANIC_MARK: AtomicBool = AtomicBool::new(false);
+
+pub fn set_panic_mark() {
+    PANIC_MARK.store(true, Ordering::SeqCst);
+}
+
+pub fn panic_mark_is_on() -> bool {
+    PANIC_MARK.load(Ordering::SeqCst)
+}
+
+pub const PANIC_MARK_FILE: &str = "panic_mark_file";
+
+pub fn panic_mark_file_path<P: AsRef<Path>>(data_dir: P) -> PathBuf {
+    data_dir.as_ref().join(PANIC_MARK_FILE)
+}
+
+pub fn create_panic_mark_file<P: AsRef<Path>>(data_dir: P) {
+    let file = panic_mark_file_path(data_dir);
+    File::create(&file).unwrap();
+}
+
+pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
+    let path = panic_mark_file_path(data_dir);
+    file::file_exists(path)
+}
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertSend: Send {}
+
+pub trait AssertSync: Sync {}
 
 pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     if max == NO_LIMIT || entries.len() <= 1 {
@@ -58,12 +94,14 @@ pub fn limit_size<T: Message + Clone>(entries: &mut Vec<T>, max: u64) {
     let mut size = 0;
     let limit = entries
         .iter()
-        .take_while(|&e| if size == 0 {
-            size += Message::compute_size(e) as u64;
-            true
-        } else {
-            size += Message::compute_size(e) as u64;
-            size <= max
+        .take_while(|&e| {
+            if size == 0 {
+                size += u64::from(Message::compute_size(e));
+                true
+            } else {
+                size += u64::from(Message::compute_size(e));
+                size <= max
+            }
         })
         .count();
 
@@ -135,24 +173,9 @@ impl<T> HandyRwLock<T> for RwLock<T> {
     }
 }
 
-
-pub fn make_std_tcp_conn<A: ToSocketAddrs>(addr: A) -> io::Result<TcpStream> {
-    let stream = TcpStream::connect(addr)?;
-    stream.set_nodelay(true)?;
-    Ok(stream)
-}
-
-// A helper function to parse SocketAddr for mio.
-// In mio example, it uses "127.0.0.1:80".parse() to get the SocketAddr,
-// but it is just ok for "ip:port", not "host:port".
-pub fn to_socket_addr<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
-    let addrs = addr.to_socket_addrs()?;
-    Ok(addrs.collect::<Vec<SocketAddr>>()[0])
-}
-
 /// A function to escape a byte array to a readable ascii string.
 /// escape rules follow golang/protobuf.
-/// https://github.com/golang/protobuf/blob/master/proto/text.go#L578
+/// <https://github.com/golang/protobuf/blob/master/proto/text.go#L578>
 ///
 /// # Examples
 ///
@@ -196,27 +219,10 @@ pub fn escape(data: &[u8]) -> String {
 /// # Panic
 ///
 /// If s is not a properly encoded string.
-///
-/// # Examples
-///
-/// ```
-/// use tikv::util::unescape;
-///
-/// assert_eq!(unescape(r"ab"), b"ab");
-/// assert_eq!(unescape(r"a\\023"), b"a\\023");
-/// assert_eq!(unescape(r"a\000"), b"a\0");
-/// assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
-/// assert_eq!(unescape(r"\342\235\244\360\237\220\267"), "❤🐷".as_bytes());
-/// ```
-///
 pub fn unescape(s: &str) -> Vec<u8> {
     let mut buf = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
-    loop {
-        let b = match bytes.next() {
-            None => break,
-            Some(t) => t,
-        };
+    while let Some(b) = bytes.next() {
         if b != b'\\' {
             buf.push(b);
             continue;
@@ -228,6 +234,16 @@ pub fn unescape(s: &str) -> Vec<u8> {
             b'n' => buf.push(b'\n'),
             b't' => buf.push(b'\t'),
             b'r' => buf.push(b'\r'),
+            b'x' => {
+                macro_rules! next_hex {
+                    () => {
+                        bytes.next().map(char::from).unwrap().to_digit(16).unwrap()
+                    };
+                }
+                // Can coerce as u8 since the range of possible values is constrained to
+                // between 00 and FF.
+                buf.push(((next_hex!() << 4) + next_hex!()) as u8);
+            }
             b => {
                 let b1 = b - b'0';
                 let b2 = bytes.next().unwrap() - b'0';
@@ -240,7 +256,7 @@ pub fn unescape(s: &str) -> Vec<u8> {
     buf
 }
 
-/// Convert a borrow to a slice.
+/// Converts a borrow to a slice.
 pub fn as_slice<T>(t: &T) -> &[T] {
     unsafe {
         let ptr = t as *const T;
@@ -248,7 +264,7 @@ pub fn as_slice<T>(t: &T) -> &[T] {
     }
 }
 
-/// `TryInsertWith` is a helper trait for `Entry` to accept a failable closure.
+/// A helper trait for `Entry` to accept a failable closure.
 pub trait TryInsertWith<'a, V, E> {
     fn or_try_insert_with<F: FnOnce() -> Result<V, E>>(self, default: F) -> Result<&'a mut V, E>;
 }
@@ -272,7 +288,7 @@ pub fn get_tag_from_thread_name() -> Option<String> {
         .map(From::from)
 }
 
-/// `DeferContext` will invoke the wrapped closure when dropped.
+/// Invokes the wrapped closure when dropped.
 pub struct DeferContext<T: FnOnce()> {
     t: Option<T>,
 }
@@ -306,6 +322,14 @@ impl<L, R> Either<L, R> {
     }
 
     #[inline]
+    pub fn as_mut(&mut self) -> Either<&mut L, &mut R> {
+        match *self {
+            Either::Left(ref mut l) => Either::Left(l),
+            Either::Right(ref mut r) => Either::Right(r),
+        }
+    }
+
+    #[inline]
     pub fn left(self) -> Option<L> {
         match self {
             Either::Left(l) => Some(l),
@@ -320,72 +344,6 @@ impl<L, R> Either<L, R> {
             _ => None,
         }
     }
-}
-
-/// `build_info` returns a tuple of Strings that contains build utc time and commit hash.
-pub fn build_info() -> (String, String, String, String) {
-    let raw = include_str!(concat!(env!("OUT_DIR"), "/build-info.txt"));
-    let mut parts = raw.split('\n');
-
-    (
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-        parts.next().unwrap_or("None").to_owned(),
-    )
-}
-
-/// `print_tikv_info` prints the tikv version information to the standard output.
-pub fn print_tikv_info() {
-    let (hash, branch, date, rustc) = build_info();
-    info!("Welcome to TiKV.");
-    info!("Release Version:   {}", env!("CARGO_PKG_VERSION"));
-    info!("Git Commit Hash:   {}", hash);
-    info!("Git Commit Branch: {}", branch);
-    info!("UTC Build Time:    {}", date);
-    info!("Rustc Version:     {}", rustc);
-}
-
-/// `run_prometheus` runs a background prometheus client.
-pub fn run_prometheus(
-    interval: Duration,
-    address: &str,
-    job: &str,
-) -> Option<thread::JoinHandle<()>> {
-    if interval == Duration::from_secs(0) {
-        return None;
-    }
-
-    let job = job.to_owned();
-    let address = address.to_owned();
-    let handler = thread::Builder::new()
-        .name("promepusher".to_owned())
-        .spawn(move || loop {
-            let metric_familys = prometheus::gather();
-
-            let res = prometheus::push_metrics(
-                &job,
-                prometheus::hostname_grouping_key(),
-                &address,
-                metric_familys,
-            );
-            if let Err(e) = res {
-                error!("fail to push metrics: {}", e);
-            }
-
-            thread::sleep(interval);
-        })
-        .unwrap();
-
-    Some(handler)
-}
-
-#[cfg(target_os = "linux")]
-pub use self::thread_metrics::monitor_threads;
-
-#[cfg(not(target_os = "linux"))]
-pub fn monitor_threads<S: Into<String>>(_: S) -> io::Result<()> {
-    Ok(())
 }
 
 /// A simple ring queue with fixed capacity.
@@ -403,7 +361,7 @@ impl<T> RingQueue<T> {
     pub fn with_capacity(cap: usize) -> RingQueue<T> {
         RingQueue {
             buf: VecDeque::with_capacity(cap),
-            cap: cap,
+            cap,
         }
     }
 
@@ -430,11 +388,11 @@ impl<T> RingQueue<T> {
     }
 }
 
-// `cfs_diff' Returns a Vec of cf which is in `a' but not in `b'.
+/// Returns a Vec of cf which is in `a' but not in `b'.
 pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
     a.iter()
         .filter(|x| b.iter().find(|y| y == x).is_none())
-        .map(|x| *x)
+        .cloned()
         .collect()
 }
 
@@ -457,7 +415,7 @@ impl<T> MustConsumeVec<T> {
     #[inline]
     pub fn with_capacity(tag: &'static str, cap: usize) -> MustConsumeVec<T> {
         MustConsumeVec {
-            tag: tag,
+            tag,
             v: Vec::with_capacity(cap),
         }
     }
@@ -485,37 +443,140 @@ impl<T> Drop for MustConsumeVec<T> {
     }
 }
 
+/// Exit the whole process when panic.
+pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
+    use std::panic;
+    use std::process;
+
+    // HACK! New a backtrace ahead for caching necessary elf sections of this
+    // tikv-server, in case it can not open more files during panicking
+    // which leads to no stack info (0x5648bdfe4ff2 - <no info>).
+    //
+    // Crate backtrace caches debug info in a static variable `STATE`,
+    // and the `STATE` lives forever once it has been created.
+    // See more: https://github.com/alexcrichton/backtrace-rs/blob/\
+    //           597ad44b131132f17ed76bf94ac489274dd16c7f/\
+    //           src/symbolize/libbacktrace.rs#L126-L159
+    // Caching is slow, spawn it in another thread to speed up.
+    thread::Builder::new()
+        .name(thd_name!("backtrace-loader"))
+        .spawn(::backtrace::Backtrace::new)
+        .unwrap();
+
+    let data_dir = data_dir.to_string();
+    let orig_hook = panic::take_hook();
+    panic::set_hook(box move |info: &panic::PanicInfo| {
+        use slog::Drain;
+        if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
+            let msg = match info.payload().downcast_ref::<&'static str>() {
+                Some(s) => *s,
+                None => match info.payload().downcast_ref::<String>() {
+                    Some(s) => &s[..],
+                    None => "Box<Any>",
+                },
+            };
+            let thread = thread::current();
+            let name = thread.name().unwrap_or("<unnamed>");
+            let loc = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()));
+            let bt = backtrace::Backtrace::new();
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
+            );
+        } else {
+            orig_hook(info);
+        }
+
+        // There might be remaining logs in the async logger.
+        // To collect remaining logs and also collect future logs, replace the old one with a
+        // terminal logger.
+        if let Some(level) = log::max_log_level().to_log_level() {
+            let drainer = logger::term_drainer();
+            let _ = logger::init_log(
+                drainer,
+                logger::convert_log_level_to_slog_level(level),
+                false, // Use sync logger to avoid an unnecessary log thread.
+                false, // It is initialized already.
+            );
+        }
+
+        // If PANIC_MARK is true, create panic mark file.
+        if panic_mark_is_on() {
+            create_panic_mark_file(data_dir.clone());
+        }
+
+        if panic_abort {
+            process::abort();
+        } else {
+            process::exit(1);
+        }
+    })
+}
+
+#[inline]
+pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
+    // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
+    // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
+    // here.
+    let mut new_vec = Vec::with_capacity(vec.capacity());
+    new_vec.extend_from_slice(vec);
+    new_vec
+}
+
+/// Checks environment variables that affect TiKV.
+pub fn check_environment_variables() {
+    if cfg!(unix) && env::var("TZ").is_err() {
+        env::set_var("TZ", ":/etc/localtime");
+        warn!("environment variable `TZ` is missing, using `/etc/localtime`");
+    }
+
+    if let Ok(var) = env::var("GRPC_POLL_STRATEGY") {
+        info!(
+            "environment variable is present";
+            "GRPC_POLL_STRATEGY" => var
+        );
+    }
+
+    for proxy in &["http_proxy", "https_proxy"] {
+        if let Ok(var) = env::var(proxy) {
+            info!("environment variable is present";
+                *proxy => var
+            );
+        }
+    }
+}
+
+#[inline]
+pub fn is_zero_duration(d: &Duration) -> bool {
+    d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::*;
-    use std::net::{AddrParseError, SocketAddr};
-    use std::rc::Rc;
-    use std::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use kvproto::eraftpb::Entry;
-    use protobuf::Message;
     use super::*;
+    use protobuf::Message;
+    use raft::eraftpb::Entry;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::*;
+
+    use tempdir::TempDir;
 
     #[test]
-    fn test_to_socket_addr() {
-        let tbls = vec![
-            ("", false),
-            ("127.0.0.1", false),
-            ("localhost", false),
-            ("127.0.0.1:80", true),
-            ("localhost:80", true),
-        ];
+    fn test_panic_mark_file_path() {
+        let dir = TempDir::new("test_panic_mark_file_path").unwrap();
+        let panic_mark_file = panic_mark_file_path(dir.path());
+        assert_eq!(panic_mark_file, dir.path().join(PANIC_MARK_FILE))
+    }
 
-        for (addr, ok) in tbls {
-            assert_eq!(to_socket_addr(addr).is_ok(), ok);
-        }
-
-        let tbls = vec![("localhost:80", false), ("127.0.0.1:80", true)];
-
-        for (addr, ok) in tbls {
-            let ret: Result<SocketAddr, AddrParseError> = addr.parse();
-            assert_eq!(ret.is_ok(), ok);
-        }
+    #[test]
+    fn test_panic_mark_file_exists() {
+        let dir = TempDir::new("test_panic_mark_file_exists").unwrap();
+        create_panic_mark_file(dir.path());
+        assert!(panic_mark_file_exists(dir.path()));
     }
 
     #[test]
@@ -542,7 +603,7 @@ mod tests {
     #[test]
     fn test_defer() {
         let should_panic = Rc::new(AtomicBool::new(true));
-        let sp = should_panic.clone();
+        let sp = Rc::clone(&should_panic);
         defer!(assert!(!sp.load(Ordering::SeqCst)));
         should_panic.store(false, Ordering::SeqCst);
     }
@@ -567,7 +628,7 @@ mod tests {
             }
         }
 
-        #[allow(clone_on_copy)]
+        #[allow(clippy::clone_on_copy)]
         fn foo(a: &Option<usize>) -> Option<usize> {
             a.clone()
         }
@@ -577,7 +638,7 @@ mod tests {
     fn test_limit_size() {
         let mut e = Entry::new();
         e.set_data(b"0123456789".to_vec());
-        let size = e.compute_size() as u64;
+        let size = u64::from(e.compute_size());
 
         let tbls = vec![
             (vec![], NO_LIMIT, 0),
@@ -613,21 +674,17 @@ mod tests {
                 v.push_back(10 + i - first);
             }
             for len in 0..10 {
-                for low in 0..len + 1 {
-                    for high in low..len + 1 {
+                for low in 0..=len {
+                    for high in low..=len {
                         let (p1, p2) = super::slices_in_range(&v, low, high);
                         let mut res = vec![];
                         res.extend_from_slice(p1);
                         res.extend_from_slice(p2);
                         let exp: Vec<_> = (low..high).collect();
                         assert_eq!(
-                            res,
-                            exp,
+                            res, exp,
                             "[{}, {}) in {:?} with first: {}",
-                            low,
-                            high,
-                            v,
-                            first
+                            low, high, v, first
                         );
                     }
                 }
@@ -662,10 +719,36 @@ mod tests {
 
     #[test]
     fn test_resource_leak() {
-        let res = recover_safe!(|| {
+        let res = panic_hook::recover_safe(|| {
             let mut v = MustConsumeVec::new("test");
             v.push(2);
         });
         res.unwrap_err();
+    }
+
+    #[test]
+    fn test_unescape() {
+        // No escapes
+        assert_eq!(unescape(r"ab"), b"ab");
+        // Escaped backslash
+        assert_eq!(unescape(r"a\\023"), b"a\\023");
+        // Escaped three digit octal
+        assert_eq!(unescape(r"a\000"), b"a\0");
+        assert_eq!(
+            unescape(r"\342\235\244\360\237\220\267"),
+            "❤🐷".as_bytes()
+        );
+        // Whitespace
+        assert_eq!(unescape("a\\r\\n\\t '\\\"\\\\"), b"a\r\n\t '\"\\");
+        // Hex Octals
+        assert_eq!(unescape(r"abc\x64\x65\x66ghi"), b"abcdefghi");
+        assert_eq!(unescape(r"JKL\x4d\x4E\x4fPQR"), b"JKLMNOPQR");
+    }
+
+    #[test]
+    fn test_is_zero() {
+        assert!(is_zero_duration(&Duration::new(0, 0)));
+        assert!(!is_zero_duration(&Duration::new(1, 0)));
+        assert!(!is_zero_duration(&Duration::new(0, 1)));
     }
 }

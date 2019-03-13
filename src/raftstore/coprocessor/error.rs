@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::result::Result as StdResult;
 use std::error::Error as StdError;
+use std::result::Result as StdResult;
 
-
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<StdError + Sync + Send>) {
+        Other(err: Box<dyn StdError + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())

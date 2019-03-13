@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Json;
+use super::{Json, Result};
+use crate::coprocessor::codec::convert;
+use crate::coprocessor::dag::expr::EvalContext;
 
 impl Json {
     pub fn cast_to_int(&self) -> i64 {
@@ -25,23 +27,26 @@ impl Json {
         }
     }
 
-    pub fn cast_to_real(&self) -> f64 {
-        match *self {
+    ///  Keep compatible with TiDB's `ConvertJSONToFloat` function.
+    pub fn cast_to_real(&self, ctx: &mut EvalContext) -> Result<f64> {
+        let d = match *self {
             Json::Object(_) | Json::Array(_) | Json::None | Json::Boolean(false) => 0f64,
             Json::Boolean(true) => 1f64,
             Json::I64(d) => d as f64,
             Json::U64(d) => d as f64,
             Json::Double(d) => d,
-            Json::String(ref s) => s.parse::<f64>().unwrap_or(0f64),
-        }
+            Json::String(ref s) => convert::bytes_to_f64(ctx, s.as_bytes())?,
+        };
+        Ok(d)
     }
 }
 
 #[cfg(test)]
-mod test {
-    use std::f64;
-
+mod tests {
     use super::*;
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use std::f64;
+    use std::sync::Arc;
 
     #[test]
     fn test_cast_to_int() {
@@ -79,10 +84,10 @@ mod test {
             (r#""hello""#, 0f64),
             (r#""1234""#, 1234f64),
         ];
-
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         for (jstr, exp) in test_cases {
             let json: Json = jstr.parse().unwrap();
-            let get = json.cast_to_real();
+            let get = json.cast_to_real(&mut ctx).unwrap();
             assert!(
                 (get - exp).abs() < f64::EPSILON,
                 "cast_to_int get: {}, exp: {}",

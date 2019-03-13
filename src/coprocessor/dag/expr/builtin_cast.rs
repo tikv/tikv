@@ -11,53 +11,58 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{str, i64, u64};
-use std::ascii::AsciiExt;
 use std::borrow::Cow;
+use std::convert::TryInto;
+use std::{i64, str, u64};
 
-use coprocessor::codec::{mysql, Datum};
-use coprocessor::codec::mysql::{charset, types, Decimal, Duration, Json, Res, Time};
-use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use cop_datatype::prelude::*;
+use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
-use super::{FnCall, Result, StatementContext};
+use super::{Error, EvalContext, Result, ScalarFunc};
+use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::mysql::decimal::RoundMode;
+use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::coprocessor::codec::{mysql, Datum};
 
-impl FnCall {
-    pub fn cast_int_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+impl ScalarFunc {
+    pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    pub fn cast_real_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_real_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
-            let uval = convert_float_to_uint(val, u64::MAX, types::DOUBLE)?;
+        if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+            let uval = convert_float_to_uint(val, u64::MAX, FieldTypeTp::Double)?;
             Ok(Some(uval as i64))
         } else {
-            let res = convert_float_to_int(val, i64::MIN, i64::MAX, types::DOUBLE)?;
+            let res = convert_float_to_int(val, i64::MIN, i64::MAX, FieldTypeTp::Double)?;
             Ok(Some(res))
         }
     }
 
-    pub fn cast_decimal_as_int(
-        &self,
-        ctx: &StatementContext,
-        row: &[Datum],
-    ) -> Result<Option<i64>> {
+    pub fn cast_decimal_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.into_owned().round(0, RoundMode::HalfEven).unwrap();
-        if mysql::has_unsigned_flag(self.tp.get_flag() as u64) {
-            let uint = val.as_u64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(uint as i64))
+        let (overflow, res) = if self.field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+            let uint = val.as_u64();
+            (uint.is_overflow(), uint.unwrap() as i64)
         } else {
-            let val = val.as_i64().unwrap();
-            // TODO:handle overflow
-            Ok(Some(val))
+            let val = val.as_i64();
+            (val.is_overflow(), val.unwrap())
+        };
+
+        if overflow {
+            if !ctx.cfg.overflow_as_warning {
+                return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
+            }
+            ctx.warnings
+                .append_warning(Error::truncated_wrong_val("DECIMAL", &format!("{}", val)));
         }
+        Ok(Some(res))
     }
 
-    pub fn cast_str_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
-        if self.children[0].is_hybrid_type() {
+    pub fn cast_str_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        if self.children[0].field_type().is_hybrid() {
             return self.children[0].eval_int(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -65,22 +70,42 @@ impl FnCall {
             Some(&b'-') => true,
             _ => false,
         };
-        if is_negative {
-            // negative
-            let v = convert::bytes_to_int(ctx, &val)?;
-            // TODO: if overflow, don't append this warning
-            Ok(Some(v))
+        let res = if is_negative {
+            convert::bytes_to_int(ctx, &val).map(|v| {
+                ctx.warnings
+                    .append_warning(Error::cast_neg_int_as_unsigned());
+                v
+            })
         } else {
-            let urs = convert::bytes_to_uint(ctx, &val)?;
-            // TODO: process overflow
-            Ok(Some(urs as i64))
+            convert::bytes_to_uint(ctx, &val).map(|urs| {
+                if !self.field_type.flag().contains(FieldTypeFlag::UNSIGNED)
+                    && urs > (i64::MAX as u64)
+                {
+                    ctx.warnings
+                        .append_warning(Error::cast_as_signed_overflow());
+                }
+                urs as i64
+            })
+        };
+
+        match res {
+            Ok(v) => Ok(Some(v)),
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.overflow_from_cast_str_as_int(&val, e, is_negative)
+                        .map(Some)
+                } else {
+                    Err(e)
+                }
+            }
         }
     }
 
-    pub fn cast_time_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_time_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
@@ -88,26 +113,27 @@ impl FnCall {
 
     pub fn cast_duration_as_int(
         &self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let dec = val.to_decimal()?;
-        let dec = dec.round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
+        let dec = dec
+            .round(mysql::DEFAULT_FSP as i8, RoundMode::HalfEven)
             .unwrap();
         let res = dec.as_i64().unwrap();
         Ok(Some(res))
     }
 
-    pub fn cast_json_as_int(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<i64>> {
+    pub fn cast_json_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let res = val.cast_to_int();
         Ok(Some(res))
     }
 
-    pub fn cast_int_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_int_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        if !mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        if !self.children[0].is_unsigned() {
             Ok(Some(self.produce_float_with_specified_tp(ctx, val as f64)?))
         } else {
             let uval = val as u64;
@@ -117,14 +143,14 @@ impl FnCall {
         }
     }
 
-    pub fn cast_real_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_real_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
     pub fn cast_decimal_as_real(
         &self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -132,8 +158,8 @@ impl FnCall {
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_str_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
-        if self.children[0].is_hybrid_type() {
+    pub fn cast_str_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
+        if self.children[0].field_type().is_hybrid() {
             return self.children[0].eval_real(ctx, row);
         }
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -141,7 +167,7 @@ impl FnCall {
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_time_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_time_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let val = val.to_decimal()?;
         let res = val.as_f64()?;
@@ -150,7 +176,7 @@ impl FnCall {
 
     pub fn cast_duration_as_real(
         &self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -159,20 +185,20 @@ impl FnCall {
         Ok(Some(self.produce_float_with_specified_tp(ctx, res)?))
     }
 
-    pub fn cast_json_as_real(&self, ctx: &StatementContext, row: &[Datum]) -> Result<Option<f64>> {
+    pub fn cast_json_as_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         Ok(Some(self.produce_float_with_specified_tp(ctx, val)?))
     }
 
     pub fn cast_int_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let field_type = &self.children[0].get_tp();
-        let res = if !mysql::has_unsigned_flag(field_type.get_flag() as u64) {
+        let field_type = &self.children[0].field_type();
+        let res = if !field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
             Cow::Owned(Decimal::from(val))
         } else {
             let uval = val as u64;
@@ -183,7 +209,7 @@ impl FnCall {
 
     pub fn cast_real_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -194,27 +220,26 @@ impl FnCall {
 
     pub fn cast_decimal_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         self.produce_dec_with_specified_tp(ctx, val).map(Some)
-
     }
 
     pub fn cast_str_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        let dec = if self.children[0].is_hybrid_type() {
+        let dec = if self.children[0].field_type().is_hybrid() {
             try_opt!(self.children[0].eval_decimal(ctx, row))
         } else {
             let val = try_opt!(self.children[0].eval_string(ctx, row));
             match Decimal::from_bytes(&val)? {
                 Res::Ok(d) => Cow::Owned(d),
                 Res::Truncated(d) | Res::Overflow(d) => {
-                    convert::handle_truncate(ctx, true)?;
+                    ctx.handle_truncate(true)?;
                     Cow::Owned(d)
                 }
             }
@@ -224,7 +249,7 @@ impl FnCall {
 
     pub fn cast_time_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -235,7 +260,7 @@ impl FnCall {
 
     pub fn cast_duration_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -244,14 +269,13 @@ impl FnCall {
             .map(Some)
     }
 
-
     pub fn cast_json_as_decimal<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
-        let val = val.cast_to_real();
+        let val = val.cast_to_real(ctx)?;
         let dec = Decimal::from_f64(val)?;
         self.produce_dec_with_specified_tp(ctx, Cow::Owned(dec))
             .map(Some)
@@ -259,11 +283,11 @@ impl FnCall {
 
     pub fn cast_int_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let s = if mysql::has_unsigned_flag(self.children[0].get_tp().get_flag() as u64) {
+        let s = if self.children[0].is_unsigned() {
             let uval = val as u64;
             format!("{}", uval)
         } else {
@@ -275,7 +299,7 @@ impl FnCall {
 
     pub fn cast_real_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -286,7 +310,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -297,7 +321,7 @@ impl FnCall {
 
     pub fn cast_str_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
@@ -306,7 +330,7 @@ impl FnCall {
 
     pub fn cast_time_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
@@ -315,10 +339,9 @@ impl FnCall {
             .map(Some)
     }
 
-
     pub fn cast_duration_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
@@ -329,7 +352,7 @@ impl FnCall {
 
     pub fn cast_json_as_str<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
@@ -340,165 +363,177 @@ impl FnCall {
 
     pub fn cast_int_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_real_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_decimal_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_float_str(ctx, &s)?))
     }
 
     pub fn cast_str_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        Ok(Some(self.produce_time_with_str(ctx, &val)?))
     }
 
     pub fn cast_time_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let mut val = val.into_owned();
-        val.round_frac(self.tp.get_decimal() as i8)?;
+        val.round_frac(self.field_type.decimal() as i8)?;
         // TODO: tidb only update tp when tp is Date
-        val.set_tp(self.tp.get_tp() as u8)?;
+        val.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_duration_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val = Time::from_duration(&ctx.tz, self.tp.get_tp() as u8, val.as_ref())?;
-        val.round_frac(self.tp.get_decimal() as i8)?;
+        let mut val =
+            Time::from_duration(ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+        val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
 
     pub fn cast_json_as_time<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
-        Ok(Some(self.produce_time_with_str(ctx, s)?))
+        Ok(Some(self.produce_time_with_str(ctx, &s)?))
     }
 
     pub fn cast_int_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
-        Ok(Some(Cow::Owned(dur)))
+        // TODO: port NumberToDuration from tidb.
+        match Duration::parse(s.as_bytes(), self.field_type.decimal() as i8) {
+            Ok(dur) => Ok(Some(Cow::Owned(dur))),
+            Err(e) => {
+                if e.is_overflow() {
+                    ctx.handle_overflow(e)?;
+                    Ok(None)
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     pub fn cast_real_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
         let s = format!("{}", val);
-        let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
+        let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
     }
 
     pub fn cast_decimal_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let s = val.to_string();
-        let dur = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
+        let dur = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
     }
 
     pub fn cast_str_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let dur = Duration::parse(val.as_ref(), self.tp.get_decimal() as i8)?;
+        let dur = Duration::parse(val.as_ref(), self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(dur)))
     }
 
     pub fn cast_time_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
-        let mut res = val.to_duration()?;
-        res.round_frac(self.tp.get_decimal() as i8)?;
+        let res = val
+            .to_duration()?
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
     pub fn cast_duration_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut res = val.into_owned();
-        res.round_frac(self.tp.get_decimal() as i8)?;
+        let res = val
+            .into_owned()
+            .round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
     pub fn cast_json_as_duration<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
         let val = try_opt!(self.children[0].eval_json(ctx, row));
         let s = val.unquote()?;
         // TODO: tidb would handle truncate here
-        let d = Duration::parse(s.as_bytes(), self.tp.get_decimal() as i8)?;
+        let d = Duration::parse(s.as_bytes(), self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(d)))
     }
 
     pub fn cast_int_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_int(ctx, row));
-        let flag = self.children[0].get_tp().get_flag();
-        let j = if mysql::has_is_boolean_flag(flag) {
+        let flag = self.children[0].field_type().flag();
+        let j = if flag.contains(FieldTypeFlag::IS_BOOLEAN) {
             Json::Boolean(val != 0)
-        } else if mysql::has_unsigned_flag(flag) {
+        } else if flag.contains(FieldTypeFlag::UNSIGNED) {
             Json::U64(val as u64)
         } else {
             Json::I64(val)
@@ -508,7 +543,7 @@ impl FnCall {
 
     pub fn cast_real_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
@@ -518,7 +553,7 @@ impl FnCall {
 
     pub fn cast_decimal_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
@@ -529,27 +564,30 @@ impl FnCall {
 
     pub fn cast_str_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        let val = try_opt!(self.children[0].eval_string(ctx, row));
-        let s = String::from_utf8(val.into_owned())?;
-        if mysql::has_parse_to_json_flag(self.tp.get_flag()) {
-            let j: Json = s.parse()?;
+        let val = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
+        if self
+            .field_type
+            .flag()
+            .contains(FieldTypeFlag::PARSE_TO_JSON)
+        {
+            let j: Json = val.parse()?;
             Ok(Some(Cow::Owned(j)))
         } else {
-            Ok(Some(Cow::Owned(Json::String(s))))
+            Ok(Some(Cow::Owned(Json::String(val.into_owned()))))
         }
     }
 
     pub fn cast_time_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_time(ctx, row));
         let mut val = val.into_owned();
-        if val.get_tp() == types::DATETIME || val.get_tp() == types::TIMESTAMP {
+        if val.get_time_type() == TimeType::DateTime || val.get_time_type() == TimeType::Timestamp {
             val.set_fsp(mysql::MAX_FSP as u8);
         }
         let s = format!("{}", val);
@@ -558,19 +596,19 @@ impl FnCall {
 
     pub fn cast_duration_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val = val.into_owned();
-        val.fsp = mysql::MAX_FSP as u8;
+        val.set_fsp(mysql::MAX_FSP as u8);
         let s = format!("{}", val);
         Ok(Some(Cow::Owned(Json::String(s))))
     }
 
     pub fn cast_json_as_json<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         self.children[0].eval_json(ctx, row)
@@ -578,15 +616,17 @@ impl FnCall {
 
     fn produce_dec_with_specified_tp<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         val: Cow<'a, Decimal>,
     ) -> Result<Cow<'a, Decimal>> {
-        let flen = self.tp.get_flen();
-        let decimal = self.tp.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+        let flen = self.field_type.flen();
+        let decimal = self.field_type.decimal();
+        if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(val);
         }
-        let res = val.into_owned().convert_to(ctx, flen as u8, decimal as u8)?;
+        let res = val
+            .into_owned()
+            .convert_to(ctx, flen as u8, decimal as u8)?;
         Ok(Cow::Owned(res))
     }
 
@@ -594,11 +634,11 @@ impl FnCall {
     /// a new string according to `flen` and `chs`.
     fn produce_str_with_specified_tp<'a, 'b: 'a>(
         &'b self,
-        ctx: &StatementContext,
+        ctx: &mut EvalContext,
         s: Cow<'a, [u8]>,
     ) -> Result<Cow<'a, [u8]>> {
-        let flen = self.tp.get_flen();
-        let chs = self.tp.get_charset();
+        let flen = self.field_type.flen();
+        let chs = self.field_type.get_charset();
         if flen < 0 {
             return Ok(s);
         }
@@ -620,13 +660,10 @@ impl FnCall {
                 return Ok(s);
             }
             let (char_count, truncate_pos) = truncate_info.unwrap();
-            if convert::handle_truncate_as_error(ctx) {
-                return Err(box_err!(
-                    "Data Too Long, field len {}, data len {}",
-                    flen,
-                    char_count
-                ));
-            }
+            ctx.handle_truncate_err(Error::data_too_long(format!(
+                "Data Too Long, field len {}, data len {}",
+                flen, char_count
+            )))?;
 
             let mut res = s.into_owned();
             convert::truncate_binary(&mut res, truncate_pos as isize);
@@ -634,19 +671,17 @@ impl FnCall {
         }
 
         if s.len() > flen {
-            if convert::handle_truncate_as_error(ctx) {
-                return Err(box_err!(
-                    "Data Too Long, field len {}, data len {}",
-                    flen,
-                    s.len()
-                ));
-            }
+            ctx.handle_truncate_err(Error::data_too_long(format!(
+                "Data Too Long, field len {}, data len {}",
+                flen,
+                s.len()
+            )))?;
             let mut res = s.into_owned();
             convert::truncate_binary(&mut res, flen as isize);
             return Ok(Cow::Owned(res));
         }
 
-        if self.tp.get_tp() == types::STRING as i32 && s.len() < flen {
+        if self.field_type.tp() == FieldTypeTp::String && s.len() < flen {
             let mut s = s.into_owned();
             s.resize(flen, 0);
             return Ok(Cow::Owned(s));
@@ -654,26 +689,33 @@ impl FnCall {
         Ok(s)
     }
 
-    fn produce_time_with_str(&self, ctx: &StatementContext, s: String) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s.as_ref(), self.tp.get_decimal() as i8, &ctx.tz)?;
-        t.set_tp(self.tp.get_tp() as u8)?;
+    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
+        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+        t.set_time_type(self.field_type.tp().try_into()?)?;
+        Ok(Cow::Owned(t))
+    }
+
+    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
+        let mut t =
+            Time::parse_datetime_from_float_string(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+        t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
     /// `produce_float_with_specified_tp`(`ProduceFloatWithSpecifiedTp` in tidb) produces
     /// a new float64 according to `flen` and `decimal` in `self.tp`.
     /// TODO port tests from tidb(tidb haven't implemented now)
-    fn produce_float_with_specified_tp(&self, ctx: &StatementContext, f: f64) -> Result<f64> {
-        let flen = self.tp.get_flen();
-        let decimal = self.tp.get_decimal();
-        if flen == convert::UNSPECIFIED_LENGTH || decimal == convert::UNSPECIFIED_LENGTH {
+    fn produce_float_with_specified_tp(&self, ctx: &mut EvalContext, f: f64) -> Result<f64> {
+        let flen = self.field_type.flen();
+        let decimal = self.field_type.decimal();
+        if flen == cop_datatype::UNSPECIFIED_LENGTH || decimal == cop_datatype::UNSPECIFIED_LENGTH {
             return Ok(f);
         }
         match convert::truncate_f64(f, flen as u8, decimal as u8) {
             Res::Ok(d) => Ok(d),
             Res::Overflow(d) | Res::Truncated(d) => {
                 //TODO process warning with ctx
-                convert::handle_truncate(ctx, true)?;
+                ctx.handle_truncate(true)?;
                 Ok(d)
             }
         }
@@ -681,116 +723,110 @@ impl FnCall {
 }
 
 #[cfg(test)]
-mod test {
-    use std::u64;
+mod tests {
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::{i64, u64};
 
+    use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
     use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
-    use chrono::{FixedOffset, Utc};
+    use chrono::Utc;
 
-    use coprocessor::codec::{convert, Datum};
-    use coprocessor::codec::mysql::{self, charset, types, Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::dag::expr::test::fncall_expr;
-    use coprocessor::select::xeval::evaluator::test::col_expr as base_col_expr;
+    use crate::coprocessor::codec::error::*;
+    use crate::coprocessor::codec::mysql::{
+        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
+    };
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
-    pub fn col_expr(col_id: i64, tp: i32) -> Expr {
+    pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
         let mut fp = FieldType::new();
-        fp.set_tp(tp);
+        fp.as_mut_accessor().set_tp(tp);
+        if tp == FieldTypeTp::String {
+            fp.set_charset(charset::CHARSET_UTF8.to_owned());
+        }
         expr.set_field_type(fp);
         expr
     }
 
     #[test]
     fn test_cast_as_int() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-	#[allow(inconsistent_digit_grouping)]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let time_int = 2012_12_12_12_00_23i64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsInt,
-                types::LONG_LONG,
-                Some(types::UNSIGNED_FLAG),
+                FieldTypeTp::LongLong,
+                Some(FieldTypeFlag::UNSIGNED),
                 vec![Datum::U64(1)],
                 1,
             ),
             (
                 ScalarFuncSig::CastIntAsInt,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 None,
                 vec![Datum::I64(-1)],
                 -1,
             ),
             (
                 ScalarFuncSig::CastStringAsInt,
-                types::STRING,
+                FieldTypeTp::String,
                 None,
                 vec![Datum::Bytes(b"1".to_vec())],
                 1,
             ),
             (
-                ScalarFuncSig::CastStringAsInt,
-                types::STRING,
-                None,
-                vec![Datum::Bytes(b"-123".to_vec())],
-                -123,
-            ),
-            (
-                ScalarFuncSig::CastStringAsInt,
-                types::STRING,
-                None,
-                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
-                u64::MAX as i64,
-            ),
-            (
                 ScalarFuncSig::CastRealAsInt,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 None,
                 vec![Datum::F64(1f64)],
                 1,
             ),
             (
                 ScalarFuncSig::CastRealAsInt,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 None,
                 vec![Datum::F64(1234.000)],
                 1234,
             ),
             (
                 ScalarFuncSig::CastTimeAsInt,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 None,
                 vec![Datum::Time(t)],
                 time_int,
             ),
             (
                 ScalarFuncSig::CastDurationAsInt,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 None,
                 vec![Datum::Dur(duration_t)],
                 120023,
             ),
             (
                 ScalarFuncSig::CastJsonAsInt,
-                types::JSON,
+                FieldTypeTp::JSON,
                 None,
                 vec![Datum::Json(Json::I64(-1))],
                 -1,
             ),
             (
                 ScalarFuncSig::CastJsonAsInt,
-                types::JSON,
+                FieldTypeTp::JSON,
                 None,
                 vec![Datum::Json(Json::U64(1))],
                 1,
             ),
             (
                 ScalarFuncSig::CastDecimalAsInt,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 None,
                 vec![Datum::Dec(Decimal::from(1))],
                 1,
@@ -799,40 +835,68 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, flag, col, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut exp = fncall_expr(sig, &[col_expr]);
+            let col_expr = col_expr(0, tp);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
             if flag.is_some() {
-                exp.mut_field_type().set_flag(flag.unwrap() as u32);
+                exp.mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
             let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_int(&ctx, &col).unwrap();
+            let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
             // test None
-            let res = e.eval_int(&ctx, &null_cols).unwrap();
+            let res = e.eval_int(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
+        }
+
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let cases = vec![
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                FieldTypeTp::NewDecimal,
+                vec![Datum::Dec(
+                    Decimal::from_str("1111111111111111111111111").unwrap(),
+                )],
+                9223372036854775807,
+            ),
+            (
+                ScalarFuncSig::CastDecimalAsInt,
+                FieldTypeTp::NewDecimal,
+                vec![Datum::Dec(
+                    Decimal::from_str("-1111111111111111111111111").unwrap(),
+                )],
+                -9223372036854775808,
+            ),
+        ];
+        for (sig, tp, col, expect) in cases {
+            let col_expr = col_expr(0, tp);
+            let exp = scalar_func_expr(sig, &[col_expr]);
+            let e = Expression::build(&ctx, exp).unwrap();
+            let res = e.eval_int(&mut ctx, &col).unwrap();
+            assert_eq!(res.unwrap(), expect);
         }
     }
 
     #[test]
     fn test_cast_as_real() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
-	#[allow(inconsistent_digit_grouping)]
+        #[allow(clippy::inconsistent_digit_grouping)]
         let int_t = 2012_12_12_12_00_23u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsReal,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 vec![Datum::I64(1)],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 1f64,
             ),
             (
                 ScalarFuncSig::CastIntAsReal,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 vec![Datum::I64(1234)],
                 7,
                 3,
@@ -840,15 +904,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastStringAsReal,
-                types::STRING,
+                FieldTypeTp::String,
                 vec![Datum::Bytes(b"1".to_vec())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 1f64,
             ),
             (
                 ScalarFuncSig::CastStringAsReal,
-                types::STRING,
+                FieldTypeTp::String,
                 vec![Datum::Bytes(b"1234".to_vec())],
                 7,
                 3,
@@ -856,15 +920,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastRealAsReal,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 vec![Datum::F64(1f64)],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 1f64,
             ),
             (
                 ScalarFuncSig::CastRealAsReal,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 vec![Datum::F64(1234.123)],
                 8,
                 4,
@@ -872,15 +936,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastTimeAsReal,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 vec![Datum::Time(t.clone())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 int_t as f64,
             ),
             (
                 ScalarFuncSig::CastTimeAsReal,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 vec![Datum::Time(t)],
                 15,
                 1,
@@ -888,15 +952,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDurationAsReal,
-                types::DURATION,
-                vec![Datum::Dur(duration_t.clone())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                FieldTypeTp::Duration,
+                vec![Datum::Dur(duration_t)],
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 120023f64,
             ),
             (
                 ScalarFuncSig::CastDurationAsReal,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 vec![Datum::Dur(duration_t)],
                 7,
                 1,
@@ -904,15 +968,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastJsonAsReal,
-                types::JSON,
+                FieldTypeTp::JSON,
                 vec![Datum::Json(Json::I64(1))],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 1f64,
             ),
             (
                 ScalarFuncSig::CastJsonAsReal,
-                types::JSON,
+                FieldTypeTp::JSON,
                 vec![Datum::Json(Json::I64(1))],
                 2,
                 1,
@@ -920,15 +984,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDecimalAsReal,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 vec![Datum::Dec(Decimal::from(1))],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 1f64,
             ),
             (
                 ScalarFuncSig::CastDecimalAsReal,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 vec![Datum::Dec(Decimal::from(1))],
                 2,
                 1,
@@ -938,38 +1002,39 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut exp = fncall_expr(sig, &[col_expr]);
-            exp.mut_field_type().set_flen(flen as i32);
-            exp.mut_field_type().set_decimal(decimal as i32);
+            let col_expr = col_expr(0, tp);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            exp.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
+                .set_decimal(decimal);
             let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_real(&ctx, &col).unwrap();
+            let res = e.eval_real(&mut ctx, &col).unwrap();
             assert_eq!(format!("{}", res.unwrap()), format!("{}", expect));
             // test None
-            let res = e.eval_real(&ctx, &null_cols).unwrap();
+            let res = e.eval_real(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_decimal() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t = Time::parse_utc_datetime("2012-12-12 12:00:23", 0).unwrap();
         let int_t = 20121212120023u64;
         let duration_t = Duration::parse(b"12:00:23", 0).unwrap();
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsDecimal,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 vec![Datum::I64(1)],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastIntAsDecimal,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 vec![Datum::I64(1234)],
                 7,
                 3,
@@ -977,15 +1042,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastStringAsDecimal,
-                types::STRING,
+                FieldTypeTp::String,
                 vec![Datum::Bytes(b"1".to_vec())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastStringAsDecimal,
-                types::STRING,
+                FieldTypeTp::String,
                 vec![Datum::Bytes(b"1234".to_vec())],
                 7,
                 3,
@@ -993,15 +1058,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastRealAsDecimal,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 vec![Datum::F64(1f64)],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastRealAsDecimal,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 vec![Datum::F64(1234.123)],
                 8,
                 4,
@@ -1009,15 +1074,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastTimeAsDecimal,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 vec![Datum::Time(t.clone())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(int_t),
             ),
             (
                 ScalarFuncSig::CastTimeAsDecimal,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 vec![Datum::Time(t)],
                 15,
                 1,
@@ -1025,15 +1090,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDurationAsDecimal,
-                types::DURATION,
-                vec![Datum::Dur(duration_t.clone())],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                FieldTypeTp::Duration,
+                vec![Datum::Dur(duration_t)],
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(120023),
             ),
             (
                 ScalarFuncSig::CastDurationAsDecimal,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 vec![Datum::Dur(duration_t)],
                 7,
                 1,
@@ -1041,15 +1106,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
-                types::JSON,
+                FieldTypeTp::JSON,
                 vec![Datum::Json(Json::I64(1))],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastJsonAsDecimal,
-                types::JSON,
+                FieldTypeTp::JSON,
                 vec![Datum::Json(Json::I64(1))],
                 2,
                 1,
@@ -1057,15 +1122,15 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDecimalAsDecimal,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 vec![Datum::Dec(Decimal::from(1))],
-                convert::UNSPECIFIED_LENGTH,
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 Decimal::from(1),
             ),
             (
                 ScalarFuncSig::CastDecimalAsDecimal,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 vec![Datum::Dec(Decimal::from(1))],
                 2,
                 1,
@@ -1075,23 +1140,24 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, flen, decimal, expect) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut exp = fncall_expr(sig, &[col_expr]);
-            exp.mut_field_type().set_flen(flen as i32);
-            exp.mut_field_type().set_decimal(decimal as i32);
+            let col_expr = col_expr(0, tp);
+            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            exp.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
+                .set_decimal(decimal);
             let e = Expression::build(&ctx, exp).unwrap();
-            let res = e.eval_decimal(&ctx, &col).unwrap();
+            let res = e.eval_decimal(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap().into_owned(), expect);
             // test None
-            let res = e.eval_decimal(&ctx, &null_cols).unwrap();
+            let res = e.eval_decimal(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_str() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let t_str = "2012-12-12 12:00:23";
         let t = Time::parse_utc_datetime(t_str, 0).unwrap();
         let dur_str = b"12:00:23";
@@ -1101,16 +1167,16 @@ mod test {
         let cases = vec![
             (
                 ScalarFuncSig::CastIntAsString,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::I64(1)],
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
             ),
             (
                 ScalarFuncSig::CastIntAsString,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::I64(1234)],
@@ -1119,16 +1185,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastStringAsString,
-                types::STRING,
+                FieldTypeTp::String,
                 charset::CHARSET_ASCII,
-                Some(types::STRING as i32),
+                Some(FieldTypeTp::String),
                 vec![Datum::Bytes(b"1234".to_vec())],
                 6,
                 b"1234\0\0".to_vec(),
             ),
             (
                 ScalarFuncSig::CastStringAsString,
-                types::STRING,
+                FieldTypeTp::String,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Bytes(s.as_bytes().to_vec())],
@@ -1137,16 +1203,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastRealAsString,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::F64(1f64)],
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
             ),
             (
                 ScalarFuncSig::CastRealAsString,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::F64(1234.123)],
@@ -1155,16 +1221,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastTimeAsString,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Time(t.clone())],
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 t_str.as_bytes().to_vec(),
             ),
             (
                 ScalarFuncSig::CastTimeAsString,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Time(t)],
@@ -1173,16 +1239,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDurationAsString,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 charset::CHARSET_UTF8,
                 None,
-                vec![Datum::Dur(duration_t.clone())],
-                convert::UNSPECIFIED_LENGTH,
+                vec![Datum::Dur(duration_t)],
+                cop_datatype::UNSPECIFIED_LENGTH,
                 dur_str.to_vec(),
             ),
             (
                 ScalarFuncSig::CastDurationAsString,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Dur(duration_t)],
@@ -1191,16 +1257,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastJsonAsString,
-                types::JSON,
+                FieldTypeTp::JSON,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Json(Json::I64(1))],
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
             ),
             (
                 ScalarFuncSig::CastJsonAsString,
-                types::JSON,
+                FieldTypeTp::JSON,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Json(Json::I64(1234))],
@@ -1209,16 +1275,16 @@ mod test {
             ),
             (
                 ScalarFuncSig::CastDecimalAsString,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Dec(Decimal::from(1))],
-                convert::UNSPECIFIED_LENGTH,
+                cop_datatype::UNSPECIFIED_LENGTH,
                 b"1".to_vec(),
             ),
             (
                 ScalarFuncSig::CastDecimalAsString,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 charset::CHARSET_UTF8,
                 None,
                 vec![Datum::Dec(Decimal::from(1234))],
@@ -1229,16 +1295,18 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, charset, to_tp, col, flen, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut ex = fncall_expr(sig, &[col_expr]);
-            ex.mut_field_type().set_flen(flen as i32);
-            ex.mut_field_type().set_decimal(convert::UNSPECIFIED_LENGTH);
+            let col_expr = col_expr(0, tp);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_flen(flen)
+                .set_decimal(cop_datatype::UNSPECIFIED_LENGTH);
             if to_tp.is_some() {
-                ex.mut_field_type().set_tp(to_tp.unwrap());
+                ex.mut_field_type().as_mut_accessor().set_tp(to_tp.unwrap());
             }
             ex.mut_field_type().set_charset(String::from(charset));
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_string(&ctx, &col).unwrap();
+            let res = e.eval_string(&mut ctx, &col).unwrap();
             assert_eq!(
                 res.unwrap().into_owned(),
                 exp,
@@ -1247,22 +1315,21 @@ mod test {
                 flen
             );
             // test None
-            let res = e.eval_string(&ctx, &null_cols).unwrap();
+            let res = e.eval_string(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_time() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
         let t_time_str = format!("{}", today.format("%Y-%m-%d %H:%M:%S"));
         let t_time = Time::parse_utc_datetime(t_time_str.as_ref(), 0).unwrap();
         let t_date = {
             let mut date = t_time.clone();
-            date.set_tp(types::DATE).unwrap();
+            date.set_time_type(TimeType::Date).unwrap();
             date
         };
         let t_int = format!("{}", today.format("%Y%m%d%H%M%S"))
@@ -1274,7 +1341,7 @@ mod test {
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_utc_datetime(&dur_to_time_str, 0).unwrap();
         let mut dur_to_date = dur_to_time.clone();
-        dur_to_date.set_tp(types::DATE).unwrap();
+        dur_to_date.set_time_type(TimeType::Date).unwrap();
 
         let json_cols = vec![Datum::Json(Json::String(t_time_str.clone()))];
         let int_cols = vec![Datum::U64(t_int)];
@@ -1288,136 +1355,138 @@ mod test {
             (
                 // cast int as time
                 ScalarFuncSig::CastIntAsTime,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 &int_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 // cast int as datetime(6)
                 ScalarFuncSig::CastIntAsTime,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 &int_cols,
                 mysql::MAX_FSP,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 ScalarFuncSig::CastStringAsTime,
-                types::STRING,
+                FieldTypeTp::String,
                 &str_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 // cast string as datetime(6)
                 ScalarFuncSig::CastStringAsTime,
-                types::STRING,
+                FieldTypeTp::String,
                 &str_cols,
                 mysql::MAX_FSP,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 ScalarFuncSig::CastRealAsTime,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 &f64_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 // cast real as date(0)
                 ScalarFuncSig::CastRealAsTime,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 &f64_cols,
                 mysql::DEFAULT_FSP,
-                types::DATE,
+                FieldTypeTp::Date,
                 &t_date,
             ),
             (
                 ScalarFuncSig::CastTimeAsTime,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &time_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 // cast time as date
                 ScalarFuncSig::CastTimeAsTime,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &time_cols,
                 mysql::DEFAULT_FSP,
-                types::DATE,
+                FieldTypeTp::Date,
                 &t_date,
             ),
             (
                 ScalarFuncSig::CastDurationAsTime,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 &duration_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &dur_to_time,
             ),
             (
                 // cast duration as date
                 ScalarFuncSig::CastDurationAsTime,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 &duration_cols,
                 mysql::MAX_FSP,
-                types::DATE,
+                FieldTypeTp::Date,
                 &dur_to_date,
             ),
             (
                 ScalarFuncSig::CastJsonAsTime,
-                types::JSON,
+                FieldTypeTp::JSON,
                 &json_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 ScalarFuncSig::CastJsonAsTime,
-                types::JSON,
+                FieldTypeTp::JSON,
                 &json_cols,
                 mysql::DEFAULT_FSP,
-                types::DATE,
+                FieldTypeTp::Date,
                 &t_date,
             ),
             (
                 ScalarFuncSig::CastDecimalAsTime,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 &dec_cols,
-                mysql::UN_SPECIFIED_FSP,
-                types::DATETIME,
+                mysql::UNSPECIFIED_FSP,
+                FieldTypeTp::DateTime,
                 &t_time,
             ),
             (
                 // cast decimal as date
                 ScalarFuncSig::CastDecimalAsTime,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 &dec_cols,
                 mysql::DEFAULT_FSP,
-                types::DATE,
+                FieldTypeTp::Date,
                 &t_date,
             ),
         ];
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, to_tp, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut ex = fncall_expr(sig, &[col_expr]);
-            ex.mut_field_type().set_decimal(to_fsp as i32);
-            ex.mut_field_type().set_tp(to_tp as i32);
+            let col_expr = col_expr(0, tp);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_decimal(isize::from(to_fsp))
+                .set_tp(to_tp);
             let e = Expression::build(&ctx, ex).unwrap();
 
-            let res = e.eval_time(&ctx, col).unwrap();
+            let res = e.eval_time(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
             let mut expt = exp.clone();
-            if to_fsp != mysql::UN_SPECIFIED_FSP {
+            if to_fsp != mysql::UNSPECIFIED_FSP {
                 expt.set_fsp(to_fsp as u8);
             }
             assert_eq!(
@@ -1429,15 +1498,14 @@ mod test {
                 to_fsp,
             );
             // test None
-            let res = e.eval_time(&ctx, &null_cols).unwrap();
+            let res = e.eval_time(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_as_duration() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let today = Utc::now();
         let t_date_str = format!("{}", today.format("%Y-%m-%d"));
 
@@ -1447,29 +1515,29 @@ mod test {
         let dur_to_time_str = format!("{} 12:00:23", t_date_str);
         let dur_to_time = Time::parse_utc_datetime(&dur_to_time_str, 0).unwrap();
         let mut dur_to_date = dur_to_time.clone();
-        dur_to_date.set_tp(types::DATE).unwrap();
+        dur_to_date.set_time_type(TimeType::Date).unwrap();
 
         let json_cols = vec![Datum::Json(Json::String(String::from(dur_str)))];
         let int_cols = vec![Datum::U64(dur_int)];
         let str_cols = vec![Datum::Bytes(dur_str.as_bytes().to_vec())];
         let f64_cols = vec![Datum::F64(dur_int as f64)];
         let time_cols = vec![Datum::Time(dur_to_time)];
-        let duration_cols = vec![Datum::Dur(duration.clone())];
+        let duration_cols = vec![Datum::Dur(duration)];
         let dec_cols = vec![Datum::Dec(Decimal::from(dur_int))];
 
         let cases = vec![
             (
                 // cast int as duration
                 ScalarFuncSig::CastIntAsDuration,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 &int_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast int as duration
                 ScalarFuncSig::CastIntAsDuration,
-                types::LONG_LONG,
+                FieldTypeTp::LongLong,
                 &int_cols,
                 mysql::MAX_FSP,
                 &duration,
@@ -1477,15 +1545,15 @@ mod test {
             (
                 // string as duration
                 ScalarFuncSig::CastStringAsDuration,
-                types::STRING,
+                FieldTypeTp::String,
                 &str_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast string as duration
                 ScalarFuncSig::CastStringAsDuration,
-                types::STRING,
+                FieldTypeTp::String,
                 &str_cols,
                 4,
                 &duration,
@@ -1493,15 +1561,15 @@ mod test {
             (
                 // cast real as duration
                 ScalarFuncSig::CastRealAsDuration,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 &f64_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast real as duration
                 ScalarFuncSig::CastRealAsDuration,
-                types::DOUBLE,
+                FieldTypeTp::Double,
                 &f64_cols,
                 1,
                 &duration,
@@ -1509,30 +1577,30 @@ mod test {
             (
                 // cast time as duration
                 ScalarFuncSig::CastTimeAsDuration,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &time_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast time as duration
                 ScalarFuncSig::CastTimeAsDuration,
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 &time_cols,
                 5,
                 &duration,
             ),
             (
                 ScalarFuncSig::CastDurationAsDuration,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 &duration_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast duration as duration
                 ScalarFuncSig::CastDurationAsDuration,
-                types::DURATION,
+                FieldTypeTp::Duration,
                 &duration_cols,
                 mysql::MAX_FSP,
                 &duration,
@@ -1540,14 +1608,14 @@ mod test {
             (
                 // cast json as duration
                 ScalarFuncSig::CastJsonAsDuration,
-                types::JSON,
+                FieldTypeTp::JSON,
                 &json_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 ScalarFuncSig::CastJsonAsDuration,
-                types::JSON,
+                FieldTypeTp::JSON,
                 &json_cols,
                 5,
                 &duration,
@@ -1555,15 +1623,15 @@ mod test {
             (
                 // cast decimal as duration
                 ScalarFuncSig::CastDecimalAsDuration,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 &dec_cols,
-                mysql::UN_SPECIFIED_FSP,
+                mysql::UNSPECIFIED_FSP,
                 &duration,
             ),
             (
                 // cast decimal as duration
                 ScalarFuncSig::CastDecimalAsDuration,
-                types::NEW_DECIMAL,
+                FieldTypeTp::NewDecimal,
                 &dec_cols,
                 2,
                 &duration,
@@ -1572,15 +1640,17 @@ mod test {
 
         let null_cols = vec![Datum::Null];
         for (sig, tp, col, to_fsp, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let mut ex = fncall_expr(sig, &[col_expr]);
-            ex.mut_field_type().set_decimal(to_fsp as i32);
+            let col_expr = col_expr(0, tp);
+            let mut ex = scalar_func_expr(sig, &[col_expr]);
+            ex.mut_field_type()
+                .as_mut_accessor()
+                .set_decimal(isize::from(to_fsp));
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_duration(&ctx, col).unwrap();
+            let res = e.eval_duration(&mut ctx, col).unwrap();
             let data = res.unwrap().into_owned();
-            let mut expt = exp.clone();
-            if to_fsp != mysql::UN_SPECIFIED_FSP {
-                expt.fsp = to_fsp as u8;
+            let mut expt = *exp;
+            if to_fsp != mysql::UNSPECIFIED_FSP {
+                expt.set_fsp(to_fsp as u8);
             }
             assert_eq!(
                 data.to_string(),
@@ -1590,28 +1660,27 @@ mod test {
                 to_fsp,
             );
             // test None
-            let res = e.eval_duration(&ctx, &null_cols).unwrap();
+            let res = e.eval_duration(&mut ctx, &null_cols).unwrap();
             assert!(res.is_none());
         }
     }
 
     #[test]
     fn test_cast_int_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
-                Some(types::UNSIGNED_FLAG),
+                Some(FieldTypeFlag::UNSIGNED),
                 vec![Datum::U64(32)],
                 Some(Json::U64(32)),
             ),
             (
-                Some(types::UNSIGNED_FLAG | types::IS_BOOLEAN_FLAG),
+                Some(FieldTypeFlag::UNSIGNED | FieldTypeFlag::IS_BOOLEAN),
                 vec![Datum::U64(1)],
                 Some(Json::Boolean(true)),
             ),
             (
-                Some(types::UNSIGNED_FLAG | types::IS_BOOLEAN_FLAG),
+                Some(FieldTypeFlag::UNSIGNED | FieldTypeFlag::IS_BOOLEAN),
                 vec![Datum::I64(0)],
                 Some(Json::Boolean(false)),
             ),
@@ -1619,13 +1688,16 @@ mod test {
             (None, vec![Datum::Null], None),
         ];
         for (flag, cols, exp) in cases {
-            let mut col_expr = col_expr(0, types::LONG_LONG as i32);
+            let mut col_expr = col_expr(0, FieldTypeTp::LongLong);
             if flag.is_some() {
-                col_expr.mut_field_type().set_flag(flag.unwrap() as u32);
+                col_expr
+                    .mut_field_type()
+                    .as_mut_accessor()
+                    .set_flag(flag.unwrap());
             }
-            let ex = fncall_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
+            let ex = scalar_func_expr(ScalarFuncSig::CastIntAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1636,17 +1708,16 @@ mod test {
 
     #[test]
     fn test_cast_real_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::DOUBLE as i32);
-            let ex = fncall_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
+            let col_expr = col_expr(0, FieldTypeTp::Double);
+            let ex = scalar_func_expr(ScalarFuncSig::CastRealAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1657,8 +1728,7 @@ mod test {
 
     #[test]
     fn test_cast_decimal_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
@@ -1667,11 +1737,11 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::NEW_DECIMAL as i32);
-            let ex = fncall_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
+            let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsJson, &[col_expr]);
 
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1682,8 +1752,7 @@ mod test {
 
     #[test]
     fn test_cast_str_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 false,
@@ -1699,15 +1768,15 @@ mod test {
             (true, vec![Datum::Null], None),
         ];
         for (by_parse, cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
-            let mut ex = fncall_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
+            let col_expr = col_expr(0, FieldTypeTp::String);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsJson, &[col_expr]);
             if by_parse {
-                let mut flag = ex.get_field_type().get_flag();
-                flag |= types::PARSE_TO_JSON_FLAG as u32;
-                ex.mut_field_type().set_flag(flag);
+                let mut flag = ex.get_field_type().flag();
+                flag |= FieldTypeFlag::PARSE_TO_JSON;
+                ex.mut_field_type().as_mut_accessor().set_flag(flag);
             }
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1718,46 +1787,45 @@ mod test {
 
     #[test]
     fn test_cast_time_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let cfg = EvalConfig::default_for_test();
+        let mut ctx = EvalContext::new(Arc::new(cfg));
         let time_str = "2012-12-12 11:11:11";
         let date_str = "2012-12-12";
-        let tz = FixedOffset::east(0);
+        let tz = Tz::utc();
         let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
         let time_stamp = {
             let t = time.to_packed_u64();
-            Time::from_packed_u64(t, types::TIMESTAMP, mysql::DEFAULT_FSP, &tz).unwrap()
+            Time::from_packed_u64(t, TimeType::Timestamp, mysql::DEFAULT_FSP, tz).unwrap()
         };
         let date = {
             let mut t = time.clone();
-            t.set_tp(types::DATE).unwrap();
+            t.set_time_type(TimeType::Date).unwrap();
             t
         };
 
-
         let cases = vec![
             (
-                types::DATETIME,
+                FieldTypeTp::DateTime,
                 vec![Datum::Time(time)],
                 Some(Json::String(format!("{}.000000", time_str))),
             ),
             (
-                types::TIMESTAMP,
+                FieldTypeTp::Timestamp,
                 vec![Datum::Time(time_stamp)],
                 Some(Json::String(format!("{}.000000", time_str))),
             ),
             (
-                types::DATE,
+                FieldTypeTp::Date,
                 vec![Datum::Time(date)],
                 Some(Json::String(String::from(date_str))),
             ),
-            (0, vec![Datum::Null], None),
+            (FieldTypeTp::Unspecified, vec![Datum::Null], None),
         ];
         for (tp, cols, exp) in cases {
-            let col_expr = col_expr(0, tp as i32);
-            let ex = fncall_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
+            let col_expr = col_expr(0, tp);
+            let ex = scalar_func_expr(ScalarFuncSig::CastTimeAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1768,8 +1836,7 @@ mod test {
 
     #[test]
     fn test_cast_duration_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let dur_str = "11:12:08";
         let dur_str_expect = "11:12:08.000000";
 
@@ -1781,10 +1848,10 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
-            let ex = fncall_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
+            let col_expr = col_expr(0, FieldTypeTp::String);
+            let ex = scalar_func_expr(ScalarFuncSig::CastDurationAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1795,8 +1862,7 @@ mod test {
 
     #[test]
     fn test_cast_json_as_json() {
-        let mut ctx = StatementContext::default();
-        ctx.ignore_truncate = true;
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (
                 vec![Datum::Json(Json::Boolean(true))],
@@ -1805,10 +1871,10 @@ mod test {
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
-            let col_expr = col_expr(0, types::STRING as i32);
-            let ex = fncall_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
+            let col_expr = col_expr(0, FieldTypeTp::String);
+            let ex = scalar_func_expr(ScalarFuncSig::CastJsonAsJson, &[col_expr]);
             let e = Expression::build(&ctx, ex).unwrap();
-            let res = e.eval_json(&ctx, &cols).unwrap();
+            let res = e.eval_json(&mut ctx, &cols).unwrap();
             if exp.is_none() {
                 assert!(res.is_none());
                 continue;
@@ -1816,4 +1882,143 @@ mod test {
             assert_eq!(res.unwrap().into_owned(), exp.unwrap());
         }
     }
+
+    #[test]
+    fn test_dec_as_int_with_overflow() {
+        let cases = vec![
+            (
+                FieldTypeFlag::empty(),
+                vec![Datum::Dec(
+                    Decimal::from_f64(i64::MAX as f64 + 100.5).unwrap(),
+                )],
+                i64::MAX,
+            ),
+            (
+                FieldTypeFlag::UNSIGNED,
+                vec![Datum::Dec(
+                    Decimal::from_f64(u64::MAX as f64 + 100.5).unwrap(),
+                )],
+                u64::MAX as i64,
+            ),
+        ];
+        for (flag, cols, exp) in cases {
+            let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
+
+            // test with overflow as warning
+            let mut ctx =
+                EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warnings[0].get_code(),
+                ERR_TRUNCATE_WRONG_VALUE
+            );
+
+            // test overflow as error
+            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&ctx, ex).unwrap();
+            let res = e.eval_int(&mut ctx, &cols);
+            assert!(res.is_err());
+        }
+    }
+
+    #[test]
+    fn test_str_as_int() {
+        let cases = vec![
+            (
+                FieldTypeFlag::empty(),
+                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
+                u64::MAX as i64,
+                1,
+            ),
+            (
+                FieldTypeFlag::UNSIGNED,
+                vec![Datum::Bytes(b"18446744073709551615".to_vec())],
+                u64::MAX as i64,
+                0,
+            ),
+            (
+                FieldTypeFlag::empty(),
+                vec![Datum::Bytes(b"-1".to_vec())],
+                -1,
+                1,
+            ),
+        ];
+
+        for (flag, cols, exp, warnings_cnt) in cases {
+            let col_expr = col_expr(0, FieldTypeTp::String);
+            let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            ex.mut_field_type().as_mut_accessor().set_flag(flag);
+
+            let mut ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, warnings_cnt);
+            if warnings_cnt > 0 {
+                assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_UNKNOWN);
+            }
+        }
+
+        let cases = vec![
+            (
+                vec![Datum::Bytes(b"-9223372036854775810".to_vec())],
+                i64::MIN,
+            ),
+            (
+                vec![Datum::Bytes(b"18446744073709551616".to_vec())],
+                u64::MAX as i64,
+            ),
+        ];
+
+        for (cols, exp) in cases {
+            let col_expr = col_expr(0, FieldTypeTp::String);
+            let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
+            // test with overflow as warning && in select stmt
+            let mut cfg = EvalConfig::new();
+            cfg.set_overflow_as_warning(true).set_in_select_stmt(true);
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            let e = Expression::build(&ctx, ex.clone()).unwrap();
+            let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
+            assert_eq!(res, exp);
+            assert_eq!(ctx.warnings.warning_cnt, 1);
+            assert_eq!(
+                ctx.warnings.warnings[0].get_code(),
+                ERR_TRUNCATE_WRONG_VALUE
+            );
+
+            // test overflow as error
+            ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+            let e = Expression::build(&ctx, ex).unwrap();
+            let res = e.eval_int(&mut ctx, &cols);
+            assert!(res.is_err());
+        }
+    }
+
+    // This test should work when NumberToDuration ported from tidb.
+    // #[test]
+    // fn test_int_as_duration_with_overflow() {
+    //     let cols = vec![Datum::I64(3020400)];
+
+    //     let col_expr = col_expr(0, i32::from(FieldTypeTp::LongLong));
+    //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
+
+    //     // test with overflow as warning
+    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+    //     let e = Expression::build(&ctx, ex.clone()).unwrap();
+    //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
+    //     assert!(res.is_none());
+    //     assert_eq!(ctx.warnings.warning_cnt, 1);
+    //     assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+
+    //     // test overflow as error
+    //     ctx = EvalContext::new(Arc::new(EvalConfig::default()));
+    //     let e = Expression::build(&ctx, ex).unwrap();
+    //     let res = e.eval_duration(&mut ctx, &cols);
+    //     assert!(res.is_err());
+    // }
 }

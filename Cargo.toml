@@ -1,20 +1,20 @@
 [package]
 name = "tikv"
-version = "1.0.1"
+version = "3.0.0-beta"
+authors = ["The TiKV Authors"]
+description = "A distributed transactional key-value database powered by Rust and Raft"
+license = "Apache-2.0"
 keywords = ["KV", "distributed-systems", "raft"]
-build = "build.rs"
-
-[build-dependencies]
-time = "0.1"
+edition = "2018"
+publish = false
 
 [features]
 default = []
-dev = ["clippy"]
-static-link = ["rocksdb/static-link"]
 portable = ["rocksdb/portable"]
 sse = ["rocksdb/sse"]
-mem-profiling = ["jemallocator"]
+mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
+no-jemalloc = ["tikv_alloc/no-jemalloc"]
 
 [lib]
 name = "tikv"
@@ -23,88 +23,166 @@ name = "tikv"
 name = "tikv-server"
 
 [[bin]]
-name = "bench-tikv"
-path = "benches/bin/bench-tikv.rs"
-
-[[bin]]
 name = "tikv-ctl"
 
 [[bin]]
-name = "tikv-fail"
+name = "tikv-importer"
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+
+[[test]]
+name = "integrations"
+path = "tests/integrations/mod.rs"
+
+[[bench]]
+name = "raftstore"
+harness = false
+path = "benches/raftstore/mod.rs"
+
+[[bench]]
+name = "coprocessor_executors"
+harness = false
+path = "benches/coprocessor_executors/mod.rs"
+
+[[bench]]
+name = "hierarchy"
+harness = false
+path = "benches/hierarchy/mod.rs"
+
+[[bench]]
+name = "misc"
+path = "benches/misc/mod.rs"
 
 [dependencies]
-log = "0.3"
-byteorder = "0.5"
+hashbrown = { version = "0.1", features = ["serde"] }
+log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-async = "2.3"
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+slog-term = "2.4"
+slog_derive = "0.1"
+byteorder = "1.2"
 rand = "0.3"
-quick-error = "0.2"
+quick-error = "1.2.2"
 tempdir = "0.3"
 time = "0.1"
 toml = "0.4"
 libc = "0.2"
-crc = "1.2"
-crc32c = "0.2"
+crc = "1.8"
 fs2 = "0.4"
-clippy = {version = "*", optional = true}
-protobuf = "1.4"
-nix = "0.9.0"
+protobuf = "~2.0"
+nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
+chrono-tz = "0.5"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
-clap = "2"
+clap = "2.32"
 url = "1.5"
-regex = "0.1"
+regex = "1.0"
 fnv = "1.0"
 sys-info = "0.5.1"
-flat_map = "0.0.4"
-ordermap = "0.3"
-mio = "0.5"
+indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
+futures-cpupool = "0.1"
+tikv_alloc = { path = "components/tikv_alloc" }
 tokio-core = "0.1"
-tokio-timer = "0.1"
+tokio-timer = "0.2"
+tokio-executor = "0.1"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-grpcio = "0.1"
-rustc-serialize = "0.3"
-murmur3 = "0.4.0"
-futures-cpupool = "0.1"
+zipf = "0.2.0"
+bitflags = "1.0.1"
+fail = "0.2"
+uuid = { version = "0.6", features = [ "serde", "v4" ] }
+grpcio = { version = "0.4", features = [ "secure" ] }
+raft = "0.4"
+crossbeam = "0.5"
+derive_more = "0.11.0"
+num = "0.2"
+num-traits = "0.2"
+hex = "0.3"
+rust-crypto = "^0.2"
+base64 = "0.10"
+safemem = "0.3"
+smallvec = { version = "0.6", features = ["union"] }
+flate2 = { version = "1.0", features = ["zlib"], default-features = false }
+more-asserts = "0.1"
+hyper = "0.12"
+tokio-threadpool = "0.1"
+vlog = "0.1.4"
+cop_datatype = { path = "components/cop_datatype" }
+panic_hook = { path = "components/panic_hook" }
+tipb = { git = "https://github.com/pingcap/tipb.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+log_wrappers = { path = "components/log_wrappers" }
 
-[target.'cfg(unix)'.dependencies]
-signal = "0.4"
+[dependencies.murmur3]
+git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
 
-[dependencies.kvproto]
-git = "https://github.com/pingcap/kvproto.git"
-
-[dependencies.tipb]
-git = "https://github.com/pingcap/tipb.git"
-
 [dependencies.prometheus]
-version = "0.3"
+version = "0.4.2"
 default-features = false
 features = ["nightly", "push", "process"]
 
-[dependencies.jemallocator]
-git = "https://github.com/busyjay/jemallocator.git"
-branch = "dev"
-features = ["profiling"]
-optional = true
+[dependencies.prometheus-static-metric]
+version = "0.1.4"
 
-[dependencies.fail]
-git = "https://github.com/pingcap/fail-rs.git"
+[dev-dependencies]
+test_util = { path = "components/test_util" }
+test_raftstore = { path = "components/test_raftstore" }
+test_storage = { path = "components/test_storage" }
+test_coprocessor = { path = "components/test_coprocessor" }
+# See https://japaric.github.io/criterion.rs/book/user_guide/known_limitations.html
+# critcmp is known to support 0.2.5
+criterion = { version = "=0.2.5", features=['real_blackbox'] }
+arrow = "0.10.0"
 
-[replace]
-"protobuf:1.4.1" = { git = "https://github.com/stepancheg/rust-protobuf.git" }
+[target.'cfg(unix)'.dependencies]
+signal = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+
+[workspace]
+members = [
+  "fuzz",
+  "fuzz/fuzzer-afl",
+  "fuzz/fuzzer-libfuzzer",
+  "fuzz/fuzzer-honggfuzz",
+  "components/test_raftstore",
+  "components/test_storage",
+  "components/test_coprocessor",
+  "components/test_util",
+  "components/tikv_alloc",
+  "components/codec",
+  "components/panic_hook",
+  "components/cop_datatype",
+  "components/log_wrappers",
+]
 
 [profile.dev]
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
-codegen-units = 2
+codegen-units = 4
 
 # The release profile, used for `cargo build --release`
 [profile.release]
+lto = true
 opt-level = 3
 debug = true
+# TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
+codegen-units = 1
+
+# The benchmark profile is identical to release, except that lto = false
+[profile.bench]
+lto = false
+opt-level = 3
+debug = true
+codegen-units = 1

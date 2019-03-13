@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
 use protobuf::RepeatedField;
+use std::mem;
 use tipb::analyze;
 
 /// Bucket is an element of histogram.
@@ -30,10 +30,10 @@ struct Bucket {
 impl Bucket {
     fn new(count: u64, upper_bound: Vec<u8>, lower_bound: Vec<u8>, repeats: u64) -> Bucket {
         Bucket {
-            count: count,
-            upper_bound: upper_bound,
-            lower_bound: lower_bound,
-            repeats: repeats,
+            count,
+            upper_bound,
+            lower_bound,
+            repeats,
         }
     }
 
@@ -78,7 +78,7 @@ impl Histogram {
     pub fn new(buckets_num: usize) -> Histogram {
         Histogram {
             per_bucket_limit: 1,
-            buckets_num: buckets_num,
+            buckets_num,
             ..Default::default()
         }
     }
@@ -86,7 +86,8 @@ impl Histogram {
     pub fn into_proto(self) -> analyze::Histogram {
         let mut hist = analyze::Histogram::new();
         hist.set_ndv(self.ndv as i64);
-        let buckets: Vec<analyze::Bucket> = self.buckets
+        let buckets: Vec<analyze::Bucket> = self
+            .buckets
             .into_iter()
             .map(|bucket| bucket.into_proto())
             .collect();
@@ -163,13 +164,12 @@ impl Histogram {
     }
 }
 
-
 #[cfg(test)]
-mod test {
-    use std::iter::repeat;
-    use coprocessor::codec::datum;
-    use coprocessor::codec::datum::Datum;
+mod tests {
     use super::*;
+    use crate::coprocessor::codec::datum;
+    use crate::coprocessor::codec::datum::Datum;
+    use std::iter::repeat;
 
     #[test]
     fn test_histogram() {

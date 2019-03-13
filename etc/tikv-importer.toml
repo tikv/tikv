@@ -1,0 +1,53 @@
+# TiKV Importer configuration file template
+
+# log file.
+log-file = ""
+# log level: trace, debug, info, warn, error, off.
+log-level = "info"
+
+[server]
+# set listening address.
+addr = "127.0.0.1:20170"
+# size of thread pool for grpc server.
+grpc-concurrency = 16
+
+[metric]
+# the Prometheus client push job name.
+job = "tikv-importer"
+# the Prometheus client push interval.
+interval = "15s"
+# the Prometheus pushgateway address.
+address = ""
+
+[rocksdb]
+# the maximum number of concurrent background jobs.
+max-background-jobs = 32
+
+[rocksdb.defaultcf]
+# amount of data to build up in memory before flushing to disk.
+write-buffer-size = "1GB"
+
+# the maximum number of write buffers that are built up in memory.
+max-write-buffer-number = 8
+
+# the compression algorithms using in different levels.
+# the algorithm at level-0 is using to compress KV data.
+# the algorithm at level-6 is using to compress SST files.
+# the algorithms at level-1 ~ level-5 are not used for now.
+compression-per-level = ["lz4", "no", "no", "no", "no", "no", "zstd"]
+
+[import]
+# the directory to store importing kv data.
+import-dir = "/tmp/tikv/import"
+# number of threads to handle RPC requests.
+num-threads = 16
+# number of concurrent import jobs.
+num-import-jobs = 24
+# maximum duration to prepare regions.
+# max-prepare-duration = "5m"
+# split regions into this size according to the importing data.
+# region-split-size = "512MB"
+# stream channel window size, stream will be blocked on channel full.
+# stream-channel-window = 128
+# maximum number of open engines
+max-open-engines = 8

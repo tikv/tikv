@@ -11,10 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use fnv::FnvHashSet as HashSet;
-pub use fnv::FnvBuildHasher as BuildHasherDefault;
-pub use fnv::FnvHashMap as HashMap;
-pub use std::collections::hash_map::Entry as HashMapEntry;
-pub use flat_map::FlatMap;
-pub use flat_map::flat_map::Values as FlatMapValues;
-pub use ordermap::{Entry as OrderMapEntry, OrderMap};
+pub type HashMap<K, V> = hashbrown::HashMap<K, V, hashbrown::hash_map::DefaultHashBuilder>;
+pub type HashSet<T> = hashbrown::HashSet<T, hashbrown::hash_map::DefaultHashBuilder>;
+pub use hashbrown::hash_map::Entry as HashMapEntry;
+
+pub use indexmap::map::Entry as OrderMapEntry;
+pub use indexmap::IndexMap as OrderMap;

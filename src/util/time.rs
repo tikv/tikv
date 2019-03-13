@@ -11,36 +11,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, SystemTime};
-use std::thread::{self, Builder, JoinHandle};
-use std::sync::mpsc::{self, Sender};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::cmp::Ordering;
+use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::mpsc::{self, Sender};
+use std::thread::{self, Builder, JoinHandle};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use time::{Duration as TimeDuration, Timespec};
 
-/// Convert Duration to milliseconds.
+// Re-export duration.
+pub use std::time::Duration;
+
+/// Converts Duration to milliseconds.
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
+    let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000 + (nanos / 1_000_000)
 }
 
-/// Convert Duration to seconds.
+/// Converts Duration to seconds.
 #[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
-    let nanos = d.subsec_nanos() as f64;
+    let nanos = f64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
 }
 
-/// Convert Duration to nanoseconds.
+/// Converts Duration to nanoseconds.
 #[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
-    let nanos = d.subsec_nanos() as u64;
+    let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
     d.as_secs() * 1_000_000_000 + nanos
+}
+
+/// Gets the current timestamp in seconds.
+#[inline]
+pub fn time_now_sec() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub struct SlowTimer {
@@ -55,7 +67,7 @@ impl SlowTimer {
 
     pub fn from(slow_time: Duration) -> SlowTimer {
         SlowTimer {
-            slow_time: slow_time,
+            slow_time,
             t: Instant::now_coarse(),
         }
     }
@@ -100,26 +112,28 @@ impl Monitor {
     {
         let (tx, rx) = mpsc::channel();
         let h = Builder::new()
-            .name(thd_name!("time-monitor-worker"))
-            .spawn(move || while let Err(_) = rx.try_recv() {
-                let before = now();
-                thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
+            .name(thd_name!("time-monitor"))
+            .spawn(move || {
+                while let Err(_) = rx.try_recv() {
+                    let before = now();
+                    thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
 
-                let after = now();
-                if let Err(e) = after.duration_since(before) {
-                    error!(
-                        "system time jumped back, {:?} -> {:?}, err {:?}",
-                        before,
-                        after,
-                        e
-                    );
-                    on_jumped()
+                    let after = now();
+                    if let Err(e) = after.duration_since(before) {
+                        error!(
+                            "system time jumped back";
+                            "before" => ?before,
+                            "after" => ?after,
+                            "err" => ?e,
+                        );
+                        on_jumped()
+                    }
                 }
             })
             .unwrap();
 
         Monitor {
-            tx: tx,
+            tx,
             handle: Some(h),
         }
     }
@@ -139,21 +153,21 @@ impl Drop for Monitor {
         }
 
         if let Err(e) = self.tx.send(true) {
-            error!("send quit message for time monitor worker failed {:?}", e);
+            error!("send quit message for time monitor worker failed"; "err" => ?e);
             return;
         }
 
         if let Err(e) = h.unwrap().join() {
-            error!("join time monitor worker failed {:?}", e);
+            error!("join time monitor worker failed"; "err" => ?e);
             return;
         }
     }
 }
 
-/// `monotonic_raw_now` returns the monotonic raw time since some unspecified starting point.
-pub use self::inner::monotonic_raw_now;
-use self::inner::monotonic_now;
 use self::inner::monotonic_coarse_now;
+pub use self::inner::monotonic_now;
+/// Returns the monotonic raw time since some unspecified starting point.
+pub use self::inner::monotonic_raw_now;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
@@ -161,8 +175,8 @@ const NANOSECONDS_PER_MILLISECOND: i64 = 1_000_000;
 
 #[cfg(not(target_os = "linux"))]
 mod inner {
-    use time::{self, Timespec};
     use super::NANOSECONDS_PER_SECOND;
+    use time::{self, Timespec};
 
     pub fn monotonic_raw_now() -> Timespec {
         // TODO Add monotonic raw clock time impl for macos and windows
@@ -186,22 +200,26 @@ mod inner {
 
 #[cfg(target_os = "linux")]
 mod inner {
+    use libc;
     use std::io;
     use time::Timespec;
-    use libc;
 
+    #[inline]
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
     }
 
+    #[inline]
     pub fn monotonic_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC)
     }
 
+    #[inline]
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
     }
 
+    #[inline]
     fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,
@@ -219,7 +237,7 @@ mod inner {
 }
 
 /// A measurement of a monotonically increasing clock.
-/// It's similar and meat to replace `std::time::Instant`,
+/// It's similar and meant to replace `std::time::Instant`,
 /// for providing extra features.
 #[derive(Copy, Clone, Debug)]
 pub enum Instant {
@@ -249,6 +267,10 @@ impl Instant {
         }
     }
 
+    pub fn elapsed_secs(&self) -> f64 {
+        duration_to_sec(self.elapsed())
+    }
+
     pub fn duration_since(&self, earlier: Instant) -> Duration {
         match (*self, earlier) {
             (Instant::Monotonic(later), Instant::Monotonic(earlier)) => {
@@ -263,14 +285,26 @@ impl Instant {
         }
     }
 
-    fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
+    /// It is similar to `duration_since`, but it won't panic when `self` is less than `other`,
+    /// and `None` will be returned in this case.
+    ///
+    /// Callers need to ensure that `self` and `other` are same type of Instants.
+    pub fn checked_sub(&self, other: Instant) -> Option<Duration> {
+        if *self >= other {
+            Some(self.duration_since(other))
+        } else {
+            None
+        }
+    }
+
+    pub fn elapsed_duration(later: Timespec, earlier: Timespec) -> Duration {
         if later >= earlier {
             (later - earlier).to_std().unwrap()
         } else {
             panic!(
                 "monotonic time jumped back, {:.9} -> {:.9}",
-                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+                earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
             );
         }
     }
@@ -281,18 +315,18 @@ impl Instant {
     // Use millisecond resolution for ignoring the error.
     // See more: https://linux.die.net/man/2/clock_gettime
     fn elapsed_duration_coarse(later: Timespec, earlier: Timespec) -> Duration {
-        let later_ms =
-            later.sec * MILLISECOND_PER_SECOND + later.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
-        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND +
-            earlier.nsec as i64 / NANOSECONDS_PER_MILLISECOND;
+        let later_ms = later.sec * MILLISECOND_PER_SECOND
+            + i64::from(later.nsec) / NANOSECONDS_PER_MILLISECOND;
+        let earlier_ms = earlier.sec * MILLISECOND_PER_SECOND
+            + i64::from(earlier.nsec) / NANOSECONDS_PER_MILLISECOND;
         let dur = later_ms - earlier_ms;
         if dur >= 0 {
             Duration::from_millis(dur as u64)
         } else {
             debug!(
                 "coarse time jumped back, {:.3} -> {:.3}",
-                earlier.sec as f64 + earlier.nsec as f64 / NANOSECONDS_PER_SECOND as f64,
-                later.sec as f64 + later.nsec as f64 / NANOSECONDS_PER_SECOND as f64
+                earlier.sec as f64 + f64::from(earlier.nsec) / NANOSECONDS_PER_SECOND as f64,
+                later.sec as f64 + f64::from(later.nsec) / NANOSECONDS_PER_SECOND as f64
             );
             Duration::from_millis(0)
         }
@@ -302,8 +336,8 @@ impl Instant {
 impl PartialEq for Instant {
     fn eq(&self, other: &Instant) -> bool {
         match (*self, *other) {
-            (Instant::Monotonic(this), Instant::Monotonic(other)) |
-            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
+            (Instant::Monotonic(this), Instant::Monotonic(other))
+            | (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => this.eq(&other),
             _ => false,
         }
     }
@@ -312,8 +346,8 @@ impl PartialEq for Instant {
 impl PartialOrd for Instant {
     fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
         match (*self, *other) {
-            (Instant::Monotonic(this), Instant::Monotonic(other)) |
-            (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
+            (Instant::Monotonic(this), Instant::Monotonic(other))
+            | (Instant::MonotonicCoarse(this), Instant::MonotonicCoarse(other)) => {
                 this.partial_cmp(&other)
             }
             // The Order of different types of Instants is meaningless.
@@ -370,11 +404,11 @@ impl Sub<Instant> for Instant {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
-    use std::thread;
-    use std::ops::Sub;
-    use std::f64;
     use super::*;
+    use std::f64;
+    use std::ops::Sub;
+    use std::thread;
+    use std::time::{Duration, SystemTime};
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -383,15 +417,19 @@ mod tests {
     fn test_time_monitor() {
         let jumped = Arc::new(AtomicBool::new(false));
         let triggered = AtomicBool::new(false);
-        let now = move || if !triggered.load(Ordering::SeqCst) {
-            triggered.store(true, Ordering::SeqCst);
-            SystemTime::now()
-        } else {
-            SystemTime::now().sub(Duration::from_secs(2))
+        let now = move || {
+            if !triggered.load(Ordering::SeqCst) {
+                triggered.store(true, Ordering::SeqCst);
+                SystemTime::now()
+            } else {
+                SystemTime::now().sub(Duration::from_secs(2))
+            }
         };
 
-        let jumped2 = jumped.clone();
-        let on_jumped = move || { jumped2.store(true, Ordering::SeqCst); };
+        let jumped2 = Arc::clone(&jumped);
+        let on_jumped = move || {
+            jumped2.store(true, Ordering::SeqCst);
+        };
 
         let _m = Monitor::new(on_jumped, now);
         thread::sleep(Duration::from_secs(1));
@@ -431,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(eq_op)]
+    #[allow(clippy::eq_op)]
     fn test_instant() {
         Instant::now().elapsed();
         Instant::now_coarse().elapsed();
@@ -468,6 +506,11 @@ mod tests {
         let mut tmp_late_row = late_raw;
         tmp_late_row -= zero;
         assert_eq!(tmp_late_row, late_raw);
+
+        // checked_sub Duration.
+        assert!(late_raw.checked_sub(early_raw).unwrap() >= zero);
+        // It's either `None` or `Some(zero)`(if they are equal).
+        assert_eq!(early_raw.checked_sub(late_raw).unwrap_or(zero), zero);
 
         let mut tmp_late_coarse = late_coarse;
         tmp_late_coarse -= zero;

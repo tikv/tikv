@@ -12,10 +12,14 @@
 // limitations under the License.
 
 use std::borrow::Cow;
+use std::str;
 
-use coprocessor::codec::Datum;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use super::{Column, Result};
+use cop_datatype::prelude::*;
+use cop_datatype::FieldTypeTp;
+
+use super::{Column, EvalContext, Result};
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -38,8 +42,34 @@ impl Column {
     }
 
     #[inline]
-    pub fn eval_string<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, [u8]>>> {
-        row[self.offset].as_string()
+    pub fn eval_string<'a>(
+        &self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        if let Datum::Null = row[self.offset] {
+            return Ok(None);
+        }
+        if self.field_type.is_hybrid() {
+            let s = row[self.offset].to_string()?.into_bytes();
+            return Ok(Some(Cow::Owned(s)));
+        }
+
+        if !ctx.cfg.pad_char_to_full_length || self.field_type.tp() != FieldTypeTp::String {
+            return row[self.offset].as_string();
+        }
+
+        let res = row[self.offset].as_string()?.unwrap();
+        let cur_len = str::from_utf8(res.as_ref())?.chars().count();
+        // FIXME: flen() can be -1 (UNSPECIFIED_LENGTH)
+        let flen = self.field_type.flen() as usize;
+        if flen <= cur_len {
+            return Ok(Some(res));
+        }
+        let new_len = flen - cur_len + res.len();
+        let mut s = res.into_owned();
+        s.resize(new_len, b' ');
+        Ok(Some(Cow::Owned(s)))
     }
 
     #[inline]
@@ -59,12 +89,17 @@ impl Column {
 }
 
 #[cfg(test)]
-mod test {
-    use std::u64;
-    use coprocessor::codec::Datum;
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::dag::expr::{Expression, StatementContext};
-    use coprocessor::select::xeval::evaluator::test::col_expr;
+mod tests {
+    use std::sync::Arc;
+    use std::{str, u64};
+
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use tipb::expression::FieldType;
+
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::col_expr;
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -76,6 +111,33 @@ mod test {
         Option<Duration>,
         Option<Json>,
     );
+
+    #[test]
+    fn test_with_pad_char_to_full_length() {
+        let mut ctx = EvalContext::default();
+        let mut pad_char_ctx_cfg = EvalConfig::default();
+        pad_char_ctx_cfg.pad_char_to_full_length = true;
+        let mut pad_char_ctx = EvalContext::new(Arc::new(pad_char_ctx_cfg));
+
+        let mut c = col_expr(0);
+        let mut field_tp = FieldType::new();
+        let flen = 16;
+        field_tp
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::String)
+            .set_flen(flen);
+        c.set_field_type(field_tp);
+        let e = Expression::build(&ctx, c).unwrap();
+        // test without pad_char_to_full_length
+        let s = "你好".as_bytes().to_owned();
+        let row = vec![Datum::Bytes(s.clone())];
+        let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
+        assert_eq!(res.to_owned(), s.clone());
+        // test with pad_char_to_full_length
+        let res = e.eval_string(&mut pad_char_ctx, &row).unwrap().unwrap();
+        let s = str::from_utf8(res.as_ref()).unwrap();
+        assert_eq!(s.chars().count(), flen as usize);
+    }
 
     #[test]
     fn test_column_eval() {
@@ -90,7 +152,7 @@ mod test {
             Datum::F64(124.32),
             Datum::Dec(dec.clone()),
             Datum::Bytes(s.clone()),
-            Datum::Dur(dur.clone()),
+            Datum::Dur(dur),
         ];
 
         let expecteds = vec![
@@ -100,34 +162,70 @@ mod test {
             EvalResults(None, Some(124.32), None, None, None, None, None),
             EvalResults(None, None, Some(dec.clone()), None, None, None, None),
             EvalResults(None, None, None, Some(s.clone()), None, None, None),
-            EvalResults(None, None, None, None, None, Some(dur.clone()), None),
+            EvalResults(None, None, None, None, None, Some(dur), None),
         ];
 
-        let ctx = StatementContext::default();
+        let mut ctx = EvalContext::default();
         for (ii, exp) in expecteds.iter().enumerate().take(row.len()) {
             let c = col_expr(ii as i64);
             let e = Expression::build(&ctx, c).unwrap();
 
-            let i = e.eval_int(&ctx, &row).unwrap_or(None);
-            let r = e.eval_real(&ctx, &row).unwrap_or(None);
-            let dec = e.eval_decimal(&ctx, &row)
+            let i = e.eval_int(&mut ctx, &row).unwrap_or(None);
+            let r = e.eval_real(&mut ctx, &row).unwrap_or(None);
+            let dec = e
+                .eval_decimal(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let s = e.eval_string(&ctx, &row)
+            let s = e
+                .eval_string(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let t = e.eval_time(&ctx, &row)
+            let t = e
+                .eval_time(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e.eval_duration(&ctx, &row)
+            let dur = e
+                .eval_duration(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let j = e.eval_json(&ctx, &row)
+            let j = e
+                .eval_json(&mut ctx, &row)
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
 
             let result = EvalResults(i, r, dec, s, t, dur, j);
             assert_eq!(*exp, result);
+        }
+    }
+
+    #[test]
+    fn test_hybrid_type() {
+        let mut ctx = EvalContext::default();
+        let row = vec![Datum::I64(12)];
+        let hybrid_cases = vec![FieldTypeTp::Enum, FieldTypeTp::Bit, FieldTypeTp::Set];
+        let in_hybrid_cases = vec![
+            FieldTypeTp::JSON,
+            FieldTypeTp::NewDecimal,
+            FieldTypeTp::Short,
+        ];
+        for tp in hybrid_cases {
+            let mut c = col_expr(0);
+            let mut field_tp = FieldType::new();
+            field_tp.as_mut_accessor().set_tp(tp);
+            c.set_field_type(field_tp);
+            let e = Expression::build(&ctx, c).unwrap();
+            let res = e.eval_string(&mut ctx, &row).unwrap().unwrap();
+            assert_eq!(res.as_ref(), b"12");
+        }
+
+        for tp in in_hybrid_cases {
+            let mut c = col_expr(0);
+            let mut field_tp = FieldType::new();
+            field_tp.as_mut_accessor().set_tp(tp);
+            c.set_field_type(field_tp);
+            let e = Expression::build(&ctx, c).unwrap();
+            let res = e.eval_string(&mut ctx, &row);
+            assert!(res.is_err());
         }
     }
 }

@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// FIXME: remove following later
-#![allow(dead_code)]
-
 use std::{char, str, u32};
 
 use super::super::Result;
@@ -89,9 +86,9 @@ fn decode_escaped_unicode(s: &str) -> Result<char> {
 }
 
 #[cfg(test)]
-mod test {
-    use std::collections::BTreeMap;
+mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_decode_escaped_unicode() {
@@ -107,12 +104,9 @@ mod test {
             assert!(d.is_ok(), "#{} expect ok but got err {:?}", i, d);
             let got = d.unwrap();
             assert_eq!(
-                got,
-                expected,
+                got, expected,
                 "#{} expect {:?} but got {:?}",
-                i,
-                expected,
-                got
+                i, expected, got
             );
         }
     }
@@ -143,12 +137,9 @@ mod test {
                 let got = r.unwrap();
                 let expected = String::from(expected.unwrap());
                 assert_eq!(
-                    got,
-                    expected,
+                    got, expected,
                     "#{} expect {:?} but got {:?}",
-                    i,
-                    expected,
-                    got
+                    i, expected, got
                 );
             } else {
                 assert!(r.is_err(), "#{} expected error but got {:?}", i, r);
@@ -170,12 +161,9 @@ mod test {
             assert!(r.is_ok(), "#{} expect unquote ok but got err {:?}", i, r);
             let got = r.unwrap();
             assert_eq!(
-                got,
-                expected,
+                got, expected,
                 "#{} expect {:?} but got {:?}",
-                i,
-                expected,
-                got
+                i, expected, got
             );
         }
     }
