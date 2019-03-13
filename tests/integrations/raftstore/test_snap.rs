@@ -270,7 +270,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // test if node can be safely restarted without losing any data.
     cluster.stop_node(1);
-    cluster.run_node(1);
+    cluster.run_node(1).unwrap();
 
     cluster.must_put_cf(cf, b"k3", b"v3");
     must_get_cf_equal(&engine1, cf, b"k3", b"v3");
