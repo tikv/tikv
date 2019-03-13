@@ -329,8 +329,11 @@ impl Duration {
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
-        !self.is_zero()
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::coprocessor::dag::expr::EvalContext,
+    ) -> crate::coprocessor::Result<bool> {
+        Ok(!self.is_zero())
     }
 }
 
