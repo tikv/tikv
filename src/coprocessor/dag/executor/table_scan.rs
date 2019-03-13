@@ -61,7 +61,7 @@ impl<S: Store> TableScanExecutor<S> {
             .get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
-            .map(|c| c.get_column_id())
+            .map(ColumnInfo::get_column_id)
             .collect();
 
         let desc = meta.get_desc();

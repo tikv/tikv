@@ -44,7 +44,7 @@ impl<'a> RpnFnCallPayload<'a> {
 
     /// Gets the raw argument at specific position.
     #[inline]
-    pub fn raw_arg_at(&'a self, position: usize) -> &'a RpnStackNode {
+    pub fn raw_arg_at(&'a self, position: usize) -> &'a RpnStackNode<'a> {
         &self.raw_args[position]
     }
 
@@ -133,7 +133,7 @@ impl<'a> RpnStackNode<'a> {
 
     /// Borrows the inner scalar or vector value as a vector like value.
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         match self {
             RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
             RpnStackNode::Vector { ref value, .. } => value.as_ref().as_vector_like(),
@@ -681,7 +681,7 @@ mod tests {
         #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
-            _payload: RpnFnCallPayload,
+            _payload: RpnFnCallPayload<'_>,
             v: &Option<i64>,
         ) -> Result<Option<f64>> {
             Ok(v.map(|v| v as f64))
@@ -698,7 +698,7 @@ mod tests {
         #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
-            _payload: RpnFnCallPayload,
+            _payload: RpnFnCallPayload<'_>,
             v1: &Option<f64>,
             v2: &Option<f64>,
         ) -> Result<Option<i64>> {
@@ -719,7 +719,7 @@ mod tests {
         #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
-            _payload: RpnFnCallPayload,
+            _payload: RpnFnCallPayload<'_>,
             v1: &Option<i64>,
             v2: &Option<i64>,
             v3: &Option<i64>,
@@ -743,7 +743,7 @@ mod tests {
         #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
-            _payload: RpnFnCallPayload,
+            _payload: RpnFnCallPayload<'_>,
             v1: &Option<f64>,
             v2: &Option<f64>,
             v3: &Option<f64>,

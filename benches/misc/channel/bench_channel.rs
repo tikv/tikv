@@ -73,7 +73,7 @@ fn bench_util_channel(b: &mut Bencher) {
 
 #[bench]
 fn bench_util_loose(b: &mut Bencher) {
-    let (tx, rx) = mpsc::loose_bounded(480000);
+    let (tx, rx) = mpsc::loose_bounded(480_000);
 
     let t = thread::spawn(move || {
         let mut n2: usize = 0;

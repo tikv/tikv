@@ -152,21 +152,21 @@ impl DAGBuilder {
 
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
-                executor = box BatchTableScanExecutor::new(
+                executor = Box::new(BatchTableScanExecutor::new(
                     C::new(summary_slot_index),
                     store,
                     config.clone(),
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
-                )?;
+                )?);
             }
             ExecType::TypeIndexScan => {
                 COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
 
                 let mut descriptor = first_ed.take_idx_scan();
                 let columns_info = descriptor.take_columns().into_vec();
-                executor = box BatchIndexScanExecutor::new(
+                executor = Box::new(BatchIndexScanExecutor::new(
                     C::new(summary_slot_index),
                     store,
                     config.clone(),
@@ -174,7 +174,7 @@ impl DAGBuilder {
                     ranges,
                     descriptor.get_desc(),
                     descriptor.get_unique(),
-                )?;
+                )?);
             }
             _ => {
                 return Err(Error::Other(box_err!(

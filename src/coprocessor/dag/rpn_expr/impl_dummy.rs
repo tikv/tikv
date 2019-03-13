@@ -24,7 +24,7 @@ impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
     #[inline(always)]
-    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload) -> Result<Option<i64>> {
+    fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
         Ok(Some(7))
     }
 }
@@ -38,7 +38,7 @@ impl RpnFnDummy1ArgFunc {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         _: &Option<i64>,
     ) -> Result<Option<i64>> {
         Ok(Some(5))
@@ -54,7 +54,7 @@ impl RpnFnDummy2ArgFunc {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         _: &Option<i64>,
         _: &Option<f64>,
     ) -> Result<Option<f64>> {
@@ -71,7 +71,7 @@ impl RpnFnDummy3ArgFunc {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         _: &Option<i64>,
         _: &Option<f64>,
         _: &Option<i64>,

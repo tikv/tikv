@@ -24,7 +24,7 @@ impl RpnFnLogicalAnd {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
@@ -53,7 +53,7 @@ impl RpnFnLogicalOr {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {

@@ -73,10 +73,10 @@ impl<S: Store> IndexScanExecutor<S> {
         }
         let arc_cols = Arc::new(meta.get_columns().to_vec());
         let cols = meta.mut_columns();
-        if cols.last().map_or(false, |c| c.get_pk_handle()) {
+        if cols.last().map_or(false, ColumnInfo::get_pk_handle) {
             pk_col = Some(cols.pop().unwrap());
         }
-        let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
+        let col_ids = cols.iter().map(ColumnInfo::get_column_id).collect();
         let counts = if collect { Some(Vec::default()) } else { None };
         Ok(Self {
             store,

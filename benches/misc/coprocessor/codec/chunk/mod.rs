@@ -125,8 +125,8 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
                 _ => unreachable!(),
             };
         }
-        assert_eq!(col1, 262144);
-        assert!(!(523776.0 - col2).is_normal());
+        assert_eq!(col1, 262_144);
+        assert!(!(523_776.0 - col2).is_normal());
     });
 }
 
@@ -161,7 +161,7 @@ fn bench_chunk_iter_offical(b: &mut Bencher) {
                 _ => unreachable!(),
             };
         }
-        assert_eq!(col1, 262144);
-        assert!(!(523776.0 - col2).is_normal());
+        assert_eq!(col1, 262_144);
+        assert!(!(523_776.0 - col2).is_normal());
     });
 }

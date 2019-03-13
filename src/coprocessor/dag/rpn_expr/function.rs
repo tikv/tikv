@@ -32,7 +32,7 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
         &self,
         rows: usize,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
 }
 
@@ -52,7 +52,7 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
         &self,
         rows: usize,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue> {
         (**self).eval(rows, context, payload)
     }
@@ -69,11 +69,11 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -92,12 +92,12 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -125,13 +125,13 @@ impl Helper {
         rows: usize,
         f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -183,7 +183,7 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
         lhs: &ScalarValue,
         rhs: &ScalarValue,
     ) -> Result<VectorValue>
@@ -191,7 +191,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -207,7 +207,7 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
         lhs: &ScalarValue,
         rhs: &VectorValue,
     ) -> Result<VectorValue>
@@ -215,7 +215,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -232,7 +232,7 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
         lhs: &VectorValue,
         rhs: &ScalarValue,
     ) -> Result<VectorValue>
@@ -240,7 +240,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -257,7 +257,7 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
         lhs: &VectorValue,
         rhs: &VectorValue,
     ) -> Result<VectorValue>
@@ -265,7 +265,7 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -287,14 +287,14 @@ impl Helper {
         rows: usize,
         mut f: F,
         context: &mut EvalContext,
-        payload: RpnFnCallPayload,
+        payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>
     where
         Arg0: Evaluable,
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
     {
         assert_eq!(payload.args_len(), 3);
 
@@ -344,7 +344,7 @@ macro_rules! impl_template_fn {
                 &self,
                 rows: usize,
                 context: &mut $crate::coprocessor::dag::expr::EvalContext,
-                payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload,
+                payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload<'_>,
             ) -> $crate::coprocessor::Result<$crate::coprocessor::codec::data_type::VectorValue>
             {
                 $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(

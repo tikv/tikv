@@ -11,25 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
 #![feature(test)]
 
-extern crate crc;
-extern crate futures;
-extern crate futures_cpupool;
-extern crate grpcio;
-extern crate grpcio as grpc;
-extern crate kvproto;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate tempdir;
+use grpcio as grpc;
+
 extern crate test;
-extern crate tipb;
-extern crate tokio_threadpool;
-extern crate toml;
-extern crate uuid;
+
 #[macro_use(
     slog_kv,
     slog_error,
@@ -43,15 +30,10 @@ extern crate uuid;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-
 #[macro_use]
 extern crate tikv;
-extern crate test_coprocessor;
-extern crate test_raftstore;
-extern crate test_storage;
 #[macro_use]
 extern crate test_util;
-extern crate cop_datatype;
 
 mod config;
 mod coprocessor;

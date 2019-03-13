@@ -39,7 +39,7 @@ pub enum LazyBatchColumn {
 }
 
 impl std::fmt::Debug for LazyBatchColumn {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LazyBatchColumn::Raw(ref v) => {
                 let vec_display: Vec<_> = v

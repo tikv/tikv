@@ -25,7 +25,7 @@ impl RpnFnEQReal {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<f64>,
         arg1: &Option<f64>,
     ) -> Result<Option<i64>> {
@@ -47,7 +47,7 @@ impl RpnFnEQInt {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
@@ -68,7 +68,7 @@ impl RpnFnGTInt {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
@@ -89,7 +89,7 @@ impl RpnFnLTInt {
     #[inline(always)]
     fn call(
         _ctx: &mut EvalContext,
-        _payload: RpnFnCallPayload,
+        _payload: RpnFnCallPayload<'_>,
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {

@@ -60,7 +60,7 @@ pub enum FieldTypeTp {
 }
 
 impl fmt::Display for FieldTypeTp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }
@@ -76,7 +76,7 @@ pub enum Collation {
 }
 
 impl fmt::Display for Collation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }
