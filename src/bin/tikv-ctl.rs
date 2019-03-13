@@ -228,7 +228,10 @@ trait DebugExecutor {
         start_ts: Option<u64>,
         commit_ts: Option<u64>,
     ) {
-        if !from.starts_with(b"z") || (!to.is_empty() && !to.starts_with(b"z")) {
+        if !from.starts_with(b"z")
+            || (!to.is_empty()
+                && !(to.ge(&keys::DATA_MIN_KEY.to_vec()) || to.le(&keys::DATA_MAX_KEY.to_vec())))
+        {
             ve1!("from and to should start with \"z\"");
             process::exit(-1);
         }
@@ -1108,51 +1111,95 @@ fn main() {
         )
         .subcommand(
             SubCommand::with_name("scan")
-                .about("Print the range db range")
-                .arg(
-                    Arg::with_name("from")
-                        .required(true)
-                        .short("f")
-                        .long("from")
-                        .takes_value(true)
-                        .help(raw_key_hint)
+                .about("Scan a given range or a region")
+                .subcommand(
+                    SubCommand::with_name("range")
+                        .about("Scan a given range")
+                        .arg(
+                            Arg::with_name("from")
+                                .required(true)
+                                .short("f")
+                                .long("from")
+                                .takes_value(true)
+                                .help(raw_key_hint)
+                        )
+                        .arg(
+                            Arg::with_name("to")
+                                .short("t")
+                                .long("to")
+                                .takes_value(true)
+                                .help(raw_key_hint)
+                        )
+                        .arg(
+                            Arg::with_name("limit")
+                                .long("limit")
+                                .takes_value(true)
+                                .help("Set the scan limit"),
+                        )
+                        .arg(
+                            Arg::with_name("start_ts")
+                                .long("start-ts")
+                                .takes_value(true)
+                                .help("Set the scan start_ts as filter"),
+                        )
+                        .arg(
+                            Arg::with_name("commit_ts")
+                                .long("commit-ts")
+                                .takes_value(true)
+                                .help("Set the scan commit_ts as filter"),
+                        )
+                        .arg(
+                            Arg::with_name("show-cf")
+                                .long("show-cf")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .default_value(CF_DEFAULT)
+                                .help("Column family names, combined from default/lock/write"),
+                        ),
                 )
-                .arg(
-                    Arg::with_name("to")
-                        .short("t")
-                        .long("to")
-                        .takes_value(true)
-                        .help(raw_key_hint)
+                .subcommand(
+                    SubCommand::with_name("region")
+                        .about("Scan a given region")
+                        .arg(
+                            Arg::with_name("region")
+                                .required(true)
+                                .short("r")
+                                .takes_value(true)
+                                .help("The target region id")
+                        )
+                        .arg(
+                            Arg::with_name("limit")
+                                .long("limit")
+                                .takes_value(true)
+                                .help("Set the scan limit")
+                        )
+                        .arg(
+                            Arg::with_name("start_ts")
+                                .long("start-ts")
+                                .takes_value(true)
+                                .help("Set the scan start_ts as filter")
+                        )
+                        .arg(
+                            Arg::with_name("commit_ts")
+                                .long("commit-ts")
+                                .takes_value(true)
+                                .help("Set the scan commit_ts as filter")
+                        )
+                        .arg(
+                            Arg::with_name("show-cf")
+                                .long("show-cf")
+                                .takes_value(true)
+                                .multiple(true)
+                                .use_delimiter(true)
+                                .require_delimiter(true)
+                                .value_delimiter(",")
+                                .default_value(CF_DEFAULT)
+                                .help("Column family names, combined from default/lock/write")
+                        )
                 )
-                .arg(
-                    Arg::with_name("limit")
-                        .long("limit")
-                        .takes_value(true)
-                        .help("Set the scan limit"),
-                )
-                .arg(
-                    Arg::with_name("start_ts")
-                        .long("start-ts")
-                        .takes_value(true)
-                        .help("Set the scan start_ts as filter"),
-                )
-                .arg(
-                    Arg::with_name("commit_ts")
-                        .long("commit-ts")
-                        .takes_value(true)
-                        .help("Set the scan commit_ts as filter"),
-                )
-                .arg(
-                    Arg::with_name("show-cf")
-                        .long("show-cf")
-                        .takes_value(true)
-                        .multiple(true)
-                        .use_delimiter(true)
-                        .require_delimiter(true)
-                        .value_delimiter(",")
-                        .default_value(CF_DEFAULT)
-                        .help("Column family names, combined from default/lock/write"),
-                ),
         )
         .subcommand(
             SubCommand::with_name("raw-scan")
@@ -1803,21 +1850,39 @@ fn main() {
             debug_executor.dump_all_region_size(cfs);
         }
     } else if let Some(matches) = matches.subcommand_matches("scan") {
-        let from = unescape(matches.value_of("from").unwrap());
-        let to = matches
-            .value_of("to")
-            .map_or_else(|| vec![], |to| unescape(to));
-        let limit = matches
-            .value_of("limit")
-            .map_or(0, |s| s.parse().expect("parse u64"));
-        if to.is_empty() && limit == 0 {
-            ve1!(r#"please pass "to" or "limit""#);
-            process::exit(-1);
+        if let Some(matches) = matches.subcommand_matches("range") {
+            let from = unescape(matches.value_of("from").unwrap());
+            let to = matches
+                .value_of("to")
+                .map_or_else(|| vec![], |to| unescape(to));
+            let limit = matches
+                .value_of("limit")
+                .map_or(0, |s| s.parse().expect("parse u64"));
+            if to.is_empty() && limit == 0 {
+                ve1!(r#"please pass "to" or "limit""#);
+                process::exit(-1);
+            }
+            let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
+            let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
+            let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
+            debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
+        } else if let Some(matches) = matches.subcommand_matches("region") {
+            let region_id = value_t_or_exit!(matches.value_of("region"), u64);
+            let region_local_state = debug_executor
+                .get_region_info(region_id)
+                .region_local_state
+                .unwrap();
+            let region = region_local_state.get_region();
+            let from = keys::data_key(region.get_start_key());
+            let to = keys::data_end_key(region.get_end_key());
+            let limit = matches
+                .value_of("limit")
+                .map_or(0, |s| s.parse().expect("parse u64"));
+            let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
+            let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
+            let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
+            debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
         }
-        let cfs = Vec::from_iter(matches.values_of("show-cf").unwrap());
-        let start_ts = matches.value_of("start_ts").map(|s| s.parse().unwrap());
-        let commit_ts = matches.value_of("commit_ts").map(|s| s.parse().unwrap());
-        debug_executor.dump_mvccs_infos(from, to, limit, cfs, start_ts, commit_ts);
     } else if let Some(matches) = matches.subcommand_matches("raw-scan") {
         let from = unescape(matches.value_of("from").unwrap());
         let to = unescape(matches.value_of("to").unwrap());
