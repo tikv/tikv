@@ -103,7 +103,7 @@ impl Snapshot {
 }
 
 impl Debug for Snapshot {
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Engine Snapshot Impl")
     }
 }

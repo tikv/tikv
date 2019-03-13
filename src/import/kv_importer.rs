@@ -272,7 +272,7 @@ pub struct EnginePath {
 }
 
 impl fmt::Debug for EnginePath {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EnginePath")
             .field("save", &self.save)
             .field("temp", &self.temp)
@@ -338,7 +338,7 @@ impl Drop for EngineFile {
 }
 
 impl fmt::Debug for EngineFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EngineFile")
             .field("uuid", &self.uuid)
             .field("path", &self.path)

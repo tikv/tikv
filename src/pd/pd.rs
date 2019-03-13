@@ -134,7 +134,7 @@ pub struct PeerStat {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
                 ref region,

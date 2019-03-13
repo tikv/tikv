@@ -58,7 +58,7 @@ impl From<storage::engine::Error> for Error {
     fn from(e: storage::engine::Error) -> Error {
         match e {
             storage::engine::Error::Request(e) => Error::Region(e),
-            _ => Error::Other(box e),
+            _ => Error::Other(Box::new(e)),
         }
     }
 }
@@ -85,7 +85,7 @@ impl From<storage::txn::Error> for Error {
                 info.set_lock_ttl(ttl);
                 Error::Locked(info)
             }
-            _ => Error::Other(box e),
+            _ => Error::Other(Box::new(e)),
         }
     }
 }

@@ -129,7 +129,7 @@ impl Deref for Engine {
 }
 
 impl fmt::Debug for Engine {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Engine")
             .field("uuid", &self.uuid())
             .field("path", &self.path().to_owned())
@@ -280,7 +280,7 @@ pub fn get_approximate_ranges(
     ranges
 }
 
-fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
+fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     const DISABLED: i32 = i32::MAX;
 
     let mut db_opts = DBOptions::new();
