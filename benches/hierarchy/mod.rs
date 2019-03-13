@@ -1,9 +1,3 @@
-extern crate criterion;
-extern crate kvproto;
-extern crate test_storage;
-extern crate test_util;
-extern crate tikv;
-
 mod engine;
 mod engine_factory;
 mod mvcc;
@@ -33,7 +27,7 @@ pub struct BenchConfig<F> {
 }
 
 impl<F: fmt::Debug> fmt::Debug for BenchConfig<F> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{:?}_KL{:?}_VL{:?}",

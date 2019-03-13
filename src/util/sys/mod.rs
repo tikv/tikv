@@ -2,7 +2,7 @@ pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]
 pub mod thread {
-    use libc;
+    use libc::{self, c_int};
     use std::io::Error;
 
     pub fn set_priority(pri: i32) -> Result<(), Error> {
@@ -19,8 +19,7 @@ pub mod thread {
     pub fn get_priority() -> Result<i32, Error> {
         unsafe {
             let tid = libc::syscall(libc::SYS_gettid);
-            // clean previous error
-            let _ = Error::last_os_error();
+            clear_errno();
             let ret = libc::getpriority(libc::PRIO_PROCESS as u32, tid as u32);
             if ret == -1 {
                 let e = Error::last_os_error();
@@ -31,6 +30,19 @@ pub mod thread {
                 }
             }
             Ok(ret)
+        }
+    }
+
+    // Sadly the std lib does not have any support for setting `errno`, so we
+    // have to implement this ourselves.
+    extern "C" {
+        #[link_name = "__errno_location"]
+        fn errno_location() -> *mut c_int;
+    }
+
+    fn clear_errno() {
+        unsafe {
+            *errno_location() = 0;
         }
     }
 

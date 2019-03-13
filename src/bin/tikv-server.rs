@@ -14,12 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-#[cfg(unix)]
-extern crate nix;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     kv,
     slog_kv,
@@ -32,7 +26,6 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
 
@@ -47,6 +40,7 @@ use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::usize;
 
@@ -329,7 +323,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     region_info_accessor.stop();
 
-    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
+    if let Some(Err(e)) = worker.stop().map(JoinHandle::join) {
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e

@@ -193,14 +193,14 @@ impl<E: Engine> Store<E> {
                 Context::new(),
                 Key::from_encoded(vec![]),
                 None,
-                100000,
+                100_000,
                 false,
                 self.last_committed_ts,
             )
             .unwrap()
             .into_iter()
-            .filter(|item| item.is_ok())
-            .map(|item| item.unwrap())
+            .filter(Result::is_ok)
+            .map(Result::unwrap)
             .collect()
     }
 
