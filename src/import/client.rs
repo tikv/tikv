@@ -52,6 +52,10 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
     fn ingest_sst(&self, _: u64, _: IngestRequest) -> Result<IngestResponse> {
         unimplemented!()
     }
+
+    fn has_region_id(&self, _: u64) -> Result<bool> {
+        unimplemented!()
+    }
 }
 
 pub struct Client {
@@ -208,6 +212,10 @@ impl ImportClient for Client {
         let client = ImportSstClient::new(ch);
         let res = client.ingest_opt(&req, self.option(Duration::from_secs(30)));
         self.post_resolve(store_id, res.map_err(Error::from))
+    }
+
+    fn has_region_id(&self, id: u64) -> Result<bool> {
+        Ok(self.pd.get_region_by_id(id).wait()?.is_some())
     }
 }
 
