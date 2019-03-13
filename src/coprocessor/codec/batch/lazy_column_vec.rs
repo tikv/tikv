@@ -105,7 +105,7 @@ impl LazyBatchColumnVec {
         self.columns[0].len()
     }
 
-    /// Debug asserts that all columns have equal length.
+    /// Asserts that all columns have equal length.
     #[inline]
     pub fn assert_columns_equal_length(&self) {
         let len = self.rows_len();
