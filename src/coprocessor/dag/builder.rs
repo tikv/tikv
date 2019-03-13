@@ -93,13 +93,13 @@ impl DAGBuilder {
 
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
-                executor = box BatchTableScanExecutor::new(
+                executor = Box::new(BatchTableScanExecutor::new(
                     store,
                     config.clone(),
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
-                )?;
+                )?);
             }
             _ => {
                 return Err(Error::Other(box_err!(

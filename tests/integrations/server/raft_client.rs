@@ -46,7 +46,7 @@ fn test_batch_raft_fallback() {
     impl MockKvService for MockKvForRaft {
         fn raft(
             &mut self,
-            ctx: RpcContext,
+            ctx: RpcContext<'_>,
             stream: RequestStream<RaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
@@ -63,7 +63,7 @@ fn test_batch_raft_fallback() {
 
         fn batch_raft(
             &mut self,
-            ctx: RpcContext,
+            ctx: RpcContext<'_>,
             _stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {

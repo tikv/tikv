@@ -41,10 +41,14 @@ fn test_storage_gcworker_busy() {
     for _i in 0..GC_MAX_PENDING_TASKS {
         let tx1 = tx1.clone();
         storage
-            .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-                assert!(res.is_ok());
-                tx1.send(1).unwrap();
-            })
+            .async_gc(
+                ctx.clone(),
+                1,
+                Box::new(move |res: storage::Result<()>| {
+                    assert!(res.is_ok());
+                    tx1.send(1).unwrap();
+                }),
+            )
             .unwrap();
     }
     // Sleep to make sure the failpoint is triggered.
@@ -52,22 +56,30 @@ fn test_storage_gcworker_busy() {
     // Schedule one more request. So that there is a request being processed and
     // `GC_MAX_PENDING` requests in queue.
     storage
-        .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-            assert!(res.is_ok());
-            tx1.send(1).unwrap();
-        })
+        .async_gc(
+            ctx.clone(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                assert!(res.is_ok());
+                tx1.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
     let (tx2, rx2) = channel();
     storage
-        .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-            match res {
-                Err(storage::Error::GCWorkerTooBusy) => {}
-                res => panic!("expect too busy, got {:?}", res),
-            }
-            tx2.send(1).unwrap();
-        })
+        .async_gc(
+            Context::new(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                match res {
+                    Err(storage::Error::GCWorkerTooBusy) => {}
+                    res => panic!("expect too busy, got {:?}", res),
+                }
+                tx2.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     rx2.recv().unwrap();
@@ -104,9 +116,9 @@ fn test_scheduler_leader_change_twice() {
             b"k".to_vec(),
             10,
             Options::default(),
-            box move |res: storage::Result<_>| {
+            Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
-            },
+            }),
         )
         .unwrap();
     // Sleep to make sure the failpoint is triggered.
