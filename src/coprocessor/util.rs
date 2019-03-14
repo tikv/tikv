@@ -16,26 +16,6 @@ use tipb::schema::ColumnInfo;
 
 use coprocessor::codec::datum::Datum;
 use coprocessor::codec::mysql;
-use coprocessor::*;
-
-pub struct ErrorRequestHandler {
-    error: Option<Error>,
-}
-
-impl ErrorRequestHandler {
-    pub fn new(error: Error) -> ErrorRequestHandler {
-        ErrorRequestHandler { error: Some(error) }
-    }
-}
-
-impl RequestHandler for ErrorRequestHandler {
-    fn handle_request(&mut self) -> Result<coppb::Response> {
-        Err(self.error.take().unwrap())
-    }
-    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-        Err(self.error.take().unwrap())
-    }
-}
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
