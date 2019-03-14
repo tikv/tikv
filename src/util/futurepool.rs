@@ -67,7 +67,7 @@ impl<T: Context> ContextDelegator<T> {
         }
     }
 
-    fn context_mut(&self) -> RefMut<T> {
+    fn context_mut(&self) -> RefMut<'_, T> {
         self.inner.borrow_mut()
     }
 
@@ -113,7 +113,7 @@ impl<T: Context> ContextDelegators<T> {
     }
 
     /// This function should be called in the future pool thread. Otherwise it will panic.
-    pub fn current_thread_context_mut(&self) -> RefMut<T> {
+    pub fn current_thread_context_mut(&self) -> RefMut<'_, T> {
         let delegator = self.get_current_thread_delegator();
         delegator.context_mut()
     }
@@ -138,7 +138,7 @@ pub struct FuturePool<T: Context + 'static> {
 }
 
 impl<T: Context + 'static> fmt::Debug for FuturePool<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         f.debug_struct("FuturePool")
             .field("pool", &self.pool)
             .field("context_delegators", &self.context_delegators)
@@ -302,7 +302,7 @@ mod tests {
             sn: i32,
         }
         impl fmt::Debug for MyContext {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "MyContext")
             }
         }

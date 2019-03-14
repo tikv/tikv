@@ -14,12 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-#[cfg(unix)]
-extern crate nix;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     kv,
     slog_kv,
@@ -32,7 +26,6 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
 
@@ -47,6 +40,7 @@ use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::usize;
 
@@ -109,9 +103,9 @@ fn pre_start(cfg: &TiKvConfig) {
     check_system_config(&cfg);
     check_environment_variables();
 
-    if cfg.panic_when_key_exceed_bound {
-        info!("panic-when-key-exceed-bound is on");
-        tikv_util::set_panic_when_key_exceed_bound(true);
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
     }
 }
 
@@ -325,12 +319,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     metrics_flusher.stop();
 
-    node.stop()
-        .unwrap_or_else(|e| fatal!("failed to stop node: {}", e));
+    node.stop();
 
     region_info_accessor.stop();
 
-    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
+    if let Some(Err(e)) = worker.stop().map(JoinHandle::join) {
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e

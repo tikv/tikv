@@ -40,7 +40,7 @@ impl SyncLoggerBuffer {
         slog::Logger::root(drain, o!())
     }
 
-    fn lock(&self) -> sync::MutexGuard<Vec<u8>> {
+    fn lock(&self) -> sync::MutexGuard<'_, Vec<u8>> {
         self.0.lock().unwrap()
     }
 

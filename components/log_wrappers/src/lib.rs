@@ -13,11 +13,9 @@
 
 //! Provides wrappers for types that comes from 3rd-party and does not implement slog::Value.
 
-extern crate hex;
-extern crate kvproto as lib_kvproto;
 #[macro_use]
 extern crate slog;
-extern crate slog_term;
+#[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 pub mod test_util;
@@ -34,7 +32,7 @@ impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
     #[inline]
     fn serialize(
         &self,
-        _record: &::slog::Record,
+        _record: &::slog::Record<'_>,
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -54,7 +52,7 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
     #[inline]
     fn serialize(
         &self,
-        _record: &::slog::Record,
+        _record: &::slog::Record<'_>,
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -95,7 +93,7 @@ impl<'a> slog::Value for Key<'a> {
     #[inline]
     fn serialize(
         &self,
-        _record: &::slog::Record,
+        _record: &::slog::Record<'_>,
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
@@ -114,13 +112,15 @@ fn test_log_key() {
 
 pub mod kvproto {
     pub mod kvrpcpb {
-        pub struct KeyRange<'a>(pub &'a crate::lib_kvproto::kvrpcpb::KeyRange);
+        use ::kvproto as lib_kvproto;
+
+        pub struct KeyRange<'a>(pub &'a lib_kvproto::kvrpcpb::KeyRange);
 
         impl<'a> slog::Value for KeyRange<'a> {
             #[inline]
             fn serialize(
                 &self,
-                _record: &::slog::Record,
+                _record: &::slog::Record<'_>,
                 key: slog::Key,
                 serializer: &mut dyn slog::Serializer,
             ) -> slog::Result {
@@ -141,7 +141,7 @@ pub mod kvproto {
             let buffer = crate::test_util::SyncLoggerBuffer::new();
             let logger = buffer.build_logger();
 
-            let mut range = crate::lib_kvproto::kvrpcpb::KeyRange::new();
+            let mut range = lib_kvproto::kvrpcpb::KeyRange::new();
             range.set_start_key(b"\x20\x00".to_vec());
             range.set_end_key(b"\x31\xFF\x12a".to_vec());
             slog_info!(logger, "foo"; "bar" => KeyRange(&range));
@@ -151,13 +151,13 @@ pub mod kvproto {
             );
 
             buffer.clear();
-            let mut range = crate::lib_kvproto::kvrpcpb::KeyRange::new();
+            let mut range = lib_kvproto::kvrpcpb::KeyRange::new();
             range.set_end_key(b"\x31".to_vec());
             slog_info!(logger, "foo"; "bar" => KeyRange(&range));
             assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: [, 31)\n");
 
             buffer.clear();
-            let mut range = crate::lib_kvproto::kvrpcpb::KeyRange::new();
+            let mut range = lib_kvproto::kvrpcpb::KeyRange::new();
             range.set_start_key(b"\xC0".to_vec());
             slog_info!(logger, "foo"; "bar" => KeyRange(&range));
             assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: [C0, )\n");
@@ -165,14 +165,14 @@ pub mod kvproto {
     }
 
     pub mod coprocessor {
-        pub struct KeyRange<'a>(pub &'a crate::lib_kvproto::coprocessor::KeyRange);
+        pub struct KeyRange<'a>(pub &'a ::kvproto::coprocessor::KeyRange);
 
         // Similar to `kvrpcpb::KeyRange`. Tests are ignored.
         impl<'a> slog::Value for KeyRange<'a> {
             #[inline]
             fn serialize(
                 &self,
-                _record: &::slog::Record,
+                _record: &::slog::Record<'_>,
                 key: slog::Key,
                 serializer: &mut dyn slog::Serializer,
             ) -> slog::Result {

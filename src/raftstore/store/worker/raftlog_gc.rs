@@ -34,7 +34,7 @@ pub struct TaskRes {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",
