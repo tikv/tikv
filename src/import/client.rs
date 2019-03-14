@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
+use rocksdb::SequentialFile;
 
 use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
 use crate::storage::types::Key;
@@ -45,11 +46,15 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
         unimplemented!()
     }
 
-    fn upload_sst(&self, _: u64, _: UploadStream<'_>) -> Result<UploadResponse> {
+    fn upload_sst(&self, _: u64, _: UploadStream) -> Result<UploadResponse> {
         unimplemented!()
     }
 
     fn ingest_sst(&self, _: u64, _: IngestRequest) -> Result<IngestResponse> {
+        unimplemented!()
+    }
+
+    fn has_region_id(&self, _: u64) -> Result<bool> {
         unimplemented!()
     }
 }
@@ -195,7 +200,7 @@ impl ImportClient for Client {
         self.pd.scatter_region(region.clone()).map_err(Error::from)
     }
 
-    fn upload_sst(&self, store_id: u64, req: UploadStream<'_>) -> Result<UploadResponse> {
+    fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
         let (tx, rx) = client.upload_opt(self.option(Duration::from_secs(30)))?;
@@ -209,27 +214,29 @@ impl ImportClient for Client {
         let res = client.ingest_opt(&req, self.option(Duration::from_secs(30)));
         self.post_resolve(store_id, res.map_err(Error::from))
     }
+
+    fn has_region_id(&self, id: u64) -> Result<bool> {
+        Ok(self.pd.get_region_by_id(id).wait()?.is_some())
+    }
 }
 
-pub struct UploadStream<'a> {
+pub struct UploadStream<R = SequentialFile> {
     meta: Option<SSTMeta>,
-    size: usize,
-    cursor: Cursor<&'a [u8]>,
+    data: R,
 }
 
-impl<'a> UploadStream<'a> {
-    pub fn new(meta: SSTMeta, data: &[u8]) -> UploadStream<'_> {
-        UploadStream {
+impl<R> UploadStream<R> {
+    pub fn new(meta: SSTMeta, data: R) -> Self {
+        Self {
             meta: Some(meta),
-            size: data.len(),
-            cursor: Cursor::new(data),
+            data,
         }
     }
 }
 
 const UPLOAD_CHUNK_SIZE: usize = 1024 * 1024;
 
-impl<'a> Stream for UploadStream<'a> {
+impl<R: Read> Stream for UploadStream<R> {
     type Item = (UploadRequest, WriteFlags);
     type Error = Error;
 
@@ -242,13 +249,15 @@ impl<'a> Stream for UploadStream<'a> {
             return Ok(Async::Ready(Some((chunk, flags))));
         }
 
-        let mut buf = match self.size - self.cursor.position() as usize {
-            0 => return Ok(Async::Ready(None)),
-            n if n > UPLOAD_CHUNK_SIZE => vec![0; UPLOAD_CHUNK_SIZE],
-            n => vec![0; n],
-        };
+        let mut buf = Vec::with_capacity(UPLOAD_CHUNK_SIZE);
+        self.data
+            .by_ref()
+            .take(UPLOAD_CHUNK_SIZE as u64)
+            .read_to_end(&mut buf)?;
+        if buf.is_empty() {
+            return Ok(Async::Ready(None));
+        }
 
-        self.cursor.read_exact(buf.as_mut_slice())?;
         let mut chunk = UploadRequest::new();
         chunk.set_data(buf);
         Ok(Async::Ready(Some((chunk, flags))))
@@ -269,7 +278,7 @@ mod tests {
         let mut data = vec![0u8; UPLOAD_CHUNK_SIZE * 4];
         rand::thread_rng().fill_bytes(&mut data);
 
-        let mut stream = UploadStream::new(meta.clone(), &data);
+        let mut stream = UploadStream::new(meta.clone(), &*data);
 
         // Check meta.
         if let Async::Ready(Some((upload, _))) = stream.poll().unwrap() {
