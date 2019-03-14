@@ -11,6 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod jemalloc_metrics;
+
 use std::thread;
 use std::time::Duration;
 
@@ -25,6 +27,9 @@ pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads};
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
+
+#[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
+pub use self::jemalloc_metrics::monitor_jemalloc_stats;
 
 /// Runs a background Prometheus client.
 pub fn run_prometheus(
