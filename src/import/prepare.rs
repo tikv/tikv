@@ -31,6 +31,14 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
 
+const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 125;
+const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 8;
+
+/// PrepareJob is responsible for improving cluster data balance
+///
+/// The main job is:
+/// 1. split data into ranges according to region size and region distribution
+/// 2. split and scatter regions of a cluster before we import a large amount of data
 pub struct PrepareJob<Client> {
     tag: String,
     cfg: Config,
@@ -176,6 +184,23 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         }
         match self.split_region(&region) {
             Ok(new_region) => {
+                // We need to wait for a few milliseconds, because PD may have
+                // not received any heartbeat from the new split region, such
+                // that PD cannot create scatter operator for the new split
+                // region because it doesn't have the meta data of the new split
+                // region.
+                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
+                    if self.client.has_region_id(new_region.region.id)? {
+                        if i > 0 {
+                            debug!("waited between split and scatter; retry times => {}", i);
+                        }
+                        break;
+                    } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
+                        warn!("split region still failed after exhausting all retries");
+                    } else {
+                        thread::sleep(Duration::from_millis(SCATTER_WAIT_INTERVAL_MILLIS));
+                    }
+                }
                 self.scatter_region(&new_region)?;
                 Ok(true)
             }
