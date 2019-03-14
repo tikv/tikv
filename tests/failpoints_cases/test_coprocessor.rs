@@ -11,15 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use fail;
+
 use test_coprocessor::*;
 
 #[test]
 fn test_outdated() {
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("coprocessor_deadline_check_exceeded", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -31,11 +33,11 @@ fn test_outdated() {
 fn test_outdated_2() {
     // It should not even take any snapshots when request is outdated from the beginning.
 
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("coprocessor_deadline_check_exceeded", "return()").unwrap();
@@ -46,11 +48,11 @@ fn test_outdated_2() {
 
 #[test]
 fn test_parse_request_failed() {
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -62,11 +64,11 @@ fn test_parse_request_failed() {
 fn test_parse_request_failed_2() {
     // It should not even take any snapshots when parse failed.
 
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("coprocessor_parse_request", "return()").unwrap();
@@ -77,11 +79,11 @@ fn test_parse_request_failed_2() {
 
 #[test]
 fn test_readpool_full() {
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("read_pool_execute_full", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -91,11 +93,11 @@ fn test_readpool_full() {
 
 #[test]
 fn test_snapshot_failed() {
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("rockskv_async_snapshot", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
@@ -105,11 +107,11 @@ fn test_snapshot_failed() {
 
 #[test]
 fn test_snapshot_failed_2() {
-    let _guard = crate::setup();
+    let _guard = ::setup();
 
     let product = ProductTable::new();
     let (_, endpoint) = init_with_data(&product, &[]);
-    let req = DAGSelect::from(&product).build();
+    let req = DAGSelect::from(&product.table).build();
 
     fail::cfg("rockskv_async_snapshot_not_leader", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
