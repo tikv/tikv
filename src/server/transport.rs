@@ -243,7 +243,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
     fn resolve(&self, store_id: u64, msg: RaftMessage) {
         let trans = self.clone();
         let msg1 = msg.clone();
-        let cb = box move |mut addr: Result<String>| {
+        let cb = Box::new(move |mut addr: Result<String>| {
             {
                 // Wrapping the fail point in a closure, so we can modify
                 // local variables without return.
@@ -279,7 +279,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
             trans.write_data(store_id, &addr, msg);
             // There may be no messages in the near future, so flush it immediately.
             trans.raft_client.wl().flush();
-        };
+        });
         if let Err(e) = self.resolver.resolve(store_id, cb) {
             error!("resolve store address failed"; "store_id" => store_id, "err" => ?e);
             self.resolving.wl().remove(&store_id);
@@ -299,13 +299,13 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
 
     fn send_snapshot_sock(&self, addr: &str, msg: RaftMessage) {
         let rep = self.new_snapshot_reporter(&msg);
-        let cb = box move |res: Result<()>| {
+        let cb = Box::new(move |res: Result<()>| {
             if res.is_err() {
                 rep.report(SnapshotStatus::Failure);
             } else {
                 rep.report(SnapshotStatus::Finish);
             }
-        };
+        });
         if let Err(e) = self.snap_scheduler.schedule(SnapTask::Send {
             addr: addr.to_owned(),
             msg,

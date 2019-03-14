@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate prometheus;
-extern crate toml;
-
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -25,7 +22,7 @@ use std::usize;
 
 use rocksdb::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRecoveryMode, TitanDBOptions,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
@@ -604,6 +601,9 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[serde(with = "config::rate_limiter_mode_serde")]
+    pub rate_limiter_mode: DBRateLimiterMode,
+    pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
@@ -637,6 +637,8 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_mode: DBRateLimiterMode::WriteOnly,
+            auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
@@ -681,9 +683,15 @@ impl DbConfig {
                     );
                 })
         }
+
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
+            opts.set_ratelimiter_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                self.rate_limiter_mode,
+                self.auto_tuned,
+            );
         }
+
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -700,7 +708,7 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -889,7 +897,7 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
     }
 }
@@ -983,9 +991,11 @@ macro_rules! readpool_config {
                     .into());
                 }
                 if self.low_concurrency == 0 {
-                    return Err(
-                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
-                    );
+                    return Err(format!(
+                        "readpool.{}.low-concurrency should be > 0",
+                        $display_name
+                    )
+                    .into());
                 }
                 if self.stack_size.0 < ReadableSize::mb(2).0 {
                     return Err(
@@ -1347,7 +1357,7 @@ impl TiKvConfig {
             .and_then(|mut f| {
                 let mut s = String::new();
                 f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
+                let c = ::toml::from_str(&s)?;
                 Ok(c)
             })
             .unwrap_or_else(|e| {
@@ -1359,7 +1369,7 @@ impl TiKvConfig {
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = ::toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;

@@ -293,7 +293,7 @@ fn test_auto_gc() {
             region_info_accessors.remove(id).unwrap(),
             *id,
         );
-        cfg.post_a_round_of_gc = Some(box move || tx.send(()).unwrap());
+        cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
         storage.start_auto_gc(cfg);
     }
 
