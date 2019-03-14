@@ -138,21 +138,22 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let path = TempDir::new("test_cluster").unwrap();
+            let dir = TempDir::new("test_cluster").unwrap();
+            let kv_path = dir.path().join("kv");
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocksdb_util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = path.path().join(Path::new("raft"));
+            let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
                 rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
-            self.paths.push(path);
+            self.paths.push(dir);
         }
     }
 

@@ -190,9 +190,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
 
-    // Upgrading from v2.x to v3.x.
-    // FIXME: remove raft CF options from kv_cfs_opts.
-    tikv::raftstore::store::maybe_upgrade_from_2_to_3(&mut kv_engine, &raft_engine);
+    // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
+    // TODO: Remove raft CF options from kv_cfs_opts.
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+        &raft_engine,
+        db_path.to_str().unwrap(),
+        kv_db_opts.clone(),
+        &cfg.rocksdb,
+    );
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
 
