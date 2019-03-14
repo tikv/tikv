@@ -145,7 +145,7 @@ pub struct Full {
 }
 
 impl fmt::Display for Full {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             fmt,
             "read pool is full, current task count = {}, max task count = {}",

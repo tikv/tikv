@@ -48,7 +48,7 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
 // Validate that prevote is used in elections after partition or reboot of some nodes.
 fn test_prevote<T: Simulator>(
     cluster: &mut Cluster<T>,
-    failure_type: FailureType,
+    failure_type: FailureType<'_>,
     leader_after_failure_id: impl Into<Option<u64>>,
     detect_during_failure: impl Into<Option<(u64, bool)>>,
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
@@ -101,7 +101,9 @@ fn test_prevote<T: Simulator>(
         }
         FailureType::Reboot(peers) => {
             cluster.clear_send_filters();
-            peers.iter().for_each(|&peer| cluster.run_node(peer));
+            peers.iter().for_each(|&peer| {
+                cluster.run_node(peer).unwrap();
+            });
         }
     };
 

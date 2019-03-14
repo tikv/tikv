@@ -49,7 +49,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
         }
@@ -115,7 +115,7 @@ impl<C> Coprocessor for KeysCheckObserver<C> {}
 impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         policy: CheckPolicy,

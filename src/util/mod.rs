@@ -159,16 +159,16 @@ impl DerefMut for DefaultRng {
 /// A handy shortcut to replace `RwLock` write/read().unwrap() pattern to
 /// shortcut wl and rl.
 pub trait HandyRwLock<T> {
-    fn wl(&self) -> RwLockWriteGuard<T>;
-    fn rl(&self) -> RwLockReadGuard<T>;
+    fn wl(&self) -> RwLockWriteGuard<'_, T>;
+    fn rl(&self) -> RwLockReadGuard<'_, T>;
 }
 
 impl<T> HandyRwLock<T> for RwLock<T> {
-    fn wl(&self) -> RwLockWriteGuard<T> {
+    fn wl(&self) -> RwLockWriteGuard<'_, T> {
         self.write().unwrap()
     }
 
-    fn rl(&self) -> RwLockReadGuard<T> {
+    fn rl(&self) -> RwLockReadGuard<'_, T> {
         self.read().unwrap()
     }
 }
@@ -372,7 +372,7 @@ impl<T> RingQueue<T> {
         self.buf.push_back(t);
     }
 
-    pub fn iter(&self) -> Iter<T> {
+    pub fn iter(&self) -> Iter<'_, T> {
         self.buf.iter()
     }
 
@@ -465,7 +465,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
     let orig_hook = panic::take_hook();
-    panic::set_hook(box move |info: &panic::PanicInfo| {
+    panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
         use slog::Drain;
         if slog_global::borrow_global().is_enabled(::slog::Level::Error) {
             let msg = match info.payload().downcast_ref::<&'static str>() {
@@ -513,7 +513,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
         } else {
             process::exit(1);
         }
-    })
+    }))
 }
 
 #[inline]

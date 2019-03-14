@@ -162,4 +162,9 @@ impl ImportClient for MockClient {
         regions.insert(region.get_id(), region.region.clone());
         Ok(())
     }
+
+    fn has_region_id(&self, region_id: u64) -> Result<bool> {
+        let regions = self.regions.lock().unwrap();
+        Ok(regions.contains_key(&region_id))
+    }
 }
