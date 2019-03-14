@@ -67,7 +67,7 @@ use super::{
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_KV_WB_SIZE: usize = 4 * 1024;
-const DEFAULT_RAFT_WB_SIZE: usize = 1 * 1024;
+const DEFAULT_RAFT_WB_SIZE: usize = 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -388,6 +388,7 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
+    #[allow(clippy::useless_let_if_seq)]
     pub fn write_to_db(&mut self) {
         let mut synced = false;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
@@ -2552,7 +2553,7 @@ impl ApplyFsm {
             return;
         }
 
-        apply_ctx.prepare_for(&mut self.delegate);
+        apply_ctx.prepare_for(&self.delegate);
         // persistent all pending changes
         apply_ctx.commit_opt(&mut self.delegate, true);
         if let Err(e) = snap_task.generate_snapshot(&apply_ctx.engines) {
