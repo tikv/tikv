@@ -76,7 +76,7 @@ impl IOLimiter {
     }
 }
 
-pub struct LimitWriter<'a, T: Write + 'a> {
+pub struct LimitWriter<'a, T: Write> {
     limiter: Option<Arc<IOLimiter>>,
     writer: &'a mut T,
 }

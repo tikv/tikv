@@ -86,7 +86,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
@@ -761,7 +761,8 @@ mod tests {
             rocksdb_util::CFOptions::new("lock", cf_opts.clone()),
             rocksdb_util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let db = get_test_db_for_regions(&temp_dir, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
+        let db =
+            get_test_db_for_regions(&temp_dir, None, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();

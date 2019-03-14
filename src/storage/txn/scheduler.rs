@@ -80,14 +80,14 @@ pub enum Msg {
 
 /// Debug for messages.
 impl Debug for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
 
 /// Display for messages.
 impl Display for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
@@ -143,7 +143,7 @@ impl TaskContext {
 pub struct Scheduler<E: Engine> {
     engine: E,
 
-    // cid -> Task
+    /// cid -> Task
     pending_tasks: HashMap<u64, Task>,
 
     // cid -> TaskContext
@@ -159,7 +159,7 @@ pub struct Scheduler<E: Engine> {
     latches: Latches,
 
     // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
+    /// speed of recent write requests.
     sched_pending_write_threshold: usize,
 
     // worker pool
@@ -326,9 +326,9 @@ impl<E: Engine> Scheduler<E> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority());
 
-        let cb = box move |(cb_ctx, snapshot)| {
+        let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
-        };
+        });
         if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[tag, "async_snapshot_err"])

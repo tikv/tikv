@@ -22,7 +22,7 @@ use std::io::Error as IoError;
 pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
-pub use self::store::{Scanner, SnapshotStore, Store, StoreScanner};
+pub use self::store::{Scanner, SnapshotStore, Store};
 use crate::util::escape;
 
 quick_error! {
@@ -48,7 +48,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())

@@ -21,7 +21,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
@@ -60,7 +59,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale), false),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::clone(&stale),
+            false,
+        )),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
@@ -116,7 +118,7 @@ fn test_server_snap_gc() {
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box DropSnapshotFilter::new(tx));
+        .add_recv_filter(3, Box::new(DropSnapshotFilter::new(tx)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -210,7 +212,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+        .add_recv_filter(3, Box::new(CollectSnapshotFilter::new(tx)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
@@ -271,7 +273,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // test if node can be safely restarted without losing any data.
     cluster.stop_node(1);
-    cluster.run_node(1);
+    cluster.run_node(1).unwrap();
 
     cluster.must_put_cf(cf, b"k3", b"v3");
     must_get_cf_equal(&engine1, cf, b"k3", b"v3");
@@ -300,7 +302,7 @@ struct StaleSnapInner {
     sent: Mutex<Sender<()>>,
 }
 
-impl Filter<RaftMessage> for StaleSnap {
+impl Filter for StaleSnap {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut res = Vec::with_capacity(msgs.len());
         for mut m in msgs.drain(..) {
@@ -370,7 +372,7 @@ fn test_node_stale_snap() {
 /// Pause Snap and wait till first append message arrives.
 pub struct SnapshotAppendFilter {
     stale: AtomicBool,
-    pending_msg: Mutex<Vec<Msg>>,
+    pending_msg: Mutex<Vec<RaftMessage>>,
     notifier: Mutex<Sender<()>>,
 }
 
@@ -384,30 +386,27 @@ impl SnapshotAppendFilter {
     }
 }
 
-impl Filter<Msg> for SnapshotAppendFilter {
-    fn before(&self, msgs: &mut Vec<Msg>) -> Result<()> {
+impl Filter for SnapshotAppendFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
         let mut stale = false;
-        for m in msgs.drain(..) {
-            let mut should_collect = false;
-            if let Msg::PeerMsg(PeerMsg::RaftMessage(ref msg)) = m {
-                should_collect =
-                    !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
-                stale = !pending_msg.is_empty()
-                    && msg.get_message().get_msg_type() == MessageType::MsgAppend;
-            }
+        for msg in msgs.drain(..) {
+            let should_collect =
+                !stale && msg.get_message().get_msg_type() == MessageType::MsgSnapshot;
+            stale = !pending_msg.is_empty()
+                && msg.get_message().get_msg_type() == MessageType::MsgAppend;
             if should_collect {
-                pending_msg.push(m);
+                pending_msg.push(msg);
                 self.notifier.lock().unwrap().send(()).unwrap();
             } else {
                 if stale {
                     to_send.extend(pending_msg.drain(..));
                 }
-                to_send.push(m);
+                to_send.push(msg);
             }
         }
         self.stale.store(stale, Ordering::SeqCst);
@@ -430,7 +429,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
+        .add_recv_filter(4, Box::new(SnapshotAppendFilter::new(tx)));
     pd_client.add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");

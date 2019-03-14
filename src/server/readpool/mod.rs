@@ -145,7 +145,7 @@ pub struct Full {
 }
 
 impl fmt::Display for Full {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             fmt,
             "read pool is full, current task count = {}, max task count = {}",
@@ -171,7 +171,7 @@ mod tests {
 
     use super::*;
 
-    type BoxError = Box<error::Error + Send + Sync>;
+    type BoxError = Box<dyn error::Error + Send + Sync>;
 
     pub fn expect_val<T>(v: T, x: result::Result<T, BoxError>)
     where

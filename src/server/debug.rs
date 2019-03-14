@@ -65,7 +65,7 @@ quick_error! {
             description(msg)
             display("Not Found {:?}", msg)
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -319,13 +319,13 @@ impl Debugger {
         let handle = box_try!(get_cf_handle(db, cf));
         let start = if start.is_empty() { None } else { Some(start) };
         let end = if end.is_empty() { None } else { Some(end) };
-        info!("Debugger starts manual compact on {:?}.{}", db, cf);
+        info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
         let mut opts = CompactOptions::new();
         opts.set_max_subcompactions(threads as i32);
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact on {:?}.{}", db, cf);
+        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -471,6 +471,7 @@ impl Debugger {
                 self.engines.clone(),
                 region,
                 fake_snap_worker.scheduler(),
+                peer_id,
                 tag.clone(),
             ));
 
@@ -538,8 +539,10 @@ impl Debugger {
                 let region_id = region_state.get_region().get_id();
                 let old_peers = region_state.mut_region().take_peers();
                 info!(
-                    "region {} change peers from {:?}, to {:?}",
-                    region_id, old_peers, new_peers
+                    "peers changed";
+                    "region_id" => region_id,
+                    "old_peers" => ?old_peers,
+                    "new_peers" => ?new_peers,
                 );
                 // We need to leave epoch untouched to avoid inconsistency.
                 region_state
@@ -671,6 +674,7 @@ impl Debugger {
         config_name: &str,
         config_value: &str,
     ) -> Result<()> {
+        use super::CONFIG_ROCKSDB_GAUGE;
         let db = match module {
             MODULE::KVDB => DBType::KV,
             MODULE::RAFTDB => DBType::RAFT,
@@ -696,11 +700,20 @@ impl Debugger {
                         capacity.unwrap_err()
                     )));
                 }
-                box_try!(opt.set_block_cache_capacity(capacity.unwrap().0));
+                let cache_size = capacity.unwrap().0;
+                box_try!(opt.set_block_cache_capacity(cache_size));
+                CONFIG_ROCKSDB_GAUGE
+                    .with_label_values(&[cf, config_name])
+                    .set(cache_size as f64);
             } else {
                 let mut opt = Vec::new();
                 opt.push((config_name, config_value));
                 box_try!(rocksdb.set_options_cf(handle, &opt));
+                if let Ok(v) = config_value.parse::<f64>() {
+                    CONFIG_ROCKSDB_GAUGE
+                        .with_label_values(&[cf, config_name])
+                        .set(v);
+                }
             }
         } else {
             return Err(Error::InvalidArgument(format!(

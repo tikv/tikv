@@ -75,11 +75,11 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn into_boxed(self) -> Box<RequestHandler>
+    fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,
     {
-        box self
+        Box::new(self)
     }
 }
 

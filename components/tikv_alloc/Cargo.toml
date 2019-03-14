@@ -23,7 +23,13 @@ log = "0.3"
 tempdir = "0.3"
 
 [dependencies.jemallocator]
+version = "0.1.9"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms"]
-version = "0.1.9"
 
+[dependencies.jemalloc-sys]
+version = "0.1.8"
+features = ["stats"]
+
+[dependencies.jemalloc-ctl]
+version = "0.2.0"

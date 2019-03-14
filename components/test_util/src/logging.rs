@@ -30,7 +30,7 @@ struct CaseTraceLogger {
 impl Drain for CaseTraceLogger {
     type Ok = ();
     type Err = slog::Never;
-    fn log(&self, record: &Record, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, _: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         let tag = tikv::util::get_tag_from_thread_name().map_or_else(|| "".into(), |s| s + " ");
 
         let t = time::now();
@@ -76,7 +76,7 @@ pub fn init_log_for_test() {
     // we don't mind set it multiple times.
     let drain = CaseTraceLogger { f: writer };
 
-    // Collects following targes.
+    // Collects following targets.
     const ENABLED_TARGETS: &[&str] = &[
         "tikv::",
         "tests::",

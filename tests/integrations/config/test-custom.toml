@@ -1,6 +1,8 @@
 log-level = "debug"
 log-file = "foo"
 log-rotation-timespan = "1d"
+panic-when-unexpected-key-or-data = true
+
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
@@ -395,6 +397,7 @@ hard-pending-compaction-bytes-limit = "12GB"
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+cipher-file = "invalid path"
 
 [import]
 import-dir = "/abc"

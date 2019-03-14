@@ -40,7 +40,7 @@ impl SSTFile {
 }
 
 impl fmt::Debug for SSTFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uuid = Uuid::from_bytes(self.meta.get_uuid()).unwrap();
         f.debug_struct("SSTFile")
             .field("uuid", &uuid)
@@ -237,6 +237,7 @@ mod tests {
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
+    use crate::util::security::SecurityConfig;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();
@@ -400,8 +401,9 @@ mod tests {
     fn test_sst_file_stream() {
         let dir = TempDir::new("test_import_sst_file_stream").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
 
         for i in 0..16 {
             let k = Key::from_raw(&[i]).append_ts(0);

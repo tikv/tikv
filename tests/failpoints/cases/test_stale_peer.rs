@@ -40,7 +40,7 @@ fn test_one_node_leader_missing() {
     let check_stale_state = "peer_check_stale_state";
     fail::cfg(check_stale_state, "panic").unwrap();
 
-    cluster.start();
+    cluster.start().unwrap();
 
     // Check stale state 3 times,
     thread::sleep(cluster.cfg.raft_store.peer_stale_state_check_interval.0 * 3);

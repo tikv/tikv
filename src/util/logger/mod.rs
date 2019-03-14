@@ -174,7 +174,7 @@ where
     type Ok = ();
     type Err = io::Error;
 
-    fn log(&self, record: &Record, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         self.decorator.with_record(record, values, |decorator| {
             write_log_header(decorator, record)?;
             write_log_msg(decorator, record)?;
@@ -191,7 +191,7 @@ where
 }
 
 /// Writes log header to decorator. See [log-header](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-header-section)
-fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_header(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
     decorator.start_timestamp()?;
     write!(
         decorator,
@@ -225,7 +225,7 @@ fn write_log_header(decorator: &mut RecordDecorator, record: &Record) -> io::Res
 }
 
 /// Writes log message to decorator. See [log-message](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-message-section)
-fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result<()> {
+fn write_log_msg(decorator: &mut dyn RecordDecorator, record: &Record<'_>) -> io::Result<()> {
     decorator.start_whitespace()?;
     write!(decorator, " ")?;
 
@@ -240,8 +240,8 @@ fn write_log_msg(decorator: &mut RecordDecorator, record: &Record) -> io::Result
 
 /// Writes log fields to decorator. See [log-fields](https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md#log-fields-section)
 fn write_log_fields(
-    decorator: &mut RecordDecorator,
-    record: &Record,
+    decorator: &mut dyn RecordDecorator,
+    record: &Record<'_>,
     values: &OwnedKVList,
 ) -> io::Result<()> {
     let mut serializer = Serializer::new(decorator);
@@ -256,11 +256,11 @@ fn write_log_fields(
 }
 
 struct Serializer<'a> {
-    decorator: &'a mut RecordDecorator,
+    decorator: &'a mut dyn RecordDecorator,
 }
 
 impl<'a> Serializer<'a> {
-    fn new(decorator: &'a mut RecordDecorator) -> Self {
+    fn new(decorator: &'a mut dyn RecordDecorator) -> Self {
         Serializer { decorator }
     }
 
@@ -285,7 +285,7 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
         self.emit_arguments(key, &format_args!("None"))
     }
 
-    fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments) -> slog::Result {
+    fn emit_arguments(&mut self, key: Key, val: &fmt::Arguments<'_>) -> slog::Result {
         self.write_whitespace()?;
 
         // Write key

@@ -45,11 +45,15 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
         unimplemented!()
     }
 
-    fn upload_sst(&self, _: u64, _: UploadStream) -> Result<UploadResponse> {
+    fn upload_sst(&self, _: u64, _: UploadStream<'_>) -> Result<UploadResponse> {
         unimplemented!()
     }
 
     fn ingest_sst(&self, _: u64, _: IngestRequest) -> Result<IngestResponse> {
+        unimplemented!()
+    }
+
+    fn has_region_id(&self, _: u64) -> Result<bool> {
         unimplemented!()
     }
 }
@@ -107,11 +111,12 @@ impl Client {
 
     pub fn switch_cluster(&self, req: &SwitchModeRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -119,7 +124,7 @@ impl Client {
             let future = match client.switch_mode_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("switch store {:?}: {:?}", store, e);
+                    error!("switch mode failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -134,11 +139,12 @@ impl Client {
 
     pub fn compact_cluster(&self, req: &CompactRequest) -> Result<()> {
         let mut futures = Vec::new();
-        for store in self.pd.get_all_stores()? {
+        // Exclude tombstone stores.
+        for store in self.pd.get_all_stores(true)? {
             let ch = match self.resolve(store.get_id()) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("get store channel failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -146,7 +152,7 @@ impl Client {
             let future = match client.compact_async(req) {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("compact store {:?}: {:?}", store, e);
+                    error!("compact failed"; "store" => ?store, "err" => %e);
                     continue;
                 }
             };
@@ -193,7 +199,7 @@ impl ImportClient for Client {
         self.pd.scatter_region(region.clone()).map_err(Error::from)
     }
 
-    fn upload_sst(&self, store_id: u64, req: UploadStream) -> Result<UploadResponse> {
+    fn upload_sst(&self, store_id: u64, req: UploadStream<'_>) -> Result<UploadResponse> {
         let ch = self.resolve(store_id)?;
         let client = ImportSstClient::new(ch);
         let (tx, rx) = client.upload_opt(self.option(Duration::from_secs(30)))?;
@@ -207,6 +213,10 @@ impl ImportClient for Client {
         let res = client.ingest_opt(&req, self.option(Duration::from_secs(30)));
         self.post_resolve(store_id, res.map_err(Error::from))
     }
+
+    fn has_region_id(&self, id: u64) -> Result<bool> {
+        Ok(self.pd.get_region_by_id(id).wait()?.is_some())
+    }
 }
 
 pub struct UploadStream<'a> {
@@ -216,7 +226,7 @@ pub struct UploadStream<'a> {
 }
 
 impl<'a> UploadStream<'a> {
-    pub fn new(meta: SSTMeta, data: &[u8]) -> UploadStream {
+    pub fn new(meta: SSTMeta, data: &[u8]) -> UploadStream<'_> {
         UploadStream {
             meta: Some(meta),
             size: data.len(),

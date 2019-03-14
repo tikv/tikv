@@ -85,8 +85,16 @@ impl<'a> CFOptions<'a> {
     }
 }
 
-pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<DB, String> {
-    let mut db_opts = DBOptions::new();
+pub fn new_engine(
+    path: &str,
+    db_opts: Option<DBOptions>,
+    cfs: &[&str],
+    opts: Option<Vec<CFOptions<'_>>>,
+) -> Result<DB, String> {
+    let mut db_opts = match db_opts {
+        Some(opt) => opt,
+        None => DBOptions::new(),
+    };
     db_opts.enable_statistics(true);
     let cf_opts = match opts {
         Some(opts_vec) => opts_vec,
@@ -103,7 +111,10 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
 
 /// Turns "dynamic level size" off for the existing column family which was off before.
 /// Column families are small, HashMap isn't necessary.
-fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
+fn adjust_dynamic_level_bytes(
+    cf_descs: &[CColumnFamilyDescriptor],
+    cf_options: &mut CFOptions<'_>,
+) {
     if let Some(ref cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
@@ -130,7 +141,7 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
 fn check_and_open(
     path: &str,
     mut db_opt: DBOptions,
-    cfs_opts: Vec<CFOptions>,
+    cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB, String> {
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -161,8 +172,12 @@ fn check_and_open(
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
     let cf_descs = if !existed.is_empty() {
+        let env = match db_opt.env() {
+            Some(env) => env,
+            None => Arc::new(Env::default()),
+        };
         // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &Env::default(), true)
+        let (_, tmp) = load_latest_options(path, &env, true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
             .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
         tmp
@@ -226,7 +241,11 @@ fn check_and_open(
     Ok(db)
 }
 
-pub fn new_engine_opt(path: &str, opts: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
+pub fn new_engine_opt(
+    path: &str,
+    opts: DBOptions,
+    cfs_opts: Vec<CFOptions<'_>>,
+) -> Result<DB, String> {
     check_and_open(path, opts, cfs_opts)
 }
 
@@ -705,7 +724,7 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, &[cf_name], None).unwrap();
+        let db = new_engine(path_str, None, &[cf_name], None).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -754,6 +773,7 @@ mod tests {
         ];
         let db = new_engine(
             temp_dir.path().to_str().unwrap(),
+            None,
             &["default", "test"],
             Some(cfs_opts),
         )
