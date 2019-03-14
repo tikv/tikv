@@ -416,12 +416,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let (cur_key_without_ts, ts) =
-                Key::split_on_ts_for(cursor.key(&mut self.statistics.data))?;
-            if cur_key_without_ts == key.as_encoded().as_slice() {
+            let cur_key = cursor.key(&mut self.statistics.data);
+            let ts = Key::decode_ts_from(cur_key)?;
+            if Key::is_user_key_eq(cur_key, key.as_encoded()) {
                 v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
-            }
-            if cur_key_without_ts != key.as_encoded().as_slice() {
+            } else {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
