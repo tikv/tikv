@@ -224,7 +224,7 @@ impl Clone for Key {
 }
 
 impl Display for Key {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.write_hex_upper(f)
     }
 }

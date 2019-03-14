@@ -11,15 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate kvproto;
-extern crate tipb;
-
-extern crate futures;
-extern crate protobuf;
-
-extern crate test_storage;
-extern crate tikv;
-
 mod column;
 mod dag;
 mod fixture;

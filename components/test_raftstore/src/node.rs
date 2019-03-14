@@ -25,11 +25,12 @@ use raft::SnapshotStatus;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftRouter};
+use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
+use tikv::server::Result as ServerResult;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::worker::{FutureWorker, Worker};
 
@@ -166,10 +167,11 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>) {
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
-        let (router, system) = create_raft_batch_system(&cfg.raft_store);
         let pd_worker = FutureWorker::new("test-pd-worker");
 
         // Create localreader.
@@ -184,10 +186,7 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
         );
 
-        // Create engine
-        let (engines, path) = create_test_engine(engines, router.clone(), &cfg);
-
-        let (snap_mgr, tmp) = if node_id == 0
+        let (snap_mgr, snap_mgr_path) = if node_id == 0
             || !self
                 .trans
                 .core
@@ -225,29 +224,31 @@ impl Simulator for NodeCluster {
             local_reader,
             coprocessor_host,
             importer,
-        )
-        .unwrap();
+        )?;
         assert!(engines
             .kv
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
         assert!(node_id == 0 || node_id == node.id());
+
+        let node_id = node.id();
         debug!(
             "node_id: {} tmp: {:?}",
             node_id,
-            tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned())
+            snap_mgr_path
+                .as_ref()
+                .map(|p| p.path().to_str().unwrap().to_owned())
         );
-        if let Some(tmp) = tmp {
+        if let Some(tmp) = snap_mgr_path {
             self.trans
                 .core
                 .lock()
                 .unwrap()
                 .snap_paths
-                .insert(node.id(), (snap_mgr, tmp));
+                .insert(node_id, (snap_mgr, tmp));
         }
 
-        let node_id = node.id();
         let router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         self.trans
             .core
@@ -258,7 +259,7 @@ impl Simulator for NodeCluster {
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
-        (node_id, engines, path)
+        Ok(node_id)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
@@ -272,7 +273,7 @@ impl Simulator for NodeCluster {
 
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
-            node.stop().unwrap();
+            node.stop();
         }
         self.trans
             .core

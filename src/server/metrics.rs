@@ -125,4 +125,10 @@ lazy_static! {
         "Total number of raft messages flushed delay"
     )
     .unwrap();
+    pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb",
+        "Config information of rocksdb",
+        &["cf", "name"]
+    )
+    .unwrap();
 }

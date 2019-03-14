@@ -13,6 +13,7 @@
 
 use byteorder::WriteBytesExt;
 use num;
+use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -1782,12 +1783,20 @@ impl FromStr for Decimal {
 }
 
 impl Display for Decimal {
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         let mut dec = self.clone();
         dec = dec
             .round(self.result_frac_cnt as i8, RoundMode::HalfEven)
             .unwrap();
         fmt.write_str(&dec.to_string())
+    }
+}
+
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
+    #[inline]
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
+        // Note: as_f64() may be never fail?
+        Ok(self.as_f64()?.round() != 0f64)
     }
 }
 
@@ -1993,7 +2002,7 @@ impl<T: Write> DecimalEncoder for T {}
 
 impl Decimal {
     /// `decode` decodes value encoded by `encode_decimal`.
-    pub fn decode(data: &mut BytesSlice) -> Result<Decimal> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Decimal> {
         if data.len() < 3 {
             return Err(box_err!("decimal too short: {} < 3", data.len()));
         }
@@ -2076,7 +2085,7 @@ impl Decimal {
     }
 
     /// `decode_from_chunk` decode Decimal encodeded by `encode_decimal_to_chunk`.
-    pub fn decode_from_chunk(data: &mut BytesSlice) -> Result<Decimal> {
+    pub fn decode_from_chunk(data: &mut BytesSlice<'_>) -> Result<Decimal> {
         let mut d = if data.len() > 4 {
             let int_cnt = data[0];
             let frac_cnt = data[1];
@@ -2297,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::approx_constant)]
+    #[allow(clippy::approx_constant, clippy::excessive_precision)]
     fn test_f64() {
         let cases = vec![
             ("12345", 12345f64),
@@ -2634,7 +2643,7 @@ mod tests {
                 .unwrap();
             let shifted = dec.shift_with_word_buf_len(shift, word_buf_len);
             let res = shifted.map(|d| d.to_string());
-            assert_eq!(res, exp.map(|s| s.to_owned()));
+            assert_eq!(res, exp.map(ToOwned::to_owned));
         }
     }
 
