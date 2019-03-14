@@ -79,7 +79,7 @@ pub trait RequestHandler: Send {
     where
         Self: 'static + Sized,
     {
-        box self
+        Box::new(self)
     }
 }
 

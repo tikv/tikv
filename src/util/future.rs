@@ -23,12 +23,12 @@ where
     T: Send + 'static,
 {
     let (tx, future) = oneshot::channel::<T>();
-    let callback = box move |result| {
+    let callback = Box::new(move |result| {
         let r = tx.send(result);
         if r.is_err() {
             warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
         }
-    };
+    });
     (callback, future)
 }
 

@@ -11,10 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod jemalloc_metrics;
+
 use std::thread;
 use std::time::Duration;
 
-use prometheus::{self, Encoder, TextEncoder};
+use prometheus::*;
 
 #[cfg(target_os = "linux")]
 mod threads_linux;
@@ -25,6 +27,9 @@ pub use self::threads_linux::{cpu_total, get_thread_ids, monitor_threads};
 mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
+
+#[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
+pub use self::jemalloc_metrics::monitor_jemalloc_stats;
 
 /// Runs a background Prometheus client.
 pub fn run_prometheus(
@@ -70,4 +75,13 @@ pub fn dump() -> String {
         }
     }
     String::from_utf8(buffer).unwrap()
+}
+
+lazy_static! {
+    pub static ref CRITICAL_ERROR: IntCounterVec = register_int_counter_vec!(
+        "tikv_critical_error_total",
+        "Counter of critical error.",
+        &["type"]
+    )
+    .unwrap();
 }
