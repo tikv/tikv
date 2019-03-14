@@ -128,7 +128,7 @@ impl<E: Engine> Endpoint<E> {
                     Some(dag.get_start_ts()),
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = box move |snap, req_ctx: &ReqContext| {
+                builder = Box::new(move |snap, req_ctx: &ReqContext| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     let store = SnapshotStore::new(
                         snap,
@@ -145,7 +145,7 @@ impl<E: Engine> Endpoint<E> {
                         is_streaming,
                         true,
                     )
-                };
+                });
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::new();
@@ -160,11 +160,11 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(analyze.get_start_ts()),
                 );
-                builder = box move |snap, req_ctx: &_| {
+                builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
-                };
+                });
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::new();
@@ -179,11 +179,11 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(checksum.get_start_ts()),
                 );
-                builder = box move |snap, req_ctx: &_| {
+                builder = Box::new(move |snap, req_ctx: &_| {
                     // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
-                };
+                });
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
@@ -280,7 +280,7 @@ impl<E: Engine> Endpoint<E> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .future_execute(priority, move |ctxd| {
@@ -417,13 +417,13 @@ impl<E: Engine> Endpoint<E> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .future_execute(priority, move |ctxd| {
                 tracker.attach_ctxd(ctxd);
 
-                Self::handle_stream_request_impl(engine, tracker, handler_builder)  // Stream<Resp, Error>
+                Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
@@ -625,7 +625,7 @@ mod tests {
             F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
         {
             StreamFromClosure {
-                result_generator: box result_generator,
+                result_generator: Box::new(result_generator),
                 nth: 0,
             }
         }
@@ -650,7 +650,7 @@ mod tests {
 
         // a normal request
         let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -660,7 +660,7 @@ mod tests {
 
         // an outdated request
         let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
             "test",
             kvrpcpb::Context::new(),
@@ -781,8 +781,9 @@ mod tests {
             let mut context = kvrpcpb::Context::new();
             context.set_priority(kvrpcpb::CommandPri::Normal);
 
-            let handler_builder =
-                box |_, _: &_| Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed());
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
+            });
             let result_of_future =
                 cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
             match result_of_future {
@@ -819,8 +820,9 @@ mod tests {
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
-        let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed())
+        });
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -840,9 +842,9 @@ mod tests {
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // Fail immediately
-        let handler_builder = box |_, _: &_| {
+        let handler_builder = Box::new(|_, _: &_| {
             Ok(StreamFixture::new(vec![Err(Error::Other(box_err!("foo")))]).into_boxed())
-        };
+        });
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -862,7 +864,7 @@ mod tests {
         }
         responses.push(Err(Error::Other(box_err!("foo"))));
 
-        let handler_builder = box |_, _: &_| Ok(StreamFixture::new(responses).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -886,7 +888,7 @@ mod tests {
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
-        let handler_builder = box |_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -922,7 +924,7 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -948,7 +950,7 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -974,7 +976,7 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -1012,7 +1014,7 @@ mod tests {
             counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
             Ok((Some(resp), false))
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
             .unwrap()
@@ -1066,13 +1068,13 @@ mod tests {
             let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
                 )
                 .into_boxed())
-            };
+            });
             let resp_future_1 = cop
                 .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
                 .unwrap();
@@ -1082,12 +1084,12 @@ mod tests {
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Unary, error response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(
                     UnaryFixture::new_with_duration(Err(box_err!("foo")), PAYLOAD_LARGE as u64)
                         .into_boxed(),
                 )
-            };
+            });
             let resp_future_2 = cop
                 .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
                 .unwrap();
@@ -1141,13 +1143,13 @@ mod tests {
             let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
                 )
                 .into_boxed())
-            };
+            });
             let resp_future_1 = cop
                 .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
                 .unwrap();
@@ -1157,7 +1159,7 @@ mod tests {
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Stream.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(StreamFixture::new_with_duration(
                     vec![
                         Ok(coppb::Response::new()),
@@ -1171,7 +1173,7 @@ mod tests {
                     ],
                 )
                 .into_boxed())
-            };
+            });
             let resp_future_3 = cop
                 .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
                 .unwrap();

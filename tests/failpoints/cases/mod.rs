@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod test_bootstrap;
 mod test_conf_change;
 mod test_coprocessor;
 mod test_merge;

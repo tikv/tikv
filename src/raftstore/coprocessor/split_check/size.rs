@@ -52,7 +52,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
 
@@ -130,7 +130,7 @@ impl<C> Coprocessor for SizeCheckObserver<C> {}
 impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         mut policy: CheckPolicy,

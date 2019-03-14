@@ -250,7 +250,7 @@ fn sanitize_thread_name(tid: pid_t, raw: &str) -> String {
     for c in raw.chars() {
         match c {
             // Prometheus label characters `[a-zA-Z0-9_:]`
-            'a'...'z' | 'A'...'Z' | '0'...'9' | '_' | ':' => {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | ':' => {
                 name.push(c);
             }
             '-' | ' ' => {

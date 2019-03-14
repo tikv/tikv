@@ -257,7 +257,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
 
 // `decode_col_value` decodes data to a Datum according to the column info.
 pub fn decode_col_value(
-    data: &mut BytesSlice,
+    data: &mut BytesSlice<'_>,
     ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
@@ -269,7 +269,7 @@ pub fn decode_col_value(
 // TODO: We should only decode columns in the cols map.
 // Row layout: colID1, value1, colID2, value2, .....
 pub fn decode_row(
-    data: &mut BytesSlice,
+    data: &mut BytesSlice<'_>,
     ctx: &mut EvalContext,
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {

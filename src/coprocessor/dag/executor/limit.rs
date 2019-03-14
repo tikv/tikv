@@ -27,7 +27,7 @@ pub struct LimitExecutor<'a> {
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor<'_> {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,

@@ -43,7 +43,7 @@ enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
@@ -90,7 +90,7 @@ impl RocksEngine {
     pub fn new(
         path: &str,
         cfs: &[CfName],
-        cfs_opts: Option<Vec<CFOptions>>,
+        cfs_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -123,13 +123,13 @@ impl RocksEngine {
 }
 
 impl Display for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
 impl Debug for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "RocksDB [is_temp: {}]",
