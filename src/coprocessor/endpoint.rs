@@ -1172,7 +1172,6 @@ mod tests {
 
             // Response 2
             let resp = &rx.recv().unwrap();
-            println!("resp = {:?}", resp);
             assert_eq!(resp.len(), 2);
             assert!(resp[0].get_other_error().is_empty());
             assert_ge!(
