@@ -267,11 +267,15 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         key: &Key,
         start_ts: u64,
-    ) -> Result<Option<(u64, WriteType)>> {
+    ) -> Result<(Option<(u64, WriteType)>, bool)> {
         let mut seek_ts = start_ts;
+        let mut write_ts_collision = false;
         while let Some((commit_ts, write)) = self.reverse_seek_write(key, seek_ts)? {
+            if commit_ts == start_ts {
+                write_ts_collision = true;
+            }
             if write.start_ts == start_ts {
-                return Ok(Some((commit_ts, write.write_type)));
+                return Ok((Some((commit_ts, write.write_type)), write_ts_collision));
             }
 
             // If we reach a commit version whose type is not Rollback and start ts is
@@ -282,7 +286,7 @@ impl<S: Snapshot> MvccReader<S> {
 
             seek_ts = commit_ts + 1;
         }
-        Ok(None)
+        Ok((None, write_ts_collision))
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
@@ -792,28 +796,28 @@ mod tests {
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().0.unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().0.unwrap();
         assert_eq!(commit_ts, 30);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().0.unwrap();
         assert_eq!(commit_ts, 20);
         assert_eq!(write_type, WriteType::Rollback);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().0.unwrap();
         assert_eq!(commit_ts, 10);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().0.unwrap();
         assert_eq!(commit_ts, 5);
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_for_prev_old = reader.get_statistics().write.seek_for_prev;
-        assert!(reader.get_txn_commit_info(&key, 15).unwrap().is_none());
+        assert!(reader.get_txn_commit_info(&key, 15).unwrap().0.is_none());
         let seek_for_prev_new = reader.get_statistics().write.seek_for_prev;
 
         // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
