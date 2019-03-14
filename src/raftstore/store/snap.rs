@@ -1544,8 +1544,11 @@ pub mod tests {
         }
     }
 
-    type DBBuilder =
-        fn(p: &Path, db_opt: Option<DBOptions>, cf_opts: Option<Vec<CFOptions>>) -> Result<Arc<DB>>;
+    type DBBuilder = fn(
+        p: &Path,
+        db_opt: Option<DBOptions>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
+    ) -> Result<Arc<DB>>;
 
     pub fn open_test_empty_db(
         path: &Path,
@@ -1578,9 +1581,9 @@ pub mod tests {
     pub fn get_test_db_for_regions(
         path: &TempDir,
         raft_db_opt: Option<DBOptions>,
-        raft_cf_opt: Option<CFOptions>,
+        raft_cf_opt: Option<CFOptions<'_>>,
         kv_db_opt: Option<DBOptions>,
-        kv_cf_opts: Option<Vec<CFOptions>>,
+        kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
     ) -> Result<Engines> {
         let p = path.path();

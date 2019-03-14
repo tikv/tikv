@@ -1432,21 +1432,19 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_cfg: &config::DbConfig,
 ) {
     use crate::storage::CF_RAFT;
-    match DB::list_column_families(&kv_db_opts, kv_path) {
-        Ok(cfs) => {
-            if cfs.into_iter().find(|cf| *cf == CF_RAFT).is_none() {
-                // We have upgraded from v2.x to v3.x.
-                return;
-            }
-        }
-        Err(e) => {
-            if e.contains("No such file or directory") {
-                debug!("no need upgrade to v3.x");
-                return;
-            } else {
-                panic!("failed to list column families: {:?}", e);
-            }
-        }
+    if !util::rocksdb_util::db_exist(kv_path) {
+        debug!("no need upgrade to v3.x");
+        return;
+    }
+
+    if DB::list_column_families(&kv_db_opts, kv_path)
+        .unwrap()
+        .into_iter()
+        .find(|cf| *cf == CF_RAFT)
+        .is_none()
+    {
+        // We have upgraded from v2.x to v3.x.
+        return;
     }
 
     info!("start upgrading from v2.x to v3.x");

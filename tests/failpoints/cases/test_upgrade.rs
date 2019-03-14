@@ -31,20 +31,34 @@ use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb_util;
 
 fn test_upgrade_from_v2_to_v3(fp: &str) {
-    let tmp_path = TempDir::new("test_upgrade").unwrap();
+    let tmp_dir = TempDir::new("test_upgrade").unwrap();
+    let tmp_path_kv = tmp_dir.path().join("kv");
+
+    // Create a raft engine.
+    let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
+    let raft_engine =
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+
+    // No need to upgrade an empty node.
+    tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+        &raft_engine,
+        tmp_path_kv.to_str().unwrap(),
+        DBOptions::new(),
+        &DbConfig::default(),
+    );
+    // Check whether there is a kv engine.
+    assert!(
+        DB::list_column_families(&DBOptions::new(), tmp_path_kv.to_str().unwrap())
+            .unwrap_err()
+            .contains("No such file or directory")
+    );
 
     let all_cfs_v2 = &[CF_LOCK, CF_RAFT, CF_WRITE, CF_DEFAULT];
     // Create a v2 kv engine.
     let kv_engine =
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, all_cfs_v2, None)
-            .unwrap();
+        rocksdb_util::new_engine(tmp_path_kv.to_str().unwrap(), None, all_cfs_v2, None).unwrap();
 
-    // Create a raft engine.
-    let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine =
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
-
-    let cluster_id = 1000_000_000;
+    let cluster_id = 1_000_000_000;
     let store_id = 1;
     let region_id = 3;
     let peer_id = 4;
@@ -150,7 +164,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     fail::cfg(fp, "return").unwrap();
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
         &raft_engine,
-        tmp_path.path().to_str().unwrap(),
+        tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
     );
@@ -158,14 +172,13 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Retry upgrade.
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
         &raft_engine,
-        tmp_path.path().to_str().unwrap(),
+        tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
     );
 
     // Check kv engine, no RAFT cf.
-    let cfs =
-        DB::list_column_families(&DBOptions::new(), tmp_path.path().to_str().unwrap()).unwrap();
+    let cfs = DB::list_column_families(&DBOptions::new(), tmp_path_kv.to_str().unwrap()).unwrap();
     assert! {
         cfs
         .iter()
@@ -222,7 +235,6 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     for _ in 0..peer_id {
         // Advance the id allocator.
         pd_client.alloc_id().unwrap();
-        break;
     }
 
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
@@ -232,10 +244,10 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Update upgraded engines.
     // Create a kv engine.
     let kv_engine =
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        rocksdb_util::new_engine(tmp_path_kv.to_str().unwrap(), None, ALL_CFS, None).unwrap();
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
     cluster.dbs[0] = engines.clone();
-    cluster.paths[0] = tmp_path;
+    cluster.paths[0] = tmp_dir;
     cluster.engines.insert(store_id, engines);
     cluster.start().unwrap();
 
@@ -291,7 +303,7 @@ fn test_upgrade_2_3_boostrap(fp: &str) {
         rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
 
-    let cluster_id = 1000_000_000;
+    let cluster_id = 1_000_000_000;
     let store_id = 1;
     let region_id = 3;
     let peer_id = 4;
@@ -378,7 +390,6 @@ fn test_upgrade_2_3_boostrap(fp: &str) {
     for _ in 0..peer_id {
         // Advance the id allocator.
         pd_client.alloc_id().unwrap();
-        break;
     }
 
     // Update upgraded engines.
