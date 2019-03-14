@@ -177,10 +177,9 @@ impl<S: Snapshot> MvccReader<S> {
         if !ok {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
-        let commit_ts = write_key.decode_ts()?;
-        let k = write_key.truncate_ts()?;
-        if &k != key {
+        let write_key = cursor.key(&mut self.statistics.write);
+        let commit_ts = Key::decode_ts_from(write_key)?;
+        if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
         let write = Write::parse(cursor.value(&mut self.statistics.write))?;
@@ -417,13 +416,12 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded_slice(cursor.key(&mut self.statistics.data));
-            let ts = cur_key.decode_ts()?;
-            let cur_key_without_ts = cur_key.truncate_ts()?;
-            if cur_key_without_ts.as_encoded().as_slice() == key.as_encoded().as_slice() {
+            let (cur_key_without_ts, ts) =
+                Key::split_on_ts_for(cursor.key(&mut self.statistics.data))?;
+            if cur_key_without_ts == key.as_encoded().as_slice() {
                 v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
             }
-            if cur_key_without_ts.as_encoded().as_slice() != key.as_encoded().as_slice() {
+            if cur_key_without_ts != key.as_encoded().as_slice() {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
