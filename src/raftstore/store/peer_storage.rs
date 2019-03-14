@@ -1438,17 +1438,28 @@ pub fn write_peer_state<T: Mutable>(
 /// For backward compatiblity, it needs to check whether there are any
 /// meta data in the raft cf of the kv engine, if there are, it moves them
 /// into raft engine.
-pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
-    let start_key = keys::LOCAL_MIN_KEY;
-    let end_key = keys::LOCAL_MAX_KEY;
-    if kv_engine
-        .cf_names()
-        .into_iter()
-        .find(|cf| *cf == CF_RAFT)
-        .is_none()
-    {
-        // We have upgraded from v2.x to v3.0.
-        return;
+pub fn maybe_upgrade_from_2_to_3(
+    raft_engine: &DB,
+    kv_path: &str,
+    kv_db_opts: DBOptions,
+    kv_cfg: &config::DbConfig,
+) {
+    use crate::storage::CF_RAFT;
+    match DB::list_column_families(&kv_db_opts, kv_path) {
+        Ok(cfs) => {
+            if cfs.into_iter().find(|cf| *cf == CF_RAFT).is_none() {
+                // We have upgraded from v2.x to v3.x.
+                return;
+            }
+        }
+        Err(e) => {
+            if e.contains("No such file or directory") {
+                debug!("no need upgrade to v3.x");
+                return;
+            } else {
+                panic!("failed to list column families: {:?}", e);
+            }
+        }
     }
 
     info!("start upgrading from v2.x to v3.x");
@@ -1476,7 +1487,7 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                 m.merge_from_bytes(value).unwrap();
                 info!("upgrading PREPARE_BOOTSTRAP_KEY"; "region" => ?m);
             } else {
-                panic!("unexpect key {:?} when upgrading from v2.x to v3.0", key);
+                panic!("unexpect key {:?} when upgrading from v2.x to v3.x", key);
             }
 
             upgrade_raft_wb.put(key, value)?;
@@ -1511,7 +1522,7 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                         .unwrap_or_else(|e| {
                             panic!(
                                 "[region {}] failed to get RaftLocalState from raft engine, \
-                                 when upgrading from v2.x to v3.0: {:?}",
+                                 when upgrading from v2.x to v3.x: {:?}",
                                 region_id, e,
                             );
                         })
@@ -1522,7 +1533,7 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                         .unwrap_or_else(|e| {
                             panic!(
                                 "[region {}] failed to get parse RaftLocalState from kv engine, \
-                                 when upgrading from v2.x to v3.0: {:?}",
+                                 when upgrading from v2.x to v3.x: {:?}",
                                 region_id, e,
                             );
                         });
@@ -1552,7 +1563,7 @@ pub fn maybe_upgrade_from_2_to_3(kv_engine: &mut DB, raft_engine: &DB) {
                     return Ok(true);
                 }
             }
-            panic!("unexpect key {:?} when upgrading from v2.x to v3.0", key);
+            panic!("unexpect key {:?} when upgrading from v2.x to v3.x", key);
         })
         .unwrap();
 
