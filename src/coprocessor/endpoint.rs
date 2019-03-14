@@ -31,7 +31,6 @@ use util::Either;
 use coprocessor::dag::executor::ExecutorMetrics;
 use coprocessor::metrics::*;
 use coprocessor::tracker::Tracker;
-use coprocessor::util as cop_util;
 use coprocessor::*;
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
