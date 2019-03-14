@@ -47,6 +47,7 @@ extern crate serde_derive;
     slog_warn,
     slog_info,
     slog_debug,
+    slog_crit,
     slog_log,
     slog_record,
     slog_b,
@@ -76,5 +77,6 @@ pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
+pub mod binutil;
 
 pub use crate::storage::Storage;

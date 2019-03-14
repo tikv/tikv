@@ -19,16 +19,12 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 
-#[cfg(unix)]
-#[macro_use]
-mod util;
 use crate::util::setup::*;
 use crate::util::signal_handler;
 
 use std::fs::File;
 use std::path::Path;
 use std::process;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -40,8 +36,10 @@ use fs2::FileExt;
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::Engines;
+use tikv::binutil as util;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
+use tikv::fatal;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};

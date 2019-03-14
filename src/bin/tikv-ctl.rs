@@ -2,22 +2,8 @@
 
 #[macro_use]
 extern crate clap;
-#[macro_use(
-    slog_kv,
-    slog_crit,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate vlog;
-
-mod util;
 
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
@@ -49,6 +35,7 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 use engine::rocks;
 use engine::Engines;
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::keys;
