@@ -715,7 +715,7 @@ impl DbConfig {
 
     // Build cf options for v2.x. which has a RAFT cf in kv engine.
     #[doc(hidden)]
-    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
         use crate::storage::CF_RAFT;
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
