@@ -21,4 +21,5 @@ mod test_split_region;
 mod test_stale_peer;
 mod test_stale_read;
 mod test_storage;
-mod test_upgrade;
+// TODO: enable these tests.
+// mod test_upgrade;

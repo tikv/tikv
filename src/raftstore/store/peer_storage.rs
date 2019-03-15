@@ -26,8 +26,9 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{Writable, WriteBatch, WriteOptions, DB};
+use rocksdb::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
 
+use crate::config;
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
@@ -341,6 +342,42 @@ impl InvokeContext {
     }
 }
 
+pub fn recover_from_applying_state(
+    engines: &Engines,
+    raft_wb: &WriteBatch,
+    region_id: u64,
+) -> Result<()> {
+    let snapshot_raft_state_key = keys::snapshot_raft_state_key(region_id);
+    let snapshot_raft_state: RaftLocalState =
+        match box_try!(engines.kv.get_msg_cf(CF_RAFT, &snapshot_raft_state_key)) {
+            Some(state) => state,
+            None => {
+                return Err(box_err!(
+                    "[region {}] failed to get raftstate from kv engine, \
+                     when recover from applying state",
+                    region_id
+                ));
+            }
+        };
+
+    let raft_state_key = keys::raft_state_key(region_id);
+    let raft_state: RaftLocalState = match box_try!(engines.raft.get_msg(&raft_state_key)) {
+        Some(state) => state,
+        None => RaftLocalState::new(),
+    };
+
+    // if we recv append log when applying snapshot, last_index in raft_local_state will
+    // larger than snapshot_index. since raft_local_state is written to raft engine, and
+    // raft write_batch is written after kv write_batch, raft_local_state may wrong if
+    // restart happen between the two write. so we copy raft_local_state to kv engine
+    // (snapshot_raft_state), and set snapshot_raft_state.last_index = snapshot_index.
+    // after restart, we need check last_index.
+    if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+        raft_wb.put_msg(&raft_state_key, &snapshot_raft_state)?;
+    }
+    Ok(())
+}
+
 pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalState> {
     let state_key = keys::raft_state_key(region.get_id());
     Ok(match raft_engine.get_msg(&state_key)? {
@@ -404,32 +441,6 @@ fn init_last_term(
         }
         Some(e) => e.get_term(),
     })
-}
-
-impl Storage for PeerStorage {
-    fn initial_state(&self) -> raft::Result<RaftState> {
-        self.initial_state()
-    }
-
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
-        self.entries(low, high, max_size)
-    }
-
-    fn term(&self, idx: u64) -> raft::Result<u64> {
-        self.term(idx)
-    }
-
-    fn first_index(&self) -> raft::Result<u64> {
-        Ok(self.first_index())
-    }
-
-    fn last_index(&self) -> raft::Result<u64> {
-        Ok(self.last_index())
-    }
-
-    fn snapshot(&self) -> raft::Result<Snapshot> {
-        self.snapshot()
-    }
 }
 
 impl PeerStorage {
@@ -876,7 +887,7 @@ impl PeerStorage {
 
         if self.is_initialized() {
             // we can only delete the old data when the peer is initialized.
-            self.clear_meta(raft_wb)?;
+            self.clear_meta(kv_wb, raft_wb)?;
         }
 
         write_peer_state(&self.engines.kv, kv_wb, &region, PeerState::Applying, None)?;
@@ -907,9 +918,9 @@ impl PeerStorage {
     }
 
     /// Delete all meta belong to the region. Results are stored in `wb`.
-    pub fn clear_meta(&mut self, raft_wb: &WriteBatch) -> Result<()> {
+    pub fn clear_meta(&mut self, kv_wb: &WriteBatch, raft_wb: &WriteBatch) -> Result<()> {
         let region_id = self.get_region_id();
-        clear_meta(&self.engines, raft_wb, region_id, &self.raft_state)?;
+        clear_meta(&self.engines, kv_wb, raft_wb, region_id, &self.raft_state)?;
         self.cache = EntryCache::default();
         Ok(())
     }
@@ -1250,16 +1261,18 @@ pub fn fetch_entries_to(
     Err(RaftError::Store(StorageError::Unavailable))
 }
 
-/// Delete all meta belong to the region. Results are stored in `raft_wb`.
+/// Delete all meta belong to the region. Results are stored in `wb`.
 pub fn clear_meta(
     engines: &Engines,
+    kv_wb: &WriteBatch,
     raft_wb: &WriteBatch,
     region_id: u64,
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    raft_wb.delete(&keys::region_state_key(region_id))?;
-    raft_wb.delete(&keys::apply_state_key(region_id))?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    kv_wb.delete_cf(handle, &keys::region_state_key(region_id))?;
+    kv_wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
 
     let last_index = last_index(raft_state);
     let mut first_index = last_index + 1;
@@ -1275,7 +1288,6 @@ pub fn clear_meta(
         raft_wb.delete(&keys::raft_log_key(region_id, id))?;
     }
     raft_wb.delete(&keys::raft_state_key(region_id))?;
-    // TODO: do we need to delete snapshot_raft_state_key?
 
     info!(
         "finish clear peer meta";
@@ -1433,6 +1445,32 @@ pub fn write_peer_state<T: Mutable>(
     Ok(())
 }
 
+impl Storage for PeerStorage {
+    fn initial_state(&self) -> raft::Result<RaftState> {
+        self.initial_state()
+    }
+
+    fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+        self.entries(low, high, max_size)
+    }
+
+    fn term(&self, idx: u64) -> raft::Result<u64> {
+        self.term(idx)
+    }
+
+    fn first_index(&self) -> raft::Result<u64> {
+        Ok(self.first_index())
+    }
+
+    fn last_index(&self) -> raft::Result<u64> {
+        Ok(self.last_index())
+    }
+
+    fn snapshot(&self) -> raft::Result<Snapshot> {
+        self.snapshot()
+    }
+}
+
 /// Upgreade from v2.x to v3.x
 ///
 /// For backward compatiblity, it needs to check whether there are any
@@ -1462,6 +1500,15 @@ pub fn maybe_upgrade_from_2_to_3(
 
     info!("start upgrading from v2.x to v3.x");
     let t = Instant::now();
+
+    // Create v2.0.x kv engine.
+    let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
+    let mut kv_engine = util::rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)
+        .unwrap_or_else(|s| panic!("failed to create kv engine: {}", s));
+
+    let start_key = keys::LOCAL_MIN_KEY;
+    let end_key = keys::LOCAL_MAX_KEY;
+
     // Move meta data from kv engine to raft engine.
     let upgrade_raft_wb = WriteBatch::new();
     // Cleanup meta data in kv engine.
@@ -1782,8 +1829,10 @@ mod tests {
 
         assert_eq!(6, get_meta_key_count(&store));
 
+        let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
-        store.clear_meta(&raft_wb).unwrap();
+        store.clear_meta(&kv_wb, &raft_wb).unwrap();
+        store.engines.kv.write(kv_wb).unwrap();
         store.engines.raft.write(raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));

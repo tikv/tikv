@@ -378,7 +378,6 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
-    #[allow(clippy::useless_let_if_seq)]
     pub fn write_to_db(&mut self) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let wb = self.wb.take().unwrap();
