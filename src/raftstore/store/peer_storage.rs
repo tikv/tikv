@@ -381,15 +381,13 @@ pub fn init_raft_state(raft_engine: &DB, region: &Region) -> Result<RaftLocalSta
     Ok(match raft_engine.get_msg(&state_key)? {
         Some(s) => s,
         None => {
-            let mut raft_state = RaftLocalState::new();
             if !region.get_peers().is_empty() {
-                // new split region
-                raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
-                raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
-                raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
-                raft_engine.put_msg(&state_key, &raft_state)?;
+                // It's a new splited region.
+                raft_state_from_initialized_region(region)
+            } else {
+                // It's a new empty region on followers.
+                RaftLocalState::new()
             }
-            raft_state
         }
     })
 }
@@ -1423,8 +1421,8 @@ pub fn do_snapshot(
     Ok(snapshot)
 }
 
-// When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region: &metapb::Region) -> Result<()> {
+// Create a `RaftLocalState` from the given `Region`.
+fn raft_state_from_initialized_region(region: &metapb::Region) -> RaftLocalState {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
@@ -1442,6 +1440,12 @@ pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region: &metapb::Region
         }
     }
     raft_state.mut_conf_states().push(cs);
+    raft_state
+}
+
+// When we bootstrap the region we must call this to initialize region local state first.
+pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region: &metapb::Region) -> Result<()> {
+    let raft_state = raft_state_from_initialized_region(region);
     raft_wb.put_msg(&keys::raft_state_key(region.get_id()), &raft_state)?;
     Ok(())
 }
