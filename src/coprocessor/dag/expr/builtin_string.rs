@@ -87,13 +87,14 @@ impl ScalarFunc {
         Ok(if pos < 1 {
             Some(0)
         } else {
-            let (s, substr) = (s.to_lowercase(), substr.to_lowercase());
             let pos = pos as usize;
             s.char_indices()
                 .map(|(i, _)| i)
                 .chain([s.len()].iter().cloned())
                 .nth(pos - 1)
-                .map(|offset| Self::locate(&s[offset..], &substr, pos))
+                .map(|offset| {
+                    Self::locate(&s[offset..].to_lowercase(), &substr.to_lowercase(), pos)
+                })
                 .or(Some(0))
         })
     }
