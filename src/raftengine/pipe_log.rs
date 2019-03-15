@@ -379,7 +379,7 @@ impl PipeLog {
 }
 
 fn generate_file_name(file_num: u64) -> String {
-    format!("{:010}{}", file_num, LOG_SUFFIX)
+    format!("{:016}{}", file_num, LOG_SUFFIX)
 }
 
 fn extract_file_num(file_name: &str) -> Result<u64> {
