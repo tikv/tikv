@@ -56,9 +56,9 @@ impl RpnExpressionNode {
         }
     }
 
-    /// Borrows the function instance for `Fn` variant.
+    /// Borrows the function instance for `FnCall` variant.
     #[inline]
-    pub fn fn_func(&self) -> Option<&dyn RpnFunction> {
+    pub fn fn_call_func(&self) -> Option<&dyn RpnFunction> {
         match self {
             RpnExpressionNode::FnCall { ref func, .. } => Some(&*func),
             _ => None,
@@ -76,7 +76,7 @@ impl RpnExpressionNode {
 
     /// Gets the column offset for `ColumnRef` variant.
     #[inline]
-    pub fn table_column_ref_offset(&self) -> Option<usize> {
+    pub fn column_ref_offset(&self) -> Option<usize> {
         match self {
             RpnExpressionNode::ColumnRef { ref offset, .. } => Some(*offset),
             _ => None,
@@ -737,10 +737,10 @@ mod tests {
         );
 
         // FnC
-        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnC");
+        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name(), "FnC");
 
         // FnA
-        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnA");
+        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name(), "FnA");
 
         // node e
         assert_eq!(
@@ -765,13 +765,13 @@ mod tests {
         );
 
         // FnB
-        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnB");
+        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name(), "FnB");
 
         // FnA
-        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnA");
+        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name(), "FnA");
 
         // FnD
-        assert_eq!(it.next().unwrap().fn_func().unwrap().name(), "FnD");
+        assert_eq!(it.next().unwrap().fn_call_func().unwrap().name(), "FnD");
 
         // Finish
         assert!(it.next().is_none())
