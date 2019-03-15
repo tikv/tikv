@@ -3,7 +3,7 @@ All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
 ## [2.1.6]
-- Fix the `StoreNotMatch` issue caused by deocding protobuf error in some cases [#4303](https://github.com/tikv/tikv/pull/4303)
+- Fix the `StoreNotMatch` issue caused by decoding protobuf error in some cases [#4303](https://github.com/tikv/tikv/pull/4303)
 - Improve import speed by increasing default region-split-size to 512 MiB [#4347](https://github.com/tikv/tikv/pull/4347)
 - Fix OOM issue by storing the intermediate SST files on disk instead of memory [#4348](https://github.com/tikv/tikv/pull/4348)
 - Restrict memory usage by RocksDB [#4350](https://github.com/tikv/tikv/pull/4350)
