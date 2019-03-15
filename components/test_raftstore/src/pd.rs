@@ -598,6 +598,10 @@ impl Cluster {
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
     }
+
+    fn get_timestamp(&self) -> u64 {
+        unimplemented!();
+    }
 }
 
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
@@ -1151,5 +1155,14 @@ impl PdClient for TestPdClient {
 
         let safe_point = self.cluster.rl().get_gc_safe_point();
         Box::new(ok(safe_point))
+    }
+
+    fn get_timestamp(&self) -> PdFuture<u64> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+
+        let ts = self.cluster.rl().get_timestamp();
+        Box::new(ok(ts))
     }
 }

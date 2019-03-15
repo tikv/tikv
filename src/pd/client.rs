@@ -37,6 +37,8 @@ const CLIENT_PREFIX: &str = "pd";
 const MAX_RETRY_TIMES: u64 = 10;
 const RETRY_INTERVAL_MS: u64 = 300;
 
+const TSO_PHYSICAL_SHIFT: u64 = 18;
+
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -514,6 +516,39 @@ impl PdClient for RpcClient {
                 check_resp_header(resp.get_header())?;
                 Ok(resp.get_safe_point())
             })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
+    }
+
+    fn get_timestamp(&self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::TsoRequest::new();
+        req.set_header(self.header());
+        req.set_count(1);
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let (sender, receiver) = client.rl().client.tso_opt(option).unwrap();
+            let send = sender.send((req, WriteFlags::default().buffer_hint(false)));
+            Box::new(
+                send.and_then(|mut s| {
+                    s.close().unwrap();
+                    receiver.collect().map(|mut v| v.remove(0))
+                })
+                .map_err(Error::Grpc)
+                .and_then(move |resp| {
+                    PD_REQUEST_HISTOGRAM_VEC
+                        .with_label_values(&["get_timestamp"])
+                        .observe(duration_to_sec(timer.elapsed()));
+                    check_resp_header(resp.get_header())?;
+                    let ts = resp.get_timestamp();
+                    Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) | ts.get_logical()) as u64)
+                }),
+            ) as PdFuture<_>
         };
 
         self.leader_client
