@@ -72,7 +72,7 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     engines.kv.sync_wal()?;
 
     let raft_wb = WriteBatch::new();
-    write_initial_raft_state(&raft_wb, region.get_id())?;
+    write_initial_raft_state(&raft_wb, &region)?;
     engines.raft.write(raft_wb)?;
     engines.raft.sync_wal()?;
     Ok(())

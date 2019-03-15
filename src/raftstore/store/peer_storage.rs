@@ -499,20 +499,17 @@ impl PeerStorage {
                 self.region,
                 self.raft_state
             );
-
-            raft_state
-                .conf_states
-                .extend(
-                    self.raft_state
-                        .conf_states
-                        .iter()
-                        .map(|cs| ConfStateWithIndex {
-                            conf_state: cs.get_conf_state().clone(),
-                            index: cs.get_index(),
-                            in_membership_change: cs.get_in_membership_change(),
-                        }),
-                );
         }
+        let conf_states = self
+            .raft_state
+            .conf_states
+            .iter()
+            .map(|cs| ConfStateWithIndex {
+                conf_state: cs.get_conf_state().clone(),
+                index: cs.get_index(),
+                in_membership_change: cs.get_in_membership_change(),
+            });
+        raft_state.conf_states.extend(conf_states);
         Ok(raft_state)
     }
 
@@ -901,19 +898,19 @@ impl PeerStorage {
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = snap.get_metadata().get_term();
 
-	// Update configuration states.
-	ctx.raft_state.clear_conf_states();
-	let mut raft_cs = RaftLocalState_ConfState::new();
-	raft_cs.set_conf_state(snap.get_metadata().get_conf_state().clone());
-	raft_cs.set_index(snap.get_metadata().get_conf_state_index());
-	ctx.raft_state.mut_conf_states().push(raft_cs);
-	if snap.get_metadata().get_next_conf_state_index() > 0 {
-	    let mut raft_cs = RaftLocalState_ConfState::new();
-	    raft_cs.set_conf_state(snap.get_metadata().get_next_conf_state().clone());
-	    raft_cs.set_index(snap.get_metadata().get_next_conf_state_index());
-	    raft_cs.set_in_membership_change(true);
-	    ctx.raft_state.mut_conf_states().push(raft_cs);
-	}
+        // Update configuration states.
+        ctx.raft_state.clear_conf_states();
+        let mut raft_cs = RaftLocalState_ConfState::new();
+        raft_cs.set_conf_state(snap.get_metadata().get_conf_state().clone());
+        raft_cs.set_index(snap.get_metadata().get_conf_state_index());
+        ctx.raft_state.mut_conf_states().push(raft_cs);
+        if snap.get_metadata().get_next_conf_state_index() > 0 {
+            let mut raft_cs = RaftLocalState_ConfState::new();
+            raft_cs.set_conf_state(snap.get_metadata().get_next_conf_state().clone());
+            raft_cs.set_index(snap.get_metadata().get_next_conf_state_index());
+            raft_cs.set_in_membership_change(true);
+            ctx.raft_state.mut_conf_states().push(raft_cs);
+        }
 
         // The snapshot only contains log which index > applied index, so
         // here the truncate state's (index, term) is in snapshot metadata.
@@ -1133,6 +1130,13 @@ impl PeerStorage {
                 raft_cs.set_index(cs.index);
                 raft_cs.set_in_membership_change(cs.in_membership_change);
                 conf_states.push(raft_cs);
+            }
+            let compact_to = conf_states
+                .iter()
+                .take_while(|x| x.get_index() <= self.applied_index())
+                .count();
+            if compact_to > 0 {
+                conf_states = conf_states[compact_to - 1..].to_vec();
             }
             ctx.raft_state.conf_states = RepeatedField::from(conf_states);
         }
@@ -1420,13 +1424,25 @@ pub fn do_snapshot(
 }
 
 // When we bootstrap the region we must call this to initialize region local state first.
-pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> Result<()> {
+pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region: &metapb::Region) -> Result<()> {
     let mut raft_state = RaftLocalState::new();
     raft_state.set_last_index(RAFT_INIT_LOG_INDEX);
     raft_state.mut_hard_state().set_term(RAFT_INIT_LOG_TERM);
     raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
 
-    raft_wb.put_msg(&keys::raft_state_key(region_id), &raft_state)?;
+    // Initialize configuration states.
+    let mut cs = RaftLocalState_ConfState::new();
+    cs.set_index(RAFT_INIT_LOG_INDEX);
+    cs.set_in_membership_change(false);
+    for peer in region.get_peers() {
+        if !peer.get_is_learner() {
+            cs.mut_conf_state().mut_nodes().push(peer.get_id());
+        } else {
+            cs.mut_conf_state().mut_learners().push(peer.get_id());
+        }
+    }
+    raft_state.mut_conf_states().push(cs);
+    raft_wb.put_msg(&keys::raft_state_key(region.get_id()), &raft_state)?;
     Ok(())
 }
 

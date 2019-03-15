@@ -628,7 +628,7 @@ impl Debugger {
         // RegionLocalState.
         let mut region_state = RegionLocalState::new();
         region_state.set_state(PeerState::Normal);
-        region_state.set_region(region);
+        region_state.set_region(region.clone());
         let key = keys::region_state_key(region_id);
         if box_try!(kv.get_msg_cf::<RegionLocalState>(CF_RAFT, &key)).is_some() {
             return Err(Error::Other(
@@ -649,7 +649,7 @@ impl Debugger {
         if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
-        box_try!(write_initial_raft_state(&raft_wb, region_id));
+        box_try!(write_initial_raft_state(&raft_wb, &region));
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
