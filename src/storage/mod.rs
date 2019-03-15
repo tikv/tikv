@@ -1109,9 +1109,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
+        let timer = SCHED_RAW_READ_HISTOGRAM_VEC.raw_get.start_coarse_timer();
 
         let readpool = self.read_pool.clone();
 
@@ -1160,8 +1158,9 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
+
+        let timer = SCHED_RAW_READ_HISTOGRAM_VEC
+            .raw_batch_get
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
@@ -1447,9 +1446,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
+        let timer = SCHED_RAW_READ_HISTOGRAM_VEC.raw_scan.start_coarse_timer();
 
         let readpool = self.read_pool.clone();
 
@@ -1548,8 +1545,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
+        let timer = SCHED_RAW_READ_HISTOGRAM_VEC
+            .raw_batch_scan
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
