@@ -236,8 +236,8 @@ impl SnapContext {
         // do we need to check leader here?
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raft_snap,
-            &kv_snap,
+            raft_snap,
+            kv_snap,
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is

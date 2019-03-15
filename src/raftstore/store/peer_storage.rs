@@ -1338,8 +1338,8 @@ pub fn clear_meta(
 
 pub fn do_snapshot(
     mgr: SnapManager,
-    raft_snap: &DbSnapshot,
-    kv_snap: &DbSnapshot,
+    raft_snap: DbSnapshot,
+    kv_snap: DbSnapshot,
     region_id: u64,
 ) -> raft::Result<Snapshot> {
     debug!(
@@ -1403,13 +1403,13 @@ pub fn do_snapshot(
     let conf_state = conf_state_from_region(state.get_region());
     snapshot.mut_metadata().set_conf_state(conf_state);
 
-    let mut s = mgr.get_snapshot_for_building(&key, kv_snap)?;
+    let mut s = mgr.get_snapshot_for_building(&key, &kv_snap)?;
     // Set snapshot data.
     let mut snap_data = RaftSnapshotData::new();
     snap_data.set_region(state.get_region().clone());
     let mut stat = SnapshotStatistics::new();
     s.build(
-        kv_snap,
+        &kv_snap,
         state.get_region(),
         &mut snap_data,
         &mut stat,

@@ -2531,7 +2531,7 @@ impl ApplyFsm {
             return;
         }
 
-        apply_ctx.prepare_for(&mut self.delegate);
+        apply_ctx.prepare_for(&self.delegate);
         // persistent all pending changes
         apply_ctx.commit_opt(&mut self.delegate, true);
         if let Err(e) = snap_task.generate_snapshot(&apply_ctx.engines) {
