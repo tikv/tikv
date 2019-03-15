@@ -150,6 +150,7 @@ pub struct ChangePeer {
     pub conf_change: ConfChange,
     pub peer: PeerMeta,
     pub region: Region,
+    pub success: bool,
 }
 
 #[derive(Debug)]
@@ -1419,6 +1420,7 @@ impl ApplyDelegate {
                     self.tag, peer, self.region
                 );
             }
+            _ => unimplemented!(),
         }
 
         let state = if self.pending_remove {
@@ -1440,6 +1442,7 @@ impl ApplyDelegate {
                 conf_change: Default::default(),
                 peer: peer.clone(),
                 region,
+                success: true,
             })),
         ))
     }

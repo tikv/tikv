@@ -148,12 +148,16 @@ pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
 const STR_CONF_CHANGE_REMOVE_NODE: &str = "RemoveNode";
 const STR_CONF_CHANGE_ADDLEARNER_NODE: &str = "AddLearner";
+const STR_CONF_CHANGE_BEGIN_MEMBERSHIP_CHANGE: &str = "BeginMembershipChange";
+const STR_CONF_CHANGE_FINALIZE_MEMBERSHIP_CHANGE: &str = "FinalizeMembershipChange";
 
 pub fn conf_change_type_str(conf_type: eraftpb::ConfChangeType) -> &'static str {
     match conf_type {
         ConfChangeType::AddNode => STR_CONF_CHANGE_ADD_NODE,
         ConfChangeType::RemoveNode => STR_CONF_CHANGE_REMOVE_NODE,
         ConfChangeType::AddLearnerNode => STR_CONF_CHANGE_ADDLEARNER_NODE,
+        ConfChangeType::BeginMembershipChange => STR_CONF_CHANGE_BEGIN_MEMBERSHIP_CHANGE,
+        ConfChangeType::FinalizeMembershipChange => STR_CONF_CHANGE_FINALIZE_MEMBERSHIP_CHANGE,
     }
 }
 

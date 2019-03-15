@@ -1261,12 +1261,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_change_peer(&mut self, cp: ChangePeer) {
-        let change_type = cp.conf_change.get_change_type();
-        self.fsm.peer.raft_group.apply_conf_change(&cp.conf_change);
-        if cp.conf_change.get_node_id() == raft::INVALID_ID {
+        if !cp.success {
             // Apply failed, skip.
             return;
         }
+
+        let change_type = cp.conf_change.get_change_type();
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -1277,17 +1277,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
         }
 
-        let peer_id = cp.peer.get_id();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
-                if self.fsm.peer.peer_id() == peer_id && self.fsm.peer.peer.get_is_learner() {
+                let id = peer.get_id();
+                if self.fsm.peer.peer_id() == id && self.fsm.peer.peer.get_is_learner() {
                     self.fsm.peer.peer = peer.clone();
                 }
 
                 // Add this peer to cache and heartbeats.
                 let now = Instant::now();
-                let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
@@ -1297,6 +1296,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             ConfChangeType::RemoveNode => {
                 // Remove this peer from cache.
+                let peer_id = cp.peer.get_id();
                 self.fsm.peer.peer_heartbeats.remove(&peer_id);
                 if self.fsm.peer.is_leader() {
                     self.fsm
@@ -1306,6 +1306,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
             }
+            _ => unimplemented!(),
         }
 
         // In pattern matching above, if the peer is the leader,
@@ -1323,13 +1324,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             self.fsm.peer.heartbeat_pd(self.ctx);
         }
-        let my_peer_id = self.fsm.peer.peer_id();
-
-        let peer = cp.peer;
 
         // We only care remove itself now.
+        let peer = cp.peer;
         if change_type == ConfChangeType::RemoveNode && peer.get_store_id() == self.store_id() {
-            if my_peer_id == peer.get_id() {
+            if self.fsm.peer.peer_id() == peer.get_id() {
                 self.destroy_peer(false)
             } else {
                 panic!(

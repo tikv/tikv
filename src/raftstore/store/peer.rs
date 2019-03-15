@@ -351,7 +351,7 @@ impl Peer {
             ..Default::default()
         };
 
-        let raft_group = RawNode::new(&raft_cfg, ps, vec![])?;
+        let raft_group = RawNode::new(&raft_cfg, ps)?;
         let mut peer = Peer {
             peer,
             region_id: region.get_id(),
@@ -618,9 +618,9 @@ impl Peer {
             .committed_entries
             .as_ref()
             .map_or(0, |v| v.len() as u64);
-        metrics.append += ready.entries.len() as u64;
+        metrics.append += ready.entries().len() as u64;
 
-        if !raft::is_empty_snap(&ready.snapshot) {
+        if !raft::is_empty_snap(&ready.snapshot()) {
             metrics.snapshot += 1;
         }
     }
@@ -838,7 +838,7 @@ impl Peer {
 
     fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
-        if let Some(ref ss) = ready.ss {
+        if let Some(ref ss) = ready.ss() {
             match ss.raft_state {
                 StateRole::Leader => {
                     // The local read can only be performed after a new leader has applied
@@ -1204,7 +1204,7 @@ impl Peer {
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
         if self.ready_to_handle_read() {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 for (req, cb) in read.cmds.drain(..) {
@@ -1213,7 +1213,7 @@ impl Peer {
                 propose_time = Some(read.renew_lease_time);
             }
         } else {
-            for state in &ready.read_states {
+            for state in ready.read_states() {
                 let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 self.pending_reads.ready_cnt += 1;
@@ -1223,7 +1223,7 @@ impl Peer {
 
         // Note that only after handle read_states can we identify what requests are
         // actually stale.
-        if ready.ss.is_some() {
+        if ready.ss().is_some() {
             let term = self.term();
             // all uncommitted reads will be dropped silently in raft.
             self.pending_reads.clear_uncommitted(term);
@@ -1529,12 +1529,11 @@ impl Peer {
 
         match change_type {
             ConfChangeType::AddNode => {
-                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
+                if let Some(progress) = status.learner_progress.remove(&peer.get_id()) {
                     // For promote learner to voter.
-                    progress.is_learner = false;
                     status.progress.insert(peer.get_id(), progress);
                 } else {
-                    status.progress.insert(peer.get_id(), Progress::default());
+                    status.progress.insert(peer.get_id(), Progress::new(0, 0));
                 }
             }
             ConfChangeType::RemoveNode => {
@@ -1550,9 +1549,10 @@ impl Peer {
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
+            _ => unimplemented!(),
         }
         let healthy = self.count_healthy_node(status.progress.values());
-        let quorum_after_change = raft::quorum(status.progress.len());
+        let quorum_after_change = raft::majority(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());
         }

@@ -24,7 +24,8 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
 };
 use protobuf::Message;
-use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
+use raft::eraftpb::{Entry, HardState, Snapshot};
+use raft::storage::ConfStateWithIndex;
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
@@ -490,8 +491,9 @@ impl PeerStorage {
     }
 
     pub fn initial_state(&self) -> raft::Result<RaftState> {
-        let hard_state = self.raft_state.get_hard_state().clone();
-        if hard_state == HardState::new() {
+        let mut raft_state = RaftState::default();
+        raft_state.hard_state = self.raft_state.get_hard_state().clone();
+        if raft_state.hard_state == HardState::new() {
             assert!(
                 !self.is_initialized(),
                 "peer for region {:?} is initialized but local state {:?} has empty hard \
@@ -500,15 +502,20 @@ impl PeerStorage {
                 self.raft_state
             );
 
-            return Ok(RaftState {
-                hard_state,
-                conf_state: ConfState::default(),
-            });
+            raft_state
+                .conf_states
+                .extend(
+                    self.raft_state
+                        .conf_states
+                        .iter()
+                        .map(|cs| ConfStateWithIndex {
+                            conf_state: cs.get_conf_state().clone(),
+                            index: cs.get_index(),
+                            in_membership_change: cs.get_in_membership_change(),
+                        }),
+                );
         }
-        Ok(RaftState {
-            hard_state,
-            conf_state: conf_state_from_region(self.region()),
-        })
+        Ok(raft_state)
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -1082,13 +1089,13 @@ impl PeerStorage {
         ready: &Ready,
     ) -> Result<InvokeContext> {
         let mut ctx = InvokeContext::new(self);
-        let snapshot_index = if raft::is_empty_snap(&ready.snapshot) {
+        let snapshot_index = if raft::is_empty_snap(&ready.snapshot()) {
             0
         } else {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
-                &ready.snapshot,
+                &ready.snapshot(),
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
             )?;
@@ -1097,18 +1104,18 @@ impl PeerStorage {
             last_index(&ctx.raft_state)
         };
 
-        if ready.must_sync {
+        if ready.must_sync() {
             ready_ctx.set_sync_log(true);
         }
 
-        if !ready.entries.is_empty() {
-            self.append(&mut ctx, &ready.entries, ready_ctx)?;
+        if !ready.entries().is_empty() {
+            self.append(&mut ctx, ready.entries(), ready_ctx)?;
         }
 
         // Last index is 0 means the peer is created from raft message
         // and has not applied snapshot yet, so skip persistent hard state.
         if ctx.raft_state.get_last_index() > 0 {
-            if let Some(ref hs) = ready.hs {
+            if let Some(hs) = ready.hs() {
                 ctx.raft_state.set_hard_state(hs.clone());
             }
         }
@@ -1449,7 +1456,13 @@ impl Storage for PeerStorage {
         self.initial_state()
     }
 
-    fn entries(&self, low: u64, high: u64, max_size: u64) -> raft::Result<Vec<Entry>> {
+    fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: impl Into<Option<u64>>,
+    ) -> raft::Result<Vec<Entry>> {
+        let max_size = max_size.into().unwrap_or(u64::MAX);
         self.entries(low, high, max_size)
     }
 

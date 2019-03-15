@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 tikv = { path = "../../" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "cc-effective-on-recieved" }
 protobuf = "~2.0"
 tempdir = "0.3"
 raft = "0.4"
