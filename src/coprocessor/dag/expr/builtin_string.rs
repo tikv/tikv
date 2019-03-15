@@ -90,10 +90,10 @@ impl ScalarFunc {
             let (s, substr) = (s.to_lowercase(), substr.to_lowercase());
             let pos = pos as usize;
             s.char_indices()
-                .map(|(i, _)| Some(i))
-                .chain([None].iter().cloned())
+                .map(|(i, _)| i)
+                .chain([s.len()].iter().cloned())
                 .nth(pos - 1)
-                .map(|offset| Self::locate(&s[offset.unwrap_or(s.len())..], &substr, pos))
+                .map(|offset| Self::locate(&s[offset..], &substr, pos))
                 .or(Some(0))
         })
     }
