@@ -27,6 +27,7 @@ use raft::eraftpb;
 
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::raftengine::LogBatch;
 use tikv::raftstore::store::{keys, Mutable, Peekable};
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
@@ -546,15 +547,16 @@ fn test_debug_raft_log() {
     // Put some data.
     let engine = cluster.get_raft_engine(store_id);
     let (region_id, log_index) = (200, 200);
-    let key = keys::raft_log_key(region_id, log_index);
     let mut entry = eraftpb::Entry::new();
     entry.set_term(1);
-    entry.set_index(1);
+    entry.set_index(log_index);
     entry.set_entry_type(eraftpb::EntryType::EntryNormal);
     entry.set_data(vec![42]);
-    engine.put_msg(&key, &entry).unwrap();
+    let raft_wb = LogBatch::new();
+    raft_wb.add_entries(region_id, vec![entry.clone()]);
+    engine.write(raft_wb, true).unwrap();
     assert_eq!(
-        engine.get_msg::<eraftpb::Entry>(&key).unwrap().unwrap(),
+        engine.get_entry(region_id, log_index).unwrap().unwrap(),
         entry
     );
 
@@ -588,10 +590,12 @@ fn test_debug_region_info() {
     let raft_state_key = keys::raft_state_key(region_id);
     let mut raft_state = raft_serverpb::RaftLocalState::new();
     raft_state.set_last_index(42);
-    raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+    raft_engine
+        .put_msg(region_id, &raft_state_key, &raft_state)
+        .unwrap();
     assert_eq!(
         raft_engine
-            .get_msg::<raft_serverpb::RaftLocalState>(&raft_state_key)
+            .get_msg::<raft_serverpb::RaftLocalState>(region_id, &raft_state_key)
             .unwrap()
             .unwrap(),
         raft_state

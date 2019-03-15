@@ -1,23 +1,22 @@
-
-use std::u32;
-use std::mem;
+use std::cell::RefCell;
 use std::io::BufRead;
+use std::mem;
 
 // crc32c implement Castagnoli Polynomial algorithm
 // which also is used in iSCSI and SCTP. It is 50x
 // faster than crc as we test.
-use crc32c::crc32c;
-use byteorder::{ReadBytesExt, WriteBytesExt};
 use byteorder::BigEndian;
-use kvproto::eraftpb::Entry;
-use protobuf::Message as PbMsg;
+use byteorder::{ReadBytesExt, WriteBytesExt};
+use crc32c::crc32c;
 use protobuf;
+use protobuf::Message as PbMsg;
+use raft::eraftpb::Entry;
 
-use util::codec::number::{NumberDecoder, NumberEncoder};
+use crate::util::codec::number::{self, NumberEncoder};
 
 use super::memtable::EntryIndex;
-use super::Result;
 use super::Error;
+use super::Result;
 
 const BATCH_MIN_SIZE: usize = 12; // 8 bytes total length + 4 checksum
 
@@ -50,15 +49,15 @@ impl LogItemType {
         }
     }
 
-    pub fn to_byte(&self) -> u8 {
-        match *self {
+    pub fn to_byte(self) -> u8 {
+        match self {
             LogItemType::Entries => TYPE_ENTRIES,
             LogItemType::CMD => TYPE_COMMAND,
             LogItemType::KV => TYPE_KV,
         }
     }
 
-    pub fn encode_to(&self, vec: &mut Vec<u8>) {
+    pub fn encode_to(self, vec: &mut Vec<u8>) {
         vec.push(self.to_byte());
     }
 }
@@ -67,7 +66,8 @@ impl LogItemType {
 pub struct Entries {
     pub region_id: u64,
     pub entries: Vec<Entry>,
-    pub entries_index: Vec<EntryIndex>,
+    // EntryIndex may be update after write to file.
+    pub entries_index: RefCell<Vec<EntryIndex>>,
 }
 
 impl Entries {
@@ -78,18 +78,22 @@ impl Entries {
     ) -> Entries {
         let len = entries.len();
         Entries {
-            region_id: region_id,
-            entries: entries,
+            region_id,
+            entries,
             entries_index: match entries_index {
-                Some(index) => index,
-                None => vec![EntryIndex::default(); len],
+                Some(index) => RefCell::new(index),
+                None => RefCell::new(vec![EntryIndex::default(); len]),
             },
         }
     }
 
-    pub fn from_bytes(buf: &mut SliceReader, file_num: u64, fstart: *const u8) -> Result<Entries> {
-        let region_id = buf.decode_var_u64()?;
-        let mut count = buf.decode_var_u64()? as usize;
+    pub unsafe fn from_bytes(
+        buf: &mut SliceReader,
+        file_num: u64,
+        fstart: *const u8,
+    ) -> Result<Entries> {
+        let region_id = number::decode_var_u64(buf)?;
+        let mut count = number::decode_var_u64(buf)? as usize;
         let mut entries = Vec::with_capacity(count);
         let mut entries_index = Vec::with_capacity(count);
         loop {
@@ -97,13 +101,13 @@ impl Entries {
                 break;
             }
 
-            let len = buf.decode_var_u64()? as usize;
+            let len = number::decode_var_u64(buf)? as usize;
             let mut e = Entry::new();
             e.merge_from_bytes(&buf[..len])?;
             let mut entry_index = EntryIndex::default();
             entry_index.index = e.get_index();
             entry_index.file_num = file_num;
-            entry_index.offset = fstart.offset_to(buf.as_ptr()).unwrap() as u64;
+            entry_index.offset = buf.as_ptr().offset_from(fstart) as u64;
             entry_index.len = len as u64;
             buf.consume(len);
             entries.push(e);
@@ -114,7 +118,7 @@ impl Entries {
         Ok(Entries::new(region_id, entries, Some(entries_index)))
     }
 
-    pub fn encode_to(&mut self, vec: &mut Vec<u8>) -> Result<()> {
+    pub fn encode_to(&self, vec: &mut Vec<u8>) -> Result<()> {
         if self.entries.is_empty() {
             return Ok(());
         }
@@ -128,18 +132,19 @@ impl Entries {
             let content = e.write_to_bytes()?;
             vec.encode_var_u64(content.len() as u64)?;
             // file_num = 0 means entry index is not initialized.
-            if self.entries_index[i].file_num == 0 {
-                self.entries_index[i].index = e.get_index();
-                self.entries_index[i].offset = vec.len() as u64;
-                self.entries_index[i].len = content.len() as u64;
+            let mut entries_index = self.entries_index.borrow_mut();
+            if entries_index[i].file_num == 0 {
+                entries_index[i].index = e.get_index();
+                entries_index[i].offset = vec.len() as u64;
+                entries_index[i].len = content.len() as u64;
             }
             vec.extend_from_slice(&content);
         }
         Ok(())
     }
 
-    pub fn update_offset_when_needed(&mut self, file_num: u64, base: u64) {
-        for idx in &mut self.entries_index {
+    pub fn update_offset_when_needed(&self, file_num: u64, base: u64) {
+        for idx in self.entries_index.borrow_mut().iter_mut() {
             if idx.file_num == 0 {
                 idx.offset += base;
                 idx.file_num = file_num;
@@ -164,12 +169,10 @@ impl Command {
     }
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<Command> {
-        let command_type = buf.read_u8()?;
+        let command_type = number::read_u8(buf)?;
         if command_type == CMD_CLEAN {
-            let region_id = buf.decode_var_u64()?;
-            Ok(Command::Clean {
-                region_id: region_id,
-            })
+            let region_id = number::decode_var_u64(buf)?;
+            Ok(Command::Clean { region_id })
         } else {
             panic!("Unsupported command type: {:?}", command_type)
         }
@@ -183,8 +186,8 @@ pub enum OpType {
 }
 
 impl OpType {
-    pub fn encode_to(&self, vec: &mut Vec<u8>) {
-        vec.push(*self as u8);
+    pub fn encode_to(self, vec: &mut Vec<u8>) {
+        vec.push(self as u8);
     }
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<OpType> {
@@ -204,8 +207,8 @@ pub struct KeyValue {
 impl KeyValue {
     pub fn new(op_type: OpType, region_id: u64, key: &[u8], value: Option<&[u8]>) -> KeyValue {
         KeyValue {
-            op_type: op_type,
-            region_id: region_id,
+            op_type,
+            region_id,
             key: key.to_vec(),
             value: value.map(|v| v.to_vec()),
         }
@@ -213,13 +216,13 @@ impl KeyValue {
 
     pub fn from_bytes(buf: &mut SliceReader) -> Result<KeyValue> {
         let op_type = OpType::from_bytes(buf)?;
-        let region_id = buf.decode_var_u64()?;
-        let k_len = buf.decode_var_u64()? as usize;
+        let region_id = number::decode_var_u64(buf)?;
+        let k_len = number::decode_var_u64(buf)? as usize;
         let key = &buf[..k_len];
         buf.consume(k_len);
         match op_type {
             OpType::Put => {
-                let v_len = buf.decode_var_u64()? as usize;
+                let v_len = number::decode_var_u64(buf)? as usize;
                 let value = &buf[..v_len];
                 buf.consume(v_len);
                 Ok(KeyValue::new(OpType::Put, region_id, key, Some(value)))
@@ -256,7 +259,7 @@ pub struct LogItem {
 impl LogItem {
     pub fn new(item_type: LogItemType) -> LogItem {
         LogItem {
-            item_type: item_type,
+            item_type,
             entries: None,
             command: None,
             kv: None,
@@ -290,12 +293,12 @@ impl LogItem {
         }
     }
 
-    pub fn encode_to(&mut self, vec: &mut Vec<u8>) -> Result<()> {
+    pub fn encode_to(&self, vec: &mut Vec<u8>) -> Result<()> {
         // layout = { 1 byte type | item layout }
         self.item_type.encode_to(vec);
         match self.item_type {
             LogItemType::Entries => {
-                self.entries.as_mut().unwrap().encode_to(vec)?;
+                self.entries.as_ref().unwrap().encode_to(vec)?;
             }
             LogItemType::CMD => {
                 self.command.as_ref().unwrap().encode_to(vec);
@@ -307,7 +310,11 @@ impl LogItem {
         Ok(())
     }
 
-    pub fn from_bytes(buf: &mut SliceReader, file_num: u64, fstart: *const u8) -> Result<LogItem> {
+    pub unsafe fn from_bytes(
+        buf: &mut SliceReader,
+        file_num: u64,
+        fstart: *const u8,
+    ) -> Result<LogItem> {
         let item_type = LogItemType::from_byte(buf.read_u8()?);
         let mut item = LogItem::new(item_type);
         match item_type {
@@ -330,66 +337,63 @@ impl LogItem {
 
 #[derive(Debug, PartialEq)]
 pub struct LogBatch {
-    pub items: Vec<LogItem>,
+    pub items: RefCell<Vec<LogItem>>,
 }
 
 impl Default for LogBatch {
-    fn default() -> LogBatch {
-        LogBatch {
-            items: Vec::with_capacity(16),
+    fn default() -> Self {
+        Self {
+            items: RefCell::new(Vec::with_capacity(16)),
         }
     }
 }
 
 impl LogBatch {
-    pub fn with_capacity(cap: usize) -> LogBatch {
-        LogBatch {
-            items: Vec::with_capacity(cap),
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            items: RefCell::new(Vec::with_capacity(cap)),
         }
     }
 
-    pub fn add_entries(&mut self, region_id: u64, entries: Vec<Entry>) {
+    pub fn add_entries(&self, region_id: u64, entries: Vec<Entry>) {
         let item = LogItem::from_entries(region_id, entries);
-        self.items.push(item);
+        self.items.borrow_mut().push(item);
     }
 
-    pub fn clean_region(&mut self, region_id: u64) {
-        self.add_command(Command::Clean {
-            region_id: region_id,
-        });
+    pub fn clean_region(&self, region_id: u64) {
+        self.add_command(Command::Clean { region_id });
     }
 
-    pub fn add_command(&mut self, cmd: Command) {
+    pub fn add_command(&self, cmd: Command) {
         let item = LogItem::from_command(cmd);
-        self.items.push(item);
+        self.items.borrow_mut().push(item);
     }
 
-    pub fn delete(&mut self, region_id: u64, key: &[u8]) {
+    pub fn delete(&self, region_id: u64, key: &[u8]) {
         let item = LogItem::from_kv(OpType::Del, region_id, key, None);
-        self.items.push(item);
+        self.items.borrow_mut().push(item);
     }
 
-    pub fn put(&mut self, region_id: u64, key: &[u8], value: &[u8]) {
+    pub fn put(&self, region_id: u64, key: &[u8], value: &[u8]) {
         let item = LogItem::from_kv(OpType::Put, region_id, key, Some(value));
-        self.items.push(item);
+        self.items.borrow_mut().push(item);
     }
 
-    pub fn put_msg<M: protobuf::Message>(
-        &mut self,
-        region_id: u64,
-        key: &[u8],
-        m: &M,
-    ) -> Result<()> {
+    pub fn put_msg<M: protobuf::Message>(&self, region_id: u64, key: &[u8], m: &M) -> Result<()> {
         let value = m.write_to_bytes()?;
         self.put(region_id, key, &value);
         Ok(())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.borrow().is_empty()
     }
 
-    pub fn from_bytes(
+    pub unsafe fn from_bytes(
         buf: &mut SliceReader,
         file_num: u64,
         fstart: *const u8,
@@ -402,25 +406,26 @@ impl LogBatch {
             return Err(Error::TooShort);
         }
 
-        let batch_len = buf.decode_u64()? as usize;
+        let batch_len = number::decode_u64(buf)? as usize;
         if buf.len() < batch_len {
             return Err(Error::TooShort);
         }
 
         // verify checksum
         let offset = batch_len - 4;
-        let old_checksum = (&buf[offset..offset + 4]).decode_u32_le()?;
+        let mut s = &buf[offset..offset + 4];
+        let old_checksum = number::decode_u32_le(&mut s)?;
         let new_checksum = crc32c(&buf[..offset]);
         if old_checksum != new_checksum {
             return Err(Error::CheckSumError);
         }
 
-        let mut items_count = buf.decode_var_u64()? as usize;
+        let mut items_count = number::decode_var_u64(buf)? as usize;
         if items_count == 0 || buf.is_empty() {
             panic!("Empty log event is not supported");
         }
 
-        let mut log_batch = LogBatch::default();
+        let log_batch = LogBatch::new();
         loop {
             if items_count == 0 {
                 // 4 bytes checksum
@@ -429,23 +434,24 @@ impl LogBatch {
             }
 
             let item = LogItem::from_bytes(buf, file_num, fstart)?;
-            log_batch.items.push(item);
+            log_batch.items.borrow_mut().push(item);
 
             items_count -= 1;
         }
         Ok(Some(log_batch))
     }
 
-    pub fn encode_to_bytes(&mut self) -> Option<Vec<u8>> {
-        if self.items.is_empty() {
+    pub fn encode_to_bytes(&self) -> Option<Vec<u8>> {
+        if self.items.borrow().is_empty() {
             return None;
         }
 
         // layout = { 8 bytes len | item count | multiple items | 4 bytes checksum }
         let mut vec = Vec::with_capacity(4096);
         vec.encode_u64(0).unwrap();
-        vec.encode_var_u64(self.items.len() as u64).unwrap();
-        for item in &mut self.items {
+        vec.encode_var_u64(self.items.borrow().len() as u64)
+            .unwrap();
+        for item in self.items.borrow_mut().iter_mut() {
             item.encode_to(&mut vec).unwrap();
         }
         let checksum = crc32c(&vec.as_slice()[8..]);
@@ -457,12 +463,11 @@ impl LogBatch {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use kvproto::eraftpb::Entry;
+    use raft::eraftpb::Entry;
 
     #[test]
     fn test_log_item_type() {
@@ -484,16 +489,16 @@ mod tests {
         let pb_entries = vec![Entry::new(); 10];
         let region_id = 8;
         let file_num = 1;
-        let mut entries = Entries::new(region_id, pb_entries, None);
+        let entries = Entries::new(region_id, pb_entries, None);
 
         let mut encoded = vec![];
         entries.encode_to(&mut encoded).unwrap();
-        for idx in &mut entries.entries_index {
+        for idx in entries.entries_index.borrow_mut().iter_mut() {
             idx.file_num = file_num;
         }
         let mut s = encoded.as_slice();
         let fstart: *const u8 = encoded.as_ptr();
-        let decode_entries = Entries::from_bytes(&mut s, file_num, fstart).unwrap();
+        let decode_entries = unsafe { Entries::from_bytes(&mut s, file_num, fstart).unwrap() };
         assert_eq!(s.len(), 0);
         assert_eq!(entries.region_id, decode_entries.region_id);
         assert_eq!(entries.entries, decode_entries.entries);
@@ -534,13 +539,12 @@ mod tests {
             LogItem::from_kv(OpType::Put, region_id, b"key", Some(b"value")),
         ];
 
-
         for mut item in items {
             let mut encoded = vec![];
             item.encode_to(&mut encoded).unwrap();
             let mut s = encoded.as_slice();
             let fstart: *const u8 = encoded.as_ptr();
-            let decoded_item = LogItem::from_bytes(&mut s, file_num, fstart).unwrap();
+            let decoded_item = unsafe { LogItem::from_bytes(&mut s, file_num, fstart).unwrap() };
             assert_eq!(s.len(), 0);
 
             if item.item_type == LogItemType::Entries {
@@ -557,26 +561,26 @@ mod tests {
     fn test_log_batch_enc_dec() {
         let region_id = 8;
         let file_num = 1;
-        let mut batch = LogBatch::default();
+        let batch = LogBatch::new();
         batch.add_entries(region_id, vec![Entry::new(); 10]);
-        batch.add_command(Command::Clean {
-            region_id: region_id,
-        });
+        batch.add_command(Command::Clean { region_id });
         batch.put(region_id, b"key", b"value");
         batch.delete(region_id, b"key2");
 
         let encoded = batch.encode_to_bytes().unwrap();
         let mut s = encoded.as_slice();
         let fstart: *const u8 = encoded.as_ptr();
-        let decoded_batch = LogBatch::from_bytes(&mut s, file_num, fstart)
-            .unwrap()
-            .unwrap();
+        let decoded_batch = unsafe {
+            LogBatch::from_bytes(&mut s, file_num, fstart)
+                .unwrap()
+                .unwrap()
+        };
         assert_eq!(s.len(), 0);
 
-        for item in &mut batch.items {
+        for item in batch.items.borrow_mut().iter_mut() {
             if item.item_type == LogItemType::Entries {
                 item.entries
-                    .as_mut()
+                    .as_ref()
                     .unwrap()
                     .update_offset_when_needed(file_num, 0);
             }

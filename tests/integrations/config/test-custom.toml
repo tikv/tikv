@@ -83,8 +83,7 @@ raft-max-inflight-msgs = 123
 raft-entry-max-size = "12MB"
 raft-log-gc-tick-interval = "12s"
 raft-log-gc-threshold = 12
-raft-log-gc-count-limit = 12
-raft-log-gc-size-limit = "1KB"
+raft-log-gc-expired-files-tick-interval = "59s"
 raft-entry-cache-life-time = "12s"
 raft-reject-transfer-leader-duration = "3s"
 split-region-check-tick-interval = "12s"
@@ -133,29 +132,12 @@ region-max-keys = 100000
 region-split-keys = 100000
 
 [rocksdb]
-wal-recovery-mode = 1
-wal-dir = "/var"
-wal-ttl-seconds = 1
-wal-size-limit = "1KB"
-max-total-wal-size = "1GB"
-max-background-jobs = 12
-max-manifest-file-size = "12MB"
-create-if-missing = false
-max-open-files = 12345
-enable-statistics = false
-stats-dump-period = "12m"
-compaction-readahead-size = "1KB"
-info-log-max-size = "1KB"
-info-log-roll-time = "12s"
-info-log-keep-log-file-num = 1000
-info-log-dir = "/var"
-rate-bytes-per-sec = "1KB"
-bytes-per-sync = "1MB"
-wal-bytes-per-sync = "32KB"
-max-sub-compactions = 12
-writable-file-max-buffer-size = "12MB"
-use-direct-io-for-flush-and-compaction = true
-enable-pipelined-write = false
+dir = "/var"
+recovery-mode = 1
+bytes-per-sync = "255KB"
+target-file-size = "127MB"
+cache-size-limit = "3GB"
+total-size-limit = "5GB"
 
 [rocksdb.titan]
 enabled = true

@@ -15,6 +15,7 @@ use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::util::Engines;
+use crate::raftengine::LogBatch;
 use crate::raftstore::Result;
 use crate::storage::{CF_DEFAULT, CF_RAFT};
 use crate::util::rocksdb_util;
@@ -44,7 +45,7 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
         return Err(box_err!("kv store is not empty and has already had data."));
     }
 
-    if !is_range_empty(&engines.raft, CF_DEFAULT, keys::MIN_KEY, keys::MAX_KEY)? {
+    if !engines.raft.is_empty() {
         return Err(box_err!(
             "raft store is not empty and has already had data."
         ));
@@ -71,17 +72,15 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     engines.kv.write(wb)?;
     engines.kv.sync_wal()?;
 
-    let raft_wb = WriteBatch::new();
+    let raft_wb = LogBatch::new();
     write_initial_raft_state(&raft_wb, region.get_id())?;
-    engines.raft.write(raft_wb)?;
-    engines.raft.sync_wal()?;
+    engines.raft.write(raft_wb, true)?;
     Ok(())
 }
 
 // Clear first region meta and prepare state.
 pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
-    engines.raft.delete(&keys::raft_state_key(region_id))?;
-    engines.raft.sync_wal()?;
+    engines.raft.clean_region(region_id)?;
 
     let wb = WriteBatch::new();
     wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
@@ -127,10 +126,12 @@ pub fn prepare_bootstrap(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
     use tempdir::TempDir;
 
     use super::*;
+    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::store::engine::Peekable;
     use crate::raftstore::store::{keys, Engines};
     use crate::storage::CF_DEFAULT;
@@ -139,7 +140,7 @@ mod tests {
     #[test]
     fn test_bootstrap() {
         let path = TempDir::new("var").unwrap();
-        let raft_path = path.path().join("raft");
+        let raft_path = path.path().join(Path::new("raft"));
         let kv_engine = Arc::new(
             rocksdb_util::new_engine(
                 path.path().to_str().unwrap(),
@@ -149,10 +150,9 @@ mod tests {
             )
             .unwrap(),
         );
-        let raft_engine = Arc::new(
-            rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                .unwrap(),
-        );
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(raft_path.to_str().unwrap());
+        let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
         let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
@@ -172,7 +172,7 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(raft_engine
-            .get_value(&keys::raft_state_key(1))
+            .get(1, &keys::raft_state_key(1))
             .unwrap()
             .is_some());
 
@@ -185,12 +185,10 @@ mod tests {
             &keys::region_meta_prefix(2)
         )
         .unwrap());
-        assert!(is_range_empty(
-            &raft_engine,
-            CF_DEFAULT,
-            &keys::region_raft_prefix(1),
-            &keys::region_raft_prefix(2)
-        )
-        .unwrap());
+
+        assert!(raft_engine
+            .fetch_all_entries_for_region(1)
+            .unwrap()
+            .is_empty());
     }
 }

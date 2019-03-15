@@ -1,25 +1,24 @@
-
-use std::u64;
 use std::cmp;
-use std::io::BufRead;
-use std::sync::RwLock;
-use std::mem;
 use std::fmt;
+use std::io::BufRead;
+use std::mem;
+use std::sync::RwLock;
 use std::time::Instant;
+use std::u64;
 
 use protobuf;
-use kvproto::eraftpb::Entry;
 use protobuf::Message as PbMsg;
+use raft::eraftpb::Entry;
 
-use util::collections::{HashMap, HashSet};
+use crate::util::collections::{HashMap, HashSet};
 
-use super::Result;
-use super::Error;
-use super::memtable::MemTable;
-use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER, VERSION};
-use super::log_batch::{Command, LogBatch, LogItemType, OpType};
 use super::config::Config;
+use super::log_batch::{Command, LogBatch, LogItemType, OpType};
+use super::memtable::MemTable;
 use super::metrics::*;
+use super::pipe_log::{PipeLog, FILE_MAGIC_HEADER, VERSION};
+use super::Error;
+use super::Result;
 
 const SLOTS_COUNT: usize = 128;
 
@@ -33,8 +32,8 @@ pub enum RecoveryMode {
 impl From<i32> for RecoveryMode {
     fn from(i: i32) -> RecoveryMode {
         assert!(
-            RecoveryMode::TolerateCorruptedTailRecords as i32 <= i &&
-                i <= RecoveryMode::AbsoluteConsistency as i32
+            RecoveryMode::TolerateCorruptedTailRecords as i32 <= i
+                && i <= RecoveryMode::AbsoluteConsistency as i32
         );
         unsafe { mem::transmute(i) }
     }
@@ -63,14 +62,15 @@ impl RaftEngine {
             &cfg.dir,
             cfg.bytes_per_sync.0 as usize,
             cfg.target_file_size.0 as usize,
-        ).unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
+        )
+        .unwrap_or_else(|e| panic!("Open raft log failed, error: {:?}", e));
         let mut memtables = Vec::with_capacity(SLOTS_COUNT);
         for _ in 0..SLOTS_COUNT {
             memtables.push(RwLock::new(HashMap::default()));
         }
         let mut engine = RaftEngine {
-            cfg: cfg,
-            memtables: memtables,
+            cfg,
+            memtables,
             pipe_log: RwLock::new(pip_log),
         };
         let recovery_mode = RecoveryMode::from(engine.cfg.recovery_mode);
@@ -105,8 +105,7 @@ impl RaftEngine {
                     .unwrap_or_else(|e| {
                         panic!(
                             "Read content of file {} failed, error {:?}",
-                            current_read_file,
-                            e
+                            current_read_file, e
                         )
                     })
                     .unwrap_or_else(|| panic!("Expect has content, but get None"))
@@ -123,19 +122,20 @@ impl RaftEngine {
             // Iterate all LogBatch in one file
             let mut offset = (FILE_MAGIC_HEADER.len() + VERSION.len()) as u64;
             loop {
-                match LogBatch::from_bytes(&mut buf, current_read_file, start_ptr) {
+                match unsafe { LogBatch::from_bytes(&mut buf, current_read_file, start_ptr) } {
                     Ok(Some(log_batch)) => {
                         self.apply_to_memtable(log_batch, current_read_file);
-                        offset = start_ptr.offset_to(buf.as_ptr()).unwrap() as u64;
+                        offset = unsafe { buf.as_ptr().offset_from(start_ptr) as u64 };
                     }
                     Ok(None) => {
                         info!("Recovered raft log file {}.", current_read_file);
                         break;
                     }
-                    e @ Err(Error::TooShort) => if current_read_file == active_file_num {
-                        match recovery_mode {
-                            RecoveryMode::TolerateCorruptedTailRecords => {
-                                warn!(
+                    e @ Err(Error::TooShort) => {
+                        if current_read_file == active_file_num {
+                            match recovery_mode {
+                                RecoveryMode::TolerateCorruptedTailRecords => {
+                                    warn!(
                                     "Encounter err {:?}, incomplete batch in last log file {}, \
                                      offset {}, truncate it in TolerateCorruptedTailRecords \
                                      recovery mode.",
@@ -143,37 +143,37 @@ impl RaftEngine {
                                     current_read_file,
                                     offset
                                 );
-                                let mut pipe_log = self.pipe_log.write().unwrap();
-                                pipe_log.truncate_active_log(offset).unwrap();
-                                break;
-                            }
-                            RecoveryMode::AbsoluteConsistency => {
-                                panic!(
+                                    let mut pipe_log = self.pipe_log.write().unwrap();
+                                    pipe_log.truncate_active_log(offset).unwrap();
+                                    break;
+                                }
+                                RecoveryMode::AbsoluteConsistency => {
+                                    panic!(
                                     "Encounter err {:?}, incomplete batch in last log file {}, \
                                      offset {}, panic in AbsoluteConsistency recovery mode.",
                                     e,
                                     current_read_file,
                                     offset
                                 );
+                                }
                             }
+                        } else {
+                            panic!("Corruption occur in middle log file {}", current_read_file);
                         }
-                    } else {
-                        panic!("Corruption occur in middle log file {}", current_read_file);
-                    },
+                    }
                     Err(e) => {
                         panic!(
                             "Failed when recover log file {}, error {:?}",
-                            current_read_file,
-                            e
+                            current_read_file, e
                         );
                     }
                 }
             }
 
             // Only keep latest entries in cache, keep cache below limited size.
-            if self.cfg.cache_size_limit.0 > 0 &&
-                (current_read_file - first_file_num) * self.cfg.target_file_size.0 >
-                    self.cfg.cache_size_limit.0
+            if self.cfg.cache_size_limit.0 > 0
+                && (current_read_file - first_file_num) * self.cfg.target_file_size.0
+                    > self.cfg.cache_size_limit.0
             {
                 let total_files_in_cache =
                     self.cfg.cache_size_limit.0 / self.cfg.target_file_size.0;
@@ -240,20 +240,19 @@ impl RaftEngine {
                     memtable.fetch_all(&mut ents, &mut ents_idx);
                     let mut all_ents = Vec::with_capacity(memtable.entries_count());
                     for i in ents_idx {
-                        let e = self.read_entry_from_file(i.file_num, i.offset, i.len, i.index)
+                        let e = self
+                            .read_entry_from_file(i.file_num, i.offset, i.len, i.index)
                             .unwrap_or_else(|e| {
                                 panic!(
                                     "Read entry from file {} at offset {} failed \
                                      when rewriting, err {:?}",
-                                    i.file_num,
-                                    i.offset,
-                                    e
+                                    i.file_num, i.offset, e
                                 )
                             });
                         all_ents.push(e);
                     }
                     all_ents.extend(ents.into_iter());
-                    let mut log_batch = LogBatch::default();
+                    let log_batch = LogBatch::new();
                     log_batch.add_entries(memtable.region_id(), all_ents);
 
                     // Dump all key value pairs
@@ -266,39 +265,41 @@ impl RaftEngine {
                     // Rewrite to new log file
                     let write_res = {
                         let mut pipe_log = self.pipe_log.write().unwrap();
-                        pipe_log.append_log_batch(&mut log_batch, false)
+                        pipe_log.append_log_batch(&log_batch, false)
                     };
 
                     // Apply to memtable
                     match write_res {
                         // Using slef.apply_to_memtable here will cause deadlock.
-                        Ok(file_num) => for item in log_batch.items.drain(..) {
-                            match item.item_type {
-                                LogItemType::Entries => {
-                                    let entries_to_add = item.entries.unwrap();
-                                    assert_eq!(entries_to_add.region_id, memtable.region_id());
-                                    memtable.append(
-                                        entries_to_add.entries,
-                                        entries_to_add.entries_index,
-                                    );
-                                }
-                                LogItemType::CMD => {
-                                    panic!("Memtable doesn't contain command item.");
-                                }
-                                LogItemType::KV => {
-                                    let kv = item.kv.unwrap();
-                                    assert_eq!(kv.region_id, memtable.region_id());
-                                    match kv.op_type {
-                                        OpType::Put => {
-                                            memtable.put(kv.key, kv.value.unwrap(), file_num);
-                                        }
-                                        OpType::Del => {
-                                            memtable.delete(kv.key.as_slice());
+                        Ok(file_num) => {
+                            for item in log_batch.items.borrow_mut().drain(..) {
+                                match item.item_type {
+                                    LogItemType::Entries => {
+                                        let entries_to_add = item.entries.unwrap();
+                                        assert_eq!(entries_to_add.region_id, memtable.region_id());
+                                        memtable.append(
+                                            entries_to_add.entries,
+                                            entries_to_add.entries_index.into_inner(),
+                                        );
+                                    }
+                                    LogItemType::CMD => {
+                                        panic!("Memtable doesn't contain command item.");
+                                    }
+                                    LogItemType::KV => {
+                                        let kv = item.kv.unwrap();
+                                        assert_eq!(kv.region_id, memtable.region_id());
+                                        match kv.op_type {
+                                            OpType::Put => {
+                                                memtable.put(kv.key, kv.value.unwrap(), file_num);
+                                            }
+                                            OpType::Del => {
+                                                memtable.delete(kv.key.as_slice());
+                                            }
                                         }
                                     }
                                 }
                             }
-                        },
+                        }
                         Err(e) => panic!("Rewrite inactive region entries failed. error {:?}", e),
                     }
                 }
@@ -309,7 +310,7 @@ impl RaftEngine {
         has_write
     }
 
-    pub fn regions_need_compact(&self) -> HashSet<u64> {
+    pub fn regions_need_force_compact(&self) -> HashSet<u64> {
         // first_file_num: the oldest file number.
         // current_file_num: current file number.
         // inactive_file_num: files before this one should not in cache.
@@ -410,10 +411,10 @@ impl RaftEngine {
         }
     }
 
-    pub fn write(&self, mut log_batch: LogBatch, sync: bool) -> Result<()> {
+    pub fn write(&self, log_batch: LogBatch, sync: bool) -> Result<()> {
         let write_res = {
             let mut pipe_log = self.pipe_log.write().unwrap();
-            pipe_log.append_log_batch(&mut log_batch, sync)
+            pipe_log.append_log_batch(&log_batch, sync)
         };
         match write_res {
             Ok(file_num) => {
@@ -440,13 +441,13 @@ impl RaftEngine {
     }
 
     pub fn put(&self, region_id: u64, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut log_batch = LogBatch::default();
+        let log_batch = LogBatch::new();
         log_batch.put(region_id, key, value);
         self.write(log_batch, false)
     }
 
     pub fn put_msg<M: protobuf::Message>(&self, region_id: u64, key: &[u8], m: &M) -> Result<()> {
-        let mut log_batch = LogBatch::default();
+        let log_batch = LogBatch::new();
         log_batch.put_msg(region_id, key, m)?;
         self.write(log_batch, false)
     }
@@ -462,10 +463,7 @@ impl RaftEngine {
         }
     }
 
-    pub fn get_msg<M>(&self, region_id: u64, key: &[u8]) -> Result<Option<M>>
-    where
-        M: protobuf::Message + protobuf::MessageStatic,
-    {
+    pub fn get_msg<M: protobuf::Message>(&self, region_id: u64, key: &[u8]) -> Result<Option<M>> {
         let value = self.get(region_id, key)?;
 
         if value.is_none() {
@@ -495,17 +493,17 @@ impl RaftEngine {
         };
 
         // Read from file
-        let entry = self.read_entry_from_file(
-            entry_idx.file_num,
-            entry_idx.offset,
-            entry_idx.len,
-            entry_idx.index,
-        ).unwrap_or_else(|e| {
+        let entry = self
+            .read_entry_from_file(
+                entry_idx.file_num,
+                entry_idx.offset,
+                entry_idx.len,
+                entry_idx.index,
+            )
+            .unwrap_or_else(|e| {
                 panic!(
                     "Read entry from file for region {} index {} failed, err {:?}",
-                    region_id,
-                    log_idx,
-                    e
+                    region_id, log_idx, e
                 )
             });
         Ok(Some(entry))
@@ -523,9 +521,7 @@ impl RaftEngine {
             pipe_log.fread(file_num, offset, len).unwrap_or_else(|e| {
                 panic!(
                     "Read from file {} in offset {} failed, err {:?}",
-                    file_num,
-                    offset,
-                    e
+                    file_num, offset, e
                 )
             })
         };
@@ -539,6 +535,31 @@ impl RaftEngine {
             );
         }
         Ok(e)
+    }
+
+    pub fn fetch_all_entries_for_region(&self, region_id: u64) -> Result<Vec<Entry>> {
+        let memtables = self.memtables[region_id as usize % SLOTS_COUNT]
+            .read()
+            .unwrap();
+        if let Some(memtable) = memtables.get(&region_id) {
+            let mut entries = vec![];
+            let mut entries_idx = vec![];
+            memtable.fetch_all(&mut entries, &mut entries_idx);
+            if !entries_idx.is_empty() {
+                let mut vec = Vec::with_capacity(entries.len() + entries_idx.len());
+                for idx in &entries_idx {
+                    let e =
+                        self.read_entry_from_file(idx.file_num, idx.offset, idx.len, idx.index)?;
+                    vec.push(e);
+                }
+                vec.extend(entries.into_iter());
+                Ok(vec)
+            } else {
+                Ok(entries)
+            }
+        } else {
+            Ok(vec![])
+        }
     }
 
     pub fn fetch_entries_to(
@@ -573,7 +594,7 @@ impl RaftEngine {
                 }
                 Err(e) => {
                     error!("Fetch entries from memtable failed, err {:?}", e);
-                    return Err(e.into());
+                    return Err(e);
                 }
             }
         } else {
@@ -583,7 +604,7 @@ impl RaftEngine {
 
     // command interface
     pub fn clean_region(&self, region_id: u64) -> Result<()> {
-        let mut log_batch = LogBatch::default();
+        let log_batch = LogBatch::new();
         log_batch.clean_region(region_id);
         self.write(log_batch, true)
     }
@@ -615,8 +636,8 @@ impl RaftEngine {
         self.apply_to_memtable(log_batch, file_num);
     }
 
-    fn apply_to_memtable(&self, mut log_batch: LogBatch, file_num: u64) {
-        for item in log_batch.items.drain(..) {
+    fn apply_to_memtable(&self, log_batch: LogBatch, file_num: u64) {
+        for item in log_batch.items.borrow_mut().drain(..) {
             match item.item_type {
                 LogItemType::Entries => {
                     let entries_to_add = item.entries.unwrap();
@@ -627,7 +648,10 @@ impl RaftEngine {
                     let memtable = memtables
                         .entry(region_id)
                         .or_insert_with(|| MemTable::new(region_id, self.cfg.region_size.0 / 2));
-                    memtable.append(entries_to_add.entries, entries_to_add.entries_index);
+                    memtable.append(
+                        entries_to_add.entries,
+                        entries_to_add.entries_index.into_inner(),
+                    );
                 }
                 LogItemType::CMD => {
                     let command = item.command.unwrap();

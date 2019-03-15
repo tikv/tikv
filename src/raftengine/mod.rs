@@ -1,23 +1,20 @@
-
+use crate::util::codec;
+use protobuf;
 use std::error;
 use std::io::Error as IoError;
 use std::num;
-use util::codec;
-use protobuf;
-
 
 pub mod config;
-pub mod log_batch;
-pub mod pipe_log;
-pub mod memtable;
 pub mod engine;
+pub mod log_batch;
+pub mod memtable;
 pub mod metrics;
-
+pub mod pipe_log;
 
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -56,6 +53,6 @@ quick_error! {
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
+pub use self::config::Config;
 pub use self::engine::{RaftEngine, RecoveryMode};
 pub use self::log_batch::LogBatch;
-pub use self::config::Config;

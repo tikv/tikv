@@ -1,22 +1,21 @@
-
-use std::fs::{self, File, OpenOptions};
-use std::path::{Path, PathBuf};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::u64;
 use std::cmp;
 use std::collections::VecDeque;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::u64;
 
-use super::Result;
 use super::log_batch::{LogBatch, LogItemType};
 use super::metrics::*;
+use super::Result;
 
-const LOG_SUFFIX: &'static str = ".log";
-const LOG_SUFFIX_LEN: usize = 4;
-const FILE_NUM_LEN: usize = 10;
+const LOG_SUFFIX: &str = ".raftlog";
+const LOG_SUFFIX_LEN: usize = 8;
+const FILE_NUM_LEN: usize = 16;
 const FILE_NAME_LEN: usize = FILE_NUM_LEN + LOG_SUFFIX_LEN;
-pub const FILE_MAGIC_HEADER: &'static [u8] = b"RAFT-LOG-FILE-HEADER";
-pub const VERSION: &'static [u8] = b"v1.0.0";
+pub const FILE_MAGIC_HEADER: &[u8] = b"RAFT-LOG-FILE-HEADER-9986AB3E47F320B394C8E84916EB0ED5";
+pub const VERSION: &[u8] = b"v1.0.0";
 const INIT_FILE_NUM: u64 = 1;
 const DEFAULT_FILES_COUNT: usize = 32;
 
@@ -47,9 +46,9 @@ impl PipeLog {
             active_file_num: INIT_FILE_NUM,
             active_log: None,
             active_log_size: 0,
-            rotate_size: rotate_size,
+            rotate_size,
             dir: dir.to_string(),
-            bytes_per_sync: bytes_per_sync,
+            bytes_per_sync,
             last_sync_size: 0,
             current_read_file_num: 0,
             opened_files: VecDeque::with_capacity(DEFAULT_FILES_COUNT),
@@ -142,8 +141,7 @@ impl PipeLog {
             error!("Seek failed, err: {:?}", e);
             return Err(e.into());
         }
-        let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
-        buf.resize(len as usize, 0x0);
+        let mut buf: Vec<u8> = vec![0; len as usize];
         file.read_exact(buf.as_mut_slice())?;
         Ok(buf)
     }
@@ -160,9 +158,9 @@ impl PipeLog {
         self.active_log.as_mut().unwrap().write_all(content)?;
         let offset = self.active_log_size as u64;
         self.active_log_size += content.len();
-        if sync ||
-            self.bytes_per_sync > 0 &&
-                self.active_log_size - self.last_sync_size >= self.bytes_per_sync
+        if sync
+            || self.bytes_per_sync > 0
+                && self.active_log_size - self.last_sync_size >= self.bytes_per_sync
         {
             self.active_log.as_mut().unwrap().sync_data()?;
             self.last_sync_size = self.active_log_size;
@@ -176,12 +174,13 @@ impl PipeLog {
         Ok((file_num, offset))
     }
 
-    pub fn append_log_batch(&mut self, batch: &mut LogBatch, sync: bool) -> Result<u64> {
+    pub fn append_log_batch(&mut self, batch: &LogBatch, sync: bool) -> Result<u64> {
         if let Some(content) = batch.encode_to_bytes() {
             let (file_num, offset) = self.append(&content, sync)?;
-            for item in &mut batch.items {
+            for item in batch.items.borrow_mut().iter_mut() {
                 match item.item_type {
-                    LogItemType::Entries => item.entries
+                    LogItemType::Entries => item
+                        .entries
                         .as_mut()
                         .unwrap()
                         .update_offset_when_needed(file_num, offset),
@@ -279,8 +278,7 @@ impl PipeLog {
         let file = File::open(path).unwrap_or_else(|e| {
             panic!(
                 "Open file {} for read failed, err {:?}",
-                self.active_file_num,
-                e
+                self.active_file_num, e
             )
         });
         self.opened_files.push_back(Mutex::new(file));
@@ -344,8 +342,8 @@ impl PipeLog {
     }
 
     pub fn total_size(&self) -> usize {
-        (self.active_file_num - self.first_file_num) as usize * self.rotate_size +
-            self.active_log_size
+        (self.active_file_num - self.first_file_num) as usize * self.rotate_size
+            + self.active_log_size
     }
 
     pub fn read_next_file(&mut self) -> Result<Option<Vec<u8>>> {
@@ -390,7 +388,6 @@ fn extract_file_num(file_name: &str) -> Result<u64> {
         Err(e) => Err(e.into()),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -474,13 +471,9 @@ mod tests {
             pipe_log.active_log_size(),
             FILE_MAGIC_HEADER.len() + VERSION.len()
         );
-        assert!(
-            pipe_log
-                .truncate_active_log(
-                    (FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()) as u64
-                )
-                .is_err()
-        );
+        assert!(pipe_log
+            .truncate_active_log((FILE_MAGIC_HEADER.len() + VERSION.len() + s_content.len()) as u64)
+            .is_err());
 
         // read next file
         let mut header: Vec<u8> = vec![];

@@ -174,7 +174,6 @@ pub enum ExecResult {
     ChangePeer(ChangePeer),
     CompactLog {
         state: RaftTruncatedState,
-        first_index: u64,
     },
     SplitRegion {
         regions: Vec<Region>,
@@ -1917,7 +1916,6 @@ impl ApplyDelegate {
             resp,
             ApplyResult::Res(ExecResult::CompactLog {
                 state: apply_state.get_truncated_state().clone(),
-                first_index,
             }),
         ))
     }
@@ -2688,6 +2686,7 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
+    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
@@ -2713,11 +2712,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let raft_db = Arc::new(
-            rocksdb_util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
-                .unwrap(),
-        );
-        (path, Engines::new(db, raft_db))
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(path.path().join("raft").to_str().unwrap());
+        let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
+        (path, Engines::new(db, raft_engine))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {

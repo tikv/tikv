@@ -82,20 +82,17 @@ fn check_compacted(
 
     for (id, engines) in all_engines {
         for i in 0..compacted_idx[id] {
-            let key = keys::raft_log_key(1, i);
-            if engines.raft.get(&key).unwrap().is_none() {
+            if engines.raft.get_entry(1, i).unwrap().is_none() {
                 break;
             }
-            assert!(engines.raft.get(&key).unwrap().is_none());
+            assert!(engines.raft.get_entry(1, i).unwrap().is_none());
         }
     }
     true
 }
 
 fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     cluster.run();
 
     cluster.must_put(b"k1", b"v1");
@@ -149,7 +146,6 @@ fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
 fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let gc_limit: u64 = 100;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = gc_limit;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(100);
     cluster.run();
@@ -206,8 +202,6 @@ fn test_node_compact_many_times() {
 }
 
 fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 100000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(2);
     cluster.run();
     cluster.stop_node(1);
 
@@ -280,8 +274,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
         assert!(idx > before_state.get_index());
 
         for i in 0..idx {
-            let key = keys::raft_log_key(1, i);
-            assert!(engines.raft.get(&key).unwrap().is_none());
+            assert!(engines.raft.get_entry(1, i).unwrap().is_none());
         }
     }
 }

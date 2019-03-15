@@ -26,7 +26,6 @@ use tikv::util::config::*;
 use tikv::util::HandyRwLock;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -330,7 +329,6 @@ fn test_node_stale_snap() {
     let mut cluster = new_node_cluster(0, 3);
     // disable compact log to make snapshot only be sent when peer is first added.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.

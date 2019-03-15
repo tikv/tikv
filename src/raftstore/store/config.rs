@@ -45,13 +45,10 @@ pub struct Config {
 
     // Interval to gc unnecessary raft log (ms).
     pub raft_log_gc_tick_interval: ReadableDuration,
+    // Interval to gc expired raft log files (ms)
+    pub raft_log_gc_expired_files_tick_interval: ReadableDuration,
     // A threshold to gc stale raft log, must >= 1.
     pub raft_log_gc_threshold: u64,
-    // When entry count exceed this value, gc will be forced trigger.
-    pub raft_log_gc_count_limit: u64,
-    // When the approximate size of raft log entries exceed this value,
-    // gc will be forced trigger.
-    pub raft_log_gc_size_limit: ReadableSize,
     // When a peer is not responding for this time, leader will not keep entry cache for it.
     pub raft_entry_cache_life_time: ReadableDuration,
     // When a peer is newly added, reject transferring leader to the peer for a while.
@@ -159,10 +156,8 @@ impl Default for Config {
             raft_max_inflight_msgs: 256,
             raft_entry_max_size: ReadableSize::mb(8),
             raft_log_gc_tick_interval: ReadableDuration::secs(10),
+            raft_log_gc_expired_files_tick_interval: ReadableDuration::secs(60),
             raft_log_gc_threshold: 50,
-            // Assume the average size of entries is 1k.
-            raft_log_gc_count_limit: split_size * 3 / 4 / ReadableSize::kb(1),
-            raft_log_gc_size_limit: split_size * 3 / 4,
             raft_entry_cache_life_time: ReadableDuration::secs(30),
             raft_reject_transfer_leader_duration: ReadableDuration::secs(3),
             split_region_check_tick_interval: ReadableDuration::secs(10),
@@ -268,10 +263,6 @@ impl Config {
             ));
         }
 
-        if self.raft_log_gc_size_limit.0 == 0 {
-            return Err(box_err!("raft log gc size limit should large than 0."));
-        }
-
         let election_timeout =
             self.raft_base_tick_interval.as_millis() * self.raft_election_timeout_ticks as u64;
         let lease = self.raft_store_max_leader_lease.as_millis() as u64;
@@ -280,14 +271,6 @@ impl Config {
                 "election timeout {} ms is less than lease {} ms",
                 election_timeout,
                 lease
-            ));
-        }
-
-        if self.merge_max_log_gap >= self.raft_log_gc_count_limit {
-            return Err(box_err!(
-                "merge log gap {} should be less than log gc limit {}.",
-                self.merge_max_log_gap,
-                self.raft_log_gc_count_limit
             ));
         }
 
@@ -407,12 +390,6 @@ impl Config {
         metrics
             .with_label_values(&["raft_log_gc_threshold"])
             .set(self.raft_log_gc_threshold as f64);
-        metrics
-            .with_label_values(&["raft_log_gc_count_limit"])
-            .set(self.raft_log_gc_count_limit as f64);
-        metrics
-            .with_label_values(&["raft_log_gc_size_limit"])
-            .set(self.raft_log_gc_size_limit.0 as f64);
         metrics
             .with_label_values(&["raft_entry_cache_life_time"])
             .set(self.raft_entry_cache_life_time.as_secs() as f64);
@@ -580,18 +557,9 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();
-        cfg.raft_log_gc_size_limit = ReadableSize(0);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
         cfg.raft_base_tick_interval = ReadableDuration::secs(1);
         cfg.raft_election_timeout_ticks = 10;
         cfg.raft_store_max_leader_lease = ReadableDuration::secs(20);
-        assert!(cfg.validate().is_err());
-
-        cfg = Config::new();
-        cfg.raft_log_gc_count_limit = 100;
-        cfg.merge_max_log_gap = 110;
         assert!(cfg.validate().is_err());
 
         cfg = Config::new();

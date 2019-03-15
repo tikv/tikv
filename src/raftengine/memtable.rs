@@ -1,13 +1,12 @@
-
-use std::u64;
 use std::cmp;
 use std::collections::VecDeque;
+use std::u64;
 
-use kvproto::eraftpb::Entry;
+use raft::eraftpb::Entry;
 
-use util::collections::HashMap;
 use super::Result;
-use util;
+use crate::util;
+use crate::util::collections::HashMap;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
@@ -24,14 +23,13 @@ pub struct EntryIndex {
 impl EntryIndex {
     pub fn new(index: u64, file_num: u64, offset: u64, len: u64) -> EntryIndex {
         EntryIndex {
-            index: index,
-            file_num: file_num,
-            offset: offset,
-            len: len,
+            index,
+            file_num,
+            offset,
+            len,
         }
     }
 }
-
 
 /*
  * Each region has an individual `MemTable` to cache latest entries and all entries indices.
@@ -67,10 +65,10 @@ pub struct MemTable {
 impl MemTable {
     pub fn new(region_id: u64, cache_limit: u64) -> MemTable {
         MemTable {
-            region_id: region_id,
+            region_id,
             entries_cache: VecDeque::with_capacity(SHRINK_CACHE_CAPACITY),
             cache_size: 0,
-            cache_limit: cache_limit,
+            cache_limit,
             entries_index: VecDeque::with_capacity(SHRINK_CACHE_CAPACITY),
             total_size: 0,
             kvs: HashMap::default(),
@@ -109,7 +107,8 @@ impl MemTable {
                     } else {
                         // truncate tail indices
                         let left = (first_index_to_add - first_index) as usize;
-                        let delta_size = self.entries_index
+                        let delta_size = self
+                            .entries_index
                             .drain(left..)
                             .fold(0, |acc, i| acc + i.len);
                         assert!(self.total_size >= delta_size);
@@ -124,7 +123,8 @@ impl MemTable {
 
                     // truncate tail entries from indices
                     let index_left = self.entries_index.len() - truncate_count;
-                    let delta_size = self.entries_index
+                    let delta_size = self
+                        .entries_index
                         .drain(index_left..)
                         .fold(0, |acc, i| acc + i.len);
                     self.cache_size -= delta_size;
@@ -133,9 +133,7 @@ impl MemTable {
             } else if cache_last_index + 1 < first_index_to_add {
                 panic!(
                     "entry cache of region {} contains unexpected hole: {} < {}",
-                    self.region_id,
-                    cache_last_index,
-                    first_index_to_add
+                    self.region_id, cache_last_index, first_index_to_add
                 );
             }
         }
@@ -177,18 +175,18 @@ impl MemTable {
             if idx > last_index {
                 panic!(
                     "compact to index {} is larger than last index {}",
-                    idx,
-                    last_index
+                    idx, last_index
                 );
             }
 
             // Compact entries index.
-            let compact_size = self.entries_index
+            let compact_size = self
+                .entries_index
                 .drain(..(idx - first_index) as usize)
                 .fold(0, |acc, i| acc + i.len);
             self.total_size -= compact_size;
-            if self.entries_index.len() < SHRINK_CACHE_CAPACITY &&
-                self.entries_index.capacity() > SHRINK_CACHE_CAPACITY
+            if self.entries_index.len() < SHRINK_CACHE_CAPACITY
+                && self.entries_index.capacity() > SHRINK_CACHE_CAPACITY
             {
                 self.entries_index.shrink_to_fit();
             }
@@ -202,8 +200,8 @@ impl MemTable {
                 // All entries are in cache.
                 self.cache_size = self.total_size;
 
-                if self.entries_cache.len() < SHRINK_CACHE_CAPACITY &&
-                    self.entries_cache.capacity() > SHRINK_CACHE_CAPACITY
+                if self.entries_cache.len() < SHRINK_CACHE_CAPACITY
+                    && self.entries_cache.capacity() > SHRINK_CACHE_CAPACITY
                 {
                     self.entries_cache.shrink_to_fit();
                 }
@@ -478,12 +476,11 @@ impl MemTable {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use kvproto::eraftpb::Entry;
+    use raft::eraftpb::Entry;
 
     #[test]
     fn test_memtable_append() {
@@ -677,20 +674,16 @@ mod tests {
         // Out of range fetching
         ents.clear();
         ents_idx.clear();
-        assert!(
-            memtable
-                .fetch_entries_to(5, 15, None, &mut ents, &mut ents_idx)
-                .is_err()
-        );
+        assert!(memtable
+            .fetch_entries_to(5, 15, None, &mut ents, &mut ents_idx)
+            .is_err());
 
         // Out of range fetching
         ents.clear();
         ents_idx.clear();
-        assert!(
-            memtable
-                .fetch_entries_to(20, 30, None, &mut ents, &mut ents_idx)
-                .is_err()
-        );
+        assert!(memtable
+            .fetch_entries_to(20, 30, None, &mut ents, &mut ents_idx)
+            .is_err());
 
         // All needed entries are in cache.
         ents.clear();

@@ -417,7 +417,6 @@ fn test_node_merge_brain_split() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 12;
 
     cluster.run();
     cluster.must_put(b"k1", b"v1");

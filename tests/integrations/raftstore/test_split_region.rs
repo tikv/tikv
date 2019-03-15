@@ -288,7 +288,6 @@ fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_
 #[test]
 fn test_delay_split_region() {
     let mut cluster = new_server_cluster(0, 3);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 500;
     cluster.cfg.raft_store.merge_max_log_gap = 100;
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     // To stable the test, we use a large hearbeat timeout 200ms(100ms * 2).
@@ -402,7 +401,6 @@ fn test_server_split_overlap_snapshot() {
 fn test_apply_new_version_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 5;
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.raft_log_gc_threshold = 5;
 

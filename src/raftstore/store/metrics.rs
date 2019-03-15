@@ -187,13 +187,6 @@ lazy_static! {
             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
-    pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =
-        register_int_counter_vec!(
-            "tikv_raftstore_entry_fetches",
-            "Total number of raft entry fetches",
-            &["type"]
-        ).unwrap();
-
     pub static ref LEADER_MISSING: IntGauge =
         register_int_gauge!(
             "tikv_raftstore_leader_missing",

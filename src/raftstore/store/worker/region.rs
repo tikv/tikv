@@ -657,6 +657,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::store::engine::{Mutable, Peekable};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
@@ -782,8 +783,12 @@ mod tests {
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
+        let raft_dir = TempDir::new("raft_dir").unwrap();
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(raft_dir.path().to_str().unwrap());
+        let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
         let runner = RegionRunner::new(
-            Engines::new(Arc::clone(&db), Arc::clone(&db)),
+            Engines::new(Arc::clone(&db), raft_engine),
             mgr,
             0,
             true,

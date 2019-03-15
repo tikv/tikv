@@ -57,6 +57,7 @@ use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
+use tikv::raftengine::RaftEngine;
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
@@ -76,7 +77,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 
 fn check_system_config(config: &TiKvConfig) {
     if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files) as u64,
     ) {
         fatal!("{}", e);
     }
@@ -120,7 +121,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
     let snap_path = store_path.join(Path::new("snap"));
-    let raft_db_path = Path::new(&cfg.raft_store.raftdb_path);
     let import_path = store_path.join("import");
 
     let f = File::create(lock_path.as_path())
@@ -197,20 +197,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
     // Create raft engine.
-    let mut raft_db_opts = cfg.raftdb.build_opt();
-    if encrypted_env.is_some() {
-        raft_db_opts.set_env(encrypted_env.unwrap());
-    }
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s)),
-    );
-    let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
+    let raft_engine = Arc::new(RaftEngine::new(cfg.raftdb.clone()));
+    let engines = Engines::new(Arc::clone(&kv_engine), raft_engine);
 
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()

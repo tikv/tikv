@@ -35,6 +35,7 @@ use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
 use crate::pd::{PdTask, INVALID_ID};
+use crate::raftengine::LogBatch;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::fsm::store::PollContext;
@@ -295,8 +296,6 @@ pub struct Peer {
 
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
-    /// The index of last compacted raft log. It is used for the next compact log task.
-    pub last_compacted_idx: u64,
     /// The index of the latest urgent proposal index.
     last_urgent_proposal_idx: u64,
     /// The index of the latest committed split command.
@@ -313,6 +312,12 @@ pub struct Peer {
 
     /// Write Statistics for PD to schedule hot spot.
     pub peer_stat: PeerStat,
+
+    /// Replicated index last time checked in `on_raft_gc_log_tick`.
+    pub last_replicated_idx: u64,
+
+    /// Need force compact raft log.
+    pub need_force_compact_raft_log: bool,
 }
 
 impl Peer {
@@ -376,7 +381,6 @@ impl Peer {
             leader_missing_time: Some(Instant::now()),
             tag,
             last_applying_idx: applied_index,
-            last_compacted_idx: 0,
             last_urgent_proposal_idx: u64::MAX,
             last_committed_split_idx: 0,
             consistency_state: ConsistencyState {
@@ -389,6 +393,8 @@ impl Peer {
             pending_messages: vec![],
             pending_merge_apply_result: None,
             peer_stat: PeerStat::default(),
+            last_replicated_idx: 0,
+            need_force_compact_raft_log: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -477,7 +483,7 @@ impl Peer {
 
         // Set Tombstone state explicitly
         let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
+        let raft_wb = LogBatch::new();
         self.mut_store().clear_meta(&kv_wb, &raft_wb)?;
         write_peer_state(
             &ctx.engines.kv,
@@ -490,7 +496,7 @@ impl Peer {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
         ctx.engines.kv.write_opt(kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(raft_wb, &write_opts)?;
+        ctx.engines.raft.write(raft_wb, ctx.cfg.sync_log)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

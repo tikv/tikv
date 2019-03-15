@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use util::config::ReadableSize;
 use super::Result;
+use crate::util::config::ReadableSize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -95,7 +95,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use util::config::ReadableSize;
+    use crate::util::config::ReadableSize;
 
     #[test]
     fn test_config_validate() {

@@ -22,6 +22,7 @@
 #![feature(integer_atomics)]
 #![feature(duration_as_u128)]
 #![feature(proc_macro_hygiene)]
+#![feature(ptr_offset_from)]
 #![feature(const_int_ops)]
 #![feature(cell_update)]
 #![recursion_limit = "200"]
@@ -38,6 +39,7 @@ extern crate byteorder;
 extern crate chrono;
 extern crate chrono_tz;
 extern crate crc;
+extern crate crc32c;
 extern crate crossbeam;
 extern crate crypto;
 #[macro_use]
@@ -137,6 +139,7 @@ pub mod config;
 pub mod coprocessor;
 pub mod import;
 pub mod pd;
+pub mod raftengine;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
