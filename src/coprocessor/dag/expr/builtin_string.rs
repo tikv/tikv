@@ -62,54 +62,47 @@ impl ScalarFunc {
     }
 
     #[inline]
+    fn locate(s: &str, p: &str, pos: usize) -> i64 {
+        s.find(p)
+            .map(|i| (pos + s[..i].chars().count()) as i64)
+            .unwrap_or(0)
+    }
+
+    #[inline]
     pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        if s.is_empty() {
-            return Ok(Some(0));
-        }
-        let substr = substr.to_lowercase();
-        let s = s.to_lowercase();
-        let result = match s.find(&substr) {
-            None => 0,
-            Some(i) => 1 + s[..i].chars().count() as i64,
-        };
-        Ok(Some(result))
+        Ok(Some(Self::locate(
+            &s.to_lowercase(),
+            &substr.to_lowercase(),
+            1,
+        )))
     }
 
     #[inline]
     pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
+        let pos = try_opt!(self.children[2].eval_int(ctx, row));
+        Ok(if pos < 1 {
+            Some(0)
+        } else {
+            let (s, substr) = (s.to_lowercase(), substr.to_lowercase());
+            let pos = pos as usize;
+            s.char_indices()
+                .map(|(i, _)| Some(i))
+                .chain([None].iter().cloned())
+                .nth(pos - 1)
+                .map(|offset| Self::locate(&s[offset.unwrap_or(s.len())..], &substr, pos))
+                .or(Some(0))
+        })
+    }
 
-        pos -= 1; // transfer 1-based argument to 0-based real index
-        if pos < 0 {
-            return Ok(Some(0));
-        }
-        let substr = substr.to_lowercase();
-        let s = s.to_lowercase();
-        if pos > (s.chars().count() as i64 - substr.chars().count() as i64) {
-            return Ok(Some(0));
-        }
-        if substr.is_empty() {
-            return Ok(Some(pos + 1));
-        }
-
-        let slice = s
-            .char_indices()
-            .nth(pos as usize)
-            .map(|(offset, _)| &s[offset..]);
-
-        if let Some(slice) = slice {
-            if let Some(idx) = slice.find(&substr) {
-                return Ok(Some(1 + pos + slice[..idx].chars().count() as i64));
-            }
-        }
-        Ok(Some(0))
+    #[inline]
+    fn locate_binary(s: &[u8], p: &[u8], pos: usize) -> i64 {
+        twoway::find_bytes(s, p)
+            .map(|i| (i + pos) as i64)
+            .unwrap_or(0)
     }
 
     #[inline]
@@ -120,11 +113,7 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        let idx = s.windows(substr.len()).position(|w| w == &*substr);
-        Ok(Some(idx.map(|i| i as i64 + 1).unwrap_or(0)))
+        Ok(Some(Self::locate_binary(&s, &substr, 1)))
     }
 
     #[inline]
@@ -135,20 +124,14 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
+        let pos = try_opt!(self.children[2].eval_int(ctx, row));
 
-        pos -= 1; // transfer 1-based argument to 0-based real index
-        if pos < 0 || pos > (s.len() as i64 - substr.len() as i64) {
-            return Ok(Some(0));
-        }
-        if substr.is_empty() {
-            return Ok(Some(pos + 1));
-        }
-
-        let idx = s[pos as usize..]
-            .windows(substr.len())
-            .position(|w| w == &*substr);
-        Ok(Some(idx.map(|i| pos + i as i64 + 1).unwrap_or(0)))
+        Ok(Some(if pos < 1 || pos as usize > s.len() + 1 {
+            0
+        } else {
+            let pos = pos as usize;
+            Self::locate_binary(&s[pos - 1..], &substr, pos)
+        }))
     }
 
     #[inline]
@@ -931,14 +914,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let substr = try_opt!(self.children[1].eval_string(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        if s.is_empty() {
-            return Ok(Some(0));
-        }
-        let idz = s.windows(substr.len()).position(|w| w == &*substr);
-        Ok(Some(idz.map(|i| i as i64 + 1).unwrap_or(0)))
+        Ok(twoway::find_bytes(&s, &substr)
+            .map(|i| (i + 1) as i64)
+            .or(Some(0)))
     }
 }
 
