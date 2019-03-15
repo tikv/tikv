@@ -7,7 +7,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Improve import speed by increasing default region-split-size to 512 MiB [#4347](https://github.com/tikv/tikv/pull/4347)
 - Fix OOM issue by storing the intermediate SST files on disk instead of memory [#4348](https://github.com/tikv/tikv/pull/4348)
 - Restrict memory usage by RocksDB [#4350](https://github.com/tikv/tikv/pull/4350)
-- Fix the issue about scatter Regions when Regions are still imbalance [#4352](https://github.com/tikv/tikv/pull/4352)
+- Fix the issue that scattering Region doesn't take effect [#4352](https://github.com/tikv/tikv/pull/4352)
 
 ## [2.1.5]
 - Fix the panic issue caused by Region merge in some cases [#4235](https://github.com/tikv/tikv/pull/4235)
