@@ -111,7 +111,7 @@ mod profiling {
             match res {
                 Err(e) => {
                     // Shouldn't be possible since mem-profiling is set
-                    panic!("is_profilng_on: {:?}", e);
+                    panic!("is_profiling_on: {:?}", e);
                 }
                 Ok(_) => prof,
             }
