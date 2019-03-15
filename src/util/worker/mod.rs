@@ -71,13 +71,13 @@ impl<T> Error for ScheduleError<T> {
 }
 
 impl<T> Display for ScheduleError<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.description())
     }
 }
 
 impl<T> Debug for ScheduleError<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }

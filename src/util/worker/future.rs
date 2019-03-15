@@ -27,19 +27,19 @@ use super::metrics::*;
 pub struct Stopped<T>(pub T);
 
 impl<T> Display for Stopped<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "channel has been closed")
     }
 }
 
 impl<T> Debug for Stopped<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "channel has been closed")
     }
 }
 
-impl<T> From<Stopped<T>> for Box<Error + Sync + Send + 'static> {
-    fn from(_: Stopped<T>) -> Box<Error + Sync + Send + 'static> {
+impl<T> From<Stopped<T>> for Box<dyn Error + Sync + Send + 'static> {
+    fn from(_: Stopped<T>) -> Box<dyn Error + Sync + Send + 'static> {
         box_err!("channel has been closed")
     }
 }

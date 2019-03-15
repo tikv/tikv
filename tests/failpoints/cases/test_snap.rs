@@ -97,11 +97,11 @@ fn test_server_snapshot_on_resolve_failure() {
     let (notify_tx, notify_rx) = mpsc::channel();
     cluster.sim.write().unwrap().add_send_filter(
         1,
-        box MessageTypeNotifier::new(
+        Box::new(MessageTypeNotifier::new(
             MessageType::MsgSnapshot,
             notify_tx,
             Arc::clone(&ready_notify),
-        ),
+        )),
     );
 
     let (drop_snapshot_tx, drop_snapshot_rx) = mpsc::channel();
@@ -109,7 +109,7 @@ fn test_server_snapshot_on_resolve_failure() {
         .sim
         .write()
         .unwrap()
-        .add_recv_filter(4, box DropSnapshotFilter::new(drop_snapshot_tx));
+        .add_recv_filter(4, Box::new(DropSnapshotFilter::new(drop_snapshot_tx)));
 
     pd_client.add_peer(1, new_peer(4, 5));
 
@@ -169,11 +169,11 @@ fn test_generate_snapshot() {
     fail::cfg("snapshot_delete_after_send", "pause").unwrap();
 
     // Let store 4 inform leader to generate a snapshot.
-    cluster.run_node(4);
+    cluster.run_node(4).unwrap();
     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
 
     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
-    cluster.run_node(5);
+    cluster.run_node(5).unwrap();
     thread::sleep(Duration::from_millis(100));
 
     fail::cfg("snapshot_delete_after_send", "off").unwrap();

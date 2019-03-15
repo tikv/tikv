@@ -99,7 +99,7 @@ enum RegionCollectorMsg {
 }
 
 impl Display for RegionCollectorMsg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RegionCollectorMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionCollectorMsg::SeekRegion { from, limit, .. } => {
@@ -122,7 +122,7 @@ impl Coprocessor for RegionEventListener {}
 impl RegionChangeObserver for RegionEventListener {
     fn on_region_changed(
         &self,
-        context: &mut ObserverContext,
+        context: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         role: StateRole,
     ) {
@@ -139,7 +139,7 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
@@ -156,9 +156,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, box listener.clone());
+        .register_role_observer(1, Box::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, box listener);
+        .register_region_change_observer(1, Box::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -191,7 +191,7 @@ impl RegionCollector {
             self.regions
                 .insert(region_id, RegionInfo::new(region, role))
                 .is_none(),
-            "region_collector: trying to create new region {} but it already exists.",
+            "trying to create new region {} but it already exists.",
             region_id
         );
     }
@@ -228,7 +228,10 @@ impl RegionCollector {
         // receive an `Update` message, the region may have been deleted for some reason. So we
         // handle it according to whether the region exists in the collection.
         if self.regions.contains_key(&region.get_id()) {
-            info!("region_collector: trying to create region {} but it already exists, try to update it", region.get_id());
+            info!(
+                "trying to create region but it already exists, try to update it";
+                "region_id" => region.get_id(),
+            );
             self.update_region(region);
         } else {
             self.create_region(region, role);
@@ -239,7 +242,10 @@ impl RegionCollector {
         if self.regions.contains_key(&region.get_id()) {
             self.update_region(region);
         } else {
-            info!("region_collector: trying to update region {} but it doesn't exist, try to create it", region.get_id());
+            info!(
+                "trying to update region but it doesn't exist, try to create it";
+                "region_id" => region.get_id(),
+            );
             self.create_region(region, role);
         }
     }
@@ -257,8 +263,8 @@ impl RegionCollector {
             // It's possible that the region is already removed because it's end_key is used by
             // another newer region.
             debug!(
-                "region_collector: destroying region {} but it doesn't exist",
-                region.get_id()
+                "destroying region but it doesn't exist";
+                "region_id" => region.get_id(),
             )
         }
     }
@@ -272,8 +278,8 @@ impl RegionCollector {
         }
 
         warn!(
-            "region_collector: role change on region {} but the region doesn't exist. create it.",
-            region_id
+            "role change on region but the region doesn't exist. create it.";
+            "region_id" => region_id,
         );
         self.create_region(region, new_role);
     }
@@ -399,7 +405,10 @@ impl RegionCollector {
                 return;
             }
             if !self.check_region_range(region, true) {
-                debug!("region_collector: Received stale event: {:?}", event);
+                debug!(
+                    "Received stale event";
+                    "event" => ?event,
+                );
                 return;
             }
         }
@@ -526,14 +535,11 @@ impl RegionInfoProvider for RegionInfoAccessor {
             from: from.to_vec(),
             filter,
             limit,
-            callback: box move |res| {
+            callback: Box::new(move |res| {
                 tx.send(res).unwrap_or_else(|e| {
-                    panic!(
-                        "region_collector: failed to send seek_region result back to caller: {:?}",
-                        e
-                    )
+                    panic!("failed to send seek_region result back to caller: {:?}", e)
                 })
-            },
+            }),
         };
         self.scheduler
             .schedule(msg)

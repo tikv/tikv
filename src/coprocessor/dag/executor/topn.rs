@@ -60,7 +60,7 @@ pub struct TopNExecutor {
     iter: Option<IntoIter<Row>>,
     eval_ctx: Option<EvalContext>,
     eval_warnings: Option<EvalWarnings>,
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     limit: usize,
     first_collect: bool,
 }
@@ -69,7 +69,7 @@ impl TopNExecutor {
     pub fn new(
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<TopNExecutor> {
         let order_by = meta.take_order_by().into_vec();
 
@@ -146,8 +146,8 @@ impl Executor for TopNExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            if let Some(topn_warnings) = self.eval_warnings.take() {
-                warnings.merge(topn_warnings);
+            if let Some(mut topn_warnings) = self.eval_warnings.take() {
+                warnings.merge(&mut topn_warnings);
             }
             Some(warnings)
         } else {

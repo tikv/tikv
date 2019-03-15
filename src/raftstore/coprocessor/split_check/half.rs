@@ -45,7 +45,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
             self.cur_bucket_size = 0;
@@ -99,7 +99,13 @@ impl HalfCheckObserver {
 impl Coprocessor for HalfCheckObserver {}
 
 impl SplitCheckObserver for HalfCheckObserver {
-    fn add_checker(&self, _: &mut ObserverContext, host: &mut Host, _: &DB, policy: CheckPolicy) {
+    fn add_checker(
+        &self,
+        _: &mut ObserverContext<'_>,
+        host: &mut Host,
+        _: &DB,
+        policy: CheckPolicy,
+    ) {
         if host.auto_split() {
             return;
         }
@@ -125,7 +131,6 @@ mod tests {
     use crate::util::rocksdb_util::{
         new_engine_opt, properties::SizePropertiesCollectorFactory, CFOptions,
     };
-    use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
@@ -155,13 +160,12 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split");
         let mut cfg = Config::default();
         cfg.region_max_size = ReadableSize(BUCKET_NUMBER_LIMIT as u64);
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0005
