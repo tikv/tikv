@@ -39,7 +39,7 @@ pub enum RpnExpressionNode {
         offset: usize,
 
         // Although we can know `ColumnInfo` according to `offset` and columns info in scan
-        // executors, its type is `ColumnInfo` instead of `FieldType`..
+        // executors, its type is `ColumnInfo` instead of `FieldType`.
         // Maybe we can remove this field in future.
         field_type: FieldType,
     },
