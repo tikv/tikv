@@ -20,10 +20,8 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use kvproto::metapb::{self, Region};
-use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
-};
-use protobuf::Message;
+use kvproto::raft_serverpb::*;
+use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{Entry, HardState, Snapshot};
 use raft::storage::ConfStateWithIndex;
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
@@ -902,10 +900,24 @@ impl PeerStorage {
 
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = snap.get_metadata().get_term();
-        ctx.apply_state.set_applied_index(last_index);
+
+	// Update configuration states.
+	ctx.raft_state.clear_conf_states();
+	let mut raft_cs = RaftLocalState_ConfState::new();
+	raft_cs.set_conf_state(snap.get_metadata().get_conf_state().clone());
+	raft_cs.set_index(snap.get_metadata().get_conf_state_index());
+	ctx.raft_state.mut_conf_states().push(raft_cs);
+	if snap.get_metadata().get_next_conf_state_index() > 0 {
+	    let mut raft_cs = RaftLocalState_ConfState::new();
+	    raft_cs.set_conf_state(snap.get_metadata().get_next_conf_state().clone());
+	    raft_cs.set_index(snap.get_metadata().get_next_conf_state_index());
+	    raft_cs.set_in_membership_change(true);
+	    ctx.raft_state.mut_conf_states().push(raft_cs);
+	}
 
         // The snapshot only contains log which index > applied index, so
         // here the truncate state's (index, term) is in snapshot metadata.
+        ctx.apply_state.set_applied_index(last_index);
         ctx.apply_state.mut_truncated_state().set_index(last_index);
         ctx.apply_state
             .mut_truncated_state()
@@ -1095,7 +1107,7 @@ impl PeerStorage {
             fail_point!("raft_before_apply_snap");
             self.apply_snapshot(
                 &mut ctx,
-                &ready.snapshot(),
+                ready.snapshot(),
                 &ready_ctx.kv_wb(),
                 &ready_ctx.raft_wb(),
             )?;
@@ -1110,6 +1122,19 @@ impl PeerStorage {
 
         if !ready.entries().is_empty() {
             self.append(&mut ctx, ready.entries(), ready_ctx)?;
+        }
+        if !ready.conf_states().is_empty() {
+            let cc_index = ready.conf_states()[0].index;
+            let mut conf_states = ctx.raft_state.take_conf_states().into_vec();
+            conf_states.retain(|c| c.index < cc_index);
+            for cs in ready.conf_states() {
+                let mut raft_cs = RaftLocalState_ConfState::new();
+                raft_cs.set_conf_state(cs.conf_state.clone());
+                raft_cs.set_index(cs.index);
+                raft_cs.set_in_membership_change(cs.in_membership_change);
+                conf_states.push(raft_cs);
+            }
+            ctx.raft_state.conf_states = RepeatedField::from(conf_states);
         }
 
         // Last index is 0 means the peer is created from raft message
