@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::i64;
+use std::iter;
 
 use hex::{self, FromHex};
 
@@ -61,22 +62,19 @@ impl ScalarFunc {
         Ok(Some(input.len() as i64))
     }
 
+    // Find `p`
     #[inline]
-    fn locate(s: &str, p: &str, pos: usize) -> i64 {
-        s.find(p)
-            .map(|i| (pos + s[..i].chars().count()) as i64)
-            .unwrap_or(0)
+    fn find_str(text: &str, pattern: &str) -> Option<i64> {
+        twoway::find_str(text, pattern).map(|i| s[..i].chars().count() as i64)
     }
 
     #[inline]
     pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        Ok(Some(Self::locate(
-            &s.to_lowercase(),
-            &substr.to_lowercase(),
-            1,
-        )))
+        Ok(Self::find_str(&s.to_lowercase(), &substr.to_lowercase())
+            .map(|i| 1 + i)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -84,26 +82,24 @@ impl ScalarFunc {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         let pos = try_opt!(self.children[2].eval_int(ctx, row));
-        Ok(if pos < 1 {
-            Some(0)
-        } else {
-            let pos = pos as usize;
-            s.char_indices()
-                .map(|(i, _)| i)
-                .chain([s.len()].iter().cloned())
-                .nth(pos - 1)
-                .map(|offset| {
-                    Self::locate(&s[offset..].to_lowercase(), &substr.to_lowercase(), pos)
-                })
-                .or(Some(0))
-        })
+        if pos < 1 {
+            return Ok(Some(0));
+        }
+        Ok(s.char_indices()
+            .map(|(i, _)| i)
+            .chain(iter::once(s.len()))
+            .nth(pos as usize - 1)
+            .map(|offset| {
+                Self::find_str(&s[offset..].to_lowercase(), &substr.to_lowercase())
+                    .map(|i| i + pos)
+                    .unwrap_or(0)
+            })
+            .or(Some(0)))
     }
 
     #[inline]
-    fn locate_binary(s: &[u8], p: &[u8], pos: usize) -> i64 {
-        twoway::find_bytes(s, p)
-            .map(|i| (i + pos) as i64)
-            .unwrap_or(0)
+    fn find_bytes(text: &[u8], pattern: &[u8]) -> Option<i64> {
+        twoway::find_bytes(text, pattern).map(|i| i as i64)
     }
 
     #[inline]
@@ -114,7 +110,7 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        Ok(Some(Self::locate_binary(&s, &substr, 1)))
+        Ok(Self::find_bytes(&s, &substr).map(|i| 1 + i).or(Some(0)))
     }
 
     #[inline]
@@ -127,12 +123,12 @@ impl ScalarFunc {
         let s = try_opt!(self.children[1].eval_string(ctx, row));
         let pos = try_opt!(self.children[2].eval_int(ctx, row));
 
-        Ok(Some(if pos < 1 || pos as usize > s.len() + 1 {
-            0
-        } else {
-            let pos = pos as usize;
-            Self::locate_binary(&s[pos - 1..], &substr, pos)
-        }))
+        if pos < 1 || pos as usize > s.len() + 1 {
+            return Ok(Some(0));
+        }
+        Ok(Self::find_bytes(&s[pos as usize - 1..], &substr)
+            .map(|i| pos + i)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -915,9 +911,7 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let substr = try_opt!(self.children[1].eval_string(ctx, row));
-        Ok(twoway::find_bytes(&s, &substr)
-            .map(|i| (i + 1) as i64)
-            .or(Some(0)))
+        Ok(Self::find_bytes(&s, &substr).map(|i| 1 + i).or(Some(0)))
     }
 }
 
