@@ -62,10 +62,9 @@ impl ScalarFunc {
         Ok(Some(input.len() as i64))
     }
 
-    // Find `p`
     #[inline]
     fn find_str(text: &str, pattern: &str) -> Option<i64> {
-        twoway::find_str(text, pattern).map(|i| s[..i].chars().count() as i64)
+        twoway::find_str(text, pattern).map(|i| text[..i].chars().count() as i64)
     }
 
     #[inline]
