@@ -86,7 +86,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),

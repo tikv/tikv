@@ -88,7 +88,7 @@ impl Entries {
     }
 
     pub unsafe fn from_bytes(
-        buf: &mut SliceReader,
+        buf: &mut SliceReader<'_>,
         file_num: u64,
         fstart: *const u8,
     ) -> Result<Entries> {
@@ -168,7 +168,7 @@ impl Command {
         }
     }
 
-    pub fn from_bytes(buf: &mut SliceReader) -> Result<Command> {
+    pub fn from_bytes(buf: &mut SliceReader<'_>) -> Result<Command> {
         let command_type = number::read_u8(buf)?;
         if command_type == CMD_CLEAN {
             let region_id = number::decode_var_u64(buf)?;
@@ -190,7 +190,7 @@ impl OpType {
         vec.push(self as u8);
     }
 
-    pub fn from_bytes(buf: &mut SliceReader) -> Result<OpType> {
+    pub fn from_bytes(buf: &mut SliceReader<'_>) -> Result<OpType> {
         let op_type = buf.read_u8()?;
         unsafe { Ok(mem::transmute(op_type)) }
     }
@@ -214,7 +214,7 @@ impl KeyValue {
         }
     }
 
-    pub fn from_bytes(buf: &mut SliceReader) -> Result<KeyValue> {
+    pub fn from_bytes(buf: &mut SliceReader<'_>) -> Result<KeyValue> {
         let op_type = OpType::from_bytes(buf)?;
         let region_id = number::decode_var_u64(buf)?;
         let k_len = number::decode_var_u64(buf)? as usize;
@@ -311,7 +311,7 @@ impl LogItem {
     }
 
     pub unsafe fn from_bytes(
-        buf: &mut SliceReader,
+        buf: &mut SliceReader<'_>,
         file_num: u64,
         fstart: *const u8,
     ) -> Result<LogItem> {
@@ -394,7 +394,7 @@ impl LogBatch {
     }
 
     pub unsafe fn from_bytes(
-        buf: &mut SliceReader,
+        buf: &mut SliceReader<'_>,
         file_num: u64,
         fstart: *const u8,
     ) -> Result<Option<LogBatch>> {

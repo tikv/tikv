@@ -35,11 +35,11 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // now  at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
     cluster.shutdown();
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
 }
 
@@ -111,7 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
-    node.stop().unwrap();
+    node.stop();
 }
 
 #[test]

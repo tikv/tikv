@@ -687,7 +687,7 @@ fn test_merge_with_slow_promote() {
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 
-    let delay_filter = box DelayFilter::new(Duration::from_millis(20));
+    let delay_filter = Box::new(DelayFilter::new(Duration::from_millis(20)));
     cluster.sim.wl().add_send_filter(3, delay_filter);
 
     pd_client.must_add_peer(right.get_id(), new_peer(3, right.get_id() + 3));

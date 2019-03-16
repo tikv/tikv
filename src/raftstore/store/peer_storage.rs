@@ -1217,15 +1217,15 @@ impl Storage for PeerStorage {
 #[cfg(test)]
 mod tests {
     use crate::raftengine::{Config as RaftEngineCfg, LogBatch, RaftEngine};
-    use crate::raftstore::store::bootstrap;
     use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::util::Engines;
-    use crate::raftstore::store::worker::{RegionRunner, RegionTask};
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use crate::storage::ALL_CFS;
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
@@ -1245,13 +1245,14 @@ mod tests {
         let kv_db =
             Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
-
         let mut raft_cfg = RaftEngineCfg::new();
         raft_cfg.dir = String::from(raft_path.to_str().unwrap());
         let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
         let engines = Engines::new(kv_db, raft_engine);
-        bootstrap::bootstrap_store(&engines, 1, 1).expect("");
-        let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
+        bootstrap_store(&engines, 1, 1).unwrap();
+
+        let region = initial_region(1, 1, 1);
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
         PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
@@ -1292,9 +1293,7 @@ mod tests {
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::default();
-        store
-            .append(&mut ctx, &ents[1..], &mut ready_ctx)
-            .expect("");
+        store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
         ctx.apply_state
             .mut_truncated_state()
             .set_index(ents[0].get_index());
@@ -1305,8 +1304,8 @@ mod tests {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
             .unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb, true).expect("");
-        store.engines.kv.write(kv_wb).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb, true).unwrap();
+        store.engines.kv.write(kv_wb).unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1317,7 +1316,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb, true).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb, true).unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1509,7 +1508,7 @@ mod tests {
                 let mut kv_wb = WriteBatch::new();
                 ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
                     .unwrap();
-                store.engines.kv.write(kv_wb).expect("");
+                store.engines.kv.write(kv_wb).unwrap();
             }
         }
     }
@@ -1542,7 +1541,7 @@ mod tests {
         assert!(!snap.get_data().is_empty());
 
         let mut data = RaftSnapshotData::new();
-        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
@@ -1662,7 +1661,7 @@ mod tests {
             let mut store = new_storage_from_ents(sched, &td, &ents);
             append_ents(&mut store, &entries);
             let li = store.last_index();
-            let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
+            let actual_entries = store.entries(4, li + 1, u64::max_value()).unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }

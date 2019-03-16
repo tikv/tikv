@@ -65,7 +65,7 @@ impl State {
     /// respectively can notify it after sending some messages into the channel.
     #[inline]
     fn yield_poll(&self) -> bool {
-        let t = Box::into_raw(box task::current());
+        let t = Box::into_raw(Box::new(task::current()));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
         if !origin.is_null() {
             unsafe { drop(Box::from_raw(origin)) };

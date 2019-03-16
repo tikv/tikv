@@ -22,20 +22,20 @@ use super::super::expr::{eval_arith, EvalContext};
 
 pub fn build_aggr_func(tp: ExprType) -> Result<Box<dyn AggrFunc>> {
     match tp {
-        ExprType::Agg_BitAnd => Ok(box AggBitAnd {
+        ExprType::Agg_BitAnd => Ok(Box::new(AggBitAnd {
             c: 0xffffffffffffffff,
-        }),
-        ExprType::Agg_BitOr => Ok(box AggBitOr { c: 0 }),
-        ExprType::Agg_BitXor => Ok(box AggBitXor { c: 0 }),
-        ExprType::Count => Ok(box Count { c: 0 }),
-        ExprType::First => Ok(box First { e: None }),
-        ExprType::Sum => Ok(box Sum { res: None }),
-        ExprType::Avg => Ok(box Avg {
+        })),
+        ExprType::Agg_BitOr => Ok(Box::new(AggBitOr { c: 0 })),
+        ExprType::Agg_BitXor => Ok(Box::new(AggBitXor { c: 0 })),
+        ExprType::Count => Ok(Box::new(Count { c: 0 })),
+        ExprType::First => Ok(Box::new(First { e: None })),
+        ExprType::Sum => Ok(Box::new(Sum { res: None })),
+        ExprType::Avg => Ok(Box::new(Avg {
             sum: Sum { res: None },
             cnt: 0,
-        }),
-        ExprType::Max => Ok(box Extremum::new(Ordering::Less)),
-        ExprType::Min => Ok(box Extremum::new(Ordering::Greater)),
+        })),
+        ExprType::Max => Ok(Box::new(Extremum::new(Ordering::Less))),
+        ExprType::Min => Ok(Box::new(Extremum::new(Ordering::Greater))),
         et => Err(box_err!("unsupport AggrExprType: {:?}", et)),
     }
 }

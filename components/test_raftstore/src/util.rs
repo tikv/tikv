@@ -492,13 +492,13 @@ pub fn create_test_engine(
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
-            let cmpacted_handler = box move |event| {
+            let cmpacted_handler = Box::new(move |event| {
                 router
                     .lock()
                     .unwrap()
                     .send_control(StoreMsg::CompactedEvent(event))
                     .unwrap();
-            };
+            });
             kv_db_opt.add_event_listener(CompactionListener::new(
                 cmpacted_handler,
                 Some(dummpy_filter),

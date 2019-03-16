@@ -42,7 +42,7 @@ pub struct TaskRes {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::RegionTask(ref task) => write!(
                 f,

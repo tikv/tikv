@@ -320,7 +320,7 @@ fn test_delay_split_region() {
     cluster.stop_node(1);
     // New leader should flush old committed entries eagerly.
     check_cluster(&mut cluster, b"k4", b"v4", true);
-    cluster.run_node(1);
+    cluster.run_node(1).unwrap();
     cluster.must_put(b"k5", b"v5");
     // New committed entries should be broadcast lazily.
     check_cluster(&mut cluster, b"k5", b"v5", false);

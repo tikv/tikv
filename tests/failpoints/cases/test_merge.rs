@@ -149,7 +149,7 @@ fn test_node_merge_restart() {
     let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
-    cluster.start();
+    cluster.start().unwrap();
 
     // Wait till merge is finished.
     let timer = Instant::now();
@@ -212,7 +212,7 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     fail::remove(skip_destroy_fp);
     cluster.clear_send_filters();
-    cluster.start();
+    cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
 }
@@ -330,7 +330,10 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::new(AtomicBool::new(false)), together),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::new(AtomicBool::new(false)),
+            together,
+        )),
     );
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {

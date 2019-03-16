@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::ToOwned;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
 use clap::ArgMatches;
@@ -22,7 +23,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::{self, logger};
 
 // A workaround for checking if log is initialized.
-pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
+pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
@@ -67,6 +68,8 @@ pub fn initial_logger(config: &TiKvConfig) {
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+    util::metrics::monitor_jemalloc_stats("tikv")
+        .unwrap_or_else(|e| fatal!("failed to monitor jemalloc stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
@@ -82,7 +85,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 }
 
 #[allow(dead_code)]
-pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
+pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
     }
@@ -108,7 +111,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
-        config.pd.endpoints = endpoints.map(|e| e.to_owned()).collect();
+        config.pd.endpoints = endpoints.map(ToOwned::to_owned).collect();
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {

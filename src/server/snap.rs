@@ -54,7 +54,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Recv { .. } => write!(f, "Recv"),
             Task::Send {
@@ -258,11 +258,11 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         move |(head, chunks)| -> Box<dyn Future<Item = (), Error = Error> + Send> {
             let context = match RecvSnapContext::new(head, &snap_mgr) {
                 Ok(context) => context,
-                Err(e) => return box future::err(e),
+                Err(e) => return Box::new(future::err(e)),
             };
 
             if context.file.is_none() {
-                return box future::result(context.finish(raft_router));
+                return Box::new(future::result(context.finish(raft_router)));
             }
 
             let context_key = context.key.clone();
@@ -282,12 +282,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context)
             });
 
-            box recv_chunks
-                .and_then(move |context| context.finish(raft_router))
-                .then(move |r| {
-                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-                    r
-                })
+            Box::new(
+                recv_chunks
+                    .and_then(move |context| context.finish(raft_router))
+                    .then(move |r| {
+                        snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
+                        r
+                    }),
+            )
         },
     );
     f.then(move |res| match res {

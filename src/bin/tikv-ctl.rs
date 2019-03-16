@@ -13,14 +13,6 @@
 
 #[macro_use]
 extern crate clap;
-#[cfg(unix)]
-extern crate nix;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
@@ -31,23 +23,20 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 #[macro_use]
 extern crate vlog;
 
 mod util;
 
+use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::iter::FromIterator;
+use std::string::ToString;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -108,7 +97,7 @@ fn new_debug_executor(
             let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
-                .map(|p| p.to_string())
+                .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_cfg = RaftEngineCfg::new();
             raft_cfg.dir = raft_path;
@@ -127,8 +116,8 @@ fn new_debug_executor(
 fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
     let env = Arc::new(Environment::new(1));
     let cb = ChannelBuilder::new(env)
-            .max_receive_message_len(1 << 30) // 1G.
-            .max_send_message_len(1 << 30);
+        .max_receive_message_len(1 << 30) // 1G.
+        .max_send_message_len(1 << 30);
 
     let channel = mgr.connect(cb, host);
     DebugClient::new(channel)
@@ -597,7 +586,7 @@ impl DebugExecutor for DebugClient {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        let cfs = cfs.into_iter().map(|s| s.to_owned()).collect();
+        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect();
         let mut req = RegionSizeRequest::new();
         req.set_cfs(RepeatedField::from_vec(cfs));
         req.set_region_id(region);
@@ -1857,10 +1846,10 @@ fn main() {
         let regions = matches
             .values_of("regions")
             .unwrap()
-            .map(|r| r.parse())
+            .map(str::parse)
             .collect::<Result<Vec<_>, _>>()
             .expect("parse regions fail");
-        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let mut cfg = PdConfig::default();
         cfg.endpoints = pd_urls;
         if let Err(e) = cfg.validate() {
@@ -1888,10 +1877,10 @@ fn main() {
             let regions = matches
                 .values_of("regions")
                 .unwrap()
-                .map(|r| r.parse())
+                .map(str::parse)
                 .collect::<Result<Vec<_>, _>>()
                 .expect("parse regions fail");
-            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+            let pd_urls = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
             let mut cfg = PdConfig::default();
             v1!(
                 "Recover regions: {:?}, pd: {:?}, read_only: {}",
@@ -1909,7 +1898,7 @@ fn main() {
         if let Some(matches) = matches.subcommand_matches("remove-fail-stores") {
             let store_ids = values_t!(matches, "stores", u64).expect("parse stores fail");
             let region_ids = matches.values_of("regions").map(|ids| {
-                ids.map(|r| r.parse())
+                ids.map(str::parse)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("parse regions fail")
             });
@@ -1919,7 +1908,7 @@ fn main() {
         }
     } else if let Some(matches) = matches.subcommand_matches("recreate-region") {
         let mut pd_cfg = PdConfig::default();
-        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(|u| u.to_owned()));
+        pd_cfg.endpoints = Vec::from_iter(matches.values_of("pd").unwrap().map(ToOwned::to_owned));
         let region_id = matches.value_of("region").unwrap().parse().unwrap();
         debug_executor.recreate_region(mgr, &pd_cfg, region_id);
     } else if let Some(matches) = matches.subcommand_matches("consistency-check") {
@@ -2042,7 +2031,7 @@ fn convert_gbmb(mut bytes: u64) -> String {
     format!("{}{}", gb, mb)
 }
 
-fn new_security_mgr(matches: &ArgMatches) -> Arc<SecurityManager> {
+fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
     let ca_path = matches.value_of("ca_path");
     let cert_path = matches.value_of("cert_path");
     let key_path = matches.value_of("key_path");
@@ -2201,9 +2190,9 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
-fn run_ldb_command(cmd: &ArgMatches, cfg: &TiKvConfig) {
+fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut args: Vec<String> = match cmd.values_of("") {
-        Some(v) => v.map(|x| x.to_owned()).collect(),
+        Some(v) => v.map(ToOwned::to_owned).collect(),
         None => Vec::new(),
     };
     args.insert(0, "ldb".to_owned());
