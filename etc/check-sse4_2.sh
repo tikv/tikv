@@ -27,7 +27,7 @@ for dir in $dirs; do
             echo "checking binary $dirfile for sse4.2"
             
             # RocksDB uses sse4.2 in the `Fast_CRC32` function
-            fast_crc32=$(nm "$dirfile" | grep -o " _.*Fast_CRC32.*")
+            fast_crc32=$(nm "$dirfile" | grep " _.*Fast_CRC32.*" | tee /dev/tty | cut -d" " -f1)
             if [[ ! $fast_crc32 ]]; then
                 echo "error: $dirfile does not contain rocksdb::crc32c::Fast_CRC32 function"
                 errors=1
@@ -37,9 +37,8 @@ for dir in $dirs; do
             # Make sure the `Fast_CRC32` uses the sse4.2 instruction `crc32`
             # f2.*0f 38 is the opcode of `crc32`, see Intel® SSE4 Programming Reference
             found=0
-            for sym in $fast_crc32; do
-                echo $sym
-                if [[ `gdb -batch -ex "disass/r $sym" $dirfile 2> /dev/null | grep ">:.*f2.*0f 38.*crc32"` ]]; then
+            for addr in $fast_crc32; do
+                if [[ `gdb -batch -ex "disass/r 0x$addr" $dirfile 2> /dev/null | grep ">:.*f2.*0f 38.*crc32"` ]]; then
                     found=1
                     break
                 fi
