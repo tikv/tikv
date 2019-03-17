@@ -192,27 +192,27 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
+x-build-dev-opt: export X_CARGO_CMD=build
+x-build-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-opt: export X_CARGO_RELEASE=1
+x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
 x-build-dev-opt:
-	X_CARGO_CMD=build \
-	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
-	X_CARGO_RELEASE=1 \
-	X_CARGO_CONFIG_FILE="${DEV_OPT_CONFIG}" \
 	bash scripts/run-cargo.sh
 
+x-build-dev-nopt: export X_CARGO_CMD=build
+x-build-dev-nopt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-nopt: export X_CARGO_RELEASE=0
+x-build-dev-nopt: export X_CARGO_CONFIG_FILE=${DEV_NOPT_CONFIG}
 x-build-dev-nopt:
-	X_CARGO_CMD=build \
-	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
-	X_CARGO_RELEASE=0 \
-	X_CARGO_CONFIG_FILE="${DEV_NOPT_CONFIG}" \
 	bash scripts/run-cargo.sh
 
 # This is a profile for _actual releases_. Devs should almost never be using
 # this. It is a very slow build, and only a bit faster.
+x-build-prod: export X_CARGO_CMD=build
+x-build-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-prod: export X_CARGO_RELEASE=1
+x-build-prod: export X_CARGO_CONFIG_FILE=${PRODCONFIG}
 x-build-prod:
-	X_CARGO_CMD=build \
-	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
-	X_CARGO_RELEASE=1 \
-	X_CARGO_CONFIG_FILE="${PROD_CONFIG}" \
 	bash scripts/run-cargo.sh
 
 x-build: x-build-dev-nopt
