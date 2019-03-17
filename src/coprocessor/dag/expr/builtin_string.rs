@@ -63,8 +63,8 @@ impl ScalarFunc {
     }
 
     #[inline]
-    fn find_str(text: &str, pattern: &str) -> Option<i64> {
-        twoway::find_str(text, pattern).map(|i| text[..i].chars().count() as i64)
+    fn find_str(text: &str, pattern: &str) -> Option<usize> {
+        twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
     }
 
     #[inline]
@@ -72,7 +72,7 @@ impl ScalarFunc {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
         Ok(Self::find_str(&s.to_lowercase(), &substr.to_lowercase())
-            .map(|i| 1 + i)
+            .map(|i| 1 + i as i64)
             .or(Some(0)))
     }
 
@@ -90,15 +90,10 @@ impl ScalarFunc {
             .nth(pos as usize - 1)
             .map(|offset| {
                 Self::find_str(&s[offset..].to_lowercase(), &substr.to_lowercase())
-                    .map(|i| i + pos)
+                    .map(|i| i as i64 + pos)
                     .unwrap_or(0)
             })
             .or(Some(0)))
-    }
-
-    #[inline]
-    fn find_bytes(text: &[u8], pattern: &[u8]) -> Option<i64> {
-        twoway::find_bytes(text, pattern).map(|i| i as i64)
     }
 
     #[inline]
@@ -109,7 +104,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        Ok(Self::find_bytes(&s, &substr).map(|i| 1 + i).or(Some(0)))
+        Ok(twoway::find_bytes(&s, &substr)
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -125,8 +122,8 @@ impl ScalarFunc {
         if pos < 1 || pos as usize > s.len() + 1 {
             return Ok(Some(0));
         }
-        Ok(Self::find_bytes(&s[pos as usize - 1..], &substr)
-            .map(|i| pos + i)
+        Ok(twoway::find_bytes(&s[pos as usize - 1..], &substr)
+            .map(|i| pos + i as i64)
             .or(Some(0)))
     }
 
@@ -910,7 +907,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let substr = try_opt!(self.children[1].eval_string(ctx, row));
-        Ok(Self::find_bytes(&s, &substr).map(|i| 1 + i).or(Some(0)))
+        Ok(twoway::find_bytes(&s, &substr)
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 }
 
