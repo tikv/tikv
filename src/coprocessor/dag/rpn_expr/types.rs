@@ -105,7 +105,7 @@ impl std::ops::DerefMut for RpnExpressionNodeVec {
 impl RpnExpressionNodeVec {
     /// Builds the RPN expression node list from an expression definition tree.
     // TODO: Deprecate it in Coprocessor V2 DAG interface.
-    pub fn build_from_expr_tree(tree_node: Expr, time_zone: Tz) -> Result<Self> {
+    pub fn build_from_expr_tree(tree_node: Expr, time_zone: &Tz) -> Result<Self> {
         let mut expr_nodes = Vec::new();
         Self::append_rpn_nodes_recursively(
             tree_node,
@@ -154,7 +154,7 @@ impl RpnExpressionNodeVec {
     /// recursively.
     fn append_rpn_nodes_recursively<F>(
         mut tree_node: Expr,
-        time_zone: Tz,
+        time_zone: &Tz,
         rpn_nodes: &mut Vec<RpnExpressionNode>,
         fn_mapper: F,
     ) -> Result<()>
@@ -311,7 +311,7 @@ impl RpnExpressionNodeVec {
             mut tree_node: Expr,
             eval_type: EvalType,
             rpn_nodes: &mut Vec<RpnExpressionNode>,
-            time_zone: Tz,
+            time_zone: &Tz,
         ) -> Result<()> {
             let field_type = tree_node.take_field_type();
             let scalar_value = match eval_type {
@@ -686,7 +686,7 @@ mod tests {
         let mut vec = vec![];
         RpnExpressionNodeVec::append_rpn_nodes_recursively(
             node_fn_d,
-            Tz::utc(),
+            &Tz::utc(),
             &mut vec,
             fn_mapper,
         )
