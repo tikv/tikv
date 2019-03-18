@@ -35,11 +35,12 @@ if [[ -n "$X_CARGO_FEATURES" ]]; then
 fi
 
 if [[ -n "$X_CARGO_RELEASE" && "$X_CARGO_RELEASE" != "0" ]]; then
-	# TODO check that this works
+    # TODO check that this works
     args="$args --release"
 fi
 
 if [[ -n "$X_CARGO_CONFIG_FILE" ]]; then
+    echo "using $X_CARGO_CONFIG_FILE"
     args="$args -Zunstable-options -Zconfig-profile"
     mkdir .cargo 2> /dev/null || true
     set -x
@@ -47,8 +48,13 @@ if [[ -n "$X_CARGO_CONFIG_FILE" ]]; then
     set +x
 fi
 
-if [[ -n "X_RUSTFLAGS" ]]; then
-    RUSTFLAGS="$RUSTFLAGS $X_RUSTFLAGS"
+if [[ -n "$X_RUSTFLAGS" ]]; then
+    export RUSTFLAGS="$RUSTFLAGS $X_RUSTFLAGS"
+fi
+
+if [[ -n "$X_DEBUG" ]]; then
+    export CARGO_PROFILE_DEV_DEBUG="true"
+    export CARGO_PROFILE_RELEASE_DEBUG="true"
 fi
 
 # Turn off error -> exit

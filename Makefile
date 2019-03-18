@@ -152,17 +152,22 @@ expression: format clippy
 #
 # They can be invoked as:
 #
-#     $ make x-build-dev-nopt   # A typical dev profile
-#                               #   (fast build / slow run)
-#     $ make x-build-dev-opt    # An optimized dev profile
-#                               #   (slow build / fast run)
-#     $ make x-build-prod       # A release build
-#                               #   (slowest build / fastest run)
+#     $ make x-build-dev-nopt      # An unoptimized build
+#                                  #   (fast build / slow run)
+#     $ make x-build-dev-opt       # A mostly-optimized dev profile
+#                                  #   (slower build / faster run)
+#     $ make x-build-prod          # A release build
+#                                  #   (slowest build / fastest run)
+#     $ make x-bench               # Run benches mostly-optimized
+#                                  #   (slower build / faster run)
+#     $ make x-test                # Run tests unoptimized
+#                                  #   (fast build / slow run)
 #
-# Shortcuts for the first two are
+# The first three have aliases:
 #
 #     $ make x-build
 #     $ make x-build-opt
+#     $ make x-release
 #
 # The below rules all rely on using a .cargo/config file to override various
 # profiles. Within those config files we'll experiment with compile-time
@@ -184,10 +189,11 @@ expression: format clippy
 DEV_OPT_CONFIG=etc/cargo.config.dev-opt
 DEV_NOPT_CONFIG=etc/cargo.config.dev-nopt
 PROD_CONFIG=etc/cargo.config.prod
+TEST_CONFIG=etc/cargo.config.test
+BENCH_CONFIG=etc/cargo.config.bench
 
 ifneq ($(DEBUG),)
-# FIXME: Set debuginfo with cargo config env vars, not rustflags
-export X_RUSTFLAGS:=-Cdebuginfo=2
+export X_DEBUG=${DEBUG}
 endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
@@ -211,13 +217,29 @@ x-build-dev-nopt:
 x-build-prod: export X_CARGO_CMD=build
 x-build-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-prod: export X_CARGO_RELEASE=1
-x-build-prod: export X_CARGO_CONFIG_FILE=${PRODCONFIG}
+x-build-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
 x-build-prod:
 	bash scripts/run-cargo.sh
+
+x-test: export X_CARGO_CMD=test
+x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-test: export X_CARGO_RELEASE=0
+x-test: export X_CARGO_CONFIG_FILE=${TEST_CONFIG}
+x-test:
+	bash etc/run-cargo.sh
+
+x-bench: export X_CARGO_CMD=bench
+x-bench: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-bench: export X_CARGO_RELEASE=0
+x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
+x-bench:
+	bash etc/run-cargo.sh
 
 x-build: x-build-dev-nopt
 
 x-build-opt: x-build-dev-opt
+
+x-release: x-build-prod
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.
