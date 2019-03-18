@@ -137,6 +137,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
+            | ScalarFuncSig::PeriodAdd
+            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
@@ -435,8 +437,6 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
-            | ScalarFuncSig::PeriodAdd
-            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::RandomBytes
@@ -765,6 +765,9 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         DateDiff => date_diff,
+
+        PeriodAdd => period_add,
+        PeriodDiff => period_diff,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1181,6 +1184,8 @@ mod tests {
                     ScalarFuncSig::SubDatetimeAndDuration,
                     ScalarFuncSig::SubDatetimeAndString,
                     ScalarFuncSig::SubDurationAndDuration,
+                    ScalarFuncSig::PeriodAdd,
+                    ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
                 ],
@@ -1521,8 +1526,8 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
-            ScalarFuncSig::PeriodAdd,
-            ScalarFuncSig::PeriodDiff,
+            // ScalarFuncSig::PeriodAdd,
+            // ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,
