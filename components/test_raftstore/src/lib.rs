@@ -12,6 +12,7 @@
 // limitations under the License.
 
 #![feature(box_syntax)]
+#![feature(integer_atomics)]
 
 extern crate futures;
 extern crate grpcio as grpc;
