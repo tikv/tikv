@@ -80,7 +80,9 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         let mut sought_regions = Vec::new();
         let mut key = b"".to_vec();
         loop {
-            let res = engine.seek_region(&key, box |_, _| true, 100).unwrap();
+            let res = engine
+                .seek_region(&key, Box::new(|_, _| true), 100)
+                .unwrap();
             match res {
                 SeekRegionResult::Found(region) => {
                     key = region.get_end_key().to_vec();
@@ -97,7 +99,9 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         assert_eq!(sought_regions, regions);
 
         // Test end_key is exclusive
-        let res = engine.seek_region(b"k1", box |_, _| true, 100).unwrap();
+        let res = engine
+            .seek_region(b"k1", Box::new(|_, _| true), 100)
+            .unwrap();
         match res {
             SeekRegionResult::Found(region) => {
                 assert_eq!(region, regions[1]);
@@ -107,7 +111,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 
         // Test exactly reaches limit
         let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 5)
+            .seek_region(b"", Box::new(|r, _| r.get_end_key() == b"k9"), 5)
             .unwrap();
         match res {
             SeekRegionResult::Found(region) => {
@@ -118,7 +122,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 
         // Test exactly exceeds limit
         let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 4)
+            .seek_region(b"", Box::new(|r, _| r.get_end_key() == b"k9"), 4)
             .unwrap();
         match res {
             SeekRegionResult::LimitExceeded { next_key } => {
@@ -128,7 +132,9 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         }
 
         // Test seek to the end
-        let res = engine.seek_region(b"", box |_, _| false, 100).unwrap();
+        let res = engine
+            .seek_region(b"", Box::new(|_, _| false), 100)
+            .unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
@@ -136,7 +142,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 
         // Test exactly to the end
         let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key().is_empty(), 6)
+            .seek_region(b"", Box::new(|r, _| r.get_end_key().is_empty()), 6)
             .unwrap();
         match res {
             SeekRegionResult::Found(region) => {
@@ -146,7 +152,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         }
 
         // Test limit exactly reaches end
-        let res = engine.seek_region(b"", box |_, _| false, 6).unwrap();
+        let res = engine.seek_region(b"", Box::new(|_, _| false), 6).unwrap();
         match res {
             SeekRegionResult::Ended => {}
             r => panic!("expect getting Ended, but got {:?}", r),
@@ -154,7 +160,7 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
 
         // Test seek from non-starting key
         let res = engine
-            .seek_region(b"k6\xff\xff\xff\xff\xff", box |_, _| true, 1)
+            .seek_region(b"k6\xff\xff\xff\xff\xff", Box::new(|_, _| true), 1)
             .unwrap();
         match res {
             SeekRegionResult::Found(region) => {
@@ -163,7 +169,11 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
             r => panic!("expect getting a region, but got {:?}", r),
         }
         let res = engine
-            .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_, _| true, 1)
+            .seek_region(
+                b"\xff\xff\xff\xff\xff\xff\xff\xff",
+                Box::new(|_, _| true),
+                1,
+            )
             .unwrap();
         match res {
             SeekRegionResult::Found(region) => {
@@ -182,11 +192,11 @@ fn test_region_collection_seek_region() {
     cluster
         .sim
         .wl()
-        .post_create_coprocessor_host(box move |id, host| {
+        .post_create_coprocessor_host(Box::new(move |id, host| {
             let p = RegionInfoAccessor::new(host);
             p.start();
             tx.send((id, p)).unwrap()
-        });
+        }));
 
     cluster.run();
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();

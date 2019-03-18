@@ -61,7 +61,7 @@ impl RpcClient {
                     });
                 }
                 Err(e) => {
-                    warn!("validate PD endpoints failed: {:?}", e);
+                    warn!("validate PD endpoints failed"; "err" => ?e);
                     thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
                 }
             }
@@ -117,7 +117,7 @@ impl RpcClient {
 }
 
 impl fmt::Debug for RpcClient {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RpcClient")
             .field("cluster_id", &self.cluster_id)
             .field("leader", &self.get_leader())
@@ -212,23 +212,29 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_store())
+        let store = resp.take_store();
+        if store.get_state() != metapb::StoreState::Tombstone {
+            Ok(store)
+        } else {
+            Err(Error::StoreTombstone(format!("{:?}", store)))
+        }
     }
 
-    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_all_stores"])
             .start_coarse_timer();
 
         let mut req = pdpb::GetAllStoresRequest::new();
         req.set_header(self.header());
+        req.set_exclude_tombstone_stores(exclude_tombstone);
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             client.get_all_stores_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_stores().to_vec())
+        Ok(resp.take_stores().into_vec())
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
@@ -322,7 +328,7 @@ impl PdClient for RpcClient {
                 )) as PdFuture<_>;
             }
 
-            info!("heartbeat sender is refreshed.");
+            info!("heartbeat sender is refreshed");
             let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
             let (tx, rx) = mpsc::unbounded();
             tx.unbounded_send(req).unwrap();
@@ -341,7 +347,7 @@ impl PdClient for RpcClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("failed to send heartbeat: {:?}", e);
+                            error!("failed to send heartbeat"; "err" => ?e);
                             Err(e)
                         }
                     }),

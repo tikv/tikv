@@ -20,13 +20,13 @@ pub fn make_rpc_error(err: Error) -> RpcStatus {
     RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", err)))
 }
 
-pub fn send_rpc_error<M, E>(ctx: RpcContext, sink: UnarySink<M>, error: E)
+pub fn send_rpc_error<M, E>(ctx: RpcContext<'_>, sink: UnarySink<M>, error: E)
 where
     Error: From<E>,
 {
     let err = make_rpc_error(Error::from(error));
     ctx.spawn(sink.fail(err).map_err(|e| {
-        warn!("send rpc error: {:?}", e);
+        warn!("send rpc failed"; "err" => %e);
     }));
 }
 
@@ -46,6 +46,6 @@ macro_rules! send_rpc_response {
                 $sink.fail(make_rpc_error(e))
             }
         };
-        res.map_err(|e| warn!("send rpc response: {:?}", e))
+        res.map_err(|e| warn!("send rpc response"; "err" => %e))
     }};
 }

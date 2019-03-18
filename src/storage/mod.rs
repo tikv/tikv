@@ -54,11 +54,12 @@ pub use self::engine::{
     TestEngineBuilder,
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
 pub type CfName = &'static str;
 pub const CF_DEFAULT: CfName = "default";
@@ -164,7 +165,7 @@ pub enum Command {
 }
 
 impl Display for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Command::Prewrite {
                 ref ctx,
@@ -254,7 +255,7 @@ impl Display for Command {
 }
 
 impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
@@ -959,10 +960,11 @@ impl<E: Engine> Storage<E> {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            modifies,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -1124,7 +1126,8 @@ impl<E: Engine> Storage<E> {
                 // no scan_count for this kind of op.
 
                 let key_len = key.len();
-                let result = snapshot.get_cf(cf, &Key::from_encoded(key))
+                let result = snapshot
+                    .get_cf(cf, &Key::from_encoded(key))
                     // map storage::engine::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {
@@ -1223,7 +1226,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
@@ -1248,10 +1251,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
@@ -1273,7 +1277,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
@@ -1305,7 +1309,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
@@ -1332,10 +1336,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
@@ -1666,7 +1671,7 @@ quick_error! {
         Closed {
             description("storage is closed.")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -1726,7 +1731,7 @@ impl ErrorHeaderKind {
 }
 
 impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_str())
     }
 }

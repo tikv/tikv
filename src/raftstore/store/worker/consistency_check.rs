@@ -17,13 +17,12 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 
 use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use crate::raftstore::store::{keys, Msg, PeerMsg};
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use crate::storage::CF_RAFT;
 use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
 
 use super::metrics::*;
-use super::MsgSender;
 use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
@@ -46,7 +45,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::ComputeHash {
                 ref region, index, ..
@@ -55,13 +54,13 @@ impl Display for Task {
     }
 }
 
-pub struct Runner<C: MsgSender> {
-    ch: C,
+pub struct Runner<C: CasualRouter> {
+    router: C,
 }
 
-impl<C: MsgSender> Runner<C> {
-    pub fn new(ch: C) -> Runner<C> {
-        Runner { ch }
+impl<C: CasualRouter> Runner<C> {
+    pub fn new(router: C) -> Runner<C> {
+        Runner { router }
     }
 
     /// Computes the hash of the Region.
@@ -126,12 +125,11 @@ impl<C: MsgSender> Runner<C> {
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
-        let msg = Msg::PeerMsg(PeerMsg::ComputeHashResult {
-            region_id,
+        let msg = CasualMessage::ComputeHashResult {
             index,
             hash: checksum,
-        });
-        if let Err(e) = self.ch.try_send(msg) {
+        };
+        if let Err(e) = self.router.send(region_id, msg) {
             warn!(
                 "failed to send hash compute result";
                 "region_id" => region_id,
@@ -141,7 +139,7 @@ impl<C: MsgSender> Runner<C> {
     }
 }
 
-impl<C: MsgSender> Runnable<Task> for Runner<C> {
+impl<C: CasualRouter> Runnable<Task> for Runner<C> {
     fn run(&mut self, task: Task) {
         match task {
             Task::ComputeHash {
@@ -157,7 +155,7 @@ impl<C: MsgSender> Runnable<Task> for Runner<C> {
 mod tests {
     use super::*;
     use crate::raftstore::store::engine::Snapshot;
-    use crate::raftstore::store::{keys, Msg};
+    use crate::raftstore::store::keys;
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
@@ -184,7 +182,7 @@ mod tests {
         let mut region = Region::new();
         region.mut_peers().push(Peer::new());
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(100);
         let mut runner = Runner::new(tx);
         let mut digest = Digest::new(crc32::IEEE);
         let kvs = vec![(b"k1", b"v1"), (b"k2", b"v2")];
@@ -210,11 +208,7 @@ mod tests {
 
         let res = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         match res {
-            Msg::PeerMsg(PeerMsg::ComputeHashResult {
-                region_id,
-                index,
-                hash,
-            }) => {
+            (region_id, CasualMessage::ComputeHashResult { index, hash }) => {
                 assert_eq!(region_id, region.get_id());
                 assert_eq!(index, 10);
                 assert_eq!(hash, checksum_bytes);

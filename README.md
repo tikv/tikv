@@ -1,6 +1,9 @@
 ![tikv_logo](images/tikv-logo.png)
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/) [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
+[![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
+![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
 TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
@@ -180,6 +183,32 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 - [raft-rs](https://github.com/pingcap/raft-rs): The Raft distributed consensus algorithm implemented in Rust
 - [grpc-rs](https://github.com/pingcap/grpc-rs): The gRPC library for Rust built on the gRPC C Core library and Rust Futures
 - [fail-rs](https://github.com/pingcap/fail-rs): Fail points for Rust
+
+## Communication
+
+Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT). Here is an excerpt:
+
+> In the interest of fostering an open and welcoming environment, we as
+contributors and maintainers pledge to making participation in our project and
+our community a harassment-free experience for everyone, regardless of age, body
+size, disability, ethnicity, sex characteristics, gender identity and expression,
+level of experience, education, socio-economic status, nationality, personal
+appearance, race, religion, or sexual identity and orientation.
+
+### Socia Media
+
+- [Twitter](https://twitter.com/tikvproject)
+- [Blog](https://tikv.org/blog/)
+- [Reddit](https://www.reddit.com/r/TiKV)
+- Post questions or help answer them on [Stack Overflow](https://stackoverflow.com/questions/tagged/tikv)
+
+### Slack
+
+Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invite/enQtNTUyODE4ODU2MzI0LTgzZDQ3NzZlNDkzMGIyYjU1MTA0NzIwMjFjODFiZjA0YjFmYmQyOTZiNzNkNzg1N2U1MDdlZTIxNTU5NWNhNjk) - Sign up and join channels on TiKV topics that interest you.
+
+### WeChat
+
+The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personal information (WeChat ID, and other basic information) included. We will invite you in right away.
 
 ## License
 

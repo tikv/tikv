@@ -32,7 +32,7 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Box<Future<Item = T, Error = Error> + Send>;
+pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
@@ -112,11 +112,11 @@ pub trait PdClient: Send + Sync {
     ///   and Peers will be removed.
     /// - For auto-balance, PD determines how to move the Region from one store to another.
 
-    /// Gets store information.
+    /// Gets store information if it is not a tombstone store.
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
     /// Gets all stores information.
-    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, _exlcude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         unimplemented!();
     }
 

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod bootstrap;
 pub mod cmd_resp;
 pub mod config;
 pub mod engine;
@@ -21,6 +20,7 @@ pub mod msg;
 pub mod transport;
 pub mod util;
 
+mod bootstrap;
 mod local_metrics;
 mod metrics;
 mod peer;
@@ -30,16 +30,16 @@ mod snap;
 mod worker;
 
 pub use self::bootstrap::{
-    bootstrap_store, clear_prepare_bootstrap, clear_prepare_bootstrap_state, prepare_bootstrap,
-    write_prepare_bootstrap,
+    bootstrap_store, clear_prepare_bootstrap_cluster, clear_prepare_bootstrap_key, initial_region,
+    prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 pub use self::config::Config;
 pub use self::engine::{Iterable, Mutable, Peekable};
-pub use self::fsm::{new_compaction_listener, DestroyPeerJob, StoreInfo};
+pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, Msg, PeerMsg, PeerTick, ReadCallback, ReadResponse, SeekRegionCallback,
-    SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick, WriteCallback,
-    WriteResponse,
+    Callback, CasualMessage, PeerMsg, PeerTick, RaftCommand, ReadCallback, ReadResponse,
+    SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick,
+    WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
@@ -54,7 +54,7 @@ pub use self::snap::{
     check_abort, copy_snapshot, ApplyOptions, Error as SnapError, SnapEntry, SnapKey, SnapManager,
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
-pub use self::transport::Transport;
+pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::Engines;
 pub use self::worker::{KeyEntry, ReadTask};
 

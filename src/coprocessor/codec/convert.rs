@@ -55,7 +55,6 @@ pub fn truncate_f64(mut f: f64, flen: u8, decimal: u8) -> Res<f64> {
 }
 
 /// `overflow` returns an overflowed error.
-#[macro_export]
 macro_rules! overflow {
     ($val:ident, $bound:ident) => {{
         Err(box_err!("constant {} overflows {}", $val, $bound))
@@ -276,7 +275,7 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
         match c {
             '.' => dot_idx = Some(i),
             'e' | 'E' => e_idx = Some(i),
-            '0'...'9' => {
+            '0'..='9' => {
                 if e_idx.is_none() {
                     if dot_idx.is_none() {
                         int_cnt += 1;

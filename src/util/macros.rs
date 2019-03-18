@@ -93,7 +93,7 @@ macro_rules! box_try {
 macro_rules! box_err {
     ($e:expr) => ({
         use std::error::Error;
-        let e: Box<Error + Sync + Send> = format!("[{}:{}]: {}", file!(), line!(),  $e).into();
+        let e: Box<dyn Error + Sync + Send> = format!("[{}:{}]: {}", file!(), line!(),  $e).into();
         e.into()
     });
     ($f:tt, $($arg:expr),+) => ({
@@ -144,10 +144,10 @@ macro_rules! wait_op {
     (IMPL $expr:expr, $timeout:expr) => {{
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel();
-        let cb = box move |res| {
+        let cb = Box::new(move |res| {
             // we don't care error actually.
             let _ = tx.send(res);
-        };
+        });
         $expr(cb)?;
         match $timeout {
             None => rx.recv().ok(),
@@ -188,7 +188,7 @@ mod tests {
     fn test_box_error() {
         let file_name = file!();
         let line_number = line!();
-        let e: Box<Error + Send + Sync> = box_err!("{}", "hi");
+        let e: Box<dyn Error + Send + Sync> = box_err!("{}", "hi");
         assert_eq!(
             format!("{}", e),
             format!("[{}:{}]: hi", file_name, line_number + 1)

@@ -19,9 +19,8 @@ use std::sync::Arc;
 use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use crate::util::{panic_when_key_exceed_bound, set_panic_mark};
-
-use super::metrics::*;
+use crate::util::metrics::CRITICAL_ERROR;
+use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Snapshot of a region.
 ///
@@ -310,8 +309,10 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            KEY_NOT_IN_REGION.inc();
-            if panic_when_key_exceed_bound() {
+            CRITICAL_ERROR
+                .with_label_values(&["key not in region"])
+                .inc();
+            if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
             } else {
@@ -358,7 +359,7 @@ mod tests {
     }
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
-        PeerStorage::new(engines, r, worker::dummy_scheduler(), "".to_owned()).unwrap()
+        PeerStorage::new(engines, r, worker::dummy_scheduler(), 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {

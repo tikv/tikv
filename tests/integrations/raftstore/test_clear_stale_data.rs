@@ -117,7 +117,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Restart the node.
     cluster.stop_node(node_id);
-    cluster.run_node(node_id);
+    cluster.run_node(node_id).unwrap();
 
     // Keys in removed peers should not exist.
     for i in 0..n {

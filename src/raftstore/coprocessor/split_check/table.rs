@@ -40,7 +40,7 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }
@@ -87,7 +87,7 @@ impl Coprocessor for TableCheckObserver {}
 impl SplitCheckObserver for TableCheckObserver {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         policy: CheckPolicy,
@@ -103,9 +103,9 @@ impl SplitCheckObserver for TableCheckObserver {
             Ok(None) => return,
             Err(err) => {
                 warn!(
-                    "[region {}] failed to get region last key: {}",
-                    region.get_id(),
-                    err
+                    "failed to get region last key";
+                    "region_id" => region.get_id(),
+                    "err" => %err,
                 );
                 return;
             }
@@ -235,13 +235,12 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use crate::raftstore::store::{Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
+    use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
     use crate::storage::ALL_CFS;
     use crate::util::codec::number::NumberEncoder;
     use crate::util::config::ReadableSize;
     use crate::util::rocksdb_util::new_engine;
-    use crate::util::transport::RetryableSendCh;
     use crate::util::worker::Runnable;
 
     use super::*;
@@ -322,9 +321,7 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-split-table");
-        let (stx, _rx) = mpsc::sync_channel::<Msg>(100);
-        let sch = RetryableSendCh::new(stx, "test-split-size");
+        let (stx, _rx) = mpsc::sync_channel(100);
 
         let mut cfg = Config::default();
         // Enable table split.
@@ -337,9 +334,9 @@ mod tests {
         cfg.region_max_keys = 2000000000;
         cfg.region_split_keys = 1000000000;
         // Try to ignore the ApproximateRegionSize
-        let coprocessor = CoprocessorHost::new(cfg, sch);
+        let coprocessor = CoprocessorHost::new(cfg, stx);
         let mut runnable =
-            SplitCheckRunner::new(Arc::clone(&engine), ch.clone(), Arc::new(coprocessor));
+            SplitCheckRunner::new(Arc::clone(&engine), tx.clone(), Arc::new(coprocessor));
 
         type Case = (Option<Vec<u8>>, Option<Vec<u8>>, Option<i64>);
         let mut check_cases = |cases: Vec<Case>| {
@@ -351,7 +348,7 @@ mod tests {
                 if let Some(id) = table_id {
                     let key = Key::from_raw(&gen_table_prefix(id));
                     match rx.try_recv() {
-                        Ok(Msg::PeerMsg(PeerMsg::SplitRegion { split_keys, .. })) => {
+                        Ok((_, CasualMessage::SplitRegion { split_keys, .. })) => {
                             assert_eq!(split_keys, vec![key.into_encoded()]);
                         }
                         others => panic!("expect {:?}, but got {:?}", key, others),
