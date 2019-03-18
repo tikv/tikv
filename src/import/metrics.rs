@@ -48,7 +48,7 @@ lazy_static! {
     pub static ref IMPORT_RANGE_DELIVERY_DURATION: Histogram = register_histogram!(
         "tikv_import_range_delivery_duration",
         "Bucketed histogram of import range delivery duration",
-        exponential_buckets(0.1, 2.0, 20).unwrap()
+        exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IMPORT_SPLIT_SST_DURATION: Histogram = register_histogram!(
