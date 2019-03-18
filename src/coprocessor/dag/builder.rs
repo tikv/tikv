@@ -109,6 +109,8 @@ impl DAGBuilder {
             }
         }
 
+        // Currently we only support table scan executor. So if there are more
+        // executors, it is unexpected.
         if executor_descriptors.next().is_some() {
             return Err(Error::Other(box_err!(
                 "Unexpected non-first executor {:?}",

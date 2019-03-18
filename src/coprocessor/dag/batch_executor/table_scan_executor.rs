@@ -45,7 +45,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut key_only = true;
-        let mut handle_index = std::usize::MAX;
+        let mut handle_index = None;
         let mut schema = Vec::with_capacity(columns_info.len());
         let mut columns_default_value = Vec::with_capacity(columns_info.len());
         let mut column_id_index = HashMap::default();
@@ -55,11 +55,14 @@ impl<S: Store> BatchTableScanExecutor<S> {
             columns_default_value.push(ci.take_default_val());
 
             if ci.get_pk_handle() {
-                handle_index = index;
+                handle_index = Some(index);
             } else {
                 key_only = false;
                 column_id_index.insert(ci.get_column_id(), index);
             }
+
+            // Note: if two PK handles are given, we will only preserve the *last* one. Also if two
+            // columns with the same column id are given, we will only preserve the *last* one.
         }
 
         let imp = TableScanExecutorImpl {
@@ -121,9 +124,7 @@ struct TableScanExecutorImpl {
     key_only: bool,
 
     /// The index in output row to put the handle.
-    ///
-    /// If PK handle column does not exist in `schema`, this field will be set to `usize::MAX`.
-    handle_index: usize,
+    handle_index: Option<usize>,
 
     /// A vector of flags indicating whether corresponding column is filled in `next_batch`.
     /// It is a struct level field in order to prevent repeated memory allocations since its length
@@ -158,20 +159,35 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         )?)
     }
 
+    /// Constructs empty columns, with PK in decoded format and the rest in raw format.
     fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
-        // Construct empty columns, with PK in decoded format and the rest in raw format.
-
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
-        for i in 0..columns_len {
-            if i == self.handle_index {
-                // For primary key, we construct a decoded `VectorValue` because it is directly
-                // stored as i64, without a datum flag, at the end of key.
-                columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                    expect_rows,
-                    EvalType::Int,
-                ));
-            } else {
+
+        if let Some(handle_index) = self.handle_index {
+            // PK is specified in schema. PK column should be decoded and the rest is in raw format
+            // like this:
+            // non-pk non-pk non-pk pk non-pk non-pk non-pk
+            //                      ^handle_index = 3
+            //                                             ^columns_len = 7
+
+            // Columns before `handle_index` (if any) should be raw.
+            for _ in 0..handle_index {
+                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+            }
+            // For PK handle, we construct a decoded `VectorValue` because it is directly
+            // stored as i64, without a datum flag, at the end of key.
+            columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
+                expect_rows,
+                EvalType::Int,
+            ));
+            // Columns after `handle_index` (if any) should also be raw.
+            for _ in handle_index + 1..columns_len {
+                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+            }
+        } else {
+            // PK is unspecified in schema. All column should be in raw format.
+            for _ in 0..columns_len {
                 columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
             }
         }
@@ -191,21 +207,15 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
-        // Decode handle from key if handle is specified in columns.
-        if self.handle_index != std::usize::MAX {
-            if !self.is_column_filled[self.handle_index] {
-                let handle_id = table::decode_handle(key)?;
-                // FIXME: The columns may be not in the same length if there is error.
-                // TODO: We should avoid calling `push_int` repeatly. Instead we should specialize
-                // a `&mut Vec` first.
-                columns[self.handle_index]
-                    .mut_decoded()
-                    .push_int(Some(handle_id));
-                decoded_columns += 1;
-                self.is_column_filled[self.handle_index] = true;
-            }
-            // TODO: Shall we just returns error when met
-            // `self.is_column_filled[self.handle_index] == true`?
+        if let Some(handle_index) = self.handle_index {
+            let handle_id = table::decode_handle(key)?;
+            // TODO: We should avoid calling `push_int` repeatly. Instead we should specialize
+            // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
+            columns[handle_index]
+                .mut_decoded()
+                .push_int(Some(handle_id));
+            decoded_columns += 1;
+            self.is_column_filled[handle_index] = true;
         }
 
         if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
@@ -217,7 +227,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             let mut remaining = value;
             while !remaining.is_empty() && decoded_columns < columns_len {
                 if remaining[0] != datum::VAR_INT_FLAG {
-                    return Err(box_err!("Expect VAR_INT flag for column id"));
+                    return Err(box_err!("Unable to decode row: column id must be VAR_INT"));
                 }
                 remaining = &remaining[1..];
                 let column_id = box_try!(number::decode_var_i64(&mut remaining));
@@ -231,9 +241,17 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                         columns[index].push_raw(val);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
+                    } else {
+                        // This indicates that there are duplicated elements in the row, which is
+                        // unexpected. We won't abort the request or overwrite the previous element,
+                        // but will output a log anyway.
+                        warn!(
+                            "Ignored duplicated row datum in table scan";
+                            "key" => log_wrappers::Key(&key),
+                            "value" => log_wrappers::Key(&value),
+                            "dup_column_id" => column_id,
+                        );
                     }
-                    // TODO: Shall we just returns error when met
-                    // `self.is_column_filled[index] == true`?
                 }
                 remaining = new_remaining;
             }
@@ -254,8 +272,9 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 {
                     datum::DATUM_DATA_NULL
                 } else {
+                    // For a normal request this will never happen, so let's return an error.
                     return Err(box_err!(
-                        "Column (offset = {}) has flag NOT NULL, but no value is given",
+                        "Invalid request: default value must be provided for NOT NULL column (offset = {})",
                         i
                     ));
                 };
@@ -465,7 +484,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[None, None]);
 
             // Then, fetch 3 rows. 0 rows remaining (but we allow that is_drained == false).
@@ -474,7 +493,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(-5), Some(10), None]
@@ -503,7 +522,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
@@ -531,7 +550,7 @@ mod tests {
                 &[Some(4), Some(5), Some(3), Some(1), Some(6)]
             );
             assert!(result.data[1].is_raw());
-            result.data[1].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[1].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
@@ -604,7 +623,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5)]
@@ -615,7 +634,7 @@ mod tests {
                 &[Some(1), Some(3), Some(4)]
             );
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[2].decoded().as_int_slice(),
                 &[Some(10), Some(-5), None]
@@ -627,7 +646,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(0.1), Some(4.5)]
@@ -635,7 +654,7 @@ mod tests {
             assert!(result.data[1].is_decoded());
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(6)]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[None, None]);
         }
 
@@ -676,10 +695,86 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
+            );
+        }
+
+        // Case 8. PK is in the middle of the schema
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[1].clone(),
+                    columns_info[0].clone(),
+                    columns_info[2].clone(),
+                ],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 3);
+            assert_eq!(result.data.rows_len(), 5);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_int_slice(),
+                &[Some(10), Some(-5), None, None, None]
+            );
+            assert!(result.data[1].is_decoded());
+            assert_eq!(
+                result.data[1].decoded().as_int_slice(),
+                &[Some(1), Some(3), Some(4), Some(5), Some(6)]
+            );
+            assert!(result.data[2].is_raw());
+            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[2].decoded().as_real_slice(),
+                &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
+            );
+        }
+
+        // Case 9. PK is the last column in schema
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![
+                    columns_info[1].clone(),
+                    columns_info[2].clone(),
+                    columns_info[0].clone(),
+                ],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.as_ref().unwrap());
+            assert_eq!(result.data.columns_len(), 3);
+            assert_eq!(result.data.rows_len(), 5);
+            assert!(result.data[0].is_raw());
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(
+                result.data[0].decoded().as_int_slice(),
+                &[Some(10), Some(-5), None, None, None]
+            );
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(&Tz::utc(), &schema[2]).unwrap();
+            assert_eq!(
+                result.data[1].decoded().as_real_slice(),
+                &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
+            );
+            assert!(result.data[2].is_decoded());
+            assert_eq!(
+                result.data[2].decoded().as_int_slice(),
+                &[Some(1), Some(3), Some(4), Some(5), Some(6)]
             );
         }
     }
@@ -799,10 +894,10 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
         }
     }
