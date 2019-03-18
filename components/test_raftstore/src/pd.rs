@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -233,6 +233,7 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+    timestamp: AtomicU64,
 }
 
 impl Cluster {
@@ -259,6 +260,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            timestamp: AtomicU64::new(100),
         }
     }
 
@@ -600,7 +602,7 @@ impl Cluster {
     }
 
     fn get_timestamp(&self) -> u64 {
-        unimplemented!();
+        self.timestamp.fetch_add(1, Ordering::SeqCst)
     }
 }
 
