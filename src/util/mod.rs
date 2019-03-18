@@ -481,7 +481,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()));
             let bt = backtrace::Backtrace::new();
-            crit!("{}", msg;
+            error!("{}", msg;
                 "thread_name" => name,
                 "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
                 "backtrace" => format_args!("{:?}", bt),
