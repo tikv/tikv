@@ -1526,8 +1526,6 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
-            // ScalarFuncSig::PeriodAdd,
-            // ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,
