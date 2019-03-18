@@ -322,6 +322,83 @@ impl ScalarFunc {
         Ok(None)
     }
 
+    fn period_to_month(period: u64) -> u64 {
+        if period == 0 {
+            return 0;
+        }
+        let (year, month) = (period / 100, period % 100);
+        year * 12 + month - 1
+            + if year < 70 {
+                24000 // 2000*12
+            } else if year < 100 {
+                22800 // 1900*12
+            } else {
+                0
+            }
+    }
+
+    fn month_to_period(month: u64) -> u64 {
+        // maybe overflow
+        if month == 0 {
+            return 0;
+        }
+        let year = month / 12;
+        const FINAL_PERIOD: u64 = 206812;
+        let (period, overflowing) = year.overflowing_mul(100);
+        if overflowing {
+            return FINAL_PERIOD;
+        }
+        let (period, overflowing) = period.overflowing_add(
+            month % 12
+                + 1
+                + if year < 70 {
+                    200000 // 2000*100
+                } else if year < 100 {
+                    190000 // 1900*100
+                } else {
+                    0
+                },
+        );
+        if overflowing {
+            return FINAL_PERIOD;
+        }
+        const MAX_SIGNED: u64 = 9223372036854775807;
+        if period > MAX_SIGNED {
+            FINAL_PERIOD
+        } else {
+            period
+        }
+    }
+
+    pub fn period_add(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let p = try_opt!(self.children[0].eval_int(ctx, row));
+        if p == 0 {
+            return Ok(Some(0));
+        }
+        let n = try_opt!(self.children[1].eval_int(ctx, row));
+        let (month, overflowing) = Self::period_to_month(u64::from_ne_bytes(p.to_ne_bytes()))
+            .overflowing_add(u64::from_ne_bytes(n.to_ne_bytes()));
+        const FINAL_PERIOD: i64 = 206812;
+        if overflowing {
+            return Ok(Some(FINAL_PERIOD));
+        }
+        Ok(Some(i64::from_ne_bytes(
+            Self::month_to_period(month).to_ne_bytes(),
+        )))
+    }
+
+    pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let p1 = try_opt!(self.children[0].eval_int(ctx, row));
+        let p2 = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some(
+            i64::from_ne_bytes(
+                Self::period_to_month(u64::from_ne_bytes(p1.to_ne_bytes())).to_ne_bytes(),
+            ) - i64::from_ne_bytes(
+                Self::period_to_month(u64::from_ne_bytes(p2.to_ne_bytes())).to_ne_bytes(),
+            ),
+        ))
+    }
+
     #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
