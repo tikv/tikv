@@ -303,7 +303,12 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         }
-        if self.reader.get_write(&key, self.start_ts)?.is_none() {
+        if self
+            .reader
+            .seek_write(&key, self.start_ts)?
+            .map(|(commit_ts, _)| commit_ts != self.start_ts)
+            .unwrap_or(true)
+        {
             let write = Write::new(WriteType::Rollback, self.start_ts, None);
             let ts = self.start_ts;
             self.put_write(key.clone(), ts, write.to_bytes());
