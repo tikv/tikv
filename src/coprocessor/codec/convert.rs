@@ -213,7 +213,7 @@ pub fn bytes_to_f64(ctx: &mut EvalContext, bytes: &[u8]) -> Result<f64> {
 
 fn get_valid_int_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<Cow<'a, str>> {
     let vs = get_valid_float_prefix(ctx, s)?;
-    float_str_to_int_string(vs)
+    float_str_to_int_string(ctx, vs)
 }
 
 fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a str> {
@@ -265,7 +265,13 @@ fn get_valid_float_prefix<'a>(ctx: &mut EvalContext, s: &'a str) -> Result<&'a s
 /// It converts a valid float string into valid integer string which can be
 /// parsed by `i64::from_str`, we can't parse float first then convert it to string
 /// because precision will be lost.
-fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, str>> {
+///
+/// When the float string indicating a value that is overflowing the i64,
+/// the original float string is returned and an overflow warning is attached
+fn float_str_to_int_string<'a, 'b: 'a>(
+    ctx: &mut EvalContext,
+    valid_float: &'b str,
+) -> Result<Cow<'a, str>> {
     let mut dot_idx = None;
     let mut e_idx = None;
     let mut int_cnt: i64 = 0;
@@ -300,9 +306,10 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
 
     let exp = box_try!((&valid_float[e_idx.unwrap() + 1..]).parse::<i64>());
     if exp > 0 && int_cnt > (i64::MAX - exp) {
-        // (exp + inc_cnt) overflows MaxInt64.
-        // TODO: refactor errors
-        return Err(box_err!("[1264] Data Out of Range"));
+        // (exp + inc_cnt) overflows MaxInt64. Add warning and return original float string
+        ctx.warnings
+            .append_warning(Error::overflow("BIGINT", &valid_float));
+        return Ok(Cow::Owned(valid_float.to_owned()));
     }
     if int_cnt + exp <= 0 {
         return Ok(Cow::Borrowed("0"));
@@ -315,9 +322,10 @@ fn float_str_to_int_string<'a, 'b: 'a>(valid_float: &'b str) -> Result<Cow<'a, s
 
     let extra_zero_count = exp + int_cnt - digits_cnt;
     if extra_zero_count > MAX_ZERO_COUNT {
-        // Return overflow to avoid allocating too much memory.
-        // TODO: refactor errors
-        return Err(box_err!("[1264] Data Out of Range"));
+        // Overflows MaxInt64. Add warning and return original float string
+        ctx.warnings
+            .append_warning(Error::overflow("BIGINT", &valid_float));
+        return Ok(Cow::Owned(valid_float.to_owned()));
     }
 
     if extra_zero_count >= 0 {
@@ -341,6 +349,7 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
+    use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 
     use super::*;
@@ -463,16 +472,26 @@ mod tests {
 
     #[test]
     fn test_invalid_get_valid_int_prefix() {
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec!["1e21", "1e9223372036854775807"];
 
+        // Firstly, make sure no error returns, instead a valid float string is returned
         for i in cases {
-            let o = super::float_str_to_int_string(i);
-            assert!(o.is_err());
+            let o = super::get_valid_int_prefix(&mut ctx, i);
+            assert_eq!(o.unwrap(), i);
+        }
+
+        // Secondly, make sure warnings are attached when the float string cannot be casted to a valid int string
+        let warnings = ctx.take_warnings().warnings;
+        assert_eq!(warnings.len(), 2);
+        for warning in warnings {
+            assert_eq!(warning.get_code(), ERR_DATA_OUT_OF_RANGE);
         }
     }
 
     #[test]
     fn test_valid_get_valid_int_prefix() {
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
             (".1", "0"),
             (".0", "0"),
@@ -484,12 +503,15 @@ mod tests {
             ("123.456789e5", "12345678"),
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
+            ("9e20", "900000000000000000000"), // TODO: check code validity again on function float_str_to_int_string(),
+                                               // as "900000000000000000000" is already larger than i64::MAX
         ];
 
         for (i, e) in cases {
-            let o = super::float_str_to_int_string(i);
+            let o = super::get_valid_int_prefix(&mut ctx, i);
             assert_eq!(o.unwrap(), *e);
         }
+        assert_eq!(ctx.take_warnings().warnings.len(), 0);
     }
 
     #[test]
