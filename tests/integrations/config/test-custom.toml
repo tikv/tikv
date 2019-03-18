@@ -1,7 +1,7 @@
 log-level = "debug"
 log-file = "foo"
 log-rotation-timespan = "1d"
-panic-when-key-exceed-bound = true
+panic-when-unexpected-key-or-data = true
 
 [readpool.storage]
 high-concurrency = 1
@@ -150,6 +150,8 @@ info-log-roll-time = "12s"
 info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+rate-limiter-mode = 3
+auto-tuned = true
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12

@@ -313,7 +313,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::Locate3Args
-            | ScalarFuncSig::LocateBinary3Args => (3, 3),
+            | ScalarFuncSig::LocateBinary3Args
+            | ScalarFuncSig::Replace => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -442,7 +443,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
-            | ScalarFuncSig::Replace
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::SecToTime
@@ -956,6 +956,7 @@ dispatch_call! {
         DayName => day_name,
         Bin => bin,
         Concat => concat,
+        Replace => replace,
         ConcatWS => concat_ws,
         LTrim => ltrim,
         RTrim => rtrim,
@@ -1172,6 +1173,7 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::InstrBinary,
                     ScalarFuncSig::AddDatetimeAndDuration,
                     ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::AddDurationAndDuration,
@@ -1181,7 +1183,6 @@ mod tests {
                     ScalarFuncSig::SubDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
-                    ScalarFuncSig::InstrBinary,
                 ],
                 2,
                 2,
@@ -1528,7 +1529,6 @@ mod tests {
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
-            ScalarFuncSig::Replace,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
             ScalarFuncSig::SecToTime,
