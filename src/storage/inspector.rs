@@ -340,7 +340,6 @@ mod tests {
         black_box(inspector);
         is_stopped.store(true, atomic::Ordering::Release);
         handles.into_iter().for_each(|h| h.join().unwrap());
-
     }
 
     #[bench]
