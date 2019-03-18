@@ -1330,11 +1330,17 @@ impl TiKvConfig {
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            return Err(format!(
-                "storage data dir have been changed, former data dir is {}, \
-                 current data dir is {}, please check if it is expected.",
-                last_cfg.storage.data_dir, self.storage.data_dir
-            ));
+            // In v3 the default value of storage.data-dir changed
+            // from "" to "./"
+            let using_default_after_upgrade =
+                last_cfg.storage.data_dir == "" && self.storage.data_dir == "./";
+            if !using_default_after_upgrade {
+                return Err(format!(
+                    "storage data dir have been changed, former data dir is {}, \
+                     current data dir is {}, please check if it is expected.",
+                    last_cfg.storage.data_dir, self.storage.data_dir
+                ));
+            }
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
