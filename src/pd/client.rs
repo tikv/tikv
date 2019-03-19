@@ -542,7 +542,7 @@ impl PdClient for RpcClient {
             let send = sender.send((req, WriteFlags::default().buffer_hint(false)));
             Box::new(
                 send.and_then(|mut s| {
-                    s.close().unwrap();
+                    let _ = s.close();
                     receiver.collect().map(|mut v| v.remove(0))
                 })
                 .map_err(Error::Grpc)
