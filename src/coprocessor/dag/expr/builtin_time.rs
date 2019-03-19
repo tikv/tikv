@@ -327,14 +327,13 @@ impl ScalarFunc {
             return 0;
         }
         let (year, month) = (period / 100, period % 100);
-        year * 12 + month - 1
-            + if year < 70 {
-                24000 // 2000*12
-            } else if year < 100 {
-                22800 // 1900*12
-            } else {
-                0
-            }
+        if year < 70 {
+            year * 12 + month - 1 + 24000 // 2000*12
+        } else if year < 100 {
+            year * 12 + month - 1 + 22800 // 1900*12
+        } else {
+            year * 12 + month - 1
+        }
     }
 
     fn month_to_period(month: u64) -> u64 {
@@ -348,17 +347,13 @@ impl ScalarFunc {
         if overflowing {
             return FINAL_PERIOD;
         }
-        let (period, overflowing) = period.overflowing_add(
-            month % 12
-                + 1
-                + if year < 70 {
-                    200000 // 2000*100
-                } else if year < 100 {
-                    190000 // 1900*100
-                } else {
-                    0
-                },
-        );
+        let (period, overflowing) = period.overflowing_add(if year < 70 {
+            month % 12 + 1 + 200000 // 2000*100
+        } else if year < 100 {
+            month % 12 + 1 + 190000 // 1900*100
+        } else {
+            month % 12 + 1
+        });
         if overflowing {
             return FINAL_PERIOD;
         }
@@ -376,26 +371,19 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, overflowing) = Self::period_to_month(u64::from_ne_bytes(p.to_ne_bytes()))
-            .overflowing_add(u64::from_ne_bytes(n.to_ne_bytes()));
+        let (month, overflowing) = Self::period_to_month(p as u64).overflowing_add(n as u64);
         const FINAL_PERIOD: i64 = 206812;
         if overflowing {
             return Ok(Some(FINAL_PERIOD));
         }
-        Ok(Some(i64::from_ne_bytes(
-            Self::month_to_period(month).to_ne_bytes(),
-        )))
+        Ok(Some(Self::month_to_period(month) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p1 = try_opt!(self.children[0].eval_int(ctx, row));
         let p2 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(
-            i64::from_ne_bytes(
-                Self::period_to_month(u64::from_ne_bytes(p1.to_ne_bytes())).to_ne_bytes(),
-            ) - i64::from_ne_bytes(
-                Self::period_to_month(u64::from_ne_bytes(p2.to_ne_bytes())).to_ne_bytes(),
-            ),
+            Self::period_to_month(p1 as u64) as i64 - Self::period_to_month(p2 as u64) as i64,
         ))
     }
 
@@ -1416,6 +1404,49 @@ mod tests {
         let mut ctx = EvalContext::default();
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::AddTimeDateTimeNull, Datum::Null);
         test_ok_case_zero_arg(&mut ctx, ScalarFuncSig::SubTimeDateTimeNull, Datum::Null);
+    }
+
+    #[test]
+    fn test_period_add() {
+        let cases = vec![
+            (2, 222, 201808),
+            (0, 222, 0),
+            (196802, 14, 196904),
+            (6901, 13, 207002),
+            (7001, 13, 197102),
+            (200212, 9223372036854775807, 206812),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::PeriodAdd,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
+    }
+
+    #[test]
+    fn test_period_diff() {
+        let cases = vec![
+            (213002, 7010, 1912),
+            (213002, 215810, -344),
+            (2202, 9601, 313),
+            (202202, 9601, 313),
+            (200806, 6907, -733),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::PeriodDiff,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
     }
 
     #[test]
