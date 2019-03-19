@@ -265,7 +265,7 @@ impl Duration {
 }
 
 impl Display for Duration {
-    fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         if self.neg {
             write!(formatter, "-")?;
         }
@@ -320,10 +320,20 @@ pub trait DurationEncoder: NumberEncoder {
 
 impl Duration {
     /// `decode` decodes duration encoded by `encode_duration`.
-    pub fn decode(data: &mut BytesSlice) -> Result<Duration> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
         let nanos = number::decode_i64(data)?;
         let fsp = number::decode_i64(data)?;
         Duration::from_nanos(nanos, fsp as i8)
+    }
+}
+
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
+    #[inline]
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::coprocessor::dag::expr::EvalContext,
+    ) -> crate::coprocessor::Result<bool> {
+        Ok(!self.is_zero())
     }
 }
 

@@ -52,6 +52,26 @@ impl ScalarValue {
             ScalarValue::Json(_) => EvalType::Json,
         }
     }
+
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
+        VectorLikeValueRef::Scalar(self)
+    }
+}
+
+impl AsMySQLBool for ScalarValue {
+    #[inline]
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        match self {
+            ScalarValue::Int(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Real(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Decimal(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Bytes(ref v) => v.as_mysql_bool(context),
+            ScalarValue::DateTime(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Duration(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Json(ref v) => v.as_mysql_bool(context),
+        }
+    }
 }
 
 macro_rules! impl_as_ref {

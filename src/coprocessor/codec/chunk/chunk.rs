@@ -69,7 +69,7 @@ impl Chunk {
 
     /// Get the Row in the chunk with the row index.
     #[inline]
-    pub fn get_row(&self, idx: usize) -> Option<Row> {
+    pub fn get_row(&self, idx: usize) -> Option<Row<'_>> {
         if idx < self.num_rows() {
             Some(Row::new(self, idx))
         } else {
@@ -79,12 +79,12 @@ impl Chunk {
 
     // Get the Iterator for Row in the Chunk.
     #[inline]
-    pub fn iter(&self) -> RowIterator {
+    pub fn iter(&self) -> RowIterator<'_> {
         RowIterator::new(self)
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tps: &[FieldType]) -> Result<Chunk> {
+    pub fn decode(buf: &mut BytesSlice<'_>, tps: &[FieldType]) -> Result<Chunk> {
         let mut chunk = Chunk {
             columns: Vec::with_capacity(tps.len()),
         };

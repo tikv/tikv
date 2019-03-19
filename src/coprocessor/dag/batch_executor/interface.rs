@@ -15,18 +15,25 @@
 
 //! Batch executor common structures.
 
-use std::ops::Deref;
-use std::sync::Arc;
+pub use super::statistics::BatchExecuteStatistics;
 
-use tipb::schema::ColumnInfo;
+use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalWarnings};
+use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Error;
 
 /// The interface for pull-based executors. It is similar to the Volcano Iterator model, but
 /// pulls data in batch and stores data by column.
 pub trait BatchExecutor: Send {
+    /// Gets the schema of the output.
+    ///
+    /// Provides an `Arc` instead of a pure reference to make it possible to share this schema in
+    /// multiple executors. Actually the schema is only possible to be shared in executors, but it
+    /// requires the ability to store a reference to a field in the same structure. There are other
+    /// solutions so far but looks like `Arc` is the simplest one.
+    fn schema(&self) -> &[FieldType];
+
     /// Pulls next several rows of data (stored by column).
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
@@ -46,6 +53,10 @@ pub trait BatchExecutor: Send {
 }
 
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
+    fn schema(&self) -> &[FieldType] {
+        (**self).schema()
+    }
+
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         (**self).next_batch(expect_rows)
     }
@@ -53,52 +64,6 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         (**self).collect_statistics(destination)
     }
-}
-
-/// A shared context for all batch executors.
-///
-/// It is both `Send` and `Sync`, allows concurrent access from different executors in future.
-#[derive(Clone)]
-pub struct BatchExecutorContext(Arc<BatchExecutorContextInner>);
-
-impl BatchExecutorContext {
-    pub fn new(columns_info: Vec<ColumnInfo>, config: EvalConfig) -> Self {
-        let inner = BatchExecutorContextInner {
-            columns_info,
-            config,
-        };
-        BatchExecutorContext(Arc::new(inner))
-    }
-
-    /// Builds with a default config. Mainly used in tests.
-    pub fn with_default_config(columns_info: Vec<ColumnInfo>) -> Self {
-        Self::new(columns_info, EvalConfig::default())
-    }
-}
-
-impl Deref for BatchExecutorContext {
-    type Target = BatchExecutorContextInner;
-
-    fn deref(&self) -> &BatchExecutorContextInner {
-        &self.0
-    }
-}
-
-impl crate::util::AssertSend for BatchExecutorContext {}
-
-impl crate::util::AssertSync for BatchExecutorContext {}
-
-/// The actual inner structure for `BatchExecutorContext`. Normally this structure should be
-/// accessed via `BatchExecutorContext` and should not be constructed directly.
-pub struct BatchExecutorContextInner {
-    /// The column info of base physical table schemas.
-    // TODO: Actually we may need different columns_info for different executors. For example,
-    // the executor above the aggregation executor's (e.g. Projection Executor) schema should be
-    // the aggregation executor's schema instead of base schema.
-    pub columns_info: Vec<ColumnInfo>,
-
-    // TODO: This is really a execution config, although called eval config.
-    pub config: EvalConfig,
 }
 
 /// Data to be flowed between parent and child executors' single `next_batch()` invocation.
@@ -139,32 +104,4 @@ pub struct BatchExecuteResult {
     // TODO: The name of this field is confusing and not obvious, that we need so many comments to
     // explain what it is. We can change it to a better name or use an enum if necessary.
     pub is_drained: Result<bool, Error>,
-}
-
-/// Data to be flowed between parent and child executors at once during `collect_statistics()`
-/// invocation.
-///
-/// Each batch executor aggregates and updates corresponding slots in this structure.
-pub struct BatchExecuteStatistics {
-    /// For each range given in the request, how many rows are scanned.
-    pub scanned_rows_per_range: Vec<usize>,
-
-    /// Scanning statistics for each CF during execution.
-    pub cf_stats: crate::storage::Statistics,
-}
-
-impl BatchExecuteStatistics {
-    pub fn new(ranges: usize) -> Self {
-        Self {
-            scanned_rows_per_range: vec![0; ranges],
-            cf_stats: crate::storage::Statistics::default(),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        for item in self.scanned_rows_per_range.iter_mut() {
-            *item = 0;
-        }
-        self.cf_stats = crate::storage::Statistics::default();
-    }
 }

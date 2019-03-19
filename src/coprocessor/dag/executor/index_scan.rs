@@ -31,10 +31,10 @@ impl IndexInnerExecutor {
     fn new(meta: &mut IndexScan, unique: bool) -> Self {
         let mut pk_col = None;
         let cols = meta.mut_columns();
-        if cols.last().map_or(false, |c| c.get_pk_handle()) {
+        if cols.last().map_or(false, ColumnInfo::get_pk_handle) {
             pk_col = Some(cols.pop().unwrap());
         }
-        let col_ids = cols.iter().map(|c| c.get_column_id()).collect();
+        let col_ids = cols.iter().map(ColumnInfo::get_column_id).collect();
         Self {
             pk_col,
             col_ids,

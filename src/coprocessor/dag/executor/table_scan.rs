@@ -32,7 +32,7 @@ impl TableInnerExecutor {
             .get_columns()
             .iter()
             .filter(|c| !c.get_pk_handle())
-            .map(|c| c.get_column_id())
+            .map(ColumnInfo::get_column_id)
             .collect();
         Self { col_ids }
     }
@@ -91,13 +91,11 @@ pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
 mod tests {
     use std::i64;
 
-    use kvproto::kvrpcpb::IsolationLevel;
+    use kvproto::{coprocessor::KeyRange, kvrpcpb::IsolationLevel};
     use protobuf::RepeatedField;
-    use tipb::schema::ColumnInfo;
+    use tipb::{executor::TableScan, schema::ColumnInfo};
 
-    use crate::kvproto::coprocessor::KeyRange;
     use crate::storage::SnapshotStore;
-    use crate::tipb::executor::TableScan;
 
     use super::super::{
         scanner::tests::{get_point_range, prepare_table_data, Data},

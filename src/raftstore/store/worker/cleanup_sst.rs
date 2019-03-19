@@ -28,7 +28,7 @@ pub enum Task {
 }
 
 impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Task::DeleteSST { ref ssts } => write!(f, "Delete {} ssts", ssts.len()),
             Task::ValidateSST { ref ssts } => write!(f, "Validate {} ssts", ssts.len()),

@@ -17,19 +17,10 @@
 
 #[macro_use]
 extern crate quick_error;
-extern crate byteorder;
-#[cfg(test)]
-extern crate bytes;
-extern crate libc;
-#[cfg(test)]
-extern crate protobuf;
-#[cfg(test)]
-extern crate rand;
 #[cfg(test)]
 extern crate test;
+#[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-
-extern crate panic_hook;
 
 mod buffer;
 mod byte;
