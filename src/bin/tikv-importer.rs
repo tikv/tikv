@@ -14,17 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate libc;
-#[cfg(unix)]
-extern crate nix;
-extern crate prometheus;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     slog_kv,
     slog_error,
@@ -35,13 +24,8 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
@@ -122,7 +106,7 @@ fn main() {
     run_import_server(&config);
 }
 
-fn setup_config(matches: &ArgMatches) -> TiKvConfig {
+fn setup_config(matches: &ArgMatches<'_>) -> TiKvConfig {
     let mut config = matches
         .value_of("config")
         .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));

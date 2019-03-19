@@ -4,7 +4,8 @@
 # directory enables intel® sse4.2 extensions. It is suitable to run as part of
 # CI.
 
-dirs="./target/debug ./target/release"
+# Check release only.
+dirs="./target/release"
 
 errors=0
 
@@ -20,12 +21,12 @@ echo "checking bins for sse4.2"
 
 for dir in $dirs; do
     for file in $targets; do
-        
+
         dirfile="$dir/$file"
         if [[ -x "$dirfile" && ! -d "$dirfile" ]]; then
-            
+
             echo "checking binary $dirfile for sse4.2"
-            
+
             # RocksDB uses sse4.2 in the `Fast_CRC32` function
             fast_crc32=$(nm "$dirfile" | grep -o " _.*Fast_CRC32.*")
             if [[ ! $fast_crc32 ]]; then
@@ -33,7 +34,7 @@ for dir in $dirs; do
                 errors=1
                 continue
             fi
-            
+
             # Make sure the `Fast_CRC32` uses the sse4.2 instruction `crc32`
             # f2.*0f 38 is the opcode of `crc32`, see Intel® SSE4 Programming Reference
             found=0

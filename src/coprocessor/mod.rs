@@ -79,7 +79,7 @@ pub trait RequestHandler: Send {
     where
         Self: 'static + Sized,
     {
-        box self
+        Box::new(self)
     }
 }
 
@@ -110,6 +110,10 @@ impl Deadline {
 
     /// Returns error if the deadline is exceeded.
     pub fn check_if_exceeded(&self) -> Result<()> {
+        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
+            Error::Outdated(Duration::from_secs(60), self.tag)
+        ));
+
         let now = Instant::now_coarse();
         if self.deadline <= now {
             let elapsed = now.duration_since(self.start_time);

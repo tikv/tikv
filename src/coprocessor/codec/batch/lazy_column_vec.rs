@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tipb::schema::ColumnInfo;
+use tipb::expression::FieldType;
 
 use super::LazyBatchColumn;
 use crate::coprocessor::codec::data_type::VectorValue;
@@ -48,32 +48,6 @@ impl LazyBatchColumnVec {
         Self { columns }
     }
 
-    /// Pushes each raw datum into columns at corresponding index.
-    ///
-    /// If datum is missing, the corresponding element should be an empty slice.
-    ///
-    /// # Panics
-    ///
-    /// It is caller's duty to ensure that these columns are not decoded and the number of datums
-    /// matches the number of columns. Otherwise there will be panics.
-    // TODO: Remove this function, since it is not used at all.
-    #[inline]
-    pub fn push_raw_row<D, V>(&mut self, raw_row: V)
-    where
-        D: AsRef<[u8]>,
-        V: AsRef<[D]>,
-    {
-        let raw_row_slice = raw_row.as_ref();
-        assert_eq!(self.columns_len(), raw_row_slice.len());
-        for (col_index, raw_datum) in raw_row_slice.iter().enumerate() {
-            let lazy_col = &mut self.columns[col_index];
-            assert!(lazy_col.is_raw());
-            lazy_col.push_raw(raw_datum);
-        }
-
-        self.debug_assert_columns_equal_length();
-    }
-
     /// Moves all elements of `other` into `Self`, leaving `other` empty.
     ///
     /// # Panics
@@ -98,13 +72,13 @@ impl LazyBatchColumnVec {
     pub fn ensure_column_decoded(
         &mut self,
         column_index: usize,
-        time_zone: Tz,
-        column_info: &ColumnInfo,
+        time_zone: &Tz,
+        field_type: &FieldType,
     ) -> Result<&VectorValue> {
         let number_of_rows = self.rows_len();
         let col = &mut self.columns[column_index];
         assert_eq!(col.len(), number_of_rows);
-        col.decode(time_zone, column_info)?;
+        col.decode(time_zone, field_type)?;
         Ok(col.decoded())
     }
 
@@ -187,16 +161,16 @@ impl LazyBatchColumnVec {
     pub fn encode(
         &self,
         output_offsets: impl AsRef<[u32]>,
-        columns_info: impl AsRef<[ColumnInfo]>,
+        schema: impl AsRef<[FieldType]>,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         let len = self.rows_len();
-        let columns_info = columns_info.as_ref();
+        let schema = schema.as_ref();
         for i in 0..len {
             for offset in output_offsets.as_ref() {
                 let offset = *offset as usize;
                 let col = &self.columns[offset];
-                col.encode(i, &columns_info[offset], output)?;
+                col.encode(i, &schema[offset], output)?;
             }
         }
         Ok(())
@@ -227,24 +201,47 @@ mod tests {
 
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
-    /// Helper method to generate raw row ([u8] vector) from datum vector.
-    fn raw_row_from_datums(datums: impl AsRef<[Option<Datum>]>, comparable: bool) -> Vec<Vec<u8>> {
-        datums
+    /// Pushes a raw row. There must be no empty datum.
+    ///
+    /// # Panic
+    ///
+    /// Panics if there is empty datum.
+    ///
+    /// Panics if the length of row does not match the size of the columns vector.
+    ///
+    /// Panics if some column in the vector is decoded.
+    fn push_raw_row<D, V>(columns: &mut LazyBatchColumnVec, raw_row: V)
+    where
+        D: AsRef<[u8]>,
+        V: AsRef<[D]>,
+    {
+        let raw_row_slice = raw_row.as_ref();
+        assert_eq!(columns.columns_len(), raw_row_slice.len());
+        for (col_index, raw_datum) in raw_row_slice.iter().enumerate() {
+            let lazy_col = &mut columns.columns[col_index];
+            assert!(lazy_col.is_raw());
+            lazy_col.push_raw(raw_datum);
+        }
+
+        columns.debug_assert_columns_equal_length();
+    }
+
+    /// Pushes a raw row via a datum vector.
+    fn push_raw_row_from_datums(
+        columns: &mut LazyBatchColumnVec,
+        datums: impl AsRef<[Datum]>,
+        comparable: bool,
+    ) {
+        let raw_row: Vec<_> = datums
             .as_ref()
             .iter()
             .map(|some_datum| {
                 let mut ret = Vec::new();
-                if some_datum.is_some() {
-                    DatumEncoder::encode(
-                        &mut ret,
-                        &[some_datum.clone().take().unwrap()],
-                        comparable,
-                    )
-                    .unwrap();
-                }
+                DatumEncoder::encode(&mut ret, &[some_datum.clone()], comparable).unwrap();
                 ret
             })
-            .collect()
+            .collect();
+        push_raw_row(columns, raw_row);
     }
 
     #[test]
@@ -254,38 +251,28 @@ mod tests {
         for comparable in &[true, false] {
             let schema = [
                 {
-                    // Column 1: Long, Default value 5
-                    let mut default_value = Vec::new();
-                    DatumEncoder::encode(&mut default_value, &[Datum::U64(5)], *comparable)
-                        .unwrap();
-
-                    let mut col_info = ColumnInfo::new();
-                    col_info.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                    col_info.set_default_val(default_value);
-                    col_info
+                    // Column 1: Long
+                    let mut ft = FieldType::new();
+                    ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
+                    ft
                 },
                 {
-                    // Column 2: Double, Default value NULL
-                    let mut col_info = ColumnInfo::new();
-                    col_info.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    col_info
+                    // Column 2: Double
+                    let mut ft = FieldType::new();
+                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
+                    ft
                 },
                 {
-                    // Column 3: VarChar, Default value NULL
-                    let mut col_info = ColumnInfo::new();
-                    col_info.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-                    col_info
+                    // Column 3: VarChar
+                    let mut ft = FieldType::new();
+                    ft.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
+                    ft
                 },
             ];
 
             let values = vec![
-                vec![Some(Datum::U64(1)), Some(Datum::F64(1.0)), None],
-                // None in Column 0 should be decoded to its default value 5.
-                vec![None, Some(Datum::Null), Some(Datum::Bytes(vec![0u8, 2u8]))],
-                // Null in Column 0 should be decoded to NULL.
-                vec![Some(Datum::Null), Some(Datum::F64(3.0)), None],
-                // None in Column 1 should be decoded to NULL because of no default value.
-                vec![Some(Datum::U64(4)), None, Some(Datum::Null)],
+                vec![Datum::U64(1), Datum::F64(1.0), Datum::Null],
+                vec![Datum::Null, Datum::Null, Datum::Bytes(vec![0u8, 2u8])],
             ];
 
             // Empty LazyBatchColumnVec
@@ -293,8 +280,8 @@ mod tests {
             assert_eq!(columns.rows_len(), 0);
             assert_eq!(columns.columns_len(), 3);
 
-            for raw_row in values.iter().map(|r| raw_row_from_datums(r, *comparable)) {
-                columns.push_raw_row(raw_row.iter());
+            for raw_datum in &values {
+                push_raw_row_from_datums(&mut columns, raw_datum, *comparable);
             }
             assert_eq!(columns.rows_len(), values.len());
 
@@ -302,27 +289,21 @@ mod tests {
             assert!(!columns.is_column_decoded(2));
             {
                 let col = columns
-                    .ensure_column_decoded(2, Tz::utc(), &schema[2])
+                    .ensure_column_decoded(2, &Tz::utc(), &schema[2])
                     .unwrap();
-                assert_eq!(col.len(), 4);
+                assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Bytes);
-                assert_eq!(
-                    col.as_bytes_slice(),
-                    &[None, Some(vec![0u8, 2u8]), None, None]
-                );
+                assert_eq!(col.as_bytes_slice(), &[None, Some(vec![0u8, 2u8])]);
             }
             // Decode a decoded column
             assert!(columns.is_column_decoded(2));
             {
                 let col = columns
-                    .ensure_column_decoded(2, Tz::utc(), &schema[2])
+                    .ensure_column_decoded(2, &Tz::utc(), &schema[2])
                     .unwrap();
-                assert_eq!(col.len(), 4);
+                assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Bytes);
-                assert_eq!(
-                    col.as_bytes_slice(),
-                    &[None, Some(vec![0u8, 2u8]), None, None]
-                );
+                assert_eq!(col.as_bytes_slice(), &[None, Some(vec![0u8, 2u8])]);
             }
             assert!(columns.is_column_decoded(2));
 
@@ -330,11 +311,11 @@ mod tests {
             assert!(!columns.is_column_decoded(0));
             {
                 let col = columns
-                    .ensure_column_decoded(0, Tz::utc(), &schema[0])
+                    .ensure_column_decoded(0, &Tz::utc(), &schema[0])
                     .unwrap();
-                assert_eq!(col.len(), 4);
+                assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Int);
-                assert_eq!(col.as_int_slice(), &[Some(1), Some(5), None, Some(4)]);
+                assert_eq!(col.as_int_slice(), &[Some(1), None]);
             }
             assert!(columns.is_column_decoded(0));
 
@@ -342,11 +323,11 @@ mod tests {
             assert!(!columns.is_column_decoded(1));
             {
                 let col = columns
-                    .ensure_column_decoded(1, Tz::utc(), &schema[1])
+                    .ensure_column_decoded(1, &Tz::utc(), &schema[1])
                     .unwrap();
-                assert_eq!(col.len(), 4);
+                assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Real);
-                assert_eq!(col.as_real_slice(), &[Some(1.0), None, Some(3.0), None]);
+                assert_eq!(col.as_real_slice(), &[Some(1.0), None]);
             }
             assert!(columns.is_column_decoded(1));
         }
@@ -358,20 +339,16 @@ mod tests {
 
         let schema = [
             {
-                // Column 1: Long, Default value 5
-                let mut default_value = Vec::new();
-                DatumEncoder::encode(&mut default_value, &[Datum::U64(5)], true).unwrap();
-
-                let mut col_info = ColumnInfo::new();
-                col_info.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                col_info.set_default_val(default_value);
-                col_info
+                // Column 1: Long
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
+                ft
             },
             {
                 // Column 2: Double
-                let mut col_info = ColumnInfo::new();
-                col_info.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                col_info
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
+                ft
             },
         ];
 
@@ -388,18 +365,12 @@ mod tests {
         assert_eq!(columns.columns_len(), 2);
         assert_eq!(columns.rows_capacity(), 3);
 
-        columns.push_raw_row(raw_row_from_datums(&[None, Some(Datum::F64(1.3))], false));
-        columns.push_raw_row(raw_row_from_datums(&[None, None], false));
-        columns.push_raw_row(raw_row_from_datums(&[Some(Datum::U64(3)), None], true));
-        columns.push_raw_row(raw_row_from_datums(
-            &[Some(Datum::U64(3)), Some(Datum::F64(5.0))],
-            false,
-        ));
-        columns.push_raw_row(raw_row_from_datums(
-            &[Some(Datum::U64(11)), Some(Datum::F64(7.5))],
-            true,
-        ));
-        columns.push_raw_row(raw_row_from_datums(&[None, Some(Datum::F64(13.1))], true));
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(1.3)], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::Null], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(3), Datum::Null], true);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(3), Datum::F64(5.0)], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(11), Datum::F64(7.5)], true);
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(13.1)], true);
 
         let retain_map = &[true, true, false, false, true, false];
         columns.retain_rows_by_index(|idx| retain_map[idx]);
@@ -410,18 +381,15 @@ mod tests {
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 3);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
-            assert_eq!(
-                column0.decoded().as_int_slice(),
-                &[Some(5), Some(5), Some(11)]
-            );
+            assert_eq!(column0.decoded().as_int_slice(), &[None, None, Some(11)]);
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 3);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -430,45 +398,28 @@ mod tests {
             );
         }
 
-        columns.push_raw_row(raw_row_from_datums(
-            &[None, Some(Datum::F64(101.51))],
-            false,
-        ));
-        columns.push_raw_row(raw_row_from_datums(&[Some(Datum::U64(1)), None], false));
-        columns.push_raw_row(raw_row_from_datums(
-            &[Some(Datum::U64(5)), Some(Datum::F64(1.9))],
-            true,
-        ));
-        columns.push_raw_row(raw_row_from_datums(
-            &[None, Some(Datum::F64(101.51))],
-            false,
-        ));
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(101.51)], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(1), Datum::Null], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(5), Datum::F64(1.9)], true);
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(101.51)], false);
 
         assert_eq!(columns.rows_len(), 7);
         assert_eq!(columns.columns_len(), 2);
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 7);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
             assert_eq!(
                 column0.decoded().as_int_slice(),
-                &[
-                    Some(5),
-                    Some(5),
-                    Some(11),
-                    Some(5),
-                    Some(1),
-                    Some(5),
-                    Some(5)
-                ]
+                &[None, None, Some(11), None, Some(1), Some(5), None]
             );
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 7);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -493,18 +444,18 @@ mod tests {
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 4);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
             assert_eq!(
                 column0.decoded().as_int_slice(),
-                &[Some(5), Some(11), Some(5), Some(5)]
+                &[None, Some(11), Some(5), None]
             );
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 4);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -520,18 +471,18 @@ mod tests {
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 4);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
             assert_eq!(
                 column0.decoded().as_int_slice(),
-                &[Some(5), Some(11), Some(5), Some(5)]
+                &[None, Some(11), Some(5), None]
             );
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 4);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -547,7 +498,7 @@ mod tests {
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 0);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
             assert_eq!(column0.decoded().as_int_slice(), &[]);
@@ -555,36 +506,30 @@ mod tests {
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 0);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(column1.decoded().as_real_slice(), &[]);
         }
 
-        columns.push_raw_row(raw_row_from_datums(&[None, Some(Datum::F64(7.77))], true));
-        columns.push_raw_row(raw_row_from_datums(&[Some(Datum::U64(5)), None], false));
-        columns.push_raw_row(raw_row_from_datums(
-            &[Some(Datum::U64(1)), Some(Datum::F64(7.17))],
-            false,
-        ));
+        push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(7.77)], true);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(5), Datum::Null], false);
+        push_raw_row_from_datums(&mut columns, &[Datum::U64(1), Datum::F64(7.17)], false);
 
         assert_eq!(columns.rows_len(), 3);
         assert_eq!(columns.columns_len(), 2);
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());
-            column0.decode(Tz::utc(), &schema[0]).unwrap();
+            column0.decode(&Tz::utc(), &schema[0]).unwrap();
             assert_eq!(column0.decoded().len(), 3);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
-            assert_eq!(
-                column0.decoded().as_int_slice(),
-                &[Some(5), Some(5), Some(1)]
-            );
+            assert_eq!(column0.decoded().as_int_slice(), &[None, Some(5), Some(1)]);
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 3);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -595,7 +540,7 @@ mod tests {
 
         // Let's change a column from lazy to decoded and test whether retain works
         columns
-            .ensure_column_decoded(0, Tz::utc(), &schema[0])
+            .ensure_column_decoded(0, &Tz::utc(), &schema[0])
             .unwrap();
 
         columns.retain_rows_by_index(|_| true);
@@ -607,15 +552,12 @@ mod tests {
             assert!(column0.is_decoded());
             assert_eq!(column0.decoded().len(), 3);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
-            assert_eq!(
-                column0.decoded().as_int_slice(),
-                &[Some(5), Some(5), Some(1)]
-            );
+            assert_eq!(column0.decoded().as_int_slice(), &[None, Some(5), Some(1)]);
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 3);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
@@ -634,12 +576,12 @@ mod tests {
             assert!(column0.is_decoded());
             assert_eq!(column0.decoded().len(), 2);
             assert_eq!(column0.decoded().eval_type(), EvalType::Int);
-            assert_eq!(column0.decoded().as_int_slice(), &[Some(5), Some(1)]);
+            assert_eq!(column0.decoded().as_int_slice(), &[None, Some(1)]);
         }
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 2);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(column1.decoded().as_real_slice(), &[Some(7.77), Some(7.17)]);
@@ -659,7 +601,7 @@ mod tests {
         {
             let mut column1 = columns[1].clone();
             assert!(column1.is_raw());
-            column1.decode(Tz::utc(), &schema[1]).unwrap();
+            column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 0);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(column1.decoded().as_real_slice(), &[]);

@@ -935,7 +935,7 @@ impl RaftBatchSystem {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_admin_observer(100, box SplitObserver);
+            .register_admin_observer(100, Box::new(SplitObserver));
 
         let workers = Workers {
             split_check_worker: Worker::new("split-check"),
@@ -1907,14 +1907,14 @@ fn size_change_filter(info: &CompactionJobInfo) -> bool {
 
 pub fn new_compaction_listener(ch: RaftRouter) -> CompactionListener {
     let ch = Mutex::new(ch);
-    let compacted_handler = box move |compacted_event: CompactedEvent| {
+    let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();
         if let Err(e) = ch.send_control(StoreMsg::CompactedEvent(compacted_event)) {
             error!(
                 "send compaction finished event to raftstore failed"; "err" => ?e,
             );
         }
-    };
+    });
     CompactionListener::new(compacted_handler, Some(size_change_filter))
 }
 

@@ -219,7 +219,7 @@ impl Fsm for PeerFsm {
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     #[inline]
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -1696,51 +1696,60 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.on_check_merge();
     }
 
+    // The `PrepareMerge` and `CommitMerge` is executed sequentially, but we cannot
+    // ensure the order to handle the apply results between different peers. So check
+    // the merge locks to ensure `on_ready_prepare_merge` is called.
+    fn check_locks(
+        &self,
+        source: &metapb::Region,
+        meta: &mut StoreMeta,
+    ) -> Option<Arc<AtomicBool>> {
+        let source_region_id = source.get_id();
+        let source_version = source.get_region_epoch().get_version();
+
+        if let Some((exist_version, ready_to_merge)) = meta.merge_locks.remove(&source_region_id) {
+            if exist_version == source_version {
+                assert!(ready_to_merge.is_none());
+                // So `on_ready_prepare_merge` is executed.
+                return None;
+            } else if exist_version < source_version {
+                assert!(
+                    ready_to_merge.is_none(),
+                    "{} source region {} meets a commit merge before {} < {}",
+                    self.fsm.peer.tag,
+                    source_region_id,
+                    exist_version,
+                    source_version
+                );
+            } else {
+                panic!(
+                    "{} source region {} can't finished current merge: {} > {}",
+                    self.fsm.peer.tag, source_region_id, exist_version, source_region_id
+                );
+            }
+        }
+
+        // The corresponding `on_ready_prepare_merge` is not executed yet.
+        // Insert the lock, and `on_ready_prepare_merge` will check and use `ready_to_merge`
+        // to notify.
+        let ready_to_merge = Arc::new(AtomicBool::new(false));
+        meta.merge_locks.insert(
+            source_region_id,
+            (source_version, Some(ready_to_merge.clone())),
+        );
+        Some(ready_to_merge)
+    }
+
     fn on_ready_commit_merge(
         &mut self,
         region: metapb::Region,
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        let source_region_id = source.get_id();
-        let source_version = source.get_region_epoch().get_version();
-        'check_locks: {
-            // The `PrepareMerge` and `CommitMerge` is executed sequentially, but we can not
-            // ensure the order to handle the apply results between different peers. So check
-            // the merge locks to ensure `on_ready_prepare_merge` is called.
-            if let Some((exist_version, ready_to_merge)) =
-                meta.merge_locks.remove(&source_region_id)
-            {
-                if exist_version == source_version {
-                    assert!(ready_to_merge.is_none());
-                    // So `on_ready_prepare_merge` is executed.
-                    break 'check_locks;
-                } else if exist_version < source_version {
-                    assert!(
-                        ready_to_merge.is_none(),
-                        "{} source region {} meets a commit merge before {} < {}",
-                        self.fsm.peer.tag,
-                        source_region_id,
-                        exist_version,
-                        source_version
-                    );
-                } else {
-                    panic!(
-                        "{} source region {} can't finished current merge: {} > {}",
-                        self.fsm.peer.tag, source_region_id, exist_version, source_region_id
-                    );
-                }
-            }
 
-            // The corresponding `on_ready_prepare_merge` is not executed yet.
-            // Insert the lock, and `on_ready_prepare_merge` will check and use `ready_to_merge`
-            // to notify.
-            let ready_to_merge = Arc::new(AtomicBool::new(false));
-            meta.merge_locks.insert(
-                source_region_id,
-                (source_version, Some(ready_to_merge.clone())),
-            );
-            return Some(ready_to_merge);
+        let ready_to_merge = self.check_locks(&source, &mut meta);
+        if ready_to_merge.is_some() {
+            return ready_to_merge;
         }
 
         let prev = meta.region_ranges.remove(&enc_end_key(&source));

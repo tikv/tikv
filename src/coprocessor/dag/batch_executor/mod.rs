@@ -12,3 +12,4 @@
 // limitations under the License.
 
 pub mod interface;
+pub mod statistics;

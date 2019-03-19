@@ -96,7 +96,7 @@ impl Callback {
 }
 
 impl fmt::Debug for Callback {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
@@ -217,7 +217,7 @@ pub enum CasualMessage {
 }
 
 impl fmt::Debug for CasualMessage {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
                 fmt,
@@ -303,7 +303,7 @@ pub enum PeerMsg {
 }
 
 impl fmt::Debug for PeerMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
@@ -346,7 +346,7 @@ pub enum StoreMsg {
 }
 
 impl fmt::Debug for StoreMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),

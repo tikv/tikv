@@ -13,12 +13,6 @@
 
 #[macro_use]
 extern crate criterion;
-extern crate protobuf;
-
-extern crate kvproto;
-extern crate test_coprocessor;
-extern crate tikv;
-extern crate tipb;
 
 use criterion::{black_box, Bencher, Criterion};
 
