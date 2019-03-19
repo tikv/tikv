@@ -866,4 +866,26 @@ mod tests {
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 10);
     }
+
+    #[test]
+    fn test_get() {
+        let path = TempDir::new("_test_storage_mvcc_reader_get_same_ts").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 10);
+        engine.commit(k, 10, 11);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        assert!(reader.get(&Key::from_raw(k), 10).unwrap().is_none());
+        // Keys with its commit_ts the same with the reading ts is visible.
+        assert_eq!(&reader.get(&Key::from_raw(k), 11).unwrap().unwrap(), v);
+        assert_eq!(&reader.get(&Key::from_raw(k), 12).unwrap().unwrap(), v);
+    }
 }

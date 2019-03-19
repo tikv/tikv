@@ -456,6 +456,11 @@ mod tests {
         must_prewrite_delete(&engine, k, k, 13);
         must_rollback(&engine, k, 13);
         must_unlocked(&engine, k);
+
+        // The same start_ts and another transaction's commit_ts is considered conflicting.
+        must_prewrite_put(&engine, k, v, k, 15);
+        must_commit(&engine, k, 15, 16);
+        must_prewrite_lock_err(&engine, k, k, 16);
     }
 
     #[test]

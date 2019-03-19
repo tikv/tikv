@@ -1145,4 +1145,36 @@ mod tests {
         assert_eq!(statistics.write.prev, 1);
     }
 
+    #[test]
+    fn test_scan_ts_visibility() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let mut expected_result = Vec::new();
+
+        for (i, ts) in [5u64, 6, 7, 5, 7, 6, 5].iter().enumerate() {
+            let i = i as u8;
+            must_prewrite_put(&engine, &[i], &[i], &[i], ts - 1);
+            must_commit(&engine, &[i], ts - 1, *ts);
+            if *ts <= 6 {
+                expected_result.push((Key::from_raw(&[i]), vec![i]));
+            }
+        }
+
+        expected_result = expected_result.into_iter().rev().collect();
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 6, true)
+            .build()
+            .unwrap();
+
+        let mut result = Vec::new();
+
+        while let Some((k, v)) = scanner.next().unwrap() {
+            result.push((k, v));
+        }
+
+        assert_eq!(result, expected_result);
+    }
 }
