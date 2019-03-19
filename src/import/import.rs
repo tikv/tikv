@@ -60,27 +60,23 @@ impl<Client: ImportClient> ImportJob<Client> {
 
         // Join and check results.
         let mut res = Ok(());
-        let mut retry_ranges = Arc::new(Mutex::new(Vec::new()));
         // Before importing data, we need to help to balance data in the cluster.
         let job = PrepareJob::new(
             self.cfg.clone(),
             self.client.clone(),
             Arc::clone(&self.engine),
         );
+        let mut ranges = job.run()?.into_iter().map(|range| range.range).collect();
         for i in 0..MAX_RETRY_TIMES {
-            let ranges = if i == 0 {
-                job.run()?.drain(0..).map(|range| range.range).collect()
-            } else {
-                retry_ranges.lock().unwrap().clone()
-            };
-            retry_ranges = Arc::new(Mutex::new(Vec::new()));
+            let retry_ranges = Arc::new(Mutex::new(Vec::new()));
             let handles = self.run_import_threads(ranges, Arc::clone(&retry_ranges));
             for h in handles {
                 if let Err(e) = h.join().unwrap() {
                     res = Err(e)
                 }
             }
-            let retry_count = retry_ranges.lock().unwrap().len();
+            ranges = Arc::try_unwrap(retry_ranges).unwrap().into_inner().unwrap();
+            let retry_count = ranges.len();
             if retry_count < 1 {
                 break;
             }
