@@ -47,8 +47,8 @@ fn test_down_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 
     // Restart 1, 2
-    cluster.run_node(1);
-    cluster.run_node(2);
+    cluster.run_node(1).unwrap();
+    cluster.run_node(2).unwrap();
     wait_down_peers(cluster, 0, None);
 
     cluster.stop_node(1);
@@ -109,7 +109,7 @@ fn test_pending_peers<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(2, box DropSnapshotFilter::new(tx));
+        .add_recv_filter(2, Box::new(DropSnapshotFilter::new(tx)));
 
     pd_client.must_add_peer(region_id, new_peer(2, 2));
 

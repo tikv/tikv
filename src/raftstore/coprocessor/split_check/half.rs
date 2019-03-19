@@ -45,7 +45,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.buckets.is_empty() || self.cur_bucket_size >= self.each_bucket_size {
             self.buckets.push(entry.key().to_vec());
             self.cur_bucket_size = 0;
@@ -99,7 +99,13 @@ impl HalfCheckObserver {
 impl Coprocessor for HalfCheckObserver {}
 
 impl SplitCheckObserver for HalfCheckObserver {
-    fn add_checker(&self, _: &mut ObserverContext, host: &mut Host, _: &DB, policy: CheckPolicy) {
+    fn add_checker(
+        &self,
+        _: &mut ObserverContext<'_>,
+        host: &mut Host,
+        _: &DB,
+        policy: CheckPolicy,
+    ) {
         if host.auto_split() {
             return;
         }

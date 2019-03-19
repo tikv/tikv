@@ -230,12 +230,12 @@ impl<T: Write> JsonEncoder for T {}
 
 impl Json {
     // `decode` decodes value encoded by `encode_json` before.
-    pub fn decode(buf: &mut BytesSlice) -> Result<Json> {
+    pub fn decode(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let code = number::read_u8(buf)?;
         Json::decode_body(buf, code)
     }
 
-    fn decode_body(buf: &mut BytesSlice, code_type: u8) -> Result<Json> {
+    fn decode_body(buf: &mut BytesSlice<'_>, code_type: u8) -> Result<Json> {
         match code_type {
             TYPE_CODE_OBJECT => Json::decode_obj(buf),
             TYPE_CODE_ARRAY => Json::decode_array(buf),
@@ -248,7 +248,7 @@ impl Json {
         }
     }
 
-    fn decode_obj(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_obj(buf: &mut BytesSlice<'_>) -> Result<Json> {
         // count size key_entries value_entries keys values
         let element_count = number::decode_u32_le(buf)? as usize;
         let total_size = number::decode_u32_le(buf)? as usize;
@@ -280,7 +280,7 @@ impl Json {
         Ok(Json::Object(obj))
     }
 
-    fn decode_array(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_array(buf: &mut BytesSlice<'_>) -> Result<Json> {
         // count size value_entries values
         let element_count = number::decode_u32_le(buf)? as usize;
         let total_size = number::decode_u32_le(buf)?;
@@ -298,14 +298,14 @@ impl Json {
         Ok(Json::Array(array_data))
     }
 
-    fn decode_str(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_str(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let length = number::decode_var_u64(buf)?;
         let encode_value = read_slice(buf, length as usize)?;
         let value = str::from_utf8(encode_value)?;
         Ok(Json::String(value.into()))
     }
 
-    fn decode_literal(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_literal(buf: &mut BytesSlice<'_>) -> Result<Json> {
         match number::read_u8(buf)? {
             JSON_LITERAL_TRUE => Ok(Json::Boolean(true)),
             JSON_LITERAL_FALSE => Ok(Json::Boolean(false)),
@@ -313,23 +313,23 @@ impl Json {
         }
     }
 
-    fn decode_double(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_double(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let value = number::decode_f64_le(buf)?;
         Ok(Json::Double(value))
     }
 
-    fn decode_i64(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_i64(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let value = number::decode_i64_le(buf)?;
         Ok(Json::I64(value))
     }
 
-    fn decode_u64(buf: &mut BytesSlice) -> Result<Json> {
+    fn decode_u64(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let value = number::decode_u64_le(buf)?;
         Ok(Json::U64(value))
     }
 
     fn decode_item(
-        buf: &mut BytesSlice,
+        buf: &mut BytesSlice<'_>,
         values_data: &[u8],
         data_start_position: u32,
     ) -> Result<Json> {

@@ -14,6 +14,4 @@
 mod reader;
 mod scanner;
 pub use self::reader::MvccReader;
-pub use self::scanner::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
+pub use self::scanner::{Scanner, ScannerBuilder};

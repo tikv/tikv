@@ -82,7 +82,7 @@ struct CusRng {
 }
 
 impl std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "()")
     }
 }
@@ -262,7 +262,7 @@ impl Expression {
                 .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = field_type.decimal() as i8;
-                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, &ctx.cfg.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
