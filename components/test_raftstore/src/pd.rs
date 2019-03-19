@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -233,6 +233,7 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
+    timestamp: AtomicU64,
 }
 
 impl Cluster {
@@ -259,6 +260,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
+            timestamp: AtomicU64::new(100),
         }
     }
 
@@ -597,6 +599,10 @@ impl Cluster {
 
     fn get_gc_safe_point(&self) -> u64 {
         self.gc_safe_point
+    }
+
+    fn get_timestamp(&self) -> u64 {
+        self.timestamp.fetch_add(1, Ordering::SeqCst)
     }
 }
 
@@ -1154,6 +1160,10 @@ impl PdClient for TestPdClient {
     }
 
     fn get_timestamp(&self) -> PdFuture<u64> {
-        unimplemented!();
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+        let ts = self.cluster.rl().get_timestamp();
+        Box::new(ok(ts))
     }
 }

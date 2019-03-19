@@ -196,7 +196,6 @@ impl MvccInspector {
         Self { inner }
     }
 
-    // Quickly make the code buildable
     pub fn new_mock() -> Self {
         let maps = (0..GLOBAL_REGION_SLOTS)
             .map(|_| Default::default())
@@ -285,5 +284,91 @@ impl Stream for TaskCollector {
             return Ok(Async::NotReady);
         }
         Ok(Async::Ready(Some(items)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::{black_box, Bencher};
+
+    use std::sync::atomic::{self, AtomicBool};
+    use std::thread;
+
+    fn bench_report_ts_impl(threads: usize, b: &mut Bencher) {
+        // This benchmark's result shows the ops of only one of those threads, so we can see the
+        // performance regression of a single thread when there are other threads accessing it.
+        let inspector = MvccInspector::new_mock();
+        let region_id = 1;
+        inspector.inner.max_read_ts_map[region_id as usize % GLOBAL_REGION_SLOTS]
+            .wl()
+            .insert(
+                region_id,
+                Arc::new(RwLock::new(RegionMaxTsRecord {
+                    max_read_ts: 0,
+                    is_ready: true,
+                    version: 1,
+                })),
+            );
+
+        let is_stopped = Arc::new(AtomicBool::new(false));
+
+        let handles = (0..threads - 1)
+            .map(|i| {
+                let inspector1 = inspector.clone();
+                let is_stopped1 = Arc::clone(&is_stopped);
+                thread::spawn(move || {
+                    let mut ts = i as u64;
+                    loop {
+                        if is_stopped1.load(atomic::Ordering::Acquire) {
+                            break;
+                        }
+                        ts += 100;
+                        inspector1.report_read_ts(region_id, 1, ts, "");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut ts = 0;
+        let inspector1 = inspector.clone();
+        b.iter(move || {
+            ts += 100;
+            inspector1.report_read_ts(region_id, 1, ts, "");
+        });
+
+        black_box(inspector);
+        is_stopped.store(true, atomic::Ordering::Release);
+        handles.into_iter().for_each(|h| h.join().unwrap());
+    }
+
+    #[bench]
+    fn bench_report_ts_1(b: &mut Bencher) {
+        bench_report_ts_impl(1, b);
+    }
+
+    #[bench]
+    fn bench_report_ts_2(b: &mut Bencher) {
+        bench_report_ts_impl(2, b);
+    }
+
+    #[bench]
+    fn bench_report_ts_4(b: &mut Bencher) {
+        bench_report_ts_impl(4, b);
+    }
+
+    #[bench]
+    fn bench_report_ts_8(b: &mut Bencher) {
+        bench_report_ts_impl(8, b);
+    }
+
+    #[bench]
+    fn bench_report_ts_16(b: &mut Bencher) {
+        bench_report_ts_impl(16, b);
+    }
+
+    #[bench]
+    fn bench_report_ts_32(b: &mut Bencher) {
+        bench_report_ts_impl(32, b);
     }
 }
