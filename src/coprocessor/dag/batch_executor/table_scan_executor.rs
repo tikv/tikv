@@ -51,9 +51,27 @@ impl<S: Store> BatchTableScanExecutor<S> {
         let mut column_id_index = HashMap::default();
 
         for (index, mut ci) in columns_info.into_iter().enumerate() {
+            // For each column info, we need to extract the following info:
+            // - Corresponding field type (push into `schema`).
             schema.push(super::scan_executor::field_type_from_column_info(&ci));
-            columns_default_value.push(ci.take_default_val());
 
+            // - Prepare column default value (will be used to fill missing column later).
+            if !ci.get_default_val().is_empty() {
+                columns_default_value.push(ci.take_default_val());
+            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL) {
+                // Empty value means that we need to use NULL as the default value.
+                columns_default_value.push(Vec::new());
+            } else {
+                // default_value is not provided && flag contains NOT NULL:
+                // for a normal request this will never happen, so let's return an error.
+                return Err(box_err!(
+                    "Invalid request: default value must be provided for NOT NULL column (offset = {})",
+                    index
+                ));
+            }
+
+            // - Store the index of the PK handle.
+            // - Check whether or not we don't need KV values (iff PK handle is given).
             if ci.get_pk_handle() {
                 handle_index = Some(index);
             } else {
@@ -112,7 +130,8 @@ struct TableScanExecutorImpl {
     schema: Vec<FieldType>,
 
     /// The default value of corresponding columns in the schema. When column data is missing,
-    /// the default value will be used to fill the output.
+    /// the default value will be used to fill the output. If corresponding slot is empty, it means
+    /// NULL should be used.
     columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
@@ -264,19 +283,10 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
-                let default_value = if !self.columns_default_value[i].is_empty() {
-                    self.columns_default_value[i].as_slice()
-                } else if !self.schema[i]
-                    .flag()
-                    .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
-                {
+                let default_value = if self.columns_default_value[i].is_empty() {
                     datum::DATUM_DATA_NULL
                 } else {
-                    // For a normal request this will never happen, so let's return an error.
-                    return Err(box_err!(
-                        "Invalid request: default value must be provided for NOT NULL column (offset = {})",
-                        i
-                    ));
+                    self.columns_default_value[i].as_slice()
                 };
                 columns[i].push_raw(default_value);
             } else {
