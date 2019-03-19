@@ -37,7 +37,7 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
-use tikv::storage::{self, MvccInspector, RaftKv};
+use tikv::storage::{self, RaftKv, ReadTsCache};
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -147,14 +147,14 @@ impl Simulator for ServerCluster {
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 storage::ReadPoolContext::new(pd_worker.scheduler())
             });
-        let mvcc_inspector = MvccInspector::new(Arc::clone(&self.pd_client));
+        let read_ts_cache = ReadTsCache::new(Arc::clone(&self.pd_client));
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,
             storage_read_pool,
             None,
             None,
-            mvcc_inspector.clone(),
+            read_ts_cache.clone(),
         )
         .unwrap();
         self.storages.insert(node_id, store.get_engine());
@@ -183,7 +183,7 @@ impl Simulator for ServerCluster {
         let cop = coprocessor::Endpoint::new(
             &server_cfg,
             store.get_engine(),
-            mvcc_inspector.clone(),
+            read_ts_cache.clone(),
             cop_read_pool,
         );
         let mut server = None;
@@ -234,7 +234,7 @@ impl Simulator for ServerCluster {
 
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
-        mvcc_inspector.register_observer(&mut coprocessor_host);
+        read_ts_cache.register_observer(&mut coprocessor_host);
 
         node.start(
             engines.clone(),

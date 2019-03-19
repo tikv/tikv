@@ -28,7 +28,7 @@ use crate::raftstore::store::{
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::{self, Config as StorageConfig, MvccInspector, RaftKv, Storage};
+use crate::storage::{self, Config as StorageConfig, RaftKv, ReadTsCache, Storage};
 use crate::util::worker::{FutureWorker, Worker};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
@@ -46,7 +46,7 @@ pub fn create_raft_storage<S>(
     read_pool: ReadPool<storage::ReadPoolContext>,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
-    mvcc_inspector: MvccInspector,
+    read_ts_cache: ReadTsCache,
 ) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
@@ -58,7 +58,7 @@ where
         read_pool,
         local_storage,
         raft_store_router,
-        mvcc_inspector,
+        read_ts_cache,
     )?;
     Ok(store)
 }

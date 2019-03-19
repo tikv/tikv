@@ -14,9 +14,9 @@
 pub mod config;
 pub mod engine;
 pub mod gc_worker;
-mod inspector;
 mod metrics;
 pub mod mvcc;
+mod read_ts_cache;
 mod readpool_context;
 pub mod txn;
 pub mod types;
@@ -55,7 +55,7 @@ pub use self::engine::{
     TestEngineBuilder,
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
-pub use self::inspector::MvccInspector;
+pub use self::read_ts_cache::ReadTsCache;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
@@ -493,7 +493,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
         )
     }
 }
@@ -536,7 +536,7 @@ pub struct Storage<E: Engine> {
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
 
-    inspector: MvccInspector,
+    read_ts_cache: ReadTsCache,
 
     // Fields below are storage configurations.
     max_key_size: usize,
@@ -557,7 +557,7 @@ impl<E: Engine> Clone for Storage<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
-            inspector: self.inspector.clone(),
+            read_ts_cache: self.read_ts_cache.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
         }
@@ -606,7 +606,7 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool<ReadPoolContext>,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        mvcc_inspector: MvccInspector,
+        read_ts_cache: ReadTsCache,
     ) -> Result<Self> {
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
@@ -640,7 +640,7 @@ impl<E: Engine> Storage<E> {
             worker_scheduler,
             read_pool,
             gc_worker,
-            inspector: mvcc_inspector,
+            read_ts_cache,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
@@ -659,8 +659,8 @@ impl<E: Engine> Storage<E> {
         self.engine.clone()
     }
 
-    pub fn get_mvcc_inspector(&self) -> MvccInspector {
-        self.inspector.clone()
+    pub fn get_read_ts_cache(&self) -> ReadTsCache {
+        self.read_ts_cache.clone()
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
@@ -688,15 +688,6 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    fn report_read_ts(&self, ctx: &Context, start_ts: u64, from: &str) {
-        self.inspector.report_read_ts(
-            ctx.get_region_id(),
-            ctx.get_region_epoch().get_version(),
-            start_ts,
-            from,
-        );
-    }
-
     /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
     /// is visible.
     pub fn async_get(
@@ -709,7 +700,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_get");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -767,7 +759,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_batch_get");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -833,7 +826,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_scan");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -920,14 +914,14 @@ impl<E: Engine> Storage<E> {
         options: Options,
         callback: Callback<(Vec<Result<()>>, u64)>,
     ) -> Result<()> {
-        let inspector = self.inspector.clone();
+        let read_ts_cache = self.read_ts_cache.clone();
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
         let callback = box move |res: Result<Vec<Result<()>>>| {
             let mut max_read_ts = 0;
             if let Ok(key_errs) = &res {
                 if key_errs.is_empty() {
-                    max_read_ts = inspector.get_max_read_ts(region_id, version);
+                    max_read_ts = read_ts_cache.get_max_read_ts(region_id, version);
                 }
             }
             callback(res.map(|key_errs| (key_errs, max_read_ts)))

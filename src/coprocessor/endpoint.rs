@@ -25,7 +25,7 @@ use tipb::select::DAGRequest;
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
-use crate::storage::{self, Engine, MvccInspector, SnapshotStore};
+use crate::storage::{self, Engine, ReadTsCache, SnapshotStore};
 use crate::util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
@@ -45,7 +45,7 @@ pub struct Endpoint<E: Engine> {
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool<ReadPoolContext>,
 
-    inspector: MvccInspector,
+    read_ts_cache: ReadTsCache,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -63,7 +63,7 @@ impl<E: Engine> Clone for Endpoint<E> {
         Self {
             engine: self.engine.clone(),
             read_pool: self.read_pool.clone(),
-            inspector: self.inspector.clone(),
+            read_ts_cache: self.read_ts_cache.clone(),
             ..*self
         }
     }
@@ -75,13 +75,13 @@ impl<E: Engine> Endpoint<E> {
     pub fn new(
         cfg: &Config,
         engine: E,
-        mvcc_inspector: MvccInspector,
+        read_ts_cache: ReadTsCache,
         read_pool: ReadPool<ReadPoolContext>,
     ) -> Self {
         Self {
             engine,
             read_pool,
-            inspector: mvcc_inspector,
+            read_ts_cache,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
@@ -309,12 +309,8 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
         if let Some(ts) = req_ctx.txn_start_ts {
-            self.inspector.report_read_ts(
-                req_ctx.context.get_region_id(),
-                req_ctx.context.get_region_epoch().get_version(),
-                ts,
-                "cop_unary",
-            );
+            self.read_ts_cache
+                .report_read_ts(req_ctx.context.get_region_id(), ts);
         }
 
         let engine = self.engine.clone();
@@ -447,12 +443,8 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
         if let Some(ts) = req_ctx.txn_start_ts {
-            self.inspector.report_read_ts(
-                req_ctx.context.get_region_id(),
-                req_ctx.context.get_region_epoch().get_version(),
-                ts,
-                "cop_stream",
-            );
+            self.read_ts_cache
+                .report_read_ts(req_ctx.context.get_region_id(), ts);
         }
 
         let (tx, rx) = mpsc::channel::<coppb::Response>(self.stream_channel_size);
@@ -697,7 +689,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -742,7 +734,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -780,7 +772,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -804,7 +796,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -835,7 +827,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -885,7 +877,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -909,7 +901,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -959,7 +951,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -984,7 +976,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -1078,7 +1070,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             read_pool,
         );
 
@@ -1132,7 +1124,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::new(&config, engine, MvccInspector::new_mock(), read_pool);
+        let cop = Endpoint::new(&config, engine, ReadTsCache::new_mock(), read_pool);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
