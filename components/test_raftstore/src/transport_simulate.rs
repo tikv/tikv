@@ -211,6 +211,10 @@ impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
         self.ch.casual_send(region_id, msg)
     }
 
+    fn broadcast_unreachable(&self, store_id: u64) {
+        self.ch.broadcast_unreachable(store_id)
+    }
+
     fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }

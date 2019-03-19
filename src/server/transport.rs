@@ -54,6 +54,8 @@ pub trait RaftStoreRouter: Send + Clone {
         )
     }
 
+    fn broadcast_unreachable(&self, store_id: u64);
+
     /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
         &self,
@@ -72,6 +74,32 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()>;
+}
+
+#[derive(Clone)]
+pub struct RaftStoreBlackHole;
+
+impl RaftStoreRouter for RaftStoreBlackHole {
+    /// Sends RaftMessage to local store.
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends RaftCmdRequest to local store.
+    fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    fn broadcast_unreachable(&self, _: u64) {}
+
+    fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
 }
 
 /// A router that routes messages to the raftstore
@@ -148,6 +176,10 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_error(region_id, e))
     }
+
+    fn broadcast_unreachable(&self, store_id: u64) {
+        self.router.broadcast_unreachable(store_id)
+    }
 }
 
 pub struct ServerTransport<T, S>
@@ -155,7 +187,7 @@ where
     T: RaftStoreRouter + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: Arc<RwLock<RaftClient>>,
+    raft_client: Arc<RwLock<RaftClient<T>>>,
     snap_scheduler: Scheduler<SnapTask>,
     pub raft_router: T,
     resolving: Arc<RwLock<HashSet<u64>>>,
@@ -180,7 +212,7 @@ where
 
 impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(
-        raft_client: Arc<RwLock<RaftClient>>,
+        raft_client: Arc<RwLock<RaftClient<T>>>,
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
         resolver: S,

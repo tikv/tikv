@@ -67,8 +67,8 @@ use crate::raftstore::store::worker::{
     RegionTask, SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, Callback, CasualMessage, Engines, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter,
-    StoreMsg, StoreTick,
+    util, Callback, CasualMessage, Engines, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
+    SnapshotDeleter, StoreMsg, StoreTick,
 };
 
 type Key = Vec<u8>;
@@ -176,6 +176,12 @@ impl RaftRouter {
             }
             _ => unreachable!(),
         }
+    }
+
+    pub fn broadcast_unreachable(&self, store_id: u64) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
+        });
     }
 }
 

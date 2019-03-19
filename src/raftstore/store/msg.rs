@@ -107,12 +107,12 @@ impl fmt::Debug for Callback {
 
 bitflags! {
     pub struct PeerTicks: u8 {
-        const Raft                = 0b00000001;
-        const RaftLogGc           = 0b00000010;
-        const SplitRegionCheck    = 0b00000100;
-        const PdHeartbeat         = 0b00001000;
-        const CheckMerge          = 0b00010000;
-        const CheckPeerStaleState = 0b00100000;
+        const RAFT                   = 0b00000001;
+        const RAFT_LOG_GC            = 0b00000010;
+        const SPLIT_REGION_CHECK     = 0b00000100;
+        const PD_HEARTBEAT           = 0b00001000;
+        const CHECK_MERGE            = 0b00010000;
+        const CHECK_PEER_STALE_STATE = 0b00100000;
     }
 }
 
@@ -120,12 +120,12 @@ impl PeerTicks {
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTicks::Raft => "raft",
-            PeerTicks::RaftLogGc => "raft_log_gc",
-            PeerTicks::SplitRegionCheck => "split_region_check",
-            PeerTicks::PdHeartbeat => "pd_heartbeat",
-            PeerTicks::CheckMerge => "check_merge",
-            PeerTicks::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTicks::RAFT => "raft",
+            PeerTicks::RAFT_LOG_GC => "raft_log_gc",
+            PeerTicks::SPLIT_REGION_CHECK => "split_region_check",
+            PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
+            PeerTicks::CHECK_MERGE => "check_merge",
+            PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
             _ => unreachable!(),
         }
     }
@@ -165,8 +165,14 @@ pub enum SignificantMsg {
         to_peer_id: u64,
         status: SnapshotStatus,
     },
+    StoreUnreachable {
+        store_id: u64,
+    },
     /// Reports `to_peer_id` is unreachable.
-    Unreachable { region_id: u64, to_peer_id: u64 },
+    Unreachable {
+        region_id: u64,
+        to_peer_id: u64,
+    },
 }
 
 /// Message that will be sent to a peer.

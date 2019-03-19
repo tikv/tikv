@@ -341,12 +341,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.fsm.tick_registry.remove(tick);
         match tick {
-            PeerTicks::Raft => self.on_raft_base_tick(),
-            PeerTicks::RaftLogGc => self.on_raft_gc_log_tick(),
-            PeerTicks::PdHeartbeat => self.on_pd_heartbeat_tick(),
-            PeerTicks::SplitRegionCheck => self.on_split_region_check_tick(),
-            PeerTicks::CheckMerge => self.on_check_merge(),
-            PeerTicks::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
+            PeerTicks::RAFT => self.on_raft_base_tick(),
+            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(),
+            PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
+            PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
+            PeerTicks::CHECK_MERGE => self.on_check_merge(),
+            PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
             _ => unreachable!(),
         }
     }
@@ -525,6 +525,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::Unreachable { to_peer_id, .. } => {
                 self.fsm.peer.raft_group.report_unreachable(to_peer_id);
             }
+            SignificantMsg::StoreUnreachable { store_id } => {
+                if let Some(leader) = self.fsm.peer.get_peer_from_cache(self.fsm.peer.leader_id()) {
+                    if leader.get_store_id() == store_id {
+                        self.fsm.waken = true;
+                        self.register_raft_base_tick();
+                    }
+                }
+            }
         }
     }
 
@@ -649,7 +657,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .map(move |_| {
                 fail_point!(
                     "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTicks::RaftLogGc,
+                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
                     |_| unreachable!()
                 );
                 if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
@@ -674,7 +682,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTicks::Raft, self.ctx.cfg.raft_base_tick_interval.0)
+        self.schedule_tick(PeerTicks::RAFT, self.ctx.cfg.raft_base_tick_interval.0)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -1559,7 +1567,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn register_merge_check_tick(&mut self) {
         self.schedule_tick(
-            PeerTicks::CheckMerge,
+            PeerTicks::CHECK_MERGE,
             self.ctx.cfg.merge_check_tick_interval.0,
         )
     }
@@ -2255,7 +2263,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn register_raft_gc_log_tick(&mut self) {
         self.schedule_tick(
-            PeerTicks::RaftLogGc,
+            PeerTicks::RAFT_LOG_GC,
             self.ctx.cfg.raft_log_gc_tick_interval.0,
         )
     }
@@ -2372,7 +2380,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn register_split_region_check_tick(&mut self) {
         self.schedule_tick(
-            PeerTicks::SplitRegionCheck,
+            PeerTicks::SPLIT_REGION_CHECK,
             self.ctx.cfg.split_region_check_tick_interval.0,
         )
     }
@@ -2578,7 +2586,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn register_pd_heartbeat_tick(&mut self) {
         self.schedule_tick(
-            PeerTicks::PdHeartbeat,
+            PeerTicks::PD_HEARTBEAT,
             self.ctx.cfg.pd_heartbeat_tick_interval.0,
         )
     }
