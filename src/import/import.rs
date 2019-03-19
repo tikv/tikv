@@ -192,21 +192,8 @@ impl<Client: ImportClient> ImportJob<Client> {
             ));
         }
 
-        // Spawn a thread to dispatch ranges
         let split_thread_count = self.cfg.num_import_jobs * 2;
         let (range_tx, range_rx) = bounded(split_thread_count);
-        let range_handle = thread::Builder::new()
-            .name("dispatch-range-job".to_owned())
-            .spawn(move || {
-                for (_, range) in ranges.into_iter().enumerate() {
-                    let start = Instant::now_coarse();
-                    range_tx.send(range).unwrap();
-                    IMPORT_RANGE_DELIVERY_DURATION.observe(start.elapsed_secs());
-                }
-                Ok(())
-            })
-            .unwrap();
-        handles.push(range_handle);
 
         // Spawn a group of threads to split range to ssts
         let client = Arc::new(self.client.clone());
@@ -219,6 +206,13 @@ impl<Client: ImportClient> ImportJob<Client> {
                 Arc::clone(&finished_ranges),
             ));
         }
+
+        for (_, range) in ranges.into_iter().enumerate() {
+            let start = Instant::now_coarse();
+            range_tx.send(range).unwrap();
+            IMPORT_RANGE_DELIVERY_DURATION.observe(start.elapsed_secs());
+        }
+
         handles
     }
 }
