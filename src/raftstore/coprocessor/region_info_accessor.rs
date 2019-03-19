@@ -598,14 +598,14 @@ impl RegionInfoProvider for RegionInfoAccessor {
         let msg = RegionCollectorMsg::GetRegionsInRange {
             start: start.to_vec(),
             end: end.to_vec(),
-            callback: box move |res| {
+            callback: Box::new(move |res| {
                 tx.send(res).unwrap_or_else(|e| {
                     panic!(
                         "failed to send get_regions_in_range result back to caller: {:?}",
                         e
                     )
                 })
-            },
+            }),
         };
         self.scheduler
             .schedule(msg)
