@@ -57,16 +57,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref SCHED_RAW_READ_HISTOGRAM_VEC: SchedDurationVec = {
-        register_static_histogram_vec!(
-            SchedDurationVec,
-            "tikv_scheduler_raw_read_command_duration_seconds",
-            "Bucketed histogram of command execution",
-            &["type"],
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
-        )
-        .unwrap()
-    };
+    pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
+        SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
