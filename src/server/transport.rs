@@ -29,7 +29,7 @@ use crate::server::raft_client::RaftClient;
 use crate::server::Result;
 use crate::util::collections::HashSet;
 use crate::util::worker::Scheduler;
-use crate::util::HandyRwLock;
+use crate::util::{hash_u64, HandyRwLock};
 use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
@@ -78,15 +78,15 @@ pub trait RaftStoreRouter: Send + Clone {
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     router: RaftRouter,
-    local_reader_ch: Scheduler<ReadTask>,
+    local_readers_ch: Vec<Scheduler<ReadTask>>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_reader_ch: Scheduler<ReadTask>) -> ServerRaftStoreRouter {
+    pub fn new(router: RaftRouter, local_readers_ch: Vec<Scheduler<ReadTask>>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
-            local_reader_ch,
+            local_readers_ch,
         }
     }
 
@@ -118,12 +118,14 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
+        let region_id= cmd.request.get_header().get_region_id();
         if ReadTask::acceptable(&cmd.request) {
-            self.local_reader_ch
+            // Use hash to select a local reader.
+            let l = hash_u64(region_id) as usize % self.local_readers_ch.len();
+            self.local_readers_ch[l]
                 .schedule(ReadTask::read(cmd))
                 .map_err(|e| box_err!(e))
         } else {
-            let region_id = cmd.request.get_header().get_region_id();
             self.router
                 .send_raft_command(cmd)
                 .map_err(|e| handle_error(region_id, e))

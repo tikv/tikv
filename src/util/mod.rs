@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, slice, thread, u64};
+use std::num::Wrapping;
 
 use protobuf::Message;
 use rand::{self, ThreadRng};
@@ -552,6 +553,16 @@ pub fn check_environment_variables() {
 #[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
+}
+
+/// A fast hash function for u64.
+#[inline]
+pub fn hash_u64(i: u64) -> u64 {
+    let mut x = Wrapping(i);
+    x = (x ^ (x >> 30)) * Wrapping(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)) * Wrapping(0x94d049bb133111eb);
+    x = x ^ (x >> 31);
+    x.0
 }
 
 #[cfg(test)]

@@ -48,7 +48,7 @@ use crate::raftstore::{Error, Result};
 use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
-use crate::util::{escape, MustConsumeVec};
+use crate::util::{escape, hash_u64, MustConsumeVec};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
@@ -404,7 +404,8 @@ impl Peer {
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        if let Err(e) = ctx.local_reader.schedule(ReadTask::register(self)) {
+        let l = hash_u64(self.region_id) as usize % ctx.local_readers.len();
+        if let Err(e) = ctx.local_readers[l].schedule(ReadTask::register(self)) {
             info!(
                 "failed to schedule local reader, are we shutting down?";
                 "region_id" => self.region_id,
@@ -542,7 +543,7 @@ impl Peer {
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
-        local_reader: &Scheduler<ReadTask>,
+        local_readers: &[Scheduler<ReadTask>],
         region: metapb::Region,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -554,7 +555,7 @@ impl Peer {
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
         // becoming a leader.
-        self.maybe_update_read_progress(local_reader, progress);
+        self.maybe_update_read_progress(local_readers, progress);
 
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
@@ -850,8 +851,8 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress = ReadProgress::term(self.term());
-                    self.maybe_update_read_progress(&ctx.local_reader, progress);
-                    self.maybe_renew_leader_lease(&ctx.local_reader, monotonic_raw_now());
+                    self.maybe_update_read_progress(&ctx.local_readers, progress);
+                    self.maybe_renew_leader_lease(&ctx.local_readers, monotonic_raw_now());
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
@@ -1147,7 +1148,7 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+                        self.maybe_renew_leader_lease(&ctx.local_readers, propose_time);
                         lease_to_be_updated = false;
                     }
                 }
@@ -1235,7 +1236,7 @@ impl Peer {
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
-            self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+            self.maybe_renew_leader_lease(&ctx.local_readers, propose_time);
         }
     }
 
@@ -1286,7 +1287,7 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.maybe_update_read_progress(&ctx.local_reader, progress);
+            self.maybe_update_read_progress(&ctx.local_readers, progress);
         }
         has_ready
     }
@@ -1298,7 +1299,7 @@ impl Peer {
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease(&mut self, reader: &Scheduler<ReadTask>, ts: Timespec) {
+    fn maybe_renew_leader_lease(&mut self, readers: &[Scheduler<ReadTask>], ts: Timespec) {
         // A nonleader peer should never has leader lease.
         if !self.is_leader() {
             return;
@@ -1329,13 +1330,13 @@ impl Peer {
         let term = self.term();
         if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
             let progress = ReadProgress::leader_lease(remote_lease);
-            self.maybe_update_read_progress(reader, progress);
+            self.maybe_update_read_progress(readers, progress);
         }
     }
 
     fn maybe_update_read_progress(
         &self,
-        local_reader: &Scheduler<ReadTask>,
+        local_readers: &[Scheduler<ReadTask>],
         progress: ReadProgress,
     ) {
         if self.pending_remove {
@@ -1348,7 +1349,8 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
             "update" => %update,
         );
-        if let Err(e) = local_reader.schedule(update) {
+        let l = hash_u64(self.region_id) as usize % local_readers.len();
+        if let Err(e) = local_readers[l].schedule(update) {
             info!(
                 "failed to update read progress, are we shutting down?";
                 "region_id" => self.region_id,

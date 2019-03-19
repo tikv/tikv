@@ -120,7 +120,7 @@ impl StoreMeta {
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
-        reader: &Scheduler<ReadTask>,
+        readers: &[Scheduler<ReadTask>],
         region: Region,
         peer: &mut crate::raftstore::store::Peer,
     ) {
@@ -129,7 +129,7 @@ impl StoreMeta {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
         }
-        peer.set_region(host, reader, region);
+        peer.set_region(host, readers, region);
     }
 }
 
@@ -187,7 +187,7 @@ pub struct PollContext<T, C: 'static> {
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     pub cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
-    pub local_reader: Scheduler<ReadTask>,
+    pub local_readers: Vec<Scheduler<ReadTask>>,
     pub region_scheduler: Scheduler<RegionTask>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter,
@@ -655,7 +655,7 @@ pub struct RaftPollerBuilder<T, C> {
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
-    local_reader: Scheduler<ReadTask>,
+    local_readers: Vec<Scheduler<ReadTask>>,
     region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter,
     pub router: RaftRouter,
@@ -848,7 +848,7 @@ where
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             cleanup_sst_scheduler: self.cleanup_sst_scheduler.clone(),
-            local_reader: self.local_reader.clone(),
+            local_readers: self.local_readers.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -895,7 +895,7 @@ struct Workers {
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     split_check_worker: Worker<SplitCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
-    local_reader: Worker<ReadTask>,
+    local_readers: Vec<Worker<ReadTask>>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     coprocessor_host: Arc<CoprocessorHost>,
@@ -924,7 +924,7 @@ impl RaftBatchSystem {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_reader: Worker<ReadTask>,
+        local_readers: Vec<Worker<ReadTask>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()> {
@@ -943,7 +943,7 @@ impl RaftBatchSystem {
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             compact_worker: Worker::new("compact-worker"),
             pd_worker,
-            local_reader,
+            local_readers,
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
             coprocessor_host: Arc::new(coprocessor_host),
@@ -952,6 +952,11 @@ impl RaftBatchSystem {
                 .pool_size(cfg.future_poll_size)
                 .build(),
         };
+        let local_reader_schedulers: Vec<_> = workers.local_readers.iter()
+            .map(|local_reader| {
+                local_reader.scheduler()
+            })
+            .collect();
         let mut builder = RaftPollerBuilder {
             cfg: Arc::new(cfg),
             store: meta,
@@ -965,7 +970,7 @@ impl RaftBatchSystem {
             consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
             cleanup_sst_scheduler: workers.cleanup_sst_worker.scheduler(),
             apply_router: self.apply_router.clone(),
-            local_reader: workers.local_reader.scheduler(),
+            local_readers: local_reader_schedulers,
             trans,
             pd_client,
             coprocessor_host: workers.coprocessor_host.clone(),
@@ -1045,9 +1050,11 @@ impl RaftBatchSystem {
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
-        let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
-        let timer = LocalReader::new_timer();
-        box_try!(workers.local_reader.start_with_timer(reader, timer));
+        for local_reader in &mut workers.local_readers {
+            let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
+            let timer = LocalReader::new_timer();
+            box_try!(local_reader.start_with_timer(reader, timer));
+        }
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
@@ -1084,7 +1091,9 @@ impl RaftBatchSystem {
         handles.push(workers.pd_worker.stop());
         handles.push(workers.consistency_check_worker.stop());
         handles.push(workers.cleanup_sst_worker.stop());
-        handles.push(workers.local_reader.stop());
+        for local_reader in &mut workers.local_readers {
+            handles.push(local_reader.stop());
+        }
         self.apply_system.shutdown();
         self.system.shutdown();
         for h in handles {

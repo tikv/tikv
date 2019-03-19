@@ -136,7 +136,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<ReadTask>,
+        local_read_workers: Vec<Worker<ReadTask>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -175,7 +175,7 @@ where
             trans,
             snap_mgr,
             pd_worker,
-            local_read_worker,
+            local_read_workers,
             coprocessor_host,
             importer,
         )?;
@@ -332,7 +332,7 @@ where
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_read_worker: Worker<ReadTask>,
+        local_read_workers: Vec<Worker<ReadTask>>,
         coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()>
@@ -356,7 +356,7 @@ where
             pd_client,
             snap_mgr,
             pd_worker,
-            local_read_worker,
+            local_read_workers,
             coprocessor_host,
             importer,
         )?;

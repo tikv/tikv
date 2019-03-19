@@ -124,6 +124,7 @@ pub struct Config {
 
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
+    pub local_read_concurrency: usize,
 
     pub apply_max_batch_size: usize,
     pub apply_pool_size: usize,
@@ -198,6 +199,7 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
+            local_read_concurrency: 2,
             apply_max_batch_size: 1024,
             apply_pool_size: 2,
             store_max_batch_size: 1024,

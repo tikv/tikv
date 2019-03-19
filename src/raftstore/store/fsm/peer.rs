@@ -41,7 +41,7 @@ use crate::storage::CF_RAFT;
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
-use crate::util::{escape, is_zero_duration};
+use crate::util::{escape, is_zero_duration, hash_u64};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -1204,12 +1204,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
-        if self
-            .ctx
-            .local_reader
-            .schedule(ReadTask::destroy(region_id))
-            .is_err()
-        {
+        let l = hash_u64(region_id) as usize % self.ctx.local_readers.len();
+        if self.ctx.local_readers[l].schedule(ReadTask::destroy(region_id)).is_err() {
             info!(
                 "unable to destroy read delegate, are we shutting down?";
                 "region_id" => self.fsm.region_id(),
@@ -1271,7 +1267,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
                 &self.ctx.coprocessor_host,
-                &self.ctx.local_reader,
+                &self.ctx.local_readers,
                 cp.region,
                 &mut self.fsm.peer,
             );
@@ -1370,7 +1366,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let region_id = derived.get_id();
         meta.set_region(
             &self.ctx.coprocessor_host,
-            &self.ctx.local_reader,
+            &self.ctx.local_readers,
             derived,
             &mut self.fsm.peer,
         );
@@ -1683,7 +1679,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
                 &self.ctx.coprocessor_host,
-                &self.ctx.local_reader,
+                &self.ctx.local_readers,
                 region.clone(),
                 &mut self.fsm.peer,
             );
@@ -1765,7 +1761,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         assert!(meta.regions.remove(&source.get_id()).is_some());
         meta.set_region(
             &self.ctx.coprocessor_host,
-            &self.ctx.local_reader,
+            &self.ctx.local_readers,
             region,
             &mut self.fsm.peer,
         );
@@ -1821,7 +1817,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if let Some(r) = region {
                 meta.set_region(
                     &self.ctx.coprocessor_host,
-                    &self.ctx.local_reader,
+                    &self.ctx.local_readers,
                     r,
                     &mut self.fsm.peer,
                 );

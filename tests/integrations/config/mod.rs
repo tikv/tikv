@@ -162,6 +162,7 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
+        local_read_concurrency: 2,
         apply_max_batch_size: 22,
         apply_pool_size: 4,
         store_max_batch_size: 21,

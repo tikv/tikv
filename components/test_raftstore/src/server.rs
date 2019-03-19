@@ -26,7 +26,7 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftRouter};
-use tikv::raftstore::store::{Callback, Engines, SnapManager};
+use tikv::raftstore::store::{Callback, Engines, SnapManager, ReadTask};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
@@ -131,8 +131,17 @@ impl Simulator for ServerCluster {
         let (router, system) = create_raft_batch_system(&cfg.raft_store);
 
         // Create localreader.
-        let local_reader = Worker::new("test-local-reader");
-        let local_ch = local_reader.scheduler();
+        let local_readers: Vec<Worker<ReadTask>> = (0..cfg.raft_store.local_read_concurrency)
+            .map(|i| {
+                Worker::new(format!("test-local-reader-{}", i))
+            })
+            .collect();
+        let local_ch: Vec<_> = local_readers
+            .iter()
+            .map(|l| {
+                l.scheduler()
+            })
+            .collect();
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         let sim_router = SimulateTransport::new(raft_router);
@@ -232,7 +241,7 @@ impl Simulator for ServerCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            local_reader,
+            local_readers,
             coprocessor_host,
             importer,
         )
