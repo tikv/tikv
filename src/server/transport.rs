@@ -83,7 +83,10 @@ pub struct ServerRaftStoreRouter {
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_readers_ch: Vec<Scheduler<ReadTask>>) -> ServerRaftStoreRouter {
+    pub fn new(
+        router: RaftRouter,
+        local_readers_ch: Vec<Scheduler<ReadTask>>,
+    ) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
             local_readers_ch,
@@ -118,7 +121,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        let region_id= cmd.request.get_header().get_region_id();
+        let region_id = cmd.request.get_header().get_region_id();
         if ReadTask::acceptable(&cmd.request) {
             // Use hash to select a local reader.
             let l = hash_u64(region_id) as usize % self.local_readers_ch.len();

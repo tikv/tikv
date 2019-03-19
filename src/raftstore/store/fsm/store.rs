@@ -952,10 +952,10 @@ impl RaftBatchSystem {
                 .pool_size(cfg.future_poll_size)
                 .build(),
         };
-        let local_reader_schedulers: Vec<_> = workers.local_readers.iter()
-            .map(|local_reader| {
-                local_reader.scheduler()
-            })
+        let local_reader_schedulers: Vec<_> = workers
+            .local_readers
+            .iter()
+            .map(|local_reader| local_reader.scheduler())
             .collect();
         let mut builder = RaftPollerBuilder {
             cfg: Arc::new(cfg),
@@ -1051,7 +1051,8 @@ impl RaftBatchSystem {
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
         for local_reader in &mut workers.local_readers {
-            let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
+            let reader =
+                LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
             let timer = LocalReader::new_timer();
             box_try!(local_reader.start_with_timer(reader, timer));
         }

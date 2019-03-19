@@ -41,7 +41,7 @@ use crate::storage::CF_RAFT;
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
-use crate::util::{escape, is_zero_duration, hash_u64};
+use crate::util::{escape, hash_u64, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -1205,7 +1205,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         // Destroy read delegates.
         let l = hash_u64(region_id) as usize % self.ctx.local_readers.len();
-        if self.ctx.local_readers[l].schedule(ReadTask::destroy(region_id)).is_err() {
+        if self.ctx.local_readers[l]
+            .schedule(ReadTask::destroy(region_id))
+            .is_err()
+        {
             info!(
                 "unable to destroy read delegate, are we shutting down?";
                 "region_id" => self.fsm.region_id(),

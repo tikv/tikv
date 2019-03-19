@@ -176,16 +176,9 @@ impl Simulator for NodeCluster {
 
         // Create localreader.
         let local_readers: Vec<Worker<ReadTask>> = (0..cfg.raft_store.local_read_concurrency)
-            .map(|i| {
-                Worker::new(format!("test-local-reader-{}", i))
-            })
+            .map(|i| Worker::new(format!("test-local-reader-{}", i)))
             .collect();
-        let local_ch: Vec<_> = local_readers
-            .iter()
-            .map(|l| {
-                l.scheduler()
-            })
-            .collect();
+        let local_ch: Vec<_> = local_readers.iter().map(|l| l.scheduler()).collect();
 
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(

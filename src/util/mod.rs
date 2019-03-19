@@ -14,13 +14,13 @@
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
+use std::num::Wrapping;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 use std::{env, slice, thread, u64};
-use std::num::Wrapping;
 
 use protobuf::Message;
 use rand::{self, ThreadRng};

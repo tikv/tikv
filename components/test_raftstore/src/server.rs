@@ -26,7 +26,7 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, Engines, SnapManager, ReadTask};
+use tikv::raftstore::store::{Callback, Engines, ReadTask, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;
@@ -130,16 +130,9 @@ impl Simulator for ServerCluster {
 
         // Create localreader.
         let local_readers: Vec<Worker<ReadTask>> = (0..cfg.raft_store.local_read_concurrency)
-            .map(|i| {
-                Worker::new(format!("test-local-reader-{}", i))
-            })
+            .map(|i| Worker::new(format!("test-local-reader-{}", i)))
             .collect();
-        let local_ch: Vec<_> = local_readers
-            .iter()
-            .map(|l| {
-                l.scheduler()
-            })
-            .collect();
+        let local_ch: Vec<_> = local_readers.iter().map(|l| l.scheduler()).collect();
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         let sim_router = SimulateTransport::new(raft_router);

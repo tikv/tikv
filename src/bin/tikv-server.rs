@@ -53,7 +53,7 @@ use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
-use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder, ReadTask};
+use tikv::raftstore::store::{new_compaction_listener, Engines, ReadTask, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
@@ -63,7 +63,7 @@ use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv::util::rocksdb_util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::{self, SecurityManager};
 use tikv::util::time::Monitor;
-use tikv::util::worker::{Builder, Worker, FutureWorker};
+use tikv::util::worker::{Builder, FutureWorker, Worker};
 use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -144,12 +144,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
                 .create()
         })
         .collect();
-    let local_ch: Vec<_> = local_readers
-        .iter()
-        .map(|l| {
-            l.scheduler()
-        })
-        .collect();
+    let local_ch: Vec<_> = local_readers.iter().map(|l| l.scheduler()).collect();
 
     // Create router.
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
