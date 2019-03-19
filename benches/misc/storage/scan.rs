@@ -29,7 +29,7 @@ fn bench_tombstone_scan(b: &mut Bencher) {
 
     let mut kvs = KvGenerator::new(100, 1000);
 
-    for (k, v) in kvs.take(100000) {
+    for (k, v) in kvs.take(100_000) {
         let mut ts = ts_generator.next().unwrap();
         store
             .prewrite(

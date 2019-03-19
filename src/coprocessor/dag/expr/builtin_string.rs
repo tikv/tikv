@@ -259,6 +259,25 @@ impl ScalarFunc {
         }
     }
 
+    pub fn replace<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        raw: &'a [Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, raw));
+        let from_str = try_opt!(self.children[1].eval_string_and_decode(ctx, raw));
+        let to_str = try_opt!(self.children[2].eval_string_and_decode(ctx, raw));
+        if from_str.is_empty() {
+            return match s {
+                Cow::Borrowed(v) => Ok(Some(Cow::Borrowed(v.as_bytes()))),
+                Cow::Owned(v) => Ok(Some(Cow::Owned(v.into_bytes()))),
+            };
+        }
+        Ok(Some(Cow::Owned(
+            s.replace(from_str.as_ref(), to_str.as_ref()).into_bytes(),
+        )))
+    }
+
     pub fn left<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -910,20 +929,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
-        let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
-        let substr = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
+        let s = try_opt!(self.children[0].eval_string(ctx, row));
+        let substr = try_opt!(self.children[1].eval_string(ctx, row));
+        if substr.is_empty() {
+            return Ok(Some(1));
+        }
         if s.is_empty() {
             return Ok(Some(0));
         }
-        if substr.is_empty() {
-            return Ok(Some(0));
-        }
-        let s = String::from(s);
-        let substr = String::from(substr);
-        match s.find(&substr) {
-            Some(x) => Ok(Some(1 + s[..x].chars().count() as i64)),
-            None => Ok(Some(0)),
-        }
+        let idz = s.windows(substr.len()).position(|w| w == &*substr);
+        Ok(Some(idz.map(|i| i as i64 + 1).unwrap_or(0)))
     }
 }
 
@@ -1062,9 +1077,9 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
 #[inline]
 fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
     let r = match direction {
-        TrimDirection::Leading => s.trim_left_matches(pat),
-        TrimDirection::Trailing => s.trim_right_matches(pat),
-        _ => s.trim_left_matches(pat).trim_right_matches(pat),
+        TrimDirection::Leading => s.trim_start_matches(pat),
+        TrimDirection::Trailing => s.trim_end_matches(pat),
+        _ => s.trim_start_matches(pat).trim_end_matches(pat),
     };
     Ok(Some(Cow::Owned(r.to_string().into_bytes())))
 }
@@ -1872,7 +1887,11 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes(
+                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                            .as_bytes()
+                            .to_vec(),
+                    ),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公CAFÉ数据库قاعدة البياناتНОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1926,7 +1945,11 @@ mod tests {
                     Datum::Bytes("CAFÉ".as_bytes().to_vec()),
                     Datum::Bytes("数据库".as_bytes().to_vec()),
                     Datum::Bytes("قاعدة البيانات".as_bytes().to_vec()),
-                    Datum::Bytes("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+                    Datum::Bytes(
+                        "НОЧЬ НА ОКРАИНЕ МОСКВЫ"
+                            .as_bytes()
+                            .to_vec(),
+                    ),
                 ],
                 Datum::Bytes(
                     "忠犬ハチ公,CAFÉ,数据库,قاعدة البيانات,НОЧЬ НА ОКРАИНЕ МОСКВЫ"
@@ -1958,6 +1981,92 @@ mod tests {
         for (row, exp) in cases {
             let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
             let expr = scalar_func_expr(ScalarFuncSig::ConcatWS, &children);
+            let e = Expression::build(&ctx, expr).unwrap();
+            let res = e.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_replace() {
+        let cases = vec![
+            (
+                vec![
+                    Datum::Bytes(b"www.mysql.com".to_vec()),
+                    Datum::Bytes(b"mysql".to_vec()),
+                    Datum::Bytes(b"pingcap".to_vec()),
+                ],
+                Datum::Bytes(b"www.pingcap.com".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"www.mysql.com".to_vec()),
+                    Datum::Bytes(b"w".to_vec()),
+                    Datum::Bytes(b"1".to_vec()),
+                ],
+                Datum::Bytes(b"111.mysql.com".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"1234".to_vec()),
+                    Datum::Bytes(b"2".to_vec()),
+                    Datum::Bytes(b"55".to_vec()),
+                ],
+                Datum::Bytes(b"15534".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"abc".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                    Datum::Bytes(b"d".to_vec()),
+                ],
+                Datum::Bytes(b"abc".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"aaa".to_vec()),
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"".to_vec()),
+                ],
+                Datum::Bytes(b"".to_vec()),
+            ),
+            (
+                vec![
+                    Datum::Null,
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Null,
+                    Datum::Bytes(b"b".to_vec()),
+                ],
+                Datum::Null,
+            ),
+            (
+                vec![
+                    Datum::Bytes(b"a".to_vec()),
+                    Datum::Bytes(b"b".to_vec()),
+                    Datum::Null,
+                ],
+                Datum::Null,
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (row, exp) in cases {
+            let children: Vec<Expr> = row.iter().map(|d| datum_expr(d.clone())).collect();
+            let expr = scalar_func_expr(ScalarFuncSig::Replace, &children);
             let e = Expression::build(&ctx, expr).unwrap();
             let res = e.eval(&mut ctx, &[]).unwrap();
             assert_eq!(res, exp);
@@ -3293,14 +3402,24 @@ mod tests {
             ("F", "abcdefg", 0),
             ("cd", "abcdefg", 3),
             (" ", "abcdefg", 0),
-            ("", "", 0),
+            ("", "", 1),
+            (" ", "", 0),
+            ("", " ", 1),
             ("eFg", "abcdefg", 0),
             ("deF", "abcdefg", 0),
-            ("字节", "a多字节", 3),
+            (
+                "字节",
+                "a多字节",
+                1 + "a多字节".find("字节").unwrap() as i64,
+            ),
             ("a", "a多字节", 1),
             ("bar", "foobarbar", 4),
             ("bAr", "foobarbar", 0),
-            ("好世", "你好世界", 2),
+            (
+                "好世",
+                "你好世界",
+                1 + "你好世界".find("好世").unwrap() as i64,
+            ),
         ];
 
         for (substr, s, exp) in cases {

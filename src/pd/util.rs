@@ -407,8 +407,8 @@ fn connect(
 ) -> Result<(PdClient, GetMembersResponse)> {
     info!("connecting to PD endpoint"; "endpoints" => addr);
     let addr = addr
-        .trim_left_matches("http://")
-        .trim_left_matches("https://");
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
     let cb = ChannelBuilder::new(env)
         .keepalive_time(Duration::from_secs(10))
         .keepalive_timeout(Duration::from_secs(3));

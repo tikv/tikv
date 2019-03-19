@@ -153,7 +153,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
-    cluster.start();
+    cluster.start().unwrap();
 
     let region = &pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
@@ -276,7 +276,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.start();
+    cluster.start().unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let mut region = pd_client.get_region(b"").unwrap();
@@ -396,8 +396,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(req, Duration::from_millis(1));
 
-    cluster.run_node(2);
-    cluster.run_node(3);
+    cluster.run_node(2).unwrap();
+    cluster.run_node(3).unwrap();
 
     for _ in 0..250 {
         let region: RegionLocalState = engine1
@@ -787,10 +787,10 @@ fn test_learner_with_slow_snapshot() {
 
     let count = Arc::new(AtomicUsize::new(0));
     let filter = Arc::new(AtomicBool::new(true));
-    let snap_filter = box SnapshotFilter {
+    let snap_filter = Box::new(SnapshotFilter {
         count: Arc::clone(&count),
         filter: Arc::clone(&filter),
-    };
+    });
 
     // New added learner should keep pending until snapshot is applied.
     cluster.sim.wl().add_send_filter(1, snap_filter);
@@ -820,7 +820,7 @@ fn test_learner_with_slow_snapshot() {
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
     count.store(0, Ordering::SeqCst);
-    cluster.run_node(3);
+    cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
     pd_client.transfer_leader(r1, new_peer(3, 3));
