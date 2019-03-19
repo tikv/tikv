@@ -123,14 +123,13 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
         Ok(value.map(move |v| (key, v)))
     }
 
+    /// Fills a column vector and returns whether or not all ranges are drained.
     fn fill_column_vec(
         &mut self,
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
         assert!(expect_rows > 0);
-
-        let mut is_drained = false;
 
         loop {
             let range = self.ranges.next();
@@ -146,8 +145,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
                 }
                 super::ranges_iter::IterStatus::Continue => self.scan_next()?,
                 super::ranges_iter::IterStatus::Drained => {
-                    is_drained = true;
-                    break;
+                    return Ok(true); // drained
                 }
             };
             if let Some((key, value)) = some_row {
@@ -159,15 +157,13 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
                 self.imp.process_kv_pair(&key, &value, columns)?;
 
                 if columns.rows_len() >= expect_rows {
-                    break;
+                    return Ok(false); // not drained
                 }
             } else {
                 // No more row in the range.
                 self.ranges.notify_drained();
             }
         }
-
-        Ok(is_drained)
     }
 }
 

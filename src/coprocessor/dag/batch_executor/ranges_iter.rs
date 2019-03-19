@@ -114,7 +114,7 @@ impl<T: PointRangePolicy> RangesIterator<T> {
             None => IterStatus::Drained,
             Some(range) => {
                 if self.policy.is_point_range(&range) {
-                    self.in_range = false;
+                    // No need to set `in_range = true` because point range always drains.
                     IterStatus::NewPointRange(range)
                 } else {
                     self.in_range = true;
