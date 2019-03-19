@@ -57,6 +57,18 @@ impl ScalarValue {
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Scalar(self)
     }
+
+    pub fn new_null(eval_type: EvalType) -> Self {
+        match eval_type {
+            EvalType::Int => ScalarValue::Int(None),
+            EvalType::Real => ScalarValue::Real(None),
+            EvalType::Decimal => ScalarValue::Decimal(None),
+            EvalType::Bytes => ScalarValue::Bytes(None),
+            EvalType::DateTime => ScalarValue::DateTime(None),
+            EvalType::Duration => ScalarValue::Duration(None),
+            EvalType::Json => ScalarValue::Json(None),
+        }
+    }
 }
 
 impl AsMySQLBool for ScalarValue {
