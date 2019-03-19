@@ -220,7 +220,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                return match self.reader.get_txn_commit_info(&key, self.start_ts)?.0 {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -266,7 +266,9 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
+                let (txn_commit_info, write_ts_collision) =
+                    self.reader.get_txn_commit_info(&key, self.start_ts)?;
+                return match txn_commit_info {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -291,17 +293,26 @@ impl<S: Snapshot> MvccTxn<S> {
                             self.collapse_prev_rollback(key.clone())?;
                         }
 
-                        // insert a Rollback to WriteCF when receives Rollback before Prewrite
-                        let write = Write::new(WriteType::Rollback, ts, None);
-                        self.put_write(key, ts, write.to_bytes());
+                        if !write_ts_collision {
+                            // insert a Rollback to WriteCF when receives Rollback before Prewrite
+                            let write = Write::new(WriteType::Rollback, ts, None);
+                            self.put_write(key, ts, write.to_bytes());
+                        }
                         Ok(())
                     }
                 };
             }
         }
-        let write = Write::new(WriteType::Rollback, self.start_ts, None);
-        let ts = self.start_ts;
-        self.put_write(key.clone(), ts, write.to_bytes());
+        if self
+            .reader
+            .seek_write(&key, self.start_ts)?
+            .map(|(commit_ts, _)| commit_ts != self.start_ts)
+            .unwrap_or(true)
+        {
+            let write = Write::new(WriteType::Rollback, self.start_ts, None);
+            let ts = self.start_ts;
+            self.put_write(key.clone(), ts, write.to_bytes());
+        }
         self.unlock_key(key.clone());
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
@@ -989,5 +1000,38 @@ mod tests {
         );
 
         assert_eq!(reader.seek_ts(3).unwrap().unwrap(), Key::from_raw(&[2]));
+    }
+
+    #[test]
+    fn test_rollback_key_collision() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 10);
+        must_commit(&engine, b"k5", 10, 11);
+        must_get(&engine, b"k5", 11, b"v5");
+
+        must_rollback(&engine, b"k5", 11);
+        must_get(&engine, b"k5", 11, b"v5");
+
+        must_prewrite_delete(&engine, b"k5", b"k5", 12);
+        must_commit(&engine, b"k5", 12, 13);
+        must_get_none(&engine, b"k5", 13);
+
+        must_rollback(&engine, b"k5", 13);
+        must_get_none(&engine, b"k5", 13);
+
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 12);
+        must_commit(&engine, b"k4", 12, 13);
+        must_get(&engine, b"k4", 13, b"v4");
+
+        must_rollback(&engine, b"k4", 13);
+        must_get(&engine, b"k4", 13, b"v4");
+
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 13);
+        must_rollback(&engine, b"k3", 13);
+        must_seek_write(&engine, b"k3", 13, 13, 13, WriteType::Rollback);
+
+        must_rollback(&engine, b"k2", 13);
+        must_seek_write(&engine, b"k2", 13, 13, 13, WriteType::Rollback);
     }
 }
