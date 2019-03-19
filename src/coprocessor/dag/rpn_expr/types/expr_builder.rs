@@ -16,7 +16,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tipb::expression::{Expr, ExprType};
+use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
@@ -94,18 +94,9 @@ where
     // will be panics when the expression is evaluated.
 
     match tree_node.get_tp() {
-        ExprType::Null => handle_node_constant_null(tree_node, rpn_nodes),
-        ExprType::Int64 => handle_node_constant_int64(tree_node, rpn_nodes),
-        ExprType::Uint64 => handle_node_constant_uint64(tree_node, rpn_nodes),
-        ExprType::String | ExprType::Bytes => handle_node_constant_bytes(tree_node, rpn_nodes),
-        ExprType::Float32 | ExprType::Float64 => handle_node_constant_float(tree_node, rpn_nodes),
-        ExprType::MysqlTime => handle_node_constant_time(tree_node, rpn_nodes, time_zone),
-        ExprType::MysqlDuration => handle_node_constant_duration(tree_node, rpn_nodes),
-        ExprType::MysqlDecimal => handle_node_constant_decimal(tree_node, rpn_nodes),
-        ExprType::MysqlJson => handle_node_constant_json(tree_node, rpn_nodes),
-        ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes),
         ExprType::ScalarFunc => handle_node_fn_call(tree_node, rpn_nodes, time_zone, fn_mapper),
-        t => Err(box_err!("Unexpected ExprType {:?}", t)),
+        ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes),
+        _ => handle_node_constant(tree_node, rpn_nodes, time_zone),
     }
 }
 
@@ -152,6 +143,7 @@ where
             args.len()
         ));
     }
+    // Visit children first, then push current node, so that it is a post-order traversal.
     for arg in args {
         append_rpn_nodes_recursively(arg, rpn_nodes, time_zone, fn_mapper)?;
     }
@@ -163,13 +155,59 @@ where
 }
 
 #[inline]
-fn handle_node_constant_null(
+fn handle_node_constant(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
+    time_zone: &Tz,
 ) -> Result<()> {
     let eval_type = get_eval_type(&tree_node)?;
 
-    let scalar_value = match eval_type {
+    let scalar_value = match tree_node.get_tp() {
+        ExprType::Null => get_scalar_value_null(eval_type),
+        ExprType::Int64 if eval_type == EvalType::Int => {
+            extract_scalar_value_int64(tree_node.take_val())?
+        }
+        ExprType::Uint64 if eval_type == EvalType::Int => {
+            extract_scalar_value_uint64(tree_node.take_val())?
+        }
+        ExprType::String | ExprType::Bytes if eval_type == EvalType::Bytes => {
+            extract_scalar_value_bytes(tree_node.take_val())?
+        }
+        ExprType::Float32 | ExprType::Float64 if eval_type == EvalType::Real => {
+            extract_scalar_value_float(tree_node.take_val())?
+        }
+        ExprType::MysqlTime if eval_type == EvalType::DateTime => extract_scalar_value_date_time(
+            tree_node.take_val(),
+            tree_node.get_field_type(),
+            time_zone,
+        )?,
+        ExprType::MysqlDuration if eval_type == EvalType::Duration => {
+            extract_scalar_value_duration(tree_node.take_val())?
+        }
+        ExprType::MysqlDecimal if eval_type == EvalType::Decimal => {
+            extract_scalar_value_decimal(tree_node.take_val())?
+        }
+        ExprType::MysqlJson if eval_type == EvalType::Json => {
+            extract_scalar_value_json(tree_node.take_val())?
+        }
+        expr_type => {
+            return Err(box_err!(
+                "Unexpected ExprType {:?} and EvalType {:?}",
+                expr_type,
+                eval_type
+            ))
+        }
+    };
+    rpn_nodes.push(RpnExpressionNode::Constant {
+        value: scalar_value,
+        field_type: tree_node.take_field_type(),
+    });
+    Ok(())
+}
+
+#[inline]
+fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
+    match eval_type {
         EvalType::Int => ScalarValue::Int(None),
         EvalType::Real => ScalarValue::Real(None),
         EvalType::Decimal => ScalarValue::Decimal(None),
@@ -177,276 +215,70 @@ fn handle_node_constant_null(
         EvalType::DateTime => ScalarValue::DateTime(None),
         EvalType::Duration => ScalarValue::Duration(None),
         EvalType::Json => ScalarValue::Json(None),
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+    }
 }
 
 #[inline]
-fn handle_node_constant_int64(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Int => {
-            let value = number::decode_i64(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Int(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = number::decode_i64(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode int64 from the request")))?;
+    Ok(ScalarValue::Int(Some(value)))
 }
 
 #[inline]
-fn handle_node_constant_uint64(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Int => {
-            let value = number::decode_u64(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Int(Some(value as i64))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_uint64(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = number::decode_u64(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode uint64 from the request")))?;
+    Ok(ScalarValue::Int(Some(value as i64)))
 }
 
 #[inline]
-fn handle_node_constant_bytes(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Bytes => ScalarValue::Bytes(Some(tree_node.take_val())),
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
+    Ok(ScalarValue::Bytes(Some(val)))
 }
 
 #[inline]
-fn handle_node_constant_float(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Real => {
-            let value = number::decode_f64(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Real(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = number::decode_f64(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
+    Ok(ScalarValue::Real(Some(value)))
 }
 
 #[inline]
-fn handle_node_constant_time(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
+fn extract_scalar_value_date_time(
+    val: Vec<u8>,
+    field_type: &FieldType,
     time_zone: &Tz,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-    let field_type = tree_node.take_field_type();
-
-    let scalar_value = match eval_type {
-        EvalType::DateTime => {
-            let v = number::decode_u64(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            let fsp = field_type.decimal() as i8;
-            let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
-                .map_err(|_| {
-                    Error::Other(box_err!(
-                        "Unable to decode {:?} from the request",
-                        eval_type
-                    ))
-                })?;;
-            ScalarValue::DateTime(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type,
-    });
-    Ok(())
+) -> Result<ScalarValue> {
+    let v = number::decode_u64(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
+    let fsp = field_type.decimal() as i8;
+    let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+        .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
+    Ok(ScalarValue::DateTime(Some(value)))
 }
 
 #[inline]
-fn handle_node_constant_duration(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Duration => {
-            let n = number::decode_i64(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            let value = Duration::from_nanos(n, MAX_FSP).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Duration(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
+    let n = number::decode_i64(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode duration from the request")))?;
+    let value = Duration::from_nanos(n, MAX_FSP)
+        .map_err(|_| Error::Other(box_err!("Unable to decode duration from the request")))?;
+    Ok(ScalarValue::Duration(Some(value)))
 }
 
 #[inline]
-fn handle_node_constant_decimal(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Decimal => {
-            let value = Decimal::decode(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Decimal(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = Decimal::decode(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode decimal from the request")))?;
+    Ok(ScalarValue::Decimal(Some(value)))
 }
 
 #[inline]
-fn handle_node_constant_json(
-    mut tree_node: Expr,
-    rpn_nodes: &mut Vec<RpnExpressionNode>,
-) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
-
-    let scalar_value = match eval_type {
-        EvalType::Json => {
-            let value = Json::decode(&mut tree_node.get_val()).map_err(|_| {
-                Error::Other(box_err!(
-                    "Unable to decode {:?} from the request",
-                    eval_type
-                ))
-            })?;
-            ScalarValue::Json(Some(value))
-        }
-        t => {
-            return Err(box_err!(
-                "Unexpected eval type {:?} for ExprType {:?}",
-                t,
-                tree_node.get_tp()
-            ));
-        }
-    };
-    rpn_nodes.push(RpnExpressionNode::Constant {
-        value: scalar_value,
-        field_type: tree_node.take_field_type(),
-    });
-    Ok(())
+fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = Json::decode(&mut val.as_slice())
+        .map_err(|_| Error::Other(box_err!("Unable to decode json from the request")))?;
+    Ok(ScalarValue::Json(Some(value)))
 }
 
 #[cfg(test)]
