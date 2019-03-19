@@ -147,7 +147,7 @@ impl Simulator for ServerCluster {
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 storage::ReadPoolContext::new(pd_worker.scheduler())
             });
-        let mvcc_inspector = MvccInspector::new_mock();
+        let mvcc_inspector = MvccInspector::new(Arc::clone(&self.pd_client));
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,
