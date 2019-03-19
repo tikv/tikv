@@ -25,11 +25,12 @@ use raft::SnapshotStatus;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::fsm::{create_raft_batch_system, SendCh};
+use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
+use tikv::server::Result as ServerResult;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::worker::{FutureWorker, Worker};
 
@@ -37,7 +38,7 @@ use super::*;
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
-    routers: HashMap<u64, SimulateTransport<Msg, ServerRaftStoreRouter>>,
+    routers: HashMap<u64, SimulateTransport<ServerRaftStoreRouter>>,
 }
 
 #[derive(Clone)]
@@ -56,8 +57,8 @@ impl ChannelTransport {
     }
 }
 
-impl Channel<RaftMessage> for ChannelTransport {
-    fn send(&self, msg: RaftMessage) -> Result<()> {
+impl Transport for ChannelTransport {
+    fn send(&mut self, msg: RaftMessage) -> Result<()> {
         let from_store = msg.get_from_peer().get_store_id();
         let to_store = msg.get_to_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
@@ -103,25 +104,29 @@ impl Channel<RaftMessage> for ChannelTransport {
                 h.send_raft_msg(msg)?;
                 if is_snapshot {
                     // should report snapshot finish.
-                    core.routers[&from_store]
-                        .report_snapshot_status(region_id, to_peer_id, SnapshotStatus::Finish)
-                        .unwrap();
+                    let _ = core.routers[&from_store].report_snapshot_status(
+                        region_id,
+                        to_peer_id,
+                        SnapshotStatus::Finish,
+                    );
                 }
                 Ok(())
             }
             _ => Err(box_err!("missing sender for store {}", to_store)),
         }
     }
+
+    fn flush(&mut self) {}
 }
 
-type SimulateChannelTransport = SimulateTransport<RaftMessage, ChannelTransport>;
+type SimulateChannelTransport = SimulateTransport<ChannelTransport>;
 
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
     nodes: HashMap<u64, Node<TestPdClient>>,
     simulate_trans: HashMap<u64, SimulateChannelTransport>,
-    post_create_coprocessor_host: Option<Box<Fn(u64, &mut CoprocessorHost)>>,
+    post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost)>>,
 }
 
 impl NodeCluster {
@@ -138,7 +143,7 @@ impl NodeCluster {
 
 impl NodeCluster {
     #[allow(dead_code)]
-    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<Msg, ServerRaftStoreRouter> {
+    pub fn get_node_router(&self, node_id: u64) -> SimulateTransport<ServerRaftStoreRouter> {
         self.trans
             .core
             .lock()
@@ -152,7 +157,7 @@ impl NodeCluster {
     // Set a function that will be invoked after creating each CoprocessorHost. The first argument
     // of `op` is the node_id.
     // Set this before invoking `run_node`.
-    pub fn post_create_coprocessor_host(&mut self, op: Box<Fn(u64, &mut CoprocessorHost)>) {
+    pub fn post_create_coprocessor_host(&mut self, op: Box<dyn Fn(u64, &mut CoprocessorHost)>) {
         self.post_create_coprocessor_host = Some(op)
     }
 }
@@ -162,10 +167,11 @@ impl Simulator for NodeCluster {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        engines: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>) {
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64> {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
-        let (router, system) = create_raft_batch_system(&cfg.raft_store);
         let pd_worker = FutureWorker::new("test-pd-worker");
 
         // Create localreader.
@@ -180,10 +186,7 @@ impl Simulator for NodeCluster {
             Arc::clone(&self.pd_client),
         );
 
-        // Create engine
-        let (engines, path) = create_test_engine(engines, node.get_sendch(), &cfg);
-
-        let (snap_mgr, tmp) = if node_id == 0
+        let (snap_mgr, snap_mgr_path) = if node_id == 0
             || !self
                 .trans
                 .core
@@ -193,7 +196,7 @@ impl Simulator for NodeCluster {
                 .contains_key(&node_id)
         {
             let tmp = TempDir::new("test_cluster").unwrap();
-            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(node.get_sendch()));
+            let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap(), Some(router.clone()));
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
@@ -202,7 +205,7 @@ impl Simulator for NodeCluster {
         };
 
         // Create coprocessor.
-        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+        let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor, router.clone());
 
         if let Some(f) = self.post_create_coprocessor_host.as_ref() {
             f(node_id, &mut coprocessor_host);
@@ -221,30 +224,32 @@ impl Simulator for NodeCluster {
             local_reader,
             coprocessor_host,
             importer,
-        )
-        .unwrap();
+        )?;
         assert!(engines
             .kv
             .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
             .is_none());
         assert!(node_id == 0 || node_id == node.id());
+
+        let node_id = node.id();
         debug!(
             "node_id: {} tmp: {:?}",
             node_id,
-            tmp.as_ref().map(|p| p.path().to_str().unwrap().to_owned())
+            snap_mgr_path
+                .as_ref()
+                .map(|p| p.path().to_str().unwrap().to_owned())
         );
-        if let Some(tmp) = tmp {
+        if let Some(tmp) = snap_mgr_path {
             self.trans
                 .core
                 .lock()
                 .unwrap()
                 .snap_paths
-                .insert(node.id(), (snap_mgr, tmp));
+                .insert(node_id, (snap_mgr, tmp));
         }
 
-        let node_id = node.id();
-        let router = ServerRaftStoreRouter::new(node.get_sendch(), router.clone(), local_ch);
+        let router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         self.trans
             .core
             .lock()
@@ -254,7 +259,7 @@ impl Simulator for NodeCluster {
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
 
-        (node_id, engines, path)
+        Ok(node_id)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
@@ -268,7 +273,7 @@ impl Simulator for NodeCluster {
 
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut node) = self.nodes.remove(&node_id) {
-            node.stop().unwrap();
+            node.stop();
         }
         self.trans
             .core
@@ -316,7 +321,7 @@ impl Simulator for NodeCluster {
         self.trans.send(msg)
     }
 
-    fn add_send_filter(&mut self, node_id: u64, filter: SendFilter) {
+    fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         self.simulate_trans
             .get_mut(&node_id)
             .unwrap()
@@ -330,7 +335,7 @@ impl Simulator for NodeCluster {
             .clear_filters();
     }
 
-    fn add_recv_filter(&mut self, node_id: u64, filter: RecvFilter) {
+    fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>) {
         let mut trans = self.trans.core.lock().unwrap();
         trans.routers.get_mut(&node_id).unwrap().add_filter(filter);
     }
@@ -340,8 +345,8 @@ impl Simulator for NodeCluster {
         trans.routers.get_mut(&node_id).unwrap().clear_filters();
     }
 
-    fn get_store_sendch(&self, node_id: u64) -> Option<SendCh> {
-        self.nodes.get(&node_id).map(|node| node.get_sendch())
+    fn get_router(&self, node_id: u64) -> Option<RaftRouter> {
+        self.nodes.get(&node_id).map(|node| node.get_router())
     }
 }
 

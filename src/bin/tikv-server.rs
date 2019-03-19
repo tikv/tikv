@@ -14,17 +14,6 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate hyper;
-extern crate libc;
-#[cfg(unix)]
-extern crate nix;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     kv,
     slog_kv,
@@ -37,13 +26,8 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
@@ -56,6 +40,7 @@ use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::usize;
 
@@ -67,7 +52,7 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::fsm::{self, SendCh};
+use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
 use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
@@ -97,14 +82,14 @@ fn check_system_config(config: &TiKvConfig) {
         );
     }
 
-    // check rocksdb data dir
+    // Check RocksDB data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!(
             "rocksdb check data dir";
             "err" => %e
         );
     }
-    // check raft data dir
+    // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
             "raft check data dir";
@@ -118,9 +103,9 @@ fn pre_start(cfg: &TiKvConfig) {
     check_system_config(&cfg);
     check_environment_variables();
 
-    if cfg.panic_when_key_exceed_bound {
-        info!("panic-when-key-exceed-bound is on");
-        tikv_util::set_panic_when_key_exceed_bound(true);
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
     }
 }
 
@@ -150,7 +135,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Initialize raftstore channels.
     let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
-    let store_sendch = SendCh::new(router.clone(), "raftstore");
 
     // Create Local Reader.
     let local_reader = Builder::new("local-reader")
@@ -159,8 +143,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let local_ch = local_reader.scheduler();
 
     // Create router.
-    let raft_router = ServerRaftStoreRouter::new(store_sendch.clone(), router.clone(), local_ch);
-    let compaction_listener = new_compaction_listener(router);
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+    let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
     let pd_client = Arc::new(pd_client);
@@ -169,11 +153,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|e| fatal!("failed to start address resolver: {}", e));
     let pd_sender = pd_worker.scheduler();
 
-    // Create encrypted env from ciphter file
+    // Create encrypted env from cipher file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
-        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file) {
+        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
-                "failed to create encrypted env from ciphter file, err {:?}",
+                "failed to create encrypted env from cipher file, err {:?}",
                 e
             ),
             Ok(env) => Some(env),
@@ -206,7 +190,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Some(raft_router.clone()),
         read_ts_cache.clone(),
     )
-    .unwrap_or_else(|e| fatal!("failed to create raft stroage: {}", e));
+    .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
     // Create raft engine.
     let mut raft_db_opts = cfg.raftdb.build_opt();
@@ -230,7 +214,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .max_total_size(cfg.server.snap_max_total_size.0)
         .build(
             snap_path.as_path().to_str().unwrap().to_owned(),
-            Some(store_sendch),
+            Some(router.clone()),
         );
 
     let importer = Arc::new(SSTImporter::new(import_path).unwrap());
@@ -270,7 +254,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let mut node = Node::new(system, &server_cfg, &cfg.raft_store, pd_client.clone());
 
     // Create CoprocessorHost.
-    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), node.get_sendch());
+    let mut coprocessor_host = CoprocessorHost::new(cfg.coprocessor.clone(), router);
 
     // Create region collection.
     let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
@@ -344,12 +328,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     metrics_flusher.stop();
 
-    node.stop()
-        .unwrap_or_else(|e| fatal!("failed to stop node: {}", e));
+    node.stop();
 
     region_info_accessor.stop();
 
-    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
+    if let Some(Err(e)) = worker.stop().map(JoinHandle::join) {
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e
@@ -465,6 +448,16 @@ fn main() {
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
         )
+        .arg(
+            Arg::with_name("metrics-addr")
+                .long("metrics-addr")
+                .value_name("IP:PORT")
+                .help("Sets Prometheus Pushgateway address")
+                .long_help(
+                    "Sets push address to the Prometheus Pushgateway, \
+                     leaves it empty will disable Prometheus push",
+                ),
+        )
         .get_matches();
 
     if matches.is_present("print-sample-config") {
@@ -484,7 +477,7 @@ fn main() {
     }
 
     // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validata()`,
+    // It is okay to use the config w/o `validate()`,
     // because `initial_logger()` handles various conditions.
     initial_logger(&config);
     tikv_util::set_panic_hook(false, &config.storage.data_dir);
@@ -501,6 +494,7 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
     // Do some prepare works before start.
     pre_start(&config);
 

@@ -97,7 +97,7 @@ impl LeaderChangeObserver {
 impl Coprocessor for LeaderChangeObserver {}
 
 impl RoleObserver for LeaderChangeObserver {
-    fn on_role_change(&self, ctx: &mut ObserverContext, role: StateRole) {
+    fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role: StateRole) {
         if role == StateRole::Leader {
             self.update(
                 ctx.region().get_id(),
@@ -115,7 +115,7 @@ impl RoleObserver for LeaderChangeObserver {
 impl RegionChangeObserver for LeaderChangeObserver {
     fn on_region_changed(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         role: StateRole,
     ) {
@@ -244,9 +244,9 @@ impl ReadTsCache {
     pub fn register_observer(&self, host: &mut CoprocessorHost) {
         let observer = LeaderChangeObserver::new(Arc::clone(&self.inner));
         host.registry
-            .register_role_observer(1, box observer.clone());
+            .register_role_observer(1, Box::new(observer.clone()));
         host.registry
-            .register_region_change_observer(1, box observer);
+            .register_region_change_observer(1, Box::new(observer));
     }
 
     /// Updates the region's max read ts to `ts` if `ts` is greater.

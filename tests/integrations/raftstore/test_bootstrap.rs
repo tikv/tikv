@@ -34,11 +34,11 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // now  at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
     cluster.shutdown();
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
 }
 
@@ -62,7 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
     let local_reader = Worker::new("test-local-reader");
 
@@ -84,7 +84,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
@@ -111,7 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
-    node.stop().unwrap();
+    node.stop();
 }
 
 #[test]

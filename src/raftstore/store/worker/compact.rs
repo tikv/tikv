@@ -43,7 +43,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Compact {
                 ref cf_name,
@@ -83,7 +83,7 @@ impl Display for Task {
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())

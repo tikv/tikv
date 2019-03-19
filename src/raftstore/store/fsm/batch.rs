@@ -41,7 +41,7 @@ pub trait Fsm {
     fn is_stopped(&self) -> bool;
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, _mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -127,6 +127,7 @@ impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
 }
 
 /// A basic struct for a round of polling.
+#[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
     control: Option<Box<C>>,
@@ -470,7 +471,7 @@ pub mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    pub type Message = Option<Box<FnBox(&mut Runner) + Send>>;
+    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
 
     pub struct Runner {
         is_stopped: bool,
@@ -492,7 +493,7 @@ pub mod tests {
             self.is_stopped
         }
 
-        fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
+        fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
             self.mailbox = Some(mailbox.into_owned());
         }
 

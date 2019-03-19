@@ -18,9 +18,8 @@ use kvproto::import_sstpb::SSTMeta;
 
 use crate::import::SSTImporter;
 use crate::pd::PdClient;
-use crate::raftstore::store::fsm::SendCh;
 use crate::raftstore::store::util::is_epoch_stale;
-use crate::raftstore::store::{Msg, StoreMsg};
+use crate::raftstore::store::{StoreMsg, StoreRouter};
 use crate::util::worker::Runnable;
 
 pub enum Task {
@@ -29,7 +28,7 @@ pub enum Task {
 }
 
 impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Task::DeleteSST { ref ssts } => write!(f, "Delete {} ssts", ssts.len()),
             Task::ValidateSST { ref ssts } => write!(f, "Validate {} ssts", ssts.len()),
@@ -37,23 +36,23 @@ impl fmt::Display for Task {
     }
 }
 
-pub struct Runner<C> {
+pub struct Runner<C, S> {
     store_id: u64,
-    store_ch: SendCh,
+    store_router: S,
     importer: Arc<SSTImporter>,
     pd_client: Arc<C>,
 }
 
-impl<C: PdClient> Runner<C> {
+impl<C: PdClient, S: StoreRouter> Runner<C, S> {
     pub fn new(
         store_id: u64,
-        store_ch: SendCh,
+        store_router: S,
         importer: Arc<SSTImporter>,
         pd_client: Arc<C>,
-    ) -> Runner<C> {
+    ) -> Runner<C, S> {
         Runner {
             store_id,
-            store_ch,
+            store_router,
             importer,
             pd_client,
         }
@@ -97,14 +96,14 @@ impl<C: PdClient> Runner<C> {
         // We need to send back the result to check for the stale
         // peer, which may ingest the stale SST before it is
         // destroyed.
-        let msg = Msg::StoreMsg(StoreMsg::ValidateSSTResult { invalid_ssts });
-        if let Err(e) = self.store_ch.try_send(msg) {
+        let msg = StoreMsg::ValidateSSTResult { invalid_ssts };
+        if let Err(e) = self.store_router.send(msg) {
             error!("send validate sst result failed"; "err" => %e);
         }
     }
 }
 
-impl<C: PdClient> Runnable<Task> for Runner<C> {
+impl<C: PdClient, S: StoreRouter> Runnable<Task> for Runner<C, S> {
     fn run(&mut self, task: Task) {
         match task {
             Task::DeleteSST { ssts } => {

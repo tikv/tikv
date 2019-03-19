@@ -51,7 +51,7 @@ impl ScalarFunc {
 
 // Do match until '%' is found.
 #[inline]
-fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<bool> {
+fn partial_like(tcs: &mut Iter<'_, u8>, pcs: &mut Iter<'_, u8>, escape: u32) -> Option<bool> {
     loop {
         match pcs.next().cloned() {
             None => return Some(tcs.next().is_none()),

@@ -50,7 +50,7 @@ pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
     pub tz: Tz,
@@ -62,6 +62,8 @@ pub struct EvalConfig {
     pub in_select_stmt: bool,
     pub pad_char_to_full_length: bool,
     pub divided_by_zero_as_warning: bool,
+    // TODO: max warning count is not really a EvalConfig. Instead it is a ExecutionConfig, because
+    // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
     pub sql_mode: u64,
     /// if the session is in strict mode.
@@ -207,7 +209,7 @@ impl EvalConfig {
 }
 
 // Warning details caused in eval computation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EvalWarnings {
     // max number of warnings to return.
     max_warning_cnt: usize,
@@ -218,7 +220,7 @@ pub struct EvalWarnings {
 }
 
 impl EvalWarnings {
-    fn new(max_warning_cnt: usize) -> EvalWarnings {
+    pub fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
             max_warning_cnt,
             warning_cnt: 0,
@@ -233,7 +235,7 @@ impl EvalWarnings {
         }
     }
 
-    pub fn merge(&mut self, mut other: EvalWarnings) {
+    pub fn merge(&mut self, other: &mut EvalWarnings) {
         self.warning_cnt += other.warning_cnt;
         if self.warnings.len() >= self.max_warning_cnt {
             return;

@@ -89,7 +89,7 @@ pub fn new_engine(
     path: &str,
     db_opts: Option<DBOptions>,
     cfs: &[&str],
-    opts: Option<Vec<CFOptions>>,
+    opts: Option<Vec<CFOptions<'_>>>,
 ) -> Result<DB, String> {
     let mut db_opts = match db_opts {
         Some(opt) => opt,
@@ -111,7 +111,10 @@ pub fn new_engine(
 
 /// Turns "dynamic level size" off for the existing column family which was off before.
 /// Column families are small, HashMap isn't necessary.
-fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
+fn adjust_dynamic_level_bytes(
+    cf_descs: &[CColumnFamilyDescriptor],
+    cf_options: &mut CFOptions<'_>,
+) {
     if let Some(ref cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
@@ -138,7 +141,7 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
 fn check_and_open(
     path: &str,
     mut db_opt: DBOptions,
-    cfs_opts: Vec<CFOptions>,
+    cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB, String> {
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -238,7 +241,11 @@ fn check_and_open(
     Ok(db)
 }
 
-pub fn new_engine_opt(path: &str, opts: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
+pub fn new_engine_opt(
+    path: &str,
+    opts: DBOptions,
+    cfs_opts: Vec<CFOptions<'_>>,
+) -> Result<DB, String> {
     check_and_open(path, opts, cfs_opts)
 }
 
