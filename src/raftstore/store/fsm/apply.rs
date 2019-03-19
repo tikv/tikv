@@ -2535,7 +2535,12 @@ impl ApplyFsm {
         // persistent all pending changes
         apply_ctx.commit_opt(&mut self.delegate, true);
         if let Err(e) = snap_task.generate_snapshot(&apply_ctx.engines) {
-            error!("schedule snapshot failed"; "error" => ?e);
+            error!(
+                "schedule snapshot failed";
+                "error" => ?e,
+                "region_id" => self.delegate.region_id(),
+                "peer_id" => self.delegate.id()
+            );
         }
         apply_ctx.finish_for_snapshot();
     }
