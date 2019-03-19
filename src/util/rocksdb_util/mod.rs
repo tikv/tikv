@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod compaction_guard;
 pub mod engine_metrics;
 pub mod event_listener;
 pub mod metrics_flusher;
@@ -75,8 +76,8 @@ pub fn open_opt(
 }
 
 pub struct CFOptions<'a> {
-    cf: &'a str,
-    options: ColumnFamilyOptions,
+    pub cf: &'a str,
+    pub options: ColumnFamilyOptions,
 }
 
 impl<'a> CFOptions<'a> {

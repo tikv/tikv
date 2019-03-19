@@ -55,6 +55,8 @@ pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
 pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
 pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
+pub type GetRegionsInRangeCallback = Box<dyn FnBox(Vec<metapb::Region>) + Send>;
+
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
 ///         `GetRequest` and `SnapRequest`
