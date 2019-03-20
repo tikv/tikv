@@ -173,6 +173,19 @@ impl LazyBatchColumnVec {
         }
         Ok(())
     }
+
+    /// Truncates columns into equal length. The new length of all columns would be the length of
+    /// the shortest column before calling this function.
+    pub fn truncate_into_equal_length(&mut self) {
+        let mut min_len = self.rows_len();
+        for col in &self.columns {
+            min_len = min_len.min(col.len());
+        }
+        for col in &mut self.columns {
+            col.truncate(min_len);
+        }
+        self.assert_columns_equal_length();
+    }
 }
 
 impl std::ops::Deref for LazyBatchColumnVec {

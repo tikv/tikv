@@ -195,17 +195,8 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
         // After calling `fill_column_vec`, columns' length may not be identical when some of the
-        // columns are correctly decoded while others are not. So let's trim columns.
-        {
-            let mut min_len = data.rows_len();
-            for col in data.as_ref() {
-                min_len = min_len.min(col.len());
-            }
-            for col in data.as_mut() {
-                col.truncate(min_len);
-            }
-            data.assert_columns_equal_length();
-        }
+        // columns are correctly decoded while others are not. So let's truncate columns.
+        data.truncate_into_equal_length();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving

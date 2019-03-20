@@ -228,7 +228,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
         if let Some(handle_index) = self.handle_index {
             let handle_id = table::decode_handle(key)?;
-            // TODO: We should avoid calling `push_int` repeatly. Instead we should specialize
+            // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
             // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
             columns[handle_index]
                 .mut_decoded()
