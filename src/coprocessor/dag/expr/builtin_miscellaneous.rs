@@ -36,15 +36,15 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         //Not an IPv6 address, return 0
         if input.len() != 16 {
-            return Ok(Some(0))
+            return Ok(Some(0));
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
         let prefix_compat = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         if !input_bytes.starts_with(&prefix_compat) {
-            return Ok(Some(0))
+            return Ok(Some(0));
         }
-        return Ok(Some(1))
+        return Ok(Some(1));
     }
 
     pub fn is_ipv4_mapped<'a, 'b: 'a>(
@@ -55,15 +55,15 @@ impl ScalarFunc {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         //Not an IPv6 address, return 0
         if input.len() != 16 {
-            return Ok(Some(0))
+            return Ok(Some(0));
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
         let prefix_mapped = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff];
         if !input_bytes.starts_with(&prefix_mapped) {
-            return Ok(Some(0))
+            return Ok(Some(0));
         }
-        return Ok(Some(1))
+        return Ok(Some(1));
     }
 
     pub fn inet_aton<'a, 'b: 'a>(
