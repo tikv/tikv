@@ -274,7 +274,7 @@ impl RpnExpressionNodeVec {
         // First loop: ensure referred columns are decoded.
         for node in &self.0 {
             if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, context.cfg.tz, &schema[*offset])?;
+                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
             }
         }
 
@@ -570,7 +570,7 @@ impl RpnExpressionNodeVec {
                     })?;
                     let fsp = field_type.decimal() as i8;
                     let value =
-                        Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+                        Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, &time_zone)
                             .map_err(|_| {
                                 Error::Other(box_err!(
                                     "Unable to decode {:?} from the request",
