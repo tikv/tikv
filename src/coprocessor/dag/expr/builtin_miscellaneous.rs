@@ -40,9 +40,7 @@ impl ScalarFunc {
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
-        let prefix_compat = vec![
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
+        let prefix_compat: [u8; 12] = [0x00; 12];
         if !input_bytes.starts_with(&prefix_compat) {
             return Ok(Some(0));
         }
@@ -61,9 +59,9 @@ impl ScalarFunc {
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
-        let prefix_mapped = vec![
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
-        ];
+        let mut prefix_mapped: [u8; 12] = [0x00; 12];
+        prefix_mapped[10] = 0xff;
+        prefix_mapped[11] = 0xff;
         if !input_bytes.starts_with(&prefix_mapped) {
             return Ok(Some(0));
         }
