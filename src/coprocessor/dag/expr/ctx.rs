@@ -50,7 +50,7 @@ pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
     pub tz: Tz,
