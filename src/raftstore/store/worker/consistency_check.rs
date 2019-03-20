@@ -22,6 +22,7 @@ use crate::storage::CF_RAFT;
 use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
 
+use super::metrics::*;
 use crate::raftstore::store::metrics::*;
 
 /// Consistency checking task.
@@ -74,6 +75,7 @@ impl<C: CasualRouter> Runner<C> {
             .with_label_values(&["compute", "all"])
             .inc();
 
+        let timer = REGION_HASH_HISTOGRAM.start_coarse_timer();
         let mut digest = Digest::new(crc32::IEEE);
         let mut cf_names = snap.cf_names();
         cf_names.sort();
@@ -119,7 +121,7 @@ impl<C: CasualRouter> Runner<C> {
             Ok(None) => digest.write(b""),
         }
         let sum = digest.sum32();
-        /* timer.observe_duration() */;
+        timer.observe_duration();
 
         let mut checksum = Vec::with_capacity(4);
         checksum.write_u32::<BigEndian>(sum).unwrap();
