@@ -192,56 +192,11 @@ impl Tracker {
         let total_exec_metrics =
             std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
         let mut thread_ctx = self.ctxd.as_ref().unwrap().current_thread_context_mut();
-        thread_ctx
-            .basic_local_metrics
-            .req_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.req_time));
-        thread_ctx
-            .basic_local_metrics
-            .wait_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.wait_time));
-        thread_ctx
-            .basic_local_metrics
-            .handle_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.total_process_time));
-        thread_ctx
-            .basic_local_metrics
-            .scan_keys
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
         thread_ctx.collect(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
             total_exec_metrics,
         );
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
-            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_count"])
-            .inc_by(self.total_perf_statistics.block_read_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
-            .inc_by(self.total_perf_statistics.block_read_byte as i64);
         self.current_stage = TrackerState::Tracked;
     }
 }
