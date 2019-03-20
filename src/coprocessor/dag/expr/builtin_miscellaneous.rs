@@ -18,6 +18,9 @@ use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+const IPV6_LENGTH: usize = 16;
+const IPV4_LENGTH: usize = 4;
+
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
@@ -35,14 +38,12 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         // Not an IPv6 address, return 0
-        if input.len() != 16 {
+        if input.len() != IPV6_LENGTH {
             return Ok(Some(0));
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
-        let prefix_compat = vec![
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
+        let prefix_compat: [u8; 12] = [0x00; 12];
         if !input_bytes.starts_with(&prefix_compat) {
             return Ok(Some(0));
         }
@@ -56,14 +57,14 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         // Not an IPv6 address, return 0
-        if input.len() != 16 {
+        if input.len() != IPV6_LENGTH {
             return Ok(Some(0));
         }
 
         let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
-        let prefix_mapped = vec![
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
-        ];
+        let mut prefix_mapped: [u8; 12] = [0x00; 12];
+        prefix_mapped[10] = 0xff;
+        prefix_mapped[11] = 0xff;
         if !input_bytes.starts_with(&prefix_mapped) {
             return Ok(Some(0));
         }
@@ -141,12 +142,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
-        if s.len() == 16 {
+        if s.len() == IPV6_LENGTH {
             let v: &[u8; 16] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
                 format!("{}", Ipv6Addr::from(*v)).into_bytes(),
             )))
-        } else if s.len() == 4 {
+        } else if s.len() == IPV4_LENGTH {
             let v: &[u8; 4] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
                 format!("{}", Ipv4Addr::from(*v)).into_bytes(),
