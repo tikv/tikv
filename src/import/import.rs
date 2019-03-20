@@ -253,7 +253,6 @@ impl<Client: ImportClient> SubImportJob<Client> {
         while let Ok((range, ssts)) = self.rx.recv() {
             IMPORT_SST_RECV_DURATION.observe(start.elapsed_secs());
             start = Instant::now_coarse();
-            let mut retry = false;
             'NEXT_SST: for lazy_sst in ssts {
                 let sst = lazy_sst.into_sst_file()?;
                 let id = counter.fetch_add(1, Ordering::SeqCst);
@@ -263,12 +262,9 @@ impl<Client: ImportClient> SubImportJob<Client> {
                 // so there is no need for retry single sst
                 if res.is_err() {
                     num_errors.fetch_add(1, Ordering::SeqCst);
-                    retry = true;
+                    retry_ranges.lock().unwrap().push(range);
                     break 'NEXT_SST;
                 }
-            }
-            if retry {
-                retry_ranges.lock().unwrap().push(range);
             }
         }
 
