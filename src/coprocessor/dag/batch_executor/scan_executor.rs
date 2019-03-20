@@ -204,8 +204,8 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         // ignore this error.
 
         match &is_drained {
-            Err(_) => self.is_ended = true,
-            Ok(true) => self.is_ended = true,
+            // Note: `self.is_ended` is only used for assertion purpose.
+            Err(_) | Ok(true) => self.is_ended = true,
             Ok(false) => {}
         };
 
