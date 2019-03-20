@@ -65,6 +65,7 @@ impl ScalarFunc {
         }
         return Ok(Some(1))
     }
+
     pub fn inet_aton<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
