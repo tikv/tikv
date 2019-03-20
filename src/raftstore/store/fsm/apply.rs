@@ -382,7 +382,8 @@ impl ApplyContext {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let wb = self.wb.take().unwrap();
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.disable_wal(true);
+            // write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             self.engines
                 .kv
                 .write_opt(wb, &write_opts)
