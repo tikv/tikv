@@ -40,7 +40,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
     ) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         for def in conditions_def {
-            conditions.push(RpnExpressionNodeVec::build_from_expr_tree(def, config.tz)?);
+            conditions.push(RpnExpressionNodeVec::build_from_expr_tree(def, &config.tz)?);
         }
 
         Ok(Self {

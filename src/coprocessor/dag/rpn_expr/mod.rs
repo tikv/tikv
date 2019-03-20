@@ -36,6 +36,8 @@ pub fn map_pb_sig_to_rpn_func(value: ScalarFuncSig) -> Result<Box<dyn RpnFunctio
         ScalarFuncSig::LTInt => Ok(Box::new(impl_compare::RpnFnLTInt)),
         ScalarFuncSig::LogicalAnd => Ok(Box::new(impl_op::RpnFnLogicalAnd)),
         ScalarFuncSig::LogicalOr => Ok(Box::new(impl_op::RpnFnLogicalOr)),
+        ScalarFuncSig::IntIsNull => Ok(Box::new(impl_op::RpnFnIntIsNull)),
+        ScalarFuncSig::UnaryNot => Ok(Box::new(impl_op::RpnFnUnaryNot)),
         v => Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             v
