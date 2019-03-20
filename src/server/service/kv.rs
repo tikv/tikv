@@ -847,27 +847,17 @@ fn response_batch_commands_request<F>(
     id: u64,
     resp: F,
     tx: Sender<(u64, BatchCommandsResponse_Response)>,
-    thread_load: Arc<ThreadLoad>,
+    _thread_load: Arc<ThreadLoad>,
 ) where
     F: Future<Item = BatchCommandsResponse_Response, Error = ()> + Send + 'static,
 {
-    let executor1 = executor.clone();
     let f = resp.and_then(move |resp| {
         if tx.send((id, resp)).is_err() {
             error!("KvService response batch commands fail");
             return Err(());
         }
         if let Some(notifier) = tx.get_notifier() {
-            if thread_load.in_heavy_load() {
-                let _ = executor1.spawn(
-                    GLOBAL_TIMER_HANDLE
-                        .delay(Instant::now() + DELAY_DURATION)
-                        .map_err(|e| error!("batch commands delay error"; "err" => ?e))
-                        .inspect(move |_| notifier.notify()),
-                );
-            } else {
-                notifier.notify();
-            }
+            notifier.notify();
         }
         Ok(())
     });
