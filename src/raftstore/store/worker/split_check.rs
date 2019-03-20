@@ -255,7 +255,6 @@ impl<S: CasualRouter> Runner<S> {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Result<Vec<Vec<u8>>> {
-        let timer = CHECK_SPILT_HISTOGRAM.start_coarse_timer();
         MergedIterator::new(self.engine.as_ref(), LARGE_CFS, start_key, end_key, false).map(
             |mut iter| {
                 while let Some(e) = iter.next() {
@@ -265,7 +264,7 @@ impl<S: CasualRouter> Runner<S> {
                 }
             },
         )?;
-        timer.observe_duration();
+        /* timer.observe_duration() */;
 
         Ok(host.split_keys())
     }

@@ -673,12 +673,6 @@ impl<E: Engine> Storage<E> {
             .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
-
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
@@ -706,7 +700,7 @@ impl<E: Engine> Storage<E> {
                     result
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    /* timer.observe_duration() */;
                     r
                 })
         });
@@ -732,12 +726,6 @@ impl<E: Engine> Storage<E> {
             .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
-
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
@@ -769,7 +757,7 @@ impl<E: Engine> Storage<E> {
                     Ok(kv_pairs)
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    /* timer.observe_duration() */;
                     r
                 })
         });
@@ -799,12 +787,6 @@ impl<E: Engine> Storage<E> {
             .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
-
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
                     let mut thread_ctx = ctxd.current_thread_context_mut();
@@ -844,7 +826,7 @@ impl<E: Engine> Storage<E> {
                     })
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    /* timer.observe_duration() */;
                     r
                 })
         });
@@ -1111,12 +1093,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
-
         let readpool = self.read_pool.clone();
-
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
                 let mut thread_ctx = ctxd.current_thread_context_mut();
@@ -1143,7 +1120,7 @@ impl<E: Engine> Storage<E> {
                         r
                     });
 
-                timer.observe_duration();
+                /* timer.observe_duration() */;
                 future::result(result)
             });
             future::result(res)
@@ -1162,12 +1139,8 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
-
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.future_execute(priority, move |ctxd| {
                 let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
@@ -1199,7 +1172,7 @@ impl<E: Engine> Storage<E> {
                 thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
                 thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
 
-                timer.observe_duration();
+                /* timer.observe_duration() */;
                 future::ok(result)
             });
             future::result(res)
@@ -1449,10 +1422,6 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
-
         let readpool = self.read_pool.clone();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
@@ -1491,7 +1460,7 @@ impl<E: Engine> Storage<E> {
                 thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                 thread_ctx.collect_scan_count(CMD, &statistics);
 
-                timer.observe_duration();
+                /* timer.observe_duration() */;
                 future::result(result)
             });
             future::result(res)
@@ -1549,10 +1518,6 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_scan";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
 
@@ -1613,7 +1578,7 @@ impl<E: Engine> Storage<E> {
                 thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
                 thread_ctx.collect_scan_count(CMD, &statistics);
 
-                timer.observe_duration();
+                /* timer.observe_duration() */;
                 future::ok(result)
             });
             future::result(res)
