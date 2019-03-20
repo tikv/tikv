@@ -1195,6 +1195,8 @@ fn test_index_aggr_extre() {
 
 #[test]
 fn test_where() {
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+
     let data = vec![
         (1, Some("name:0"), 2),
         (2, Some("name:4"), 3),
@@ -1210,18 +1212,33 @@ fn test_where() {
         col.set_tp(ExprType::ColumnRef);
         let count_offset = offset_for_column(&cols, product["count"].id);
         col.mut_val().encode_i64(count_offset).unwrap();
+        col.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
 
         let mut value = Expr::new();
         value.set_tp(ExprType::String);
         value.set_val(String::from("2").into_bytes());
+        value
+            .mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::VarString);
+
         let mut right = Expr::new();
         right.set_tp(ExprType::ScalarFunc);
         right.set_sig(ScalarFuncSig::CastStringAsInt);
+        right
+            .mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
         right.mut_children().push(value);
 
         let mut cond = Expr::new();
         cond.set_tp(ExprType::ScalarFunc);
         cond.set_sig(ScalarFuncSig::LTInt);
+        cond.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
         cond.mut_children().push(col);
         cond.mut_children().push(right);
         cond

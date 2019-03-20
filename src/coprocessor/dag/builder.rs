@@ -13,17 +13,22 @@
 
 use std::sync::Arc;
 
+use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
+use tipb::expression::{Expr, ExprType};
 
 use crate::storage::Store;
 
+use super::batch_executor::executors::*;
 use super::batch_executor::interface::*;
 use super::executor::{
     Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
     StreamAggExecutor, TableScanExecutor, TopNExecutor,
 };
 use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::rpn_expr::map_pb_sig_to_rpn_func;
+use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
@@ -35,23 +40,181 @@ use crate::coprocessor::*;
 /// executor (i.e. calling `next()`) will drive the whole pipeline.
 pub struct DAGBuilder;
 
+fn check_condition(c: &Expr) -> bool {
+    use cop_datatype::FieldTypeAccessor;
+    use std::convert::TryFrom;
+
+    let eval_type = EvalType::try_from(c.get_field_type().tp());
+    if eval_type.is_err() {
+        return false;
+    }
+    match c.get_tp() {
+        ExprType::ScalarFunc => {
+            let sig = c.get_sig();
+            let func = map_pb_sig_to_rpn_func(sig);
+            if func.is_err() {
+                return false;
+            }
+            for n in c.get_children() {
+                if !check_condition(n) {
+                    return false;
+                }
+            }
+        }
+        ExprType::Null => {}
+        ExprType::Int64 => {}
+        ExprType::Uint64 => {}
+        ExprType::String | ExprType::Bytes => {}
+        ExprType::Float32 | ExprType::Float64 => {}
+        ExprType::MysqlTime => {}
+        ExprType::MysqlDuration => {}
+        ExprType::MysqlDecimal => {}
+        ExprType::MysqlJson => {}
+        ExprType::ColumnRef => {}
+        _ => return false,
+    }
+
+    true
+}
+
 impl DAGBuilder {
     /// Given a list of executor descriptors and returns whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn can_build_batch(_exec_descriptors: &[executor::Executor]) -> bool {
-        // Currently no batch executors, so always returns false.
-        false
+    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
+        use cop_datatype::EvalType;
+        use cop_datatype::FieldTypeAccessor;
+        use std::convert::TryFrom;
+
+        for ed in exec_descriptors {
+            match ed.get_tp() {
+                ExecType::TypeTableScan => {
+                    let descriptor = ed.get_tbl_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            return false;
+                        }
+                    }
+                }
+                ExecType::TypeIndexScan => {
+                    let descriptor = ed.get_idx_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            return false;
+                        }
+                    }
+                }
+                ExecType::TypeSelection => {
+                    let descriptor = ed.get_selection();
+                    let conditions = descriptor.get_conditions();
+                    for c in conditions {
+                        if !check_condition(c) {
+                            info!("Coprocessor request cannot be batched because condition {:?} is not supported", c);
+                            return false;
+                        }
+                    }
+                }
+                _ => {
+                    info!(
+                        "Coprocessor request cannot be batched because {:?} is not supported",
+                        ed.get_tp()
+                    );
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
-    pub fn build_batch<S: Store + 'static>(
-        _executor_descriptors: Vec<executor::Executor>,
-        _store: S,
-        _ranges: Vec<KeyRange>,
-        _config: Arc<EvalConfig>,
+    pub fn build_batch<S: Store + 'static, C: ExecSummaryCollector + 'static>(
+        executor_descriptors: Vec<executor::Executor>,
+        store: S,
+        ranges: Vec<KeyRange>,
+        config: Arc<EvalConfig>,
     ) -> Result<Box<dyn BatchExecutor>> {
-        // Currently no batch executors and this function should never be called, so unreachable.
-        unreachable!()
+        // Shared in multiple executors, so wrap with Rc.
+        let mut executor_descriptors = executor_descriptors.into_iter();
+        let mut first_ed = executor_descriptors
+            .next()
+            .ok_or_else(|| Error::Other(box_err!("No executors")))?;
+
+        let mut executor: Box<dyn BatchExecutor>;
+        let mut summary_slot_index = 0;
+
+        match first_ed.get_tp() {
+            ExecType::TypeTableScan => {
+                // TODO: Use static metrics.
+                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+
+                let mut descriptor = first_ed.take_tbl_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchTableScanExecutor::new(
+                    C::new(summary_slot_index),
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                )?);
+            }
+            ExecType::TypeIndexScan => {
+                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+
+                let mut descriptor = first_ed.take_idx_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchIndexScanExecutor::new(
+                    C::new(summary_slot_index),
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                    descriptor.get_unique(),
+                )?);
+            }
+            _ => {
+                return Err(Error::Other(box_err!(
+                    "Unexpected first executor {:?}",
+                    first_ed.get_tp()
+                )));
+            }
+        }
+
+        for mut ed in executor_descriptors {
+            summary_slot_index += 1;
+
+            let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
+                ExecType::TypeTableScan | ExecType::TypeIndexScan => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        ed.get_tp()
+                    )));
+                }
+                ExecType::TypeSelection => {
+                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+
+                    Box::new(BatchSelectionExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.take_selection().take_conditions().into_vec(),
+                    )?)
+                }
+                _ => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        first_ed.get_tp()
+                    )));
+                }
+            };
+            executor = new_executor;
+        }
+
+        Ok(executor)
     }
 
     /// Builds a normal executor pipeline.

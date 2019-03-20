@@ -30,9 +30,9 @@ use crate::coprocessor::*;
 
 use crate::storage::{Key, Store};
 
-use super::scanner::{ScanOn, Scanner};
 use super::ExecutorMetrics;
 use super::{Executor, Row};
+use crate::coprocessor::dag::{ScanOn, Scanner};
 
 /// Scans rows from table indexes.
 ///
@@ -287,8 +287,8 @@ pub mod tests {
     use crate::storage::SnapshotStore;
     use crate::util::collections::HashMap;
 
-    use super::super::scanner::tests::{new_col_info, Data, TestStore};
     use super::*;
+    use crate::coprocessor::dag::scanner::tests::{new_col_info, Data, TestStore};
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

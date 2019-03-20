@@ -23,12 +23,11 @@ use tipb::schema::ColumnInfo;
 use crate::storage::{Key, Store};
 use crate::util::collections::HashSet;
 
+use super::{Executor, ExecutorMetrics, Row};
 use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::{ScanOn, Scanner};
 use crate::coprocessor::util;
 use crate::coprocessor::*;
-
-use super::{Executor, ExecutorMetrics, Row};
-use super::{ScanOn, Scanner};
 
 /// Scans rows from table records.
 ///
@@ -237,10 +236,10 @@ mod tests {
 
     use crate::storage::SnapshotStore;
 
-    use super::super::scanner::tests::{
+    use super::*;
+    use crate::coprocessor::dag::scanner::tests::{
         get_point_range, get_range, prepare_table_data, Data, TestStore,
     };
-    use super::*;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;

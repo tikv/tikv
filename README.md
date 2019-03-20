@@ -208,7 +208,13 @@ Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invit
 
 ### WeChat
 
-The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personal information (WeChat ID, and other basic information) included. We will invite you in right away.
+The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
+
+- WeChat ID (**Required**)
+- PR you submitted to TiKV Repos (**Required**)
+- Other basic information
+
+We will invite you in right away.
 
 ## License
 
