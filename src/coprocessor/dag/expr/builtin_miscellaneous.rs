@@ -34,7 +34,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        //Not an IPv6 address, return 0
+        // Not an IPv6 address, return 0
         if input.len() != 16 {
             return Ok(Some(0));
         }
@@ -55,7 +55,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
-        //Not an IPv6 address, return 0
+        // Not an IPv6 address, return 0
         if input.len() != 16 {
             return Ok(Some(0));
         }
