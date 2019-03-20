@@ -20,6 +20,7 @@ use std::str::FromStr;
 
 const IPV6_LENGTH: usize = 16;
 const IPV4_LENGTH: usize = 4;
+const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
 
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -42,9 +43,7 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
 
-        let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
-        let prefix_compat: [u8; 12] = [0x00; 12];
-        if !input_bytes.starts_with(&prefix_compat) {
+        if !input.starts_with(&PREFIX_COMPAT) {
             return Ok(Some(0));
         }
         Ok(Some(1))
@@ -61,11 +60,10 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
 
-        let input_bytes: &[u8; 16] = input.as_ref().try_into().unwrap();
         let mut prefix_mapped: [u8; 12] = [0x00; 12];
         prefix_mapped[10] = 0xff;
         prefix_mapped[11] = 0xff;
-        if !input_bytes.starts_with(&prefix_mapped) {
+        if !input.starts_with(&prefix_mapped) {
             return Ok(Some(0));
         }
         Ok(Some(1))
