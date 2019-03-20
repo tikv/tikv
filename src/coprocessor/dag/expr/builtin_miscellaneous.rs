@@ -253,13 +253,6 @@ mod tests {
                 Datum::I64(0),
             ),
             (
-                Datum::Bytes(vec![
-                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0xff, 0xff, 0x1, 0x2, 0x3,
-                    0x4,
-                ]),
-                Datum::I64(0),
-            ),
-            (
                 Datum::Bytes(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]),
                 Datum::I64(0),
             ),
