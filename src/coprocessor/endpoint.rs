@@ -503,6 +503,9 @@ fn make_error_response(e: Error) -> coppb::Response {
         }
         Error::Outdated(elapsed, scan_tag) => {
             tag = "outdated";
+            OUTDATED_REQ_WAIT_TIME
+                .with_label_values(&[scan_tag])
+                .observe(elapsed.as_secs() as f64);
             resp.set_other_error(OUTDATED_ERROR_MSG.to_owned());
         }
         Error::Full => {
@@ -519,6 +522,7 @@ fn make_error_response(e: Error) -> coppb::Response {
             resp.set_other_error(format!("{}", e));
         }
     };
+    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
     resp
 }
 
