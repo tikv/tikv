@@ -494,7 +494,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
         )
     }
 }

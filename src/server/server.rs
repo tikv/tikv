@@ -340,7 +340,7 @@ mod tests {
         let cop = coprocessor::Endpoint::new(
             &cfg,
             storage.get_engine(),
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             cop_read_pool,
         );
 

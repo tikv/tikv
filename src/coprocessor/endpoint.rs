@@ -668,7 +668,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -714,7 +714,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -752,7 +752,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -776,7 +776,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -807,7 +807,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -861,7 +861,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -887,7 +887,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -939,7 +939,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -965,7 +965,7 @@ mod tests {
         let cop = Endpoint::new(
             &Config::default(),
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -1062,7 +1062,7 @@ mod tests {
                 ..Config::default()
             },
             engine,
-            ReadTsCache::new_mock(),
+            ReadTsCache::new_mock().0,
             read_pool,
         );
 
@@ -1117,7 +1117,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::new(&config, engine, ReadTsCache::new_mock(), read_pool);
+        let cop = Endpoint::new(&config, engine, ReadTsCache::new_mock().0, read_pool);
 
         let (tx, rx) = std::sync::mpsc::channel();
 
