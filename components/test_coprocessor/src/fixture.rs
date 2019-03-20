@@ -20,7 +20,7 @@ use tikv::coprocessor::{Endpoint, ReadPoolContext};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
 use tikv::storage::engine::RocksEngine;
-use tikv::storage::{Engine, MvccInspector, TestEngineBuilder};
+use tikv::storage::{Engine, ReadTsCache, TestEngineBuilder};
 use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
@@ -92,7 +92,7 @@ pub fn init_data_with_details<E: Engine>(
         store
             .insert_into(&tbl)
             .set(&tbl["id"], Datum::I64(id))
-            .set(&tbl["name"], name.map(|s| s.as_bytes()).into())
+            .set(&tbl["name"], name.map(str::as_bytes).into())
             .set(&tbl["count"], Datum::I64(count))
             .execute_with_ctx(ctx.clone());
     }
@@ -103,7 +103,7 @@ pub fn init_data_with_details<E: Engine>(
     let pool = ReadPool::new("readpool", read_pool_cfg, || {
         ReadPoolContext::new(pd_worker.scheduler())
     });
-    let cop = Endpoint::new(cfg, store.get_engine(), MvccInspector::new_mock(), pool);
+    let cop = Endpoint::new(cfg, store.get_engine(), ReadTsCache::new_mock(), pool);
     (store, cop)
 }
 

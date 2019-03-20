@@ -92,7 +92,8 @@ impl Conn {
                 match r {
                     Ok(_) => {
                         info!("batch_raft RPC finished success");
-                        box future::ok(()) as Box<dyn Future<Item = (), Error = GrpcError> + Send>
+                        Box::new(future::ok(()))
+                            as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
                         if status == RpcStatusCode::Unimplemented =>
@@ -113,18 +114,18 @@ impl Conn {
                                 stream::iter_ok::<_, GrpcError>(grpc_msgs)
                             })
                             .flatten();
-                        box sink.send_all(msgs).map(|_| ()).then(move |r| {
+                        Box::new(sink.send_all(msgs).map(|_| ()).then(move |r| {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
                                 Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
-                        })
+                        }))
                     }
                     Err(e) => {
                         error!("batch_raft RPC finished fail"; "err" => ?e);
-                        box future::err(e)
+                        Box::new(future::err(e))
                     }
                 }
             });

@@ -42,7 +42,7 @@ pub struct Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "resolve store {} address", self.store_id)
     }
 }

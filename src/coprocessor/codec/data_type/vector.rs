@@ -14,6 +14,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tipb::expression::FieldType;
 
 use super::*;
 use crate::coprocessor::codec::datum;
@@ -222,6 +223,29 @@ impl VectorValue {
         }
     }
 
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
+        VectorLikeValueRef::Vector(self)
+    }
+
+    /// Evaluates values into MySQL logic values.
+    ///
+    /// The caller must provide an output buffer which is large enough for holding values.
+    pub fn eval_as_mysql_bools(
+        &self,
+        context: &mut EvalContext,
+        outputs: &mut [bool],
+    ) -> crate::coprocessor::Result<()> {
+        assert!(outputs.len() >= self.len());
+        match_self!(ref self, v, {
+            let l = self.len();
+            for i in 0..l {
+                outputs[i] = v[i].as_mysql_bool(context)?;
+            }
+        });
+        Ok(())
+    }
+
     /// Pushes a value into the column by decoding the datum and converting to current
     /// column's type.
     ///
@@ -237,8 +261,8 @@ impl VectorValue {
     pub fn push_datum(
         &mut self,
         mut raw_datum: &[u8],
-        time_zone: Tz,
-        field_type: &dyn FieldTypeAccessor,
+        time_zone: &Tz,
+        field_type: &FieldType,
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -304,8 +328,8 @@ impl VectorValue {
         #[inline]
         fn decode_date_time_from_uint(
             v: u64,
-            time_zone: Tz,
-            field_type: &dyn FieldTypeAccessor,
+            time_zone: &Tz,
+            field_type: &FieldType,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
             let time_type = field_type.tp().try_into()?;
@@ -507,7 +531,7 @@ impl VectorValue {
     pub fn encode(
         &self,
         row_index: usize,
-        field_type: &dyn FieldTypeAccessor,
+        field_type: &FieldType,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         use crate::coprocessor::codec::mysql::DecimalEncoder;
@@ -933,11 +957,8 @@ mod benches {
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut field_type = tipb::expression::FieldType::new();
+        field_type.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         b.iter(move || {
@@ -945,8 +966,8 @@ mod benches {
                 column
                     .push_datum(
                         test::black_box(&datum_raw),
-                        test::black_box(tz),
-                        test::black_box(&col_info),
+                        test::black_box(&tz),
+                        test::black_box(&field_type),
                     )
                     .unwrap();
             }

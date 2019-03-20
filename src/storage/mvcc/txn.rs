@@ -42,7 +42,7 @@ pub struct MvccTxn<S: Snapshot> {
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
 }
@@ -467,6 +467,11 @@ mod tests {
         must_prewrite_delete(&engine, k, k, 13);
         must_rollback(&engine, k, 13);
         must_unlocked(&engine, k);
+
+        // The same start_ts and another transaction's commit_ts is considered conflicting.
+        must_prewrite_put(&engine, k, v, k, 15);
+        must_commit(&engine, k, 15, 16);
+        must_prewrite_lock_err(&engine, k, k, 16);
     }
 
     #[test]
@@ -995,5 +1000,38 @@ mod tests {
         );
 
         assert_eq!(reader.seek_ts(3).unwrap().unwrap(), Key::from_raw(&[2]));
+    }
+
+    #[test]
+    fn test_rollback_key_collision() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        must_prewrite_put(&engine, b"k5", b"v5", b"k5", 10);
+        must_commit(&engine, b"k5", 10, 11);
+        must_get(&engine, b"k5", 11, b"v5");
+
+        must_rollback(&engine, b"k5", 11);
+        must_get(&engine, b"k5", 11, b"v5");
+
+        must_prewrite_delete(&engine, b"k5", b"k5", 12);
+        must_commit(&engine, b"k5", 12, 13);
+        must_get_none(&engine, b"k5", 13);
+
+        must_rollback(&engine, b"k5", 13);
+        must_get_none(&engine, b"k5", 13);
+
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 12);
+        must_commit(&engine, b"k4", 12, 13);
+        must_get(&engine, b"k4", 13, b"v4");
+
+        must_rollback(&engine, b"k4", 13);
+        must_get(&engine, b"k4", 13, b"v4");
+
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 13);
+        must_rollback(&engine, b"k3", 13);
+        must_seek_write(&engine, b"k3", 13, 13, 13, WriteType::Rollback);
+
+        must_rollback(&engine, b"k2", 13);
+        must_seek_write(&engine, b"k2", 13, 13, 13, WriteType::Rollback);
     }
 }

@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
-use crate::grpc::{EnvBuilder, Error as GrpcError};
+use grpcio::{EnvBuilder, Error as GrpcError};
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
@@ -25,7 +25,7 @@ use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftRouter};
+use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, Engines, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
@@ -33,11 +33,12 @@ use tikv::server::readpool::ReadPool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
-use tikv::storage::{self, MvccInspector, RaftKv};
+use tikv::storage::{self, RaftKv, ReadTsCache};
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
@@ -109,10 +110,10 @@ impl Simulator for ServerCluster {
         &mut self,
         node_id: u64,
         mut cfg: TiKvConfig,
-        engines: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>) {
-        assert!(node_id == 0 || !self.metas.contains_key(&node_id));
-
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64> {
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = TempDir::new("test_cluster").unwrap();
             (p.path().to_str().unwrap().to_owned(), Some(p))
@@ -127,9 +128,6 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        // Initialize raftstore channels.
-        let (router, system) = create_raft_batch_system(&cfg.raft_store);
-
         // Create localreader.
         let local_reader = Worker::new("test-local-reader");
         let local_ch = local_reader.scheduler();
@@ -137,25 +135,21 @@ impl Simulator for ServerCluster {
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
         let sim_router = SimulateTransport::new(raft_router);
 
-        // Create engine
-        let (engines, path) = create_test_engine(engines, router.clone(), &cfg);
-
         // Create storage.
         let pd_worker = FutureWorker::new("test-future-worker");
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 storage::ReadPoolContext::new(pd_worker.scheduler())
             });
-        let mvcc_inspector = MvccInspector::new(Arc::clone(&self.pd_client));
+        let read_ts_cache = ReadTsCache::new(Arc::clone(&self.pd_client));
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,
             storage_read_pool,
             None,
             None,
-            mvcc_inspector.clone(),
-        )
-        .unwrap();
+            read_ts_cache.clone(),
+        )?;
         self.storages.insert(node_id, store.get_engine());
 
         // Create import service.
@@ -182,7 +176,7 @@ impl Simulator for ServerCluster {
         let cop = coprocessor::Endpoint::new(
             &server_cfg,
             store.get_engine(),
-            mvcc_inspector.clone(),
+            read_ts_cache.clone(),
             cop_read_pool,
         );
         let mut server = None;
@@ -233,7 +227,7 @@ impl Simulator for ServerCluster {
 
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
-        mvcc_inspector.register_observer(&mut coprocessor_host);
+        read_ts_cache.register_observer(&mut coprocessor_host);
 
         node.start(
             engines.clone(),
@@ -243,8 +237,7 @@ impl Simulator for ServerCluster {
             local_reader,
             coprocessor_host,
             importer,
-        )
-        .unwrap();
+        )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
         if let Some(tmp) = tmp {
@@ -266,7 +259,7 @@ impl Simulator for ServerCluster {
         );
         self.addrs.insert(node_id, format!("{}", addr));
 
-        (node_id, engines, path)
+        Ok(node_id)
     }
 
     fn get_snap_dir(&self, node_id: u64) -> String {
@@ -280,7 +273,7 @@ impl Simulator for ServerCluster {
     fn stop_node(&mut self, node_id: u64) {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
-            meta.node.stop().unwrap();
+            meta.node.stop();
             meta.worker.stop().unwrap().join().unwrap();
         }
     }

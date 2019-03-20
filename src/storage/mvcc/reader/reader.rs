@@ -13,13 +13,13 @@
 
 use crate::raftstore::store::engine::IterOption;
 use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
 use crate::util::rocksdb_util::properties::MvccProperties;
 use kvproto::kvrpcpb::IsolationLevel;
-use std::u64;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -77,9 +77,9 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         if self.key_only {
-            return Ok(vec![]);
+            return Ok(Some(vec![]));
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -88,16 +88,12 @@ impl<S: Snapshot> MvccReader<S> {
 
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
-            }
+            cursor
+                .get(&k, &mut self.statistics.data)?
+                .map(|v| v.to_vec())
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
-            }
+            self.snapshot.get(&k)?
         };
 
         self.statistics.data.processed += 1;
@@ -181,10 +177,9 @@ impl<S: Snapshot> MvccReader<S> {
         if !ok {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
-        let commit_ts = write_key.decode_ts()?;
-        let k = write_key.truncate_ts()?;
-        if &k != key {
+        let write_key = cursor.key(&mut self.statistics.write);
+        let commit_ts = Key::decode_ts_from(write_key)?;
+        if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
         let write = Write::parse(cursor.value(&mut self.statistics.write))?;
@@ -205,7 +200,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(ts);
         }
 
-        if ts == u64::MAX && key.to_raw()? == lock.primary {
+        if ts == std::u64::MAX && key.to_raw()? == lock.primary {
             // when ts==u64::MAX(which means to get latest committed version for
             // primary key),and current key is the primary key, returns the latest
             // commit version's value
@@ -234,7 +229,12 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 return Ok(write.short_value.take());
             }
-            return self.load_data(key, write.start_ts).map(Some);
+            match self.load_data(key, write.start_ts)? {
+                None => {
+                    return Err(default_not_found_error(key.to_raw()?, write, "get"));
+                }
+                Some(v) => return Ok(Some(v)),
+            }
         }
         Ok(None)
     }
@@ -260,11 +260,15 @@ impl<S: Snapshot> MvccReader<S> {
         &mut self,
         key: &Key,
         start_ts: u64,
-    ) -> Result<Option<(u64, WriteType)>> {
+    ) -> Result<(Option<(u64, WriteType)>, bool)> {
         let mut seek_ts = start_ts;
+        let mut write_ts_collision = false;
         while let Some((commit_ts, write)) = self.reverse_seek_write(key, seek_ts)? {
+            if commit_ts == start_ts {
+                write_ts_collision = true;
+            }
             if write.start_ts == start_ts {
-                return Ok(Some((commit_ts, write.write_type)));
+                return Ok((Some((commit_ts, write.write_type)), write_ts_collision));
             }
 
             // If we reach a commit version whose type is not Rollback and start ts is
@@ -275,7 +279,7 @@ impl<S: Snapshot> MvccReader<S> {
 
             seek_ts = commit_ts + 1;
         }
-        Ok(None)
+        Ok((None, write_ts_collision))
     }
 
     fn create_data_cursor(&mut self) -> Result<()> {
@@ -416,13 +420,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded_slice(cursor.key(&mut self.statistics.data));
-            let ts = cur_key.decode_ts()?;
-            let cur_key_without_ts = cur_key.truncate_ts()?;
-            if cur_key_without_ts.as_encoded().as_slice() == key.as_encoded().as_slice() {
+            let cur_key = cursor.key(&mut self.statistics.data);
+            let ts = Key::decode_ts_from(cur_key)?;
+            if Key::is_user_key_eq(cur_key, key.as_encoded()) {
                 v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
-            }
-            if cur_key_without_ts.as_encoded().as_slice() != key.as_encoded().as_slice() {
+            } else {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
@@ -785,28 +787,28 @@ mod tests {
         // is 40.
         // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().0.unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 25).unwrap().0.unwrap();
         assert_eq!(commit_ts, 30);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 20).unwrap().0.unwrap();
         assert_eq!(commit_ts, 20);
         assert_eq!(write_type, WriteType::Rollback);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 1).unwrap().0.unwrap();
         assert_eq!(commit_ts, 10);
         assert_eq!(write_type, WriteType::Put);
 
-        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().unwrap();
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 5).unwrap().0.unwrap();
         assert_eq!(commit_ts, 5);
         assert_eq!(write_type, WriteType::Rollback);
 
         let seek_for_prev_old = reader.get_statistics().write.seek_for_prev;
-        assert!(reader.get_txn_commit_info(&key, 15).unwrap().is_none());
+        assert!(reader.get_txn_commit_info(&key, 15).unwrap().0.is_none());
         let seek_for_prev_new = reader.get_statistics().write.seek_for_prev;
 
         // `get_txn_commit_info(&key, 15)` stopped at `30_25 PUT`.
@@ -867,5 +869,27 @@ mod tests {
         let write = reader.get_write(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 10);
+    }
+
+    #[test]
+    fn test_get() {
+        let path = TempDir::new("_test_storage_mvcc_reader_get_same_ts").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let (k, v) = (b"k", b"v");
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 10);
+        engine.commit(k, 10, 11);
+
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+
+        assert!(reader.get(&Key::from_raw(k), 10).unwrap().is_none());
+        // Keys with its commit_ts the same with the reading ts is visible.
+        assert_eq!(&reader.get(&Key::from_raw(k), 11).unwrap().unwrap(), v);
+        assert_eq!(&reader.get(&Key::from_raw(k), 12).unwrap().unwrap(), v);
     }
 }

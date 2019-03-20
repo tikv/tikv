@@ -106,7 +106,7 @@ enum RegionCollectorMsg {
 }
 
 impl Display for RegionCollectorMsg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RegionCollectorMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
             RegionCollectorMsg::SeekRegion { from, limit, .. } => {
@@ -135,7 +135,7 @@ impl Coprocessor for RegionEventListener {}
 impl RegionChangeObserver for RegionEventListener {
     fn on_region_changed(
         &self,
-        context: &mut ObserverContext,
+        context: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         role: StateRole,
     ) {
@@ -152,7 +152,7 @@ impl RegionChangeObserver for RegionEventListener {
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
@@ -169,9 +169,9 @@ fn register_region_event_listener(
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, box listener.clone());
+        .register_role_observer(1, Box::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, box listener);
+        .register_region_change_observer(1, Box::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -574,11 +574,11 @@ impl RegionInfoProvider for RegionInfoAccessor {
             from: from.to_vec(),
             filter,
             limit,
-            callback: box move |res| {
+            callback: Box::new(move |res| {
                 tx.send(res).unwrap_or_else(|e| {
                     panic!("failed to send seek_region result back to caller: {:?}", e)
                 })
-            },
+            }),
         };
         self.scheduler
             .schedule(msg)
@@ -598,14 +598,14 @@ impl RegionInfoProvider for RegionInfoAccessor {
         let msg = RegionCollectorMsg::GetRegionsInRange {
             start: start.to_vec(),
             end: end.to_vec(),
-            callback: box move |res| {
+            callback: Box::new(move |res| {
                 tx.send(res).unwrap_or_else(|e| {
                     panic!(
                         "failed to send get_regions_in_range result back to caller: {:?}",
                         e
                     )
                 })
-            },
+            }),
         };
         self.scheduler
             .schedule(msg)

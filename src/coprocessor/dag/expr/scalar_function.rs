@@ -138,6 +138,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
             | ScalarFuncSig::Strcmp
+            | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
@@ -312,7 +313,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Rpad
             | ScalarFuncSig::RpadBinary
             | ScalarFuncSig::Locate3Args
-            | ScalarFuncSig::LocateBinary3Args => (3, 3),
+            | ScalarFuncSig::LocateBinary3Args
+            | ScalarFuncSig::Replace => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
@@ -416,7 +418,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::Instr
-            | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::IntAnyValue
             | ScalarFuncSig::IsIPv4Compat
             | ScalarFuncSig::IsIPv4Mapped
@@ -442,7 +443,6 @@ impl ScalarFunc {
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
-            | ScalarFuncSig::Replace
             | ScalarFuncSig::RowCount
             | ScalarFuncSig::RowSig
             | ScalarFuncSig::SecToTime
@@ -837,6 +837,7 @@ dispatch_call! {
 
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
+        InstrBinary => instr_binary,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -955,6 +956,7 @@ dispatch_call! {
         DayName => day_name,
         Bin => bin,
         Concat => concat,
+        Replace => replace,
         ConcatWS => concat_ws,
         LTrim => ltrim,
         RTrim => rtrim,
@@ -1171,6 +1173,7 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::InstrBinary,
                     ScalarFuncSig::AddDatetimeAndDuration,
                     ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::AddDurationAndDuration,
@@ -1501,7 +1504,6 @@ mod tests {
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::Instr,
-            ScalarFuncSig::InstrBinary,
             ScalarFuncSig::IntAnyValue,
             ScalarFuncSig::IsIPv4Compat,
             ScalarFuncSig::IsIPv4Mapped,
@@ -1527,7 +1529,6 @@ mod tests {
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
-            ScalarFuncSig::Replace,
             ScalarFuncSig::RowCount,
             ScalarFuncSig::RowSig,
             ScalarFuncSig::SecToTime,

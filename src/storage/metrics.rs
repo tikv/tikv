@@ -102,18 +102,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref KV_MAX_READ_TS_UPDATE_COUNTER: IntCounterVec = register_int_counter_vec!(
-        "tikv_storage_max_read_ts_update",
-        "Statistics of max read ts updating",
-        &["from", "res"]
-    )
-    .unwrap();
-    pub static ref KV_MAX_READ_TS_FETCH_UPDATE_RETRY_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_storage_max_read_ts_fetch_update_retry",
-        "Statics of max read ts fetch_update retry times",
-        linear_buckets(1.0, 1.0, 15).unwrap()
-    )
-    .unwrap();
     pub static ref KV_GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"
@@ -165,15 +153,15 @@ lazy_static! {
         "Counter of request exceed bound"
     )
     .unwrap();
-    pub static ref MVCC_INSPECTOR_UPDATE_DURATION: Histogram = register_histogram!(
-        "tikv_storage_mvcc_inspector_update_duration",
-        "Duration of mvcc inspector update",
+    pub static ref READ_TS_CACHE_UPDATE_DURATION: Histogram = register_histogram!(
+        "tikv_storage_read_ts_cache_update_duration",
+        "Duration of read ts cache update",
         exponential_buckets(0.0001, 2.0, 10).unwrap()
     )
     .unwrap();
-    pub static ref MVCC_INSPECTOR_TS_REPORT_DURATION: Histogram = register_histogram!(
-        "tikv_storage_mvcc_inspectior_ts_report_duration",
-        "Duration of mvcc inspector ts report",
+    pub static ref READ_TS_CACHE_TS_REPORT_DURATION: Histogram = register_histogram!(
+        "tikv_storage_read_ts_cache_ts_report_duration",
+        "Duration of read ts cache ts report",
         exponential_buckets(0.0001, 2.0, 10).unwrap()
     )
     .unwrap();

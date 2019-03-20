@@ -251,7 +251,7 @@ mod tests {
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
     use crate::server::readpool::{self, ReadPool};
-    use crate::storage::{MvccInspector, TestStorageBuilder};
+    use crate::storage::{ReadTsCache, TestStorageBuilder};
     use crate::util::security::SecurityConfig;
     use crate::util::worker::FutureWorker;
     use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -340,7 +340,7 @@ mod tests {
         let cop = coprocessor::Endpoint::new(
             &cfg,
             storage.get_engine(),
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
             cop_read_pool,
         );
 

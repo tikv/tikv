@@ -18,10 +18,10 @@ use kvproto::kvrpcpb::IsolationLevel;
 use crate::storage::engine::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, CursorBuilder, Key, Lock, ScanMode, Snapshot, Statistics, Value};
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value, CF_DEFAULT};
 
 use super::util::CheckLockResult;
+use super::ScannerConfig;
 
 // When there are many versions for the user key, after several tries,
 // we will use seek to locate the right position. But this will turn around
@@ -31,137 +31,40 @@ use super::util::CheckLockResult;
 // RocksDB, so don't set REVERSE_SEEK_BOUND too small.
 const REVERSE_SEEK_BOUND: u64 = 16;
 
-/// `BackwardScanner` factory.
-pub struct BackwardScannerBuilder<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-    ts: u64,
-}
-
-impl<S: Snapshot> BackwardScannerBuilder<S> {
-    /// Initialize a new `BackwardScanner`
-    pub fn new(snapshot: S, ts: u64) -> Self {
-        Self {
-            snapshot,
-            fill_cache: true,
-            omit_value: false,
-            isolation_level: IsolationLevel::SI,
-            lower_bound: None,
-            upper_bound: None,
-            ts,
-        }
-    }
-
-    /// Set whether or not read operations should fill the cache.
-    ///
-    /// Defaults to `true`.
-    #[inline]
-    pub fn fill_cache(mut self, fill_cache: bool) -> Self {
-        self.fill_cache = fill_cache;
-        self
-    }
-
-    /// Set whether values of the user key should be omitted. When `omit_value` is `true`, the
-    /// length of returned value will be 0.
-    ///
-    /// Previously this option is called `key_only`.
-    ///
-    /// Defaults to `false`.
-    #[inline]
-    pub fn omit_value(mut self, omit_value: bool) -> Self {
-        self.omit_value = omit_value;
-        self
-    }
-
-    /// Set the isolation level.
-    ///
-    /// Defaults to `IsolationLevel::SI`.
-    #[inline]
-    pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
-        self.isolation_level = isolation_level;
-        self
-    }
-
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `BackwardScanner` should scan.
-    /// `None` means unbounded.
-    ///
-    /// Default is `(None, None)`.
-    #[inline]
-    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
-        self.lower_bound = lower_bound;
-        self.upper_bound = upper_bound;
-        self
-    }
-
-    /// Build `BackwardScanner` from the current configuration.
-    pub fn build(self) -> Result<BackwardScanner<S>> {
-        let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::Backward)
-            .build()?;
-
-        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::Backward)
-            .build()?;
-
-        Ok(BackwardScanner {
-            snapshot: self.snapshot,
-            fill_cache: self.fill_cache,
-            omit_value: self.omit_value,
-            isolation_level: self.isolation_level,
-            lower_bound: self.lower_bound,
-            upper_bound: self.upper_bound,
-            ts: self.ts,
-            lock_cursor,
-            write_cursor,
-            default_cursor: None,
-            is_started: false,
-            statistics: Statistics::default(),
-        })
-    }
-}
-
 /// This struct can be used to scan keys starting from the given user key in the reverse order
 /// (less than).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
 /// isolation level is SI, locks will be checked first.
 ///
-/// Use `BackwardScannerBuilder` to build `BackwardScanner`.
+/// Use `ScannerBuilder` to build `BackwardScanner`.
 pub struct BackwardScanner<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-
-    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `upper_bound`
-    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
-    /// created.
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-
-    ts: u64,
-
+    cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
-
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
-
     /// Is iteration started
     is_started: bool,
-
     statistics: Statistics,
 }
 
 impl<S: Snapshot> BackwardScanner<S> {
+    pub fn new(
+        cfg: ScannerConfig<S>,
+        lock_cursor: Cursor<S::Iter>,
+        write_cursor: Cursor<S::Iter>,
+    ) -> BackwardScanner<S> {
+        BackwardScanner {
+            cfg,
+            lock_cursor,
+            write_cursor,
+            statistics: Statistics::default(),
+            default_cursor: None,
+            is_started: false,
+        }
+    }
+
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::replace(&mut self.statistics, Statistics::default())
@@ -170,18 +73,18 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Get the next key-value pair, in backward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            if self.upper_bound.is_some() {
+            if self.cfg.upper_bound.is_some() {
                 // TODO: `seek_to_last` is better, however it has performance issues currently.
                 // TODO: We have no guarantee about whether or not the upper_bound has a
                 // timestamp suffix, so currently it is not safe to change write_cursor's
                 // reverse_seek to seek_for_prev. However in future, once we have different types
                 // for them, this can be done safely.
                 self.write_cursor.reverse_seek(
-                    self.upper_bound.as_ref().unwrap(),
+                    self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
                 self.lock_cursor.reverse_seek(
-                    self.upper_bound.as_ref().unwrap(),
+                    self.cfg.upper_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
@@ -236,17 +139,17 @@ impl<S: Snapshot> BackwardScanner<S> {
             };
 
             let mut result = Ok(None);
-            let mut get_ts = self.ts;
+            let mut get_ts = self.cfg.ts;
             let mut met_prev_user_key = false;
 
             if has_lock {
-                match self.isolation_level {
+                match self.cfg.isolation_level {
                     IsolationLevel::SI => {
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
@@ -272,7 +175,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.ts` in reverse order.
+    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.
     /// This function requires that the write cursor is currently pointing to the earliest version
     /// of `user_key`.
     #[inline]
@@ -407,7 +310,7 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// The implementation is similar to `PointGetter::load_data_by_write`.
     #[inline]
     fn reverse_load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.omit_value {
+        if self.cfg.omit_value {
             return Ok(vec![]);
         }
         match write.short_value {
@@ -468,20 +371,17 @@ impl<S: Snapshot> BackwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .range(self.lower_bound.take(), self.upper_bound.take())
-            .fill_cache(self.fill_cache)
-            .scan_mode(ScanMode::Backward)
-            .build()?;
-        self.default_cursor = Some(cursor);
+        self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::ScannerBuilder;
     use super::*;
     use crate::storage::mvcc::tests::*;
+    use crate::storage::Scanner;
     use crate::storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
@@ -558,7 +458,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND, true)
             .range(None, Some(Key::from_raw(&[11 as u8])))
             .build()
             .unwrap();
@@ -574,7 +474,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                             ^
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((
                 Key::from_raw(&[10 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
@@ -605,7 +505,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                                   ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[9 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -639,7 +539,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //                         ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((
                 Key::from_raw(&[8 as u8]),
                 vec![(REVERSE_SEEK_BOUND / 2 - 1) as u8]
@@ -677,7 +577,7 @@ mod tests {
         // 4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         //             ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6 as u8]), vec![0 as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -712,7 +612,7 @@ mod tests {
         //   4 4 5 5 5 5 5 6 7 7 7 7 7 8 8 8 8 8 9 9 9 9 9 10 10
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4 as u8]), vec![REVERSE_SEEK_BOUND as u8]))
         );
         let statistics = scanner.take_statistics();
@@ -722,7 +622,7 @@ mod tests {
         assert_eq!(statistics.write.seek_for_prev, 0);
 
         // Scan end.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.prev, 0);
         assert_eq!(statistics.write.seek, 0);
@@ -753,7 +653,7 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
             .range(None, None)
             .build()
             .unwrap();
@@ -770,7 +670,7 @@ mod tests {
         //   b_1 b_0 c_8
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -782,7 +682,7 @@ mod tests {
         // Use N/2 prev and reach out of bound:
         //   b_1 b_0 c_8
         // ^cursor
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -790,7 +690,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2) as usize);
 
         // Cursor remains invalid, so nothing should happen.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -823,7 +723,7 @@ mod tests {
         );
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND * 2, true)
             .range(None, None)
             .build()
             .unwrap();
@@ -840,7 +740,7 @@ mod tests {
         //   b_2 b_1 b_0 c_8
         //           ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value_c".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -853,7 +753,7 @@ mod tests {
         //   b_2 b_1 b_0 c_8
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), b"value_b".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -863,7 +763,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (REVERSE_SEEK_BOUND / 2 + 1) as usize);
 
         // Cursor remains invalid, so nothing should happen.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -890,7 +790,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, 1)
+        let mut scanner = ScannerBuilder::new(snapshot, 1, true)
             .range(None, None)
             .build()
             .unwrap();
@@ -907,7 +807,7 @@ mod tests {
         //   b_2 b_1 c_1
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -924,7 +824,7 @@ mod tests {
         //   b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![1u8].to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -934,7 +834,7 @@ mod tests {
         assert_eq!(statistics.write.prev, (SEEK_BOUND / 2) as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -961,7 +861,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, 1)
+        let mut scanner = ScannerBuilder::new(snapshot, 1, true)
             .range(None, None)
             .build()
             .unwrap();
@@ -978,7 +878,7 @@ mod tests {
         //   b_5 b_4 b_3 b_2 b_1 c_1
         //                   ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -1001,7 +901,7 @@ mod tests {
         //   b_5 b_4 b_3 b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![1u8])),
         );
         let statistics = scanner.take_statistics();
@@ -1011,7 +911,7 @@ mod tests {
         assert_eq!(statistics.write.prev, SEEK_BOUND as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -1040,7 +940,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = BackwardScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND + 1)
+        let mut scanner = ScannerBuilder::new(snapshot, REVERSE_SEEK_BOUND + 1, true)
             .range(None, None)
             .build()
             .unwrap();
@@ -1057,7 +957,7 @@ mod tests {
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
         //                                             ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"c"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -1083,7 +983,7 @@ mod tests {
         //   b_11 b_10 b_9 b_8 b_7 b_6 b_5 b_4 b_3 b_2 b_1 c_1
         // ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), vec![(REVERSE_SEEK_BOUND + 1) as u8])),
         );
         let statistics = scanner.take_statistics();
@@ -1096,7 +996,7 @@ mod tests {
         );
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.seek_for_prev, 0);
@@ -1127,80 +1027,80 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = BackwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, true)
             .range(None, None)
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
     }
 
     #[test]
@@ -1235,14 +1135,46 @@ mod tests {
 
         // Call reverse scan
         let ts = 2;
-        let mut scanner = BackwardScannerBuilder::new(snapshot, ts)
+        let mut scanner = ScannerBuilder::new(snapshot, ts, true)
             .range(None, Some(k))
             .build()
             .unwrap();
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.lock.prev, 255);
         assert_eq!(statistics.write.prev, 1);
     }
 
+    #[test]
+    fn test_scan_ts_visibility() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let mut expected_result = Vec::new();
+
+        for (i, ts) in [5u64, 6, 7, 5, 7, 6, 5].iter().enumerate() {
+            let i = i as u8;
+            must_prewrite_put(&engine, &[i], &[i], &[i], ts - 1);
+            must_commit(&engine, &[i], ts - 1, *ts);
+            if *ts <= 6 {
+                expected_result.push((Key::from_raw(&[i]), vec![i]));
+            }
+        }
+
+        expected_result = expected_result.into_iter().rev().collect();
+
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+
+        // Test both bound specified.
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 6, true)
+            .build()
+            .unwrap();
+
+        let mut result = Vec::new();
+
+        while let Some((k, v)) = scanner.next().unwrap() {
+            result.push((k, v));
+        }
+
+        assert_eq!(result, expected_result);
+    }
 }

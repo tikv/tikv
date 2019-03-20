@@ -33,7 +33,7 @@ impl From<kvrpcpb::CommandPri> for Priority {
 }
 
 impl fmt::Display for Priority {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Priority::High => write!(f, "high"),
             Priority::Normal => write!(f, "normal"),

@@ -14,9 +14,9 @@
 pub mod config;
 pub mod engine;
 pub mod gc_worker;
-mod inspector;
 mod metrics;
 pub mod mvcc;
+mod read_ts_cache;
 mod readpool_context;
 pub mod txn;
 pub mod types;
@@ -53,11 +53,12 @@ pub use self::engine::{
     TestEngineBuilder,
 };
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
-pub use self::inspector::MvccInspector;
+pub use self::mvcc::Scanner as StoreScanner;
+pub use self::read_ts_cache::ReadTsCache;
 pub use self::readpool_context::Context as ReadPoolContext;
 use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
@@ -165,7 +166,7 @@ pub enum Command {
 }
 
 impl Display for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Command::Prewrite {
                 ref ctx,
@@ -255,7 +256,7 @@ impl Display for Command {
 }
 
 impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
@@ -492,7 +493,7 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
-            MvccInspector::new_mock(),
+            ReadTsCache::new_mock(),
         )
     }
 }
@@ -530,7 +531,7 @@ pub struct Storage<E: Engine> {
     /// once there are no more references.
     refs: Arc<atomic::AtomicUsize>,
 
-    inspector: MvccInspector,
+    read_ts_cache: ReadTsCache,
 
     // Fields below are storage configurations.
     max_key_size: usize,
@@ -550,7 +551,7 @@ impl<E: Engine> Clone for Storage<E> {
             sched: self.sched.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
-            inspector: self.inspector.clone(),
+            read_ts_cache: self.read_ts_cache.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
         }
@@ -587,7 +588,7 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool<ReadPoolContext>,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
-        mvcc_inspector: MvccInspector,
+        read_ts_cache: ReadTsCache,
     ) -> Result<Self> {
         let sched = TxnScheduler::new(
             engine.clone(),
@@ -611,7 +612,7 @@ impl<E: Engine> Storage<E> {
             sched,
             read_pool,
             gc_worker,
-            inspector: mvcc_inspector,
+            read_ts_cache,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
         })
@@ -630,8 +631,8 @@ impl<E: Engine> Storage<E> {
         self.engine.clone()
     }
 
-    pub fn get_mvcc_inspector(&self) -> MvccInspector {
-        self.inspector.clone()
+    pub fn get_read_ts_cache(&self) -> ReadTsCache {
+        self.read_ts_cache.clone()
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
@@ -656,15 +657,6 @@ impl<E: Engine> Storage<E> {
             .map_err(Error::from)
     }
 
-    fn report_read_ts(&self, ctx: &Context, start_ts: u64, from: &str) {
-        self.inspector.report_read_ts(
-            ctx.get_region_id(),
-            ctx.get_region_epoch().get_version(),
-            start_ts,
-            from,
-        );
-    }
-
     /// Get value of the given key from a snapshot. Only writes that are committed before `start_ts`
     /// is visible.
     pub fn async_get(
@@ -677,7 +669,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_get");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -735,7 +728,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_batch_get");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -801,7 +795,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        self.report_read_ts(&ctx, start_ts, "kv_scan");
+        self.read_ts_cache
+            .report_read_ts(ctx.get_region_id(), start_ts);
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
             let timer = {
@@ -888,18 +883,18 @@ impl<E: Engine> Storage<E> {
         options: Options,
         callback: Callback<(Vec<Result<()>>, u64)>,
     ) -> Result<()> {
-        let inspector = self.inspector.clone();
+        let read_ts_cache = self.read_ts_cache.clone();
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
-        let callback = box move |res: Result<Vec<Result<()>>>| {
+        let callback = Box::new(move |res: Result<Vec<Result<()>>>| {
             let mut max_read_ts = 0;
             if let Ok(key_errs) = &res {
                 if key_errs.is_empty() {
-                    max_read_ts = inspector.get_max_read_ts(region_id, version);
+                    max_read_ts = read_ts_cache.get_max_read_ts(region_id, version);
                 }
             }
             callback(res.map(|key_errs| (key_errs, max_read_ts)))
-        };
+        });
 
         for m in &mutations {
             let size = m.key().as_encoded().len();
@@ -967,10 +962,11 @@ impl<E: Engine> Storage<E> {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            modifies,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -1132,7 +1128,8 @@ impl<E: Engine> Storage<E> {
                 // no scan_count for this kind of op.
 
                 let key_len = key.len();
-                let result = snapshot.get_cf(cf, &Key::from_encoded(key))
+                let result = snapshot
+                    .get_cf(cf, &Key::from_encoded(key))
                     // map storage::engine::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {
@@ -1231,7 +1228,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
@@ -1256,10 +1253,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
@@ -1281,7 +1279,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
@@ -1313,7 +1311,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
@@ -1340,10 +1338,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
@@ -1734,7 +1733,7 @@ impl ErrorHeaderKind {
 }
 
 impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_str())
     }
 }
