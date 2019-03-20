@@ -22,12 +22,12 @@ use crate::coprocessor::Result;
 pub struct LimitExecutor<'a> {
     limit: u64,
     cursor: u64,
-    src: Box<Executor + Send + 'a>,
+    src: Box<dyn Executor + Send + 'a>,
     first_collect: bool,
 }
 
 impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<Executor + Send + 'a>) -> LimitExecutor {
+    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor<'_> {
         LimitExecutor {
             limit: limit.get_limit(),
             cursor: 0,

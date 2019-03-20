@@ -15,7 +15,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
+use rocksdb::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+};
 use slog::Level;
 use toml;
 
@@ -189,6 +191,8 @@ fn test_serde_custom_tikv_config() {
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_mode: DBRateLimiterMode::AllIo,
+        auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
@@ -485,6 +489,7 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+        cipher_file: "invalid path".to_owned(),
     };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
@@ -496,6 +501,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         max_open_engines: 2,
     };
+    value.panic_when_unexpected_key_or_data = true;
 
     let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();

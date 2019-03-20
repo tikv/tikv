@@ -13,7 +13,8 @@
 
 use std::convert::{TryFrom, TryInto};
 
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tipb::expression::FieldType;
 
 use super::*;
 use crate::coprocessor::codec::datum;
@@ -222,6 +223,29 @@ impl VectorValue {
         }
     }
 
+    #[inline]
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
+        VectorLikeValueRef::Vector(self)
+    }
+
+    /// Evaluates values into MySQL logic values.
+    ///
+    /// The caller must provide an output buffer which is large enough for holding values.
+    pub fn eval_as_mysql_bools(
+        &self,
+        context: &mut EvalContext,
+        outputs: &mut [bool],
+    ) -> crate::coprocessor::Result<()> {
+        assert!(outputs.len() >= self.len());
+        match_self!(ref self, v, {
+            let l = self.len();
+            for i in 0..l {
+                outputs[i] = v[i].as_mysql_bool(context)?;
+            }
+        });
+        Ok(())
+    }
+
     /// Pushes a value into the column by decoding the datum and converting to current
     /// column's type.
     ///
@@ -237,8 +261,8 @@ impl VectorValue {
     pub fn push_datum(
         &mut self,
         mut raw_datum: &[u8],
-        time_zone: Tz,
-        field_type: &FieldTypeAccessor,
+        time_zone: &Tz,
+        field_type: &FieldType,
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
@@ -304,8 +328,8 @@ impl VectorValue {
         #[inline]
         fn decode_date_time_from_uint(
             v: u64,
-            time_zone: Tz,
-            field_type: &FieldTypeAccessor,
+            time_zone: &Tz,
+            field_type: &FieldType,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
             let time_type = field_type.tp().try_into()?;
@@ -442,6 +466,172 @@ impl VectorValue {
         }
 
         Ok(())
+    }
+
+    /// Returns maximum encoded size in binary format.
+    pub fn maximum_encoded_size(&self) -> Result<usize> {
+        match self {
+            VectorValue::Int(ref vec) => Ok(vec.len() * 9),
+
+            // Some elements might be NULLs which encoded size is 1 byte. However it's fine because
+            // this function only calculates a maximum encoded size (for constructing buffers), not
+            // actual encoded size.
+            VectorValue::Real(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Decimal(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            // FIXME: We don't need approximate size. Maximum size is enough (so
+                            // that we don't need to iterate each value).
+                            size += 1 /* FLAG */ + v.approximate_encoded_size();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::Bytes(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + 10 /* MAX VARINT LEN */ + v.len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+            VectorValue::DateTime(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Duration(ref vec) => Ok(vec.len() * 9),
+            VectorValue::Json(ref vec) => {
+                let mut size = 0;
+                for el in vec {
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + v.binary_len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                Ok(size)
+            }
+        }
+    }
+
+    /// Encodes a single element into binary format.
+    // FIXME: Use BufferWriter.
+    pub fn encode(
+        &self,
+        row_index: usize,
+        field_type: &FieldType,
+        output: &mut Vec<u8>,
+    ) -> Result<()> {
+        use crate::coprocessor::codec::mysql::DecimalEncoder;
+        use crate::coprocessor::codec::mysql::JsonEncoder;
+        use crate::util::codec::bytes::BytesEncoder;
+        use crate::util::codec::number::NumberEncoder;
+
+        match self {
+            VectorValue::Int(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        // Always encode to INT / UINT instead of VAR INT to be efficient.
+                        if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
+                            output.push(datum::UINT_FLAG);
+                            output.encode_u64(val as u64)?;
+                        } else {
+                            output.push(datum::INT_FLAG);
+                            output.encode_i64(val)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Real(ref vec) => {
+                match vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::FLOAT_FLAG);
+                        output.encode_f64(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Decimal(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(val) => {
+                        output.push(datum::DECIMAL_FLAG);
+                        let (prec, frac) = val.prec_and_frac();
+                        output.encode_decimal(val, prec, frac)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Bytes(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::COMPACT_BYTES_FLAG);
+                        output.encode_compact_bytes(val)?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::DateTime(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::UINT_FLAG);
+                        output.encode_u64(val.to_packed_u64())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Duration(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::DURATION_FLAG);
+                        output.encode_i64(val.to_nanos())?;
+                    }
+                }
+                Ok(())
+            }
+            VectorValue::Json(ref vec) => {
+                match &vec[row_index] {
+                    None => {
+                        output.push(datum::NIL_FLAG);
+                    }
+                    Some(ref val) => {
+                        output.push(datum::JSON_FLAG);
+                        output.encode_json(val)?;
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -767,11 +957,8 @@ mod benches {
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut field_type = tipb::expression::FieldType::new();
+        field_type.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         b.iter(move || {
@@ -779,8 +966,8 @@ mod benches {
                 column
                     .push_datum(
                         test::black_box(&datum_raw),
-                        test::black_box(tz),
-                        test::black_box(&col_info),
+                        test::black_box(&tz),
+                        test::black_box(&field_type),
                     )
                     .unwrap();
             }

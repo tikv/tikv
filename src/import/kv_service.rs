@@ -76,7 +76,7 @@ impl ImportKv for ImportKVService {
     /// turn off write stall mechanism.
     fn switch_mode(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
@@ -89,11 +89,11 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
-                            info!("switch cluster {:?}", req.get_request());
+                            info!("switch cluster"; "req" => ?req.get_request());
                             Ok(())
                         }
                         Err(e) => {
-                            error!("switch cluster {:?}: {:?}", req.get_request(), e);
+                            error!("switch cluster failed"; "req" => ?req.get_request(), "err" => %e);
                             Err(e)
                         }
                     }
@@ -105,7 +105,7 @@ impl ImportKv for ImportKVService {
 
     fn open_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: OpenEngineRequest,
         sink: UnarySink<OpenEngineResponse>,
     ) {
@@ -126,7 +126,7 @@ impl ImportKv for ImportKVService {
 
     fn write_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<WriteEngineRequest>,
         sink: ClientStreamingSink<WriteEngineResponse>,
     ) {
@@ -183,7 +183,7 @@ impl ImportKv for ImportKVService {
 
     fn close_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CloseEngineRequest,
         sink: UnarySink<CloseEngineResponse>,
     ) {
@@ -214,7 +214,7 @@ impl ImportKv for ImportKVService {
 
     fn import_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: ImportEngineRequest,
         sink: UnarySink<ImportEngineResponse>,
     ) {
@@ -235,7 +235,7 @@ impl ImportKv for ImportKVService {
 
     fn cleanup_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CleanupEngineRequest,
         sink: UnarySink<CleanupEngineResponse>,
     ) {
@@ -258,7 +258,7 @@ impl ImportKv for ImportKVService {
     /// the database, because otherwise the read can be very slow.
     fn compact_cluster(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CompactClusterRequest,
         sink: UnarySink<CompactClusterResponse>,
     ) {
@@ -284,11 +284,11 @@ impl ImportKv for ImportKVService {
                     let client = Client::new(req.get_pd_addr(), 1)?;
                     match client.compact_cluster(&compact) {
                         Ok(_) => {
-                            info!("compact cluster {:?}", compact);
+                            info!("compact cluster"; "req" => ?compact);
                             Ok(())
                         }
                         Err(e) => {
-                            error!("compact cluster {:?}: {:?}", compact, e);
+                            error!("compact cluster failed"; "req" => ?compact, "err" => %e);
                             Err(e)
                         }
                     }

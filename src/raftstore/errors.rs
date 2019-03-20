@@ -16,6 +16,7 @@ use std::io;
 use std::net;
 use std::result;
 
+use crossbeam::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
 use crate::pd;
@@ -25,9 +26,20 @@ use raft;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use crate::util::{escape, transport};
+use crate::util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
+
+/// Describes why a message is discarded.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DiscardReason {
+    /// Channel is disconnected, message can't be delivered.
+    Disconnected,
+    /// Message is dropped due to some filter rules, usually in tests.
+    Filtered,
+    /// Channel runs out of capacity, message can't be delivered.
+    Full,
+}
 
 quick_error! {
     #[derive(Debug)]
@@ -60,7 +72,7 @@ quick_error! {
                     escape(region.get_end_key()),
                     region.get_id())
         }
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -128,11 +140,9 @@ quick_error! {
             description(err.description())
             display("Coprocessor {}", err)
         }
-        Transport(err: transport::Error) {
-            from()
-            cause(err)
-            description(err.description())
-            display("Transport {}", err)
+        Transport(reason: DiscardReason) {
+            description("failed to send a message")
+            display("Discard due to {:?}", reason)
         }
         Snapshot(err: SnapError) {
             from()
@@ -194,7 +204,7 @@ impl Into<errorpb::Error> for Error {
             Error::StaleCommand => {
                 errorpb.set_stale_command(errorpb::StaleCommand::new());
             }
-            Error::Transport(transport::Error::Discard(_)) => {
+            Error::Transport(reason) if reason == DiscardReason::Full => {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
@@ -203,5 +213,15 @@ impl Into<errorpb::Error> for Error {
         };
 
         errorpb
+    }
+}
+
+impl<T> From<TrySendError<T>> for Error {
+    #[inline]
+    fn from(e: TrySendError<T>) -> Error {
+        match e {
+            TrySendError::Full(_) => Error::Transport(DiscardReason::Full),
+            TrySendError::Disconnected(_) => Error::Transport(DiscardReason::Disconnected),
+        }
     }
 }

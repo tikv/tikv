@@ -33,6 +33,8 @@ export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
 export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+LATEST_AUDIT_VERSION = $(strip $(shell cargo search cargo-audit | head -n 1 | awk '{ gsub(/"/, "", $$3); print $$3 }'))
+CURRENT_AUDIT_VERSION = $(strip $(shell (cargo audit --version 2> /dev/null || echo "noop 0") | awk '{ print $$2 }'))
 
 default: release
 
@@ -41,16 +43,17 @@ default: release
 all: format build test
 
 pre-clippy: unset-override
-	@rustup component add clippy-preview
+	@rustup component add clippy
 
 clippy: pre-clippy
 	@cargo clippy --all --all-targets -- \
 		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cyclomatic_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
-		-A clippy::new_without_default_derive -A clippy::neg_cmp_op_on_partial_ord \
-		-A clippy::too_many_arguments -A clippy::excessive_precision -A clippy::collapsible_if \
-		-A clippy::blacklisted_name -A clippy::needless_range_loop
+		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
+		-A clippy::excessive_precision -A clippy::collapsible_if -A clippy::blacklisted_name \
+		-A clippy::needless_range_loop -D rust-2018-idioms -A clippy::redundant_closure \
+		-A clippy::match_wild_err_arm -A clippy::blacklisted_name
 
 dev: format clippy
 	@env FAIL_POINT=1 make test
@@ -59,7 +62,7 @@ build:
 	cargo build --features "${ENABLE_FEATURES}"
 
 ctl:
-	@cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
@@ -67,9 +70,10 @@ run:
 	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
-	@cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
+	bash etc/check-sse4_2.sh
 
 unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
@@ -111,14 +115,22 @@ unset-override:
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi
 
 pre-format: unset-override
-	@rustup component add rustfmt-preview
+	@rustup component add rustfmt
 
 format: pre-format
 	@cargo fmt --all -- --check >/dev/null || \
 	cargo fmt --all
 
+pre-audit:
+ifneq ($(LATEST_AUDIT_VERSION),$(CURRENT_AUDIT_VERSION))
+	cargo install cargo-audit --force
+endif
+
+audit: pre-audit
+	cargo audit
+
 clean:
-	@cargo clean
+	cargo clean
 
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" -- --nocapture

@@ -16,6 +16,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
@@ -42,7 +43,7 @@ enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
@@ -89,7 +90,7 @@ impl RocksEngine {
     pub fn new(
         path: &str,
         cfs: &[CfName],
-        cfs_opts: Option<Vec<CFOptions>>,
+        cfs_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -100,7 +101,7 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocksdb_util::new_engine(&path, cfs, cfs_opts)?);
+        let db = Arc::new(rocksdb_util::new_engine(&path, None, cfs, cfs_opts)?);
         box_try!(worker.start(Runner(Arc::clone(&db))));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -122,13 +123,13 @@ impl RocksEngine {
 }
 
 impl Display for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
 impl Debug for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "RocksDB [is_temp: {}]",
@@ -249,6 +250,14 @@ impl Engine for RocksEngine {
     }
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+            "snapshot failed"
+        )));
+        fail_point!("rockskv_async_snapshot_not_leader", |_| {
+            let mut header = ErrorHeader::new();
+            header.mut_not_leader().set_region_id(100);
+            Err(Error::Request(header))
+        });
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }

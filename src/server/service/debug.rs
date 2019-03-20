@@ -75,8 +75,13 @@ impl<T: RaftStoreRouter> Service<T> {
         }
     }
 
-    fn handle_response<F, P>(&self, ctx: RpcContext, sink: UnarySink<P>, resp: F, tag: &'static str)
-    where
+    fn handle_response<F, P>(
+        &self,
+        ctx: RpcContext<'_>,
+        sink: UnarySink<P>,
+        resp: F,
+        tag: &'static str,
+    ) where
         P: Send + 'static,
         F: Future<Item = P, Error = Error> + Send + 'static,
     {
@@ -89,7 +94,7 @@ impl<T: RaftStoreRouter> Service<T> {
 }
 
 impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
-    fn get(&mut self, ctx: RpcContext, mut req: GetRequest, sink: UnarySink<GetResponse>) {
+    fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
 
         let db = req.get_db();
@@ -111,7 +116,12 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
         self.handle_response(ctx, sink, f, TAG);
     }
 
-    fn raft_log(&mut self, ctx: RpcContext, req: RaftLogRequest, sink: UnarySink<RaftLogResponse>) {
+    fn raft_log(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: RaftLogRequest,
+        sink: UnarySink<RaftLogResponse>,
+    ) {
         const TAG: &str = "debug_raft_log";
 
         let region_id = req.get_region_id();
@@ -134,7 +144,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn region_info(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: RegionInfoRequest,
         sink: UnarySink<RegionInfoResponse>,
     ) {
@@ -167,7 +177,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn region_size(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut req: RegionSizeRequest,
         sink: UnarySink<RegionSizeResponse>,
     ) {
@@ -203,7 +213,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn scan_mvcc(
         &mut self,
-        _: RpcContext,
+        _: RpcContext<'_>,
         mut req: ScanMvccRequest,
         sink: ServerStreamingSink<ScanMvccResponse>,
     ) {
@@ -229,7 +239,12 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
         self.pool.spawn(future).forget();
     }
 
-    fn compact(&mut self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+    fn compact(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: CompactRequest,
+        sink: UnarySink<CompactResponse>,
+    ) {
         let debugger = self.debugger.clone();
         let f = self.pool.spawn_fn(move || {
             debugger
@@ -248,7 +263,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn inject_fail_point(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut req: InjectFailPointRequest,
         sink: UnarySink<InjectFailPointResponse>,
     ) {
@@ -271,7 +286,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn recover_fail_point(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut req: RecoverFailPointRequest,
         sink: UnarySink<RecoverFailPointResponse>,
     ) {
@@ -291,7 +306,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn list_fail_points(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         _: ListFailPointsRequest,
         sink: UnarySink<ListFailPointsResponse>,
     ) {
@@ -314,7 +329,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn get_metrics(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: GetMetricsRequest,
         sink: UnarySink<GetMetricsResponse>,
     ) {
@@ -339,7 +354,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn check_region_consistency(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: RegionConsistencyCheckRequest,
         sink: UnarySink<RegionConsistencyCheckResponse>,
     ) {
@@ -360,7 +375,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn modify_tikv_config(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         mut req: ModifyTikvConfigRequest,
         sink: UnarySink<ModifyTikvConfigResponse>,
     ) {
@@ -382,7 +397,7 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
 
     fn get_region_properties(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: GetRegionPropertiesRequest,
         sink: UnarySink<GetRegionPropertiesResponse>,
     ) {
@@ -422,26 +437,27 @@ fn region_detail<T: RaftStoreRouter>(
     raft_cmd.set_status_request(status_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
     future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(box e))
+        .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
-            rx.map_err(|e| Error::Other(box e)).and_then(move |mut r| {
-                if r.response.get_header().has_error() {
-                    let e = r.response.get_header().get_error();
-                    warn!("region_detail got error: {:?}", e);
-                    let msg = print_to_string(e);
-                    return Err(Error::Other(msg.into()));
-                }
-                let detail = r.response.take_status_response().take_region_detail();
-                debug!("region_detail got region detail: {:?}", detail);
-                let leader_store_id = detail.get_leader().get_store_id();
-                if leader_store_id != store_id {
-                    let msg = format!("Leader is on store {}", leader_store_id);
-                    return Err(Error::Other(msg.into()));
-                }
-                Ok(detail)
-            })
+            rx.map_err(|e| Error::Other(Box::new(e)))
+                .and_then(move |mut r| {
+                    if r.response.get_header().has_error() {
+                        let e = r.response.get_header().get_error();
+                        warn!("region_detail got error"; "err" => ?e);
+                        let msg = print_to_string(e);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    let detail = r.response.take_status_response().take_region_detail();
+                    debug!("region_detail got region detail"; "detail" => ?detail);
+                    let leader_store_id = detail.get_leader().get_store_id();
+                    if leader_store_id != store_id {
+                        let msg = format!("Leader is on store {}", leader_store_id);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    Ok(detail)
+                })
         })
 }
 
@@ -459,18 +475,19 @@ fn consistency_check<T: RaftStoreRouter>(
     raft_cmd.set_admin_request(admin_request);
 
     let (tx, rx) = oneshot::channel();
-    let cb = Callback::Read(box |resp| tx.send(resp).unwrap());
+    let cb = Callback::Read(Box::new(|resp| tx.send(resp).unwrap()));
     future::result(raft_router.send_command(raft_cmd, cb))
-        .map_err(|e| Error::Other(box e))
+        .map_err(|e| Error::Other(Box::new(e)))
         .and_then(move |_| {
-            rx.map_err(|e| Error::Other(box e)).and_then(move |r| {
-                if r.response.get_header().has_error() {
-                    let e = r.response.get_header().get_error();
-                    warn!("consistency-check got error: {:?}", e);
-                    let msg = print_to_string(e);
-                    return Err(Error::Other(msg.into()));
-                }
-                Ok(())
-            })
+            rx.map_err(|e| Error::Other(Box::new(e)))
+                .and_then(move |r| {
+                    if r.response.get_header().has_error() {
+                        let e = r.response.get_header().get_error();
+                        warn!("consistency-check got error"; "err" => ?e);
+                        let msg = print_to_string(e);
+                        return Err(Error::Other(msg.into()));
+                    }
+                    Ok(())
+                })
         })
 }

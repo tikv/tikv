@@ -289,16 +289,18 @@ where
             }
         }
 
-        let mailbox = 'fetch_box: {
+        let mailbox = {
             let mut boxes = self.normals.lock().unwrap();
-            if let Some(mailbox) = boxes.get_mut(&addr) {
-                break 'fetch_box mailbox.clone();
+            match boxes.get_mut(&addr) {
+                Some(mailbox) => mailbox.clone(),
+                None => {
+                    drop(boxes);
+                    if !connected {
+                        caches.remove(&addr);
+                    }
+                    return CheckDoResult::NotExist;
+                }
             }
-            drop(boxes);
-            if !connected {
-                caches.remove(&addr);
-            }
-            return CheckDoResult::NotExist;
         };
 
         let res = f(&mailbox);

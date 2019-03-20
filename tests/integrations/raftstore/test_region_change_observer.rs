@@ -31,7 +31,12 @@ struct TestObserver {
 impl Coprocessor for TestObserver {}
 
 impl RegionChangeObserver for TestObserver {
-    fn on_region_changed(&self, ctx: &mut ObserverContext, event: RegionChangeEvent, _: StateRole) {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
         self.sender.send((ctx.region().clone(), event)).unwrap();
     }
 }
@@ -48,14 +53,14 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
         cluster
             .sim
             .wl()
-            .post_create_coprocessor_host(box move |id, host| {
+            .post_create_coprocessor_host(Box::new(move |id, host| {
                 if id == 1 {
                     let (sender, receiver) = sync_channel(10);
                     host.registry
-                        .register_region_change_observer(1, box TestObserver { sender });
+                        .register_region_change_observer(1, Box::new(TestObserver { sender }));
                     tx.send(receiver).unwrap();
                 }
-            });
+            }));
         r1 = cluster.run_conf_change();
 
         // Only one node has node_id = 1

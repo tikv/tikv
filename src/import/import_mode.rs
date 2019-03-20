@@ -129,10 +129,13 @@ impl ImportModeCFOptions {
     }
 
     fn set_options(&self, db: &DB, cf_name: &str) -> Result<()> {
+        use crate::server::CONFIG_ROCKSDB_GAUGE;
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
-
+        CONFIG_ROCKSDB_GAUGE
+            .with_label_values(&[cf_name, "block_cache_size"])
+            .set(self.block_cache_size as f64);
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -154,6 +157,13 @@ impl ImportModeCFOptions {
 
         let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         db.set_options_cf(cf, tmp_opts.as_slice())?;
+        for (key, value) in &opts {
+            if let Ok(v) = value.parse::<f64>() {
+                CONFIG_ROCKSDB_GAUGE
+                    .with_label_values(&[cf_name, key])
+                    .set(v);
+            }
+        }
         Ok(())
     }
 }
@@ -205,7 +215,7 @@ mod tests {
     #[test]
     fn test_import_mode_switcher() {
         let temp_dir = TempDir::new("test_import_mode_switcher").unwrap();
-        let db = new_engine(temp_dir.path().to_str().unwrap(), &["a", "b"], None).unwrap();
+        let db = new_engine(temp_dir.path().to_str().unwrap(), None, &["a", "b"], None).unwrap();
 
         let import_db_options = ImportModeDBOptions::new();
         let normal_db_options = ImportModeDBOptions::new_options(&db);
