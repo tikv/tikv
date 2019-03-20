@@ -73,3 +73,35 @@ impl RpnFnLogicalOr {
         })
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnIntIsNull;
+
+impl_template_fn! { 1 arg @ RpnFnIntIsNull }
+
+impl RpnFnIntIsNull {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg0: &Option<i64>,
+    ) -> Result<Option<i64>> {
+        Ok(Some(arg0.is_none() as i64))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RpnFnUnaryNot;
+
+impl_template_fn! { 1 arg @ RpnFnUnaryNot }
+
+impl RpnFnUnaryNot {
+    #[inline(always)]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg0: &Option<i64>,
+    ) -> Result<Option<i64>> {
+        Ok(arg0.map(|arg| (arg == 0) as i64))
+    }
+}

@@ -490,7 +490,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[None, None]);
 
             // Then, fetch 3 rows. 0 rows remaining (but we allow that is_drained == false).
@@ -499,7 +499,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(-5), Some(10), None]
@@ -529,7 +529,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
@@ -558,7 +558,7 @@ mod tests {
                 &[Some(4), Some(5), Some(3), Some(1), Some(6)]
             );
             assert!(result.data[1].is_raw());
-            result.data[1].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[1].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Some(4.5), Some(0.1), None, Some(5.2), Some(4.5)]
@@ -633,7 +633,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5)]
@@ -644,7 +644,7 @@ mod tests {
                 &[Some(1), Some(3), Some(4)]
             );
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[2].decoded().as_int_slice(),
                 &[Some(10), Some(-5), None]
@@ -656,7 +656,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(0.1), Some(4.5)]
@@ -664,7 +664,7 @@ mod tests {
             assert!(result.data[1].is_decoded());
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(6)]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[None, None]);
         }
 
@@ -706,7 +706,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 1);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
@@ -734,7 +734,7 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(10), Some(-5), None, None, None]
@@ -745,7 +745,7 @@ mod tests {
                 &[Some(1), Some(3), Some(4), Some(5), Some(6)]
             );
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[2].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
@@ -773,13 +773,13 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 5);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[0].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(10), Some(-5), None, None, None]
             );
             assert!(result.data[1].is_raw());
-            result.data[1].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[1].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Some(5.2), None, Some(4.5), Some(0.1), Some(4.5)]
@@ -908,10 +908,10 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(Tz::utc(), &schema[1]).unwrap();
+            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(Tz::utc(), &schema[2]).unwrap();
+            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
         }
     }
