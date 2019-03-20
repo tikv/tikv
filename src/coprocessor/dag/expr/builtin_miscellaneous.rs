@@ -46,7 +46,7 @@ impl ScalarFunc {
         if !input_bytes.starts_with(&prefix_compat) {
             return Ok(Some(0));
         }
-        return Ok(Some(1));
+        Ok(Some(1))
     }
 
     pub fn is_ipv4_mapped<'a, 'b: 'a>(
@@ -67,7 +67,7 @@ impl ScalarFunc {
         if !input_bytes.starts_with(&prefix_mapped) {
             return Ok(Some(0));
         }
-        return Ok(Some(1));
+        Ok(Some(1))
     }
 
     pub fn inet_aton<'a, 'b: 'a>(
