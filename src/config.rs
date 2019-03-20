@@ -36,7 +36,8 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
+    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
+    DEFAULT_ROCKSDB_SUB_DIR,
 };
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
@@ -1330,10 +1331,11 @@ impl TiKvConfig {
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            // In v3 the default value of storage.data-dir changed
+            // In tikv 3.0 the default value of storage.data-dir changed
             // from "" to "./"
             let using_default_after_upgrade =
-                last_cfg.storage.data_dir == "" && self.storage.data_dir == "./";
+                last_cfg.storage.data_dir.is_empty() && self.storage.data_dir == DEFAULT_DATA_DIR;
+
             if !using_default_after_upgrade {
                 return Err(format!(
                     "storage data dir have been changed, former data dir is {}, \
