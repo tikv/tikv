@@ -187,12 +187,14 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     }
 
     // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
-    // tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+    // if let Err(e) = tikv::raftstore::store::maybe_upgrade_from_2_to_3(
     //     &raft_engine,
     //     db_path.to_str().unwrap(),
     //     kv_db_opts.clone(),
     //     &cfg.rocksdb,
-    // );
+    // ) {
+    //     fatal!("failed to upgrade from v2.x to v3.x: {:?}", e);
+    // };
 
     // Create kv engine, storage.
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
