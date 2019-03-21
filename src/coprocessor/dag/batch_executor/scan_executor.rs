@@ -37,6 +37,10 @@ pub trait ScanExecutorImpl: Send {
 
     fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec;
 
+    /// Accepts a key value pair and fills the column vector.
+    ///
+    /// The column vector does not need to be regular when there are errors during this process.
+    /// However if there is no error, the column vector must be regular.
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -124,6 +128,8 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     }
 
     /// Fills a column vector and returns whether or not all ranges are drained.
+    ///
+    /// The columns are ensured to be regular even if there are errors during the process.
     fn fill_column_vec(
         &mut self,
         expect_rows: usize,
@@ -154,7 +160,16 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
                     .last_mut()
                     .map_or((), |val| *val += 1);
 
-                self.imp.process_kv_pair(&key, &value, columns)?;
+                if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
+                    // When there are errors in `process_kv_pair`, columns' length may not be
+                    // identical. For example, the filling process may be partially done so that
+                    // first several columns have N rows while the rest have N-1 rows. Since we do
+                    // not immediately fail when there are errors, these irregular columns may
+                    // further cause future executors to panic. So let's truncate these columns to
+                    // make they all have N-1 rows in that case.
+                    columns.truncate_into_equal_length();
+                    return Err(e);
+                }
 
                 if columns.rows_len() >= expect_rows {
                     return Ok(false); // not drained
@@ -194,9 +209,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
-        // After calling `fill_column_vec`, columns' length may not be identical when some of the
-        // columns are correctly decoded while others are not. So let's truncate columns.
-        data.truncate_into_equal_length();
+        data.assert_columns_equal_length();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
