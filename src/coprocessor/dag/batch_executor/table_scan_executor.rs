@@ -58,8 +58,11 @@ impl<S: Store> BatchTableScanExecutor<S> {
             // - Prepare column default value (will be used to fill missing column later).
             if !ci.get_default_val().is_empty() {
                 columns_default_value.push(ci.take_default_val());
-            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL) {
-                // Empty value means that we need to use NULL as the default value.
+            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL)
+                || ci.get_pk_handle()
+            {
+                // Empty slice in default value means that we need to use NULL as the default value
+                // (except for PK).
                 columns_default_value.push(Vec::new());
             } else {
                 // default_value is not provided && flag contains NOT NULL:
