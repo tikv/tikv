@@ -32,7 +32,7 @@ mod aggregate;
 mod aggregation;
 mod index_scan;
 mod limit;
-mod scanner;
+pub mod scanner;
 mod selection;
 mod table_scan;
 mod topn;
