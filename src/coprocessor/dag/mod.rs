@@ -39,6 +39,7 @@ mod builder;
 pub mod executor;
 pub mod expr;
 pub mod handler;
+pub mod rpn_expr;
 
 pub use self::executor::{ScanOn, Scanner};
 pub use self::handler::DAGRequestHandler;
