@@ -137,9 +137,9 @@ pub fn raft_log_prefix(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_LOG_SUFFIX)
 }
 
-/// Decode raft raft key, return the region id and raft suffix type.
+/// Decode region raft key, return the region id and raft suffix type.
 pub fn decode_region_raft_key(key: &[u8]) -> Result<(u64, u8)> {
-    decode_region_key(REGION_RAFT_PREFIX_KEY, key, "raft")
+    decode_region_category_key(REGION_RAFT_PREFIX_KEY, key, "raft")
 }
 
 #[inline]
@@ -151,8 +151,8 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
     key
 }
 
-/// Decode region key, return the region id and meta suffix type.
-fn decode_region_key(prefix: &[u8], key: &[u8], which: &str) -> Result<(u64, u8)> {
+/// Decode region category key, return the region id and meta suffix type.
+fn decode_region_category_key(prefix: &[u8], key: &[u8], which: &str) -> Result<(u64, u8)> {
     if prefix.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
         return Err(box_err!(
             "invalid region {} key length for key {}",
@@ -176,7 +176,7 @@ fn decode_region_key(prefix: &[u8], key: &[u8], which: &str) -> Result<(u64, u8)
 
 /// Decode region meta key, return the region id and meta suffix type.
 pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
-    decode_region_key(REGION_META_PREFIX_KEY, key, "meta")
+    decode_region_category_key(REGION_META_PREFIX_KEY, key, "meta")
 }
 
 pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
