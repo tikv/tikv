@@ -27,8 +27,6 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     src: Src,
 
     conditions: Vec<RpnExpression>,
-
-    is_ended: bool,
 }
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src> {
@@ -48,7 +46,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
             context: EvalContext::new(config),
             src,
             conditions,
-            is_ended: false,
         })
     }
 }
@@ -62,38 +59,38 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
 
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-
         self.summary_collector.inc_iterations();
         let _guard = self.summary_collector.collect_scope_duration();
 
         let mut result = self.src.next_batch(expect_rows);
 
         let rows_len = result.data.rows_len();
-        let mut base_retain_map = vec![true; rows_len];
-        let mut head_retain_map = vec![false; rows_len];
+        if rows_len > 0 {
+            let mut base_retain_map = vec![true; rows_len];
+            let mut head_retain_map = vec![false; rows_len];
 
-        for condition in &self.conditions {
-            let r = condition.eval_as_mysql_bools(
-                &mut self.context,
-                rows_len,
-                self.src.schema(),
-                &mut result.data,
-                head_retain_map.as_mut_slice(),
-            );
-            if let Err(e) = r {
-                // TODO: We should not return error when it comes from unused rows.
-                result.is_drained = result.is_drained.and(Err(e));
-                return result;
+            for condition in &self.conditions {
+                let r = condition.eval_as_mysql_bools(
+                    &mut self.context,
+                    rows_len,
+                    self.src.schema(),
+                    &mut result.data,
+                    head_retain_map.as_mut_slice(),
+                );
+                if let Err(e) = r {
+                    // TODO: We should not return error when it comes from unused rows.
+                    result.is_drained = result.is_drained.and(Err(e));
+                    return result;
+                }
+                for i in 0..rows_len {
+                    base_retain_map[i] &= head_retain_map[i];
+                }
             }
-            for i in 0..rows_len {
-                base_retain_map[i] &= head_retain_map[i];
-            }
+
+            result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
+            self.summary_collector
+                .inc_produced_rows(result.data.rows_len());
         }
-
-        result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
-        self.summary_collector
-            .inc_produced_rows(result.data.rows_len());
 
         result.warnings.merge(&mut self.context.warnings);
         result

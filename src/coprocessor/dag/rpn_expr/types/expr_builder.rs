@@ -41,6 +41,20 @@ impl RpnExpressionBuilder {
         )?;
         Ok(RpnExpression::from(expr_nodes))
     }
+
+    /// Only used in tests, with a customized function mapper.
+    #[cfg(test)]
+    pub fn build_from_expr_tree_with_fn_mapper<F>(
+        tree_node: Expr,
+        fn_mapper: F,
+    ) -> Result<RpnExpression>
+    where
+        F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    {
+        let mut expr_nodes = Vec::new();
+        append_rpn_nodes_recursively(tree_node, &mut expr_nodes, &Tz::utc(), fn_mapper)?;
+        Ok(RpnExpression::from(expr_nodes))
+    }
 }
 
 /// Transforms eval tree nodes into RPN nodes.
@@ -275,11 +289,88 @@ fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::expr::tests::*;
     use super::*;
+
+    use super::super::RpnFnCallPayload;
 
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::dag::expr::EvalContext;
+    use crate::coprocessor::Result;
+
+    /// An RPN function for test. It accepts 1 int argument, returns float.
+    #[derive(Debug, Clone, Copy)]
+    struct FnA;
+
+    impl_template_fn! { 1 arg @ FnA }
+
+    impl FnA {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut EvalContext,
+            _payload: RpnFnCallPayload<'_>,
+            _v: &Option<i64>,
+        ) -> Result<Option<f64>> {
+            unreachable!()
+        }
+    }
+
+    /// An RPN function for test. It accepts 2 float arguments, returns int.
+    #[derive(Debug, Clone, Copy)]
+    struct FnB;
+
+    impl_template_fn! { 2 arg @ FnB }
+
+    impl FnB {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut EvalContext,
+            _payload: RpnFnCallPayload<'_>,
+            _v1: &Option<f64>,
+            _v2: &Option<f64>,
+        ) -> Result<Option<i64>> {
+            unreachable!()
+        }
+    }
+
+    /// An RPN function for test. It accepts 3 int arguments, returns int.
+    #[derive(Debug, Clone, Copy)]
+    struct FnC;
+
+    impl_template_fn! { 3 arg @ FnC }
+
+    impl FnC {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut EvalContext,
+            _payload: RpnFnCallPayload<'_>,
+            _v1: &Option<i64>,
+            _v2: &Option<i64>,
+            _v3: &Option<i64>,
+        ) -> Result<Option<i64>> {
+            unreachable!()
+        }
+    }
+
+    /// An RPN function for test. It accepts 3 float arguments, returns float.
+    #[derive(Debug, Clone, Copy)]
+    struct FnD;
+
+    impl_template_fn! { 3 arg @ FnD }
+
+    impl FnD {
+        #[inline(always)]
+        fn call(
+            _ctx: &mut EvalContext,
+            _payload: RpnFnCallPayload<'_>,
+            _v1: &Option<f64>,
+            _v2: &Option<f64>,
+            _v3: &Option<f64>,
+        ) -> Result<Option<f64>> {
+            unreachable!()
+        }
+    }
 
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support FnA ~ FnD. So let's just hard code some
