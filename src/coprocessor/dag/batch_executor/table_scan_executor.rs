@@ -283,7 +283,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     // default_value is not provided && flag contains NOT NULL:
                     // for a normal request this will never happen, so let's return an error.
                     return Err(box_err!(
-                        "Invalid request: default value must be provided for NOT NULL column (offset = {})",
+                        "Data is corrupted, missing data for NOT NULL column (offset = {})",
                         i
                     ));
                 };
