@@ -56,22 +56,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             schema.push(super::scan_executor::field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
-            if !ci.get_default_val().is_empty() {
-                columns_default_value.push(ci.take_default_val());
-            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL)
-                || ci.get_pk_handle()
-            {
-                // Empty slice in default value means that we need to use NULL as the default value
-                // (except for PK).
-                columns_default_value.push(Vec::new());
-            } else {
-                // default_value is not provided && flag contains NOT NULL:
-                // for a normal request this will never happen, so let's return an error.
-                return Err(box_err!(
-                    "Invalid request: default value must be provided for NOT NULL column (offset = {})",
-                    index
-                ));
-            }
+            columns_default_value.push(ci.take_default_val());
 
             // - Store the index of the PK handle.
             // - Check whether or not we don't need KV values (iff PK handle is given).
@@ -133,8 +118,7 @@ struct TableScanExecutorImpl {
     schema: Vec<FieldType>,
 
     /// The default value of corresponding columns in the schema. When column data is missing,
-    /// the default value will be used to fill the output. If corresponding slot is empty, it means
-    /// NULL should be used.
+    /// the default value will be used to fill the output.
     columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
@@ -286,11 +270,24 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
-                let default_value = if self.columns_default_value[i].is_empty() {
+                let default_value = if !self.columns_default_value[i].is_empty() {
+                    // default value is provided, use the default value
+                    self.columns_default_value[i].as_slice()
+                } else if !self.schema[i]
+                    .flag()
+                    .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
+                {
+                    // NULL is allowed, use NULL
                     datum::DATUM_DATA_NULL
                 } else {
-                    self.columns_default_value[i].as_slice()
+                    // default_value is not provided && flag contains NOT NULL:
+                    // for a normal request this will never happen, so let's return an error.
+                    return Err(box_err!(
+                        "Invalid request: default value must be provided for NOT NULL column (offset = {})",
+                        i
+                    ));
                 };
+
                 columns[i].push_raw(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
