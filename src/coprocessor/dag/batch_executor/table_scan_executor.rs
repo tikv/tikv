@@ -280,8 +280,6 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     // NULL is allowed, use NULL
                     datum::DATUM_DATA_NULL
                 } else {
-                    // default_value is not provided && flag contains NOT NULL:
-                    // for a normal request this will never happen, so let's return an error.
                     return Err(box_err!(
                         "Data is corrupted, missing data for NOT NULL column (offset = {})",
                         i
