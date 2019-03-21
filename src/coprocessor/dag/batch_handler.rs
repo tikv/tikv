@@ -109,6 +109,9 @@ impl RequestHandler for BatchDAGHandler {
                 Ok(f) => is_drained = f,
             }
 
+            // We will only get warnings limited by max_warning_count. Note that in future we
+            // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
+            // field.
             warnings.merge(&mut result.warnings);
 
             // Notice that rows_len == 0 doesn't mean that it is drained.

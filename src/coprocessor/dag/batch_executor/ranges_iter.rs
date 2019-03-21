@@ -39,8 +39,8 @@ pub trait PointRangePolicy: Send + Sync + 'static {
 /// A policy that respects point ranges.
 ///
 /// Notice that this exists because currently we use prefix_next() result as end_key to mark a range
-/// as point range. Once we have other clearer notation, e.g. a flag, we wont't need these policy
-/// any more.
+/// as point range. Once we have other clearer notation, e.g. a flag, we won't need these policy any
+/// more.
 pub struct PointRangeEnable;
 
 /// A policy that conditional respects point ranges.
@@ -111,7 +111,7 @@ impl<T: PointRangePolicy> RangesIterator<T> {
             None => IterStatus::Drained,
             Some(range) => {
                 if self.policy.is_point_range(&range) {
-                    self.in_range = false;
+                    // No need to set `in_range = true` because point range always drains.
                     IterStatus::NewPointRange(range)
                 } else {
                     self.in_range = true;

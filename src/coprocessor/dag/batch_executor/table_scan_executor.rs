@@ -53,9 +53,27 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
         let mut column_id_index = HashMap::default();
 
         for (index, mut ci) in columns_info.into_iter().enumerate() {
+            // For each column info, we need to extract the following info:
+            // - Corresponding field type (push into `schema`).
             schema.push(super::scan_executor::field_type_from_column_info(&ci));
-            columns_default_value.push(ci.take_default_val());
 
+            // - Prepare column default value (will be used to fill missing column later).
+            if !ci.get_default_val().is_empty() {
+                columns_default_value.push(ci.take_default_val());
+            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL) {
+                // Empty value means that we need to use NULL as the default value.
+                columns_default_value.push(Vec::new());
+            } else {
+                // default_value is not provided && flag contains NOT NULL:
+                // for a normal request this will never happen, so let's return an error.
+                return Err(box_err!(
+                    "Invalid request: default value must be provided for NOT NULL column (offset = {})",
+                    index
+                ));
+            }
+
+            // - Store the index of the PK handle.
+            // - Check whether or not we don't need KV values (iff PK handle is given).
             if ci.get_pk_handle() {
                 handle_index = Some(index);
             } else {
@@ -115,7 +133,8 @@ struct TableScanExecutorImpl {
     schema: Vec<FieldType>,
 
     /// The default value of corresponding columns in the schema. When column data is missing,
-    /// the default value will be used to fill the output.
+    /// the default value will be used to fill the output. If corresponding slot is empty, it means
+    /// NULL should be used.
     columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
@@ -212,7 +231,7 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
         if let Some(handle_index) = self.handle_index {
             let handle_id = table::decode_handle(key)?;
-            // TODO: We should avoid calling `push_int` repeatly. Instead we should specialize
+            // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
             // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
             columns[handle_index]
                 .mut_decoded()
@@ -267,19 +286,10 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
-                let default_value = if !self.columns_default_value[i].is_empty() {
-                    self.columns_default_value[i].as_slice()
-                } else if !self.schema[i]
-                    .flag()
-                    .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
-                {
+                let default_value = if self.columns_default_value[i].is_empty() {
                     datum::DATUM_DATA_NULL
                 } else {
-                    // For a normal request this will never happen, so let's return an error.
-                    return Err(box_err!(
-                        "Invalid request: default value must be provided for NOT NULL column (offset = {})",
-                        i
-                    ));
+                    self.columns_default_value[i].as_slice()
                 };
                 columns[i].push_raw(default_value);
             } else {
@@ -916,5 +926,201 @@ mod tests {
         }
     }
 
-    // TODO: Test locked
+    #[test]
+    fn test_locked_data() {
+        const TABLE_ID: i64 = 42;
+
+        let columns_info = vec![
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_pk_handle(true);
+                ci.set_column_id(1);
+                ci
+            },
+            {
+                let mut ci = ColumnInfo::new();
+                ci.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ci.set_column_id(2);
+                ci
+            },
+        ];
+
+        let schema = vec![
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+        ];
+
+        let mut kv = vec![];
+        {
+            // row 0: not locked
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 0));
+            let value = table::encode_row(vec![Datum::I64(7)], &[2]).unwrap();
+            kv.push((key, Ok(value)));
+        }
+        {
+            // row 1: locked
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 1));
+            let value =
+                crate::storage::txn::Error::Mvcc(crate::storage::mvcc::Error::KeyIsLocked {
+                    // We won't check error detail in tests, so we can just fill fields casually.
+                    key: vec![],
+                    primary: vec![],
+                    ts: 1,
+                    ttl: 2,
+                });
+            kv.push((key, Err(value)));
+        }
+        {
+            // row 2: not locked
+            let key = Key::from_raw(&table::encode_row_key(TABLE_ID, 2));
+            let value = table::encode_row(vec![Datum::I64(5)], &[2]).unwrap();
+            kv.push((key, Ok(value)));
+        }
+
+        let key_range_point: Vec<_> = kv
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let mut r = KeyRange::new();
+                r.set_start(table::encode_row_key(TABLE_ID, index as i64));
+                r.set_end(r.get_start().to_vec());
+                convert_to_prefix_next(r.mut_end());
+                r
+            })
+            .collect();
+
+        let store = FixtureStore::new(kv.into_iter().collect());
+
+        // Case 1: row 0 + row 1 + row 2
+        // We should get row 0 and error because no further rows should be scanned when there is
+        // an error.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![
+                    key_range_point[0].clone(),
+                    key_range_point[1].clone(),
+                    key_range_point[2].clone(),
+                ],
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 1);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
+        }
+
+        // Let's also repeat case 1 for smaller batch size
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![
+                    key_range_point[0].clone(),
+                    key_range_point[1].clone(),
+                    key_range_point[2].clone(),
+                ],
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(1);
+            assert!(!result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 1);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
+
+            let result = executor.next_batch(1);
+            assert!(result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 0);
+        }
+
+        // Case 2: row 1 + row 2
+        // We should get error and no row, for the same reason as above.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![key_range_point[1].clone(), key_range_point[2].clone()],
+                false,
+            )
+            .unwrap();
+
+            let result = executor.next_batch(10);
+            assert!(result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 0);
+        }
+
+        // Case 3: row 2 + row 0
+        // We should get row 2 and row 0. There is no error.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![key_range_point[2].clone(), key_range_point[0].clone()],
+                false,
+            )
+            .unwrap();
+
+            let mut result = executor.next_batch(10);
+            assert!(!result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 2);
+            assert!(result.data[0].is_decoded());
+            assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(2), Some(0)]);
+            assert!(result.data[1].is_raw());
+            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(7)]);
+        }
+
+        // Case 4: row 1
+        // We should get error.
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                columns_info.clone(),
+                vec![key_range_point[1].clone()],
+                false,
+            )
+            .unwrap();
+
+            let result = executor.next_batch(10);
+            assert!(result.is_drained.is_err());
+            assert_eq!(result.data.columns_len(), 2);
+            assert_eq!(result.data.rows_len(), 0);
+        }
+    }
 }

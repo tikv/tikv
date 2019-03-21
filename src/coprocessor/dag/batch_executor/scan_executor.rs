@@ -37,6 +37,10 @@ pub trait ScanExecutorImpl: Send {
 
     fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec;
 
+    /// Accepts a key value pair and fills the column vector.
+    ///
+    /// The column vector does not need to be regular when there are errors during this process.
+    /// However if there is no error, the column vector must be regular.
     fn process_kv_pair(
         &mut self,
         key: &[u8],
@@ -131,14 +135,15 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         Ok(value.map(move |v| (key, v)))
     }
 
+    /// Fills a column vector and returns whether or not all ranges are drained.
+    ///
+    /// The columns are ensured to be regular even if there are errors during the process.
     fn fill_column_vec(
         &mut self,
         expect_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
         assert!(expect_rows > 0);
-
-        let mut is_drained = false;
 
         loop {
             let range = self.ranges.next();
@@ -154,8 +159,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
                 }
                 super::ranges_iter::IterStatus::Continue => self.scan_next()?,
                 super::ranges_iter::IterStatus::Drained => {
-                    is_drained = true;
-                    break;
+                    return Ok(true); // drained
                 }
             };
             if let Some((key, value)) = some_row {
@@ -164,18 +168,25 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
                     .last_mut()
                     .map_or((), |val| *val += 1);
 
-                self.imp.process_kv_pair(&key, &value, columns)?;
+                if let Err(e) = self.imp.process_kv_pair(&key, &value, columns) {
+                    // When there are errors in `process_kv_pair`, columns' length may not be
+                    // identical. For example, the filling process may be partially done so that
+                    // first several columns have N rows while the rest have N-1 rows. Since we do
+                    // not immediately fail when there are errors, these irregular columns may
+                    // further cause future executors to panic. So let's truncate these columns to
+                    // make they all have N-1 rows in that case.
+                    columns.truncate_into_equal_length();
+                    return Err(e);
+                }
 
                 if columns.rows_len() >= expect_rows {
-                    break;
+                    return Ok(false); // not drained
                 }
             } else {
                 // No more row in the range.
                 self.ranges.notify_drained();
             }
         }
-
-        Ok(is_drained)
     }
 }
 
@@ -211,20 +222,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
-        // After calling `fill_column_vec`, columns' length may not be identical when some of the
-        // columns are correctly decoded while others are not. So let's trim columns.
-        {
-            let mut min_len = data.rows_len();
-            for col in data.as_ref() {
-                min_len = min_len.min(col.len());
-            }
-            for col in data.as_mut() {
-                col.truncate(min_len);
-            }
-            data.assert_columns_equal_length();
-        }
-
-        self.summary_collector.inc_produced_rows(data.rows_len());
+        data.assert_columns_equal_length();
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
@@ -232,8 +230,8 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         // ignore this error.
 
         match &is_drained {
-            Err(_) => self.is_ended = true,
-            Ok(true) => self.is_ended = true,
+            // Note: `self.is_ended` is only used for assertion purpose.
+            Err(_) | Ok(true) => self.is_ended = true,
             Ok(false) => {}
         };
 

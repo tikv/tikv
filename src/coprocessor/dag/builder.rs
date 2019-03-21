@@ -92,7 +92,10 @@ impl DAGBuilder {
                     for column in descriptor.get_columns() {
                         let eval_type = EvalType::try_from(column.tp());
                         if eval_type.is_err() {
-                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
                             return false;
                         }
                     }
@@ -102,7 +105,10 @@ impl DAGBuilder {
                     for column in descriptor.get_columns() {
                         let eval_type = EvalType::try_from(column.tp());
                         if eval_type.is_err() {
-                            info!("Coprocessor request cannot be batched because column eval type {:?} is not supported", eval_type);
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
                             return false;
                         }
                     }
@@ -112,15 +118,18 @@ impl DAGBuilder {
                     let conditions = descriptor.get_conditions();
                     for c in conditions {
                         if !check_condition(c) {
-                            info!("Coprocessor request cannot be batched because condition {:?} is not supported", c);
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_condition" => ?c,
+                            );
                             return false;
                         }
                     }
                 }
                 _ => {
-                    info!(
-                        "Coprocessor request cannot be batched because {:?} is not supported",
-                        ed.get_tp()
+                    debug!(
+                        "Coprocessor request cannot be batched";
+                        "unsupported_executor_tp" => ?ed.get_tp(),
                     );
                     return false;
                 }
