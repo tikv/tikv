@@ -404,7 +404,7 @@ impl Peer {
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        let l = hash_u64(self.region_id) as usize % ctx.local_readers.len();
+        let l = hash_u64(self.region_id, ctx.local_readers.len() as u64) as usize;
         if let Err(e) = ctx.local_readers[l].schedule(ReadTask::register(self)) {
             info!(
                 "failed to schedule local reader, are we shutting down?";
@@ -1349,7 +1349,7 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
             "update" => %update,
         );
-        let l = hash_u64(self.region_id) as usize % local_readers.len();
+        let l = hash_u64(self.region_id, local_readers.len() as u64) as usize;
         if let Err(e) = local_readers[l].schedule(update) {
             info!(
                 "failed to update read progress, are we shutting down?";

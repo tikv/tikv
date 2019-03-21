@@ -124,7 +124,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         let region_id = cmd.request.get_header().get_region_id();
         if ReadTask::acceptable(&cmd.request) {
             // Use hash to select a local reader.
-            let l = hash_u64(region_id) as usize % self.local_readers_ch.len();
+            let l = hash_u64(region_id, self.local_readers_ch.len() as u64) as usize;
             self.local_readers_ch[l]
                 .schedule(ReadTask::read(cmd))
                 .map_err(|e| box_err!(e))

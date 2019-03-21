@@ -1204,7 +1204,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
-        let l = hash_u64(region_id) as usize % self.ctx.local_readers.len();
+        let l = hash_u64(region_id, self.ctx.local_readers.len() as u64) as usize;
         if self.ctx.local_readers[l]
             .schedule(ReadTask::destroy(region_id))
             .is_err()
