@@ -14,7 +14,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
@@ -28,6 +28,7 @@ use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use rocksdb::{Writable, WriteBatch, DB};
 
+use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
@@ -244,7 +245,7 @@ pub struct PeerStorage {
     last_term: u64,
 
     snap_state: RefCell<SnapState>,
-    snap_gen_task: RefCell<Option<GenSnapTask>>,
+    gen_snap_task: RefCell<Option<GenSnapTask>>,
     region_sched: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
@@ -271,40 +272,6 @@ pub struct ApplySnapResult {
     // prev_region is the region before snapshot applied.
     pub prev_region: metapb::Region,
     pub region: metapb::Region,
-}
-
-pub struct GenSnapTask {
-    pub region_id: u64,
-    snap_notifier: SyncSender<Snapshot>,
-    region_sched: Scheduler<RegionTask>,
-}
-
-impl GenSnapTask {
-    pub fn new(
-        region_id: u64,
-        snap_notifier: SyncSender<Snapshot>,
-        region_sched: Scheduler<RegionTask>,
-    ) -> GenSnapTask {
-        GenSnapTask {
-            region_id,
-            snap_notifier,
-            region_sched,
-        }
-    }
-
-    pub fn generate_snapshot(self, engines: &Engines) -> Result<()> {
-        let snapshot = RegionTask::Gen {
-            region_id: self.region_id,
-            notifier: self.snap_notifier,
-            // This snapshot may be held for a long time, which may cause too many
-            // open files in rocksdb.
-            // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
-            raft_snap: DbSnapshot::new(engines.raft.clone()),
-            kv_snap: DbSnapshot::new(engines.kv.clone()),
-        };
-        box_try!(self.region_sched.schedule(snapshot));
-        Ok(())
-    }
 }
 
 /// Returned by `PeerStorage::handle_raft_ready`, used for recording changed status of
@@ -510,7 +477,7 @@ impl PeerStorage {
             raft_state,
             apply_state,
             snap_state: RefCell::new(SnapState::Relax),
-            snap_gen_task: RefCell::new(None),
+            gen_snap_task: RefCell::new(None),
             region_sched,
             snap_tried_cnt: RefCell::new(0),
             tag,
@@ -797,13 +764,17 @@ impl PeerStorage {
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), tx, self.region_sched.clone());
-        let mut snap_gen_task = self.snap_gen_task.borrow_mut();
-        assert!(snap_gen_task.is_none());
-        *snap_gen_task = Some(task);
+        let task = GenSnapTask::new(self.region.get_id(), tx);
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(task);
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
+    }
+
+    pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
+        self.gen_snap_task.get_mut().take()
     }
 
     // Append the given entries to the raft log using previous last index or self.last_index.
@@ -1164,20 +1135,14 @@ impl PeerStorage {
     }
 
     /// Update the memory state after ready changes are flushed to disk successfully.
-    pub fn post_ready(
-        &mut self,
-        ctx: InvokeContext,
-    ) -> (Option<ApplySnapResult>, Option<GenSnapTask>) {
-        // The snapshot gen task need to be sent the apply system.
-        let gen_snap = self.snap_gen_task.borrow_mut().take();
-
+    pub fn post_ready(&mut self, ctx: InvokeContext) -> Option<ApplySnapResult> {
         self.raft_state = ctx.raft_state;
         self.apply_state = ctx.apply_state;
         self.last_term = ctx.last_term;
         // If we apply snapshot ok, we should update some infos like applied index too.
         let snap_region = match ctx.snap_region {
             Some(r) => r,
-            None => return (None, gen_snap),
+            None => return None,
         };
         // cleanup data before scheduling apply task
         if self.is_initialized() {
@@ -1199,13 +1164,10 @@ impl PeerStorage {
         let prev_region = self.region().clone();
         self.region = snap_region;
 
-        (
-            Some(ApplySnapResult {
-                prev_region,
-                region: self.region().clone(),
-            }),
-            gen_snap,
-        )
+        Some(ApplySnapResult {
+            prev_region,
+            region: self.region().clone(),
+        })
     }
 }
 
@@ -1831,9 +1793,9 @@ mod tests {
         let td = TempDir::new("tikv-store-test").unwrap();
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
-        let mut worker = Worker::new("snap-manager");
+        let mut worker = Worker::new("region-worker");
         let sched = worker.scheduler();
-        let mut s = new_storage_from_ents(sched, &td, &ents);
+        let mut s = new_storage_from_ents(sched.clone(), &td, &ents);
         let runner = RegionRunner::new(s.engines.clone(), mgr, 0, true, Duration::from_secs(0));
         worker.start(runner).unwrap();
         let snap = s.snapshot();
@@ -1841,8 +1803,10 @@ mod tests {
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
-        let gen_task = s.snap_gen_task.borrow_mut().take().unwrap();
-        gen_task.generate_snapshot(&s.engines).unwrap();
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+        gen_task
+            .generate_and_schedule_snapshot(&s.engines, &sched)
+            .unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
             ref s => panic!("unexpected state: {:?}", s),
@@ -1903,8 +1867,10 @@ mod tests {
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
-        let gen_task = s.snap_gen_task.borrow_mut().take().unwrap();
-        gen_task.generate_snapshot(&s.engines).unwrap();
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+        gen_task
+            .generate_and_schedule_snapshot(&s.engines, &sched)
+            .unwrap();
         match *s.snap_state.borrow() {
             SnapState::Generating(ref rx) => {
                 rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -1918,15 +1884,19 @@ mod tests {
         }
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot().unwrap_err(), unavailable);
-        let gen_task = s.snap_gen_task.borrow_mut().take().unwrap();
-        gen_task.generate_snapshot(&s.engines).unwrap_err();
+        let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+        gen_task
+            .generate_and_schedule_snapshot(&s.engines, &sched)
+            .unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot().unwrap_err(), unavailable);
-            let gen_task = s.snap_gen_task.borrow_mut().take().unwrap();
-            gen_task.generate_snapshot(&s.engines).unwrap_err();
+            let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
+            gen_task
+                .generate_and_schedule_snapshot(&s.engines, &sched)
+                .unwrap_err();
             assert_eq!(*s.snap_tried_cnt.borrow(), cnt + 1);
         }
 
@@ -2140,8 +2110,10 @@ mod tests {
         );
         worker.start(runner).unwrap();
         assert!(s1.snapshot().is_err());
-        let gen_task = s1.snap_gen_task.borrow_mut().take().unwrap();
-        gen_task.generate_snapshot(&s1.engines).unwrap();
+        let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
+        gen_task
+            .generate_and_schedule_snapshot(&s1.engines, &sched)
+            .unwrap();
         let snap1 = match *s1.snap_state.borrow() {
             SnapState::Generating(ref rx) => rx.recv_timeout(Duration::from_secs(3)).unwrap(),
             ref s => panic!("unexpected state: {:?}", s),

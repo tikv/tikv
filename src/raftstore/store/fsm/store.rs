@@ -656,7 +656,7 @@ pub struct RaftPollerBuilder<T, C> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
     local_reader: Scheduler<ReadTask>,
-    region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter,
     pub router: RaftRouter,
     compact_scheduler: Scheduler<CompactTask>,
