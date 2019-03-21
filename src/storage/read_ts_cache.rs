@@ -299,10 +299,26 @@ impl ReadTsCache {
     fn make_ready(inner: &Inner, region_id: u64, version: u64, tso: u64) {
         let slot = region_slot(region_id);
         let map = inner.max_read_ts_map[slot].rl();
-        let e = Arc::clone(map.get(&region_id).unwrap());
+        let e = match map.get(&region_id).map(Arc::clone) {
+            Some(e) => e,
+            None => {
+                info!(
+                    "get tso finished but the region doesn't exist in the map";
+                    "region_id" => region_id
+                );
+                return;
+            }
+        };
+
         drop(map);
         let mut e = e.wl();
         if e.version != version {
+            info!(
+                "get tso finished but the region version doesn't match";
+                "region_id" => region_id,
+                "old_version" => e.version,
+                "version" => version
+            );
             return;
         }
         if tso > e.max_read_ts {
