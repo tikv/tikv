@@ -12,6 +12,20 @@
 // limitations under the License.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    pub label_enum RawReadKind {
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
+    }
+
+    pub struct SchedDurationVec: Histogram {
+        "type" => RawReadKind,
+    }
+}
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -43,6 +57,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
+        SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",
