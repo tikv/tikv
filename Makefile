@@ -104,8 +104,8 @@ test:
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
-	bash etc/check-bins-for-jemalloc.sh
-	bash etc/check-sse4_2.sh
+	bash scripts/check-bins-for-jemalloc.sh
+	bash scripts/check-sse4_2.sh
 
 bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture
@@ -197,14 +197,14 @@ x-build-dev-opt:
 	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
 	X_CARGO_RELEASE=1 \
 	X_CARGO_CONFIG_FILE="${DEV_OPT_CONFIG}" \
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 x-build-dev-nopt:
 	X_CARGO_CMD=build \
 	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
 	X_CARGO_RELEASE=0 \
 	X_CARGO_CONFIG_FILE="${DEV_NOPT_CONFIG}" \
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 # This is a profile for _actual releases_. Devs should almost never be using
 # this. It is a very slow build, and only a bit faster.
@@ -213,7 +213,7 @@ x-build-prod:
 	X_CARGO_FEATURES="${ENABLE_FEATURES}" \
 	X_CARGO_RELEASE=1 \
 	X_CARGO_CONFIG_FILE="${PROD_CONFIG}" \
-	bash etc/run-cargo.sh
+	bash scripts/run-cargo.sh
 
 x-build: x-build-dev-nopt
 
