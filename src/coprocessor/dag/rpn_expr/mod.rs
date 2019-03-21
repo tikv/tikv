@@ -20,7 +20,7 @@ mod impl_dummy;
 mod impl_op;
 
 pub use self::function::RpnFunction;
-pub use self::types::RpnExpressionNodeVec;
+pub use self::types::{RpnExpression, RpnExpressionBuilder};
 
 use tipb::expression::ScalarFuncSig;
 

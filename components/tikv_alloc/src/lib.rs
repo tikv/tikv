@@ -106,9 +106,12 @@ static ALLOC: std::alloc::System = std::alloc::System;
 
 pub use self::imp::*;
 
+pub type AllocStats = Vec<(&'static str, usize)>;
+
 // The implementation of this crate when jemalloc is turned on
 #[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
 mod imp {
+    use super::AllocStats;
     use jemalloc_ctl::{stats, Epoch as JeEpoch};
     use jemallocator::ffi::malloc_stats_print;
     use libc::{self, c_char, c_void};
@@ -128,27 +131,18 @@ mod imp {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    pub struct JemallocStats {
-        pub allocated: usize,
-        pub active: usize,
-        pub metadata: usize,
-        pub resident: usize,
-        pub mapped: usize,
-        pub retained: usize,
-    }
-
-    pub fn fetch_stats() -> io::Result<JemallocStats> {
+    pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
         // Stats are cached. Need to advance epoch to refresh.
         JeEpoch::new()?.advance()?;
 
-        Ok(JemallocStats {
-            allocated: stats::allocated()?,
-            active: stats::active()?,
-            metadata: stats::metadata()?,
-            resident: stats::resident()?,
-            mapped: stats::mapped()?,
-            retained: stats::retained()?,
-        })
+        Ok(Some(vec![
+            ("allocated", stats::allocated()?),
+            ("active", stats::active()?),
+            ("metadata", stats::metadata()?),
+            ("resident", stats::resident()?),
+            ("mapped", stats::mapped()?),
+            ("retained", stats::retained()?),
+        ]))
     }
 
     #[allow(clippy::cast_ptr_alignment)]
@@ -304,8 +298,16 @@ mod imp {
 
 #[cfg(not(all(unix, not(fuzzing), not(feature = "no-jemalloc"))))]
 mod imp {
+
+    use super::AllocStats;
+    use std::io;
+
     pub fn dump_stats() -> String {
         String::new()
     }
     pub fn dump_prof(_path: Option<&str>) {}
+
+    pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
+        Ok(None)
+    }
 }

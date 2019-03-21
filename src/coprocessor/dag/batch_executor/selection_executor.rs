@@ -18,7 +18,7 @@ use tipb::expression::FieldType;
 
 use super::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-use crate::coprocessor::dag::rpn_expr::RpnExpressionNodeVec;
+use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
 pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
@@ -26,7 +26,7 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
 
-    conditions: Vec<RpnExpressionNodeVec>,
+    conditions: Vec<RpnExpression>,
 
     is_ended: bool,
 }
@@ -40,7 +40,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
     ) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         for def in conditions_def {
-            conditions.push(RpnExpressionNodeVec::build_from_expr_tree(def, &config.tz)?);
+            conditions.push(RpnExpressionBuilder::build_from_expr_tree(def, &config.tz)?);
         }
 
         Ok(Self {

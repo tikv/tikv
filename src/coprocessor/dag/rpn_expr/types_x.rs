@@ -22,231 +22,7 @@ use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::{Error, Result};
 
-/// A structure for holding argument values and type information of arguments and return values.
-///
-/// It can simplify function signatures without losing performance where only argument values are
-/// needed in most cases.
-///
-/// NOTE: This structure must be very fast to copy because it will be passed by value directly
-/// (i.e. Copy), instead of by reference, for **EACH** function invocation.
-#[derive(Clone, Copy)]
-pub struct RpnFnCallPayload<'a> {
-    raw_args: &'a [RpnStackNode<'a>],
-    ret_field_type: &'a FieldType,
-}
-
-impl<'a> RpnFnCallPayload<'a> {
-    /// The number of arguments.
-    #[inline]
-    pub fn args_len(&'a self) -> usize {
-        self.raw_args.len()
-    }
-
-    /// Gets the raw argument at specific position.
-    #[inline]
-    pub fn raw_arg_at(&'a self, position: usize) -> &'a RpnStackNode<'a> {
-        &self.raw_args[position]
-    }
-
-    /// Gets the field type of the argument at specific position.
-    #[inline]
-    pub fn field_type_at(&'a self, position: usize) -> &'a FieldType {
-        self.raw_args[position].field_type()
-    }
-
-    /// Gets the field type of the return value.
-    #[inline]
-    pub fn return_field_type(&'a self) -> &'a FieldType {
-        self.ret_field_type
-    }
-}
-
-/// Represents a vector value node in the RPN stack.
-///
-/// It can be either an owned node or a reference node.
-///
-/// When node comes from a column reference, it is a reference node (both value and field_type
-/// are references).
-///
-/// When nodes comes from an evaluated result, it is an owned node.
-pub enum RpnStackNodeVectorValue<'a> {
-    /// There can be frequent stack push & pops, so we wrap this field in a `Box` to reduce move
-    /// cost.
-    // TODO: Check whether it is more efficient to just remove the box.
-    Owned(Box<VectorValue>),
-    Ref(&'a VectorValue),
-}
-
-impl<'a> AsRef<VectorValue> for RpnStackNodeVectorValue<'a> {
-    #[inline]
-    fn as_ref(&self) -> &VectorValue {
-        match self {
-            RpnStackNodeVectorValue::Owned(ref value) => &value,
-            RpnStackNodeVectorValue::Ref(ref value) => *value,
-        }
-    }
-}
-
-/// A type for each node in the RPN evaluation stack. It can be one of a scalar value node or a
-/// vector value node. The vector value node can be either an owned vector value or a reference.
-pub enum RpnStackNode<'a> {
-    /// Represents a scalar value. Comes from a constant node in expression list.
-    Scalar {
-        value: &'a ScalarValue,
-        field_type: &'a FieldType,
-    },
-
-    /// Represents a vector value. Comes from a column reference or evaluated result.
-    Vector {
-        value: RpnStackNodeVectorValue<'a>,
-        field_type: &'a FieldType,
-    },
-}
-
-impl<'a> RpnStackNode<'a> {
-    /// Gets the field type.
-    #[inline]
-    pub fn field_type(&self) -> &FieldType {
-        match self {
-            RpnStackNode::Scalar { ref field_type, .. } => field_type,
-            RpnStackNode::Vector { ref field_type, .. } => field_type,
-        }
-    }
-
-    /// Borrows the inner scalar value for `Scalar` variant.
-    #[inline]
-    pub fn scalar_value(&self) -> Option<&ScalarValue> {
-        match self {
-            RpnStackNode::Scalar { ref value, .. } => Some(*value),
-            RpnStackNode::Vector { .. } => None,
-        }
-    }
-
-    /// Borrows the inner vector value for `Vector` variant.
-    #[inline]
-    pub fn vector_value(&self) -> Option<&VectorValue> {
-        match self {
-            RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { ref value, .. } => Some(value.as_ref()),
-        }
-    }
-
-    /// Borrows the inner scalar or vector value as a vector like value.
-    #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
-        match self {
-            RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_ref().as_vector_like(),
-        }
-    }
-
-    /// Whether this is a `Scalar` variant.
-    #[inline]
-    pub fn is_scalar(&self) -> bool {
-        match self {
-            RpnStackNode::Scalar { .. } => true,
-            _ => false,
-        }
-    }
-
-    /// Whether this is a `Vector` variant.
-    #[inline]
-    pub fn is_vector(&self) -> bool {
-        match self {
-            RpnStackNode::Vector { .. } => true,
-            _ => false,
-        }
-    }
-}
-
-/// A type for each node in the RPN expression list.
-#[derive(Debug)]
-pub enum RpnExpressionNode {
-    /// Represents a function call.
-    FnCall {
-        func: Box<dyn RpnFunction>,
-
-        /// The field type of the return value.
-        field_type: FieldType,
-    },
-
-    /// Represents a scalar constant value.
-    Constant {
-        value: ScalarValue,
-
-        /// The field type of the constant.
-        field_type: FieldType,
-    },
-
-    /// Represents a reference to a column in the columns specified in `eval()`.
-    ColumnRef {
-        offset: usize,
-        // The field type of the column itself is specified in `eval()`, so there is no
-        // `field_type` here.
-    },
-}
-
-impl RpnExpressionNode {
-    /// Gets the field type.
-    ///
-    /// For `FnCall` variant, the field type of the return value is returned.
-    /// For `Constant` variant, the field type of the value is returned.
-    #[inline]
-    pub fn field_type(&self) -> Option<&FieldType> {
-        match self {
-            RpnExpressionNode::FnCall { ref field_type, .. } => Some(field_type),
-            RpnExpressionNode::Constant { ref field_type, .. } => Some(field_type),
-            RpnExpressionNode::ColumnRef { .. } => None,
-        }
-    }
-
-    /// Borrows the function instance for `FnCall` variant.
-    #[inline]
-    pub fn fn_call_func(&self) -> Option<&dyn RpnFunction> {
-        match self {
-            RpnExpressionNode::FnCall { ref func, .. } => Some(&*func),
-            _ => None,
-        }
-    }
-
-    /// Borrows the constant value for `Constant` variant.
-    #[inline]
-    pub fn constant_value(&self) -> Option<&ScalarValue> {
-        match self {
-            RpnExpressionNode::Constant { ref value, .. } => Some(value),
-            _ => None,
-        }
-    }
-
-    /// Gets the column offset for `ColumnRef` variant.
-    #[inline]
-    pub fn column_ref_offset(&self) -> Option<usize> {
-        match self {
-            RpnExpressionNode::ColumnRef { ref offset, .. } => Some(*offset),
-            _ => None,
-        }
-    }
-}
-
-/// An RPN expression node list which represents an expression in Reverse Polish notation.
-#[derive(Debug)]
-pub struct RpnExpressionNodeVec(Vec<RpnExpressionNode>);
-
-impl std::ops::Deref for RpnExpressionNodeVec {
-    type Target = Vec<RpnExpressionNode>;
-
-    fn deref(&self) -> &Vec<RpnExpressionNode> {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for RpnExpressionNodeVec {
-    fn deref_mut(&mut self) -> &mut Vec<RpnExpressionNode> {
-        &mut self.0
-    }
-}
-
-impl RpnExpressionNodeVec {
+impl RpnExpression {
     /// Builds the RPN expression node list from an expression definition tree.
     // TODO: Deprecate it in Coprocessor V2 DAG interface.
     pub fn build_from_expr_tree(tree_node: Expr, time_zone: &Tz) -> Result<Self> {
@@ -257,110 +33,9 @@ impl RpnExpressionNodeVec {
             &mut expr_nodes,
             super::map_pb_sig_to_rpn_func,
         )?;
-        Ok(RpnExpressionNodeVec(expr_nodes))
+        Ok(RpnExpression(expr_nodes))
     }
 
-    /// Evaluates the expression into a vector. If referred columns are not decoded, they will be
-    /// decoded according to the given schema.
-    pub fn eval<'a>(
-        &'a self,
-        context: &mut EvalContext,
-        rows: usize,
-        schema: &'a [FieldType],
-        columns: &'a mut LazyBatchColumnVec,
-    ) -> Result<RpnStackNode<'a>> {
-        let mut stack = Vec::with_capacity(self.0.len());
-
-        // First loop: ensure referred columns are decoded.
-        for node in &self.0 {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
-            }
-        }
-
-        // Second loop: evaluate RPN expressions.
-        for node in &self.0 {
-            match node {
-                RpnExpressionNode::Constant {
-                    ref value,
-                    ref field_type,
-                } => {
-                    stack.push(RpnStackNode::Scalar {
-                        value: &value,
-                        field_type,
-                    });
-                }
-                RpnExpressionNode::ColumnRef { ref offset } => {
-                    let field_type = &schema[*offset];
-                    let decoded_column = columns[*offset].decoded();
-                    stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Ref(&decoded_column),
-                        field_type,
-                    });
-                }
-                RpnExpressionNode::FnCall {
-                    ref func,
-                    ref field_type,
-                } => {
-                    // Suppose that we have function call `Foo(A, B, C)`, the RPN nodes looks like
-                    // `[A, B, C, Foo]`.
-                    // Now we receives a function call `Foo`, so there are `[A, B, C]` in the stack
-                    // as the last several elements. We will directly use the last N (N = number of
-                    // arguments) elements in the stack as function arguments.
-                    let stack_slice_begin = stack.len() - func.args_len();
-                    let stack_slice = &stack[stack_slice_begin..];
-                    let call_info = RpnFnCallPayload {
-                        raw_args: stack_slice,
-                        ret_field_type: field_type,
-                    };
-                    let ret = func.eval(rows, context, call_info)?;
-                    stack.truncate(stack_slice_begin);
-                    stack.push(RpnStackNode::Vector {
-                        value: RpnStackNodeVectorValue::Owned(Box::new(ret)),
-                        field_type,
-                    });
-                }
-            }
-        }
-
-        assert_eq!(stack.len(), 1);
-        Ok(stack.into_iter().next().unwrap())
-    }
-
-    /// Evaluates the expression into a boolean vector.
-    ///
-    /// # Panics
-    ///
-    /// Panics if referenced columns are not decoded.
-    ///
-    /// Panics if the boolean vector output buffer is not large enough to contain all values.
-    pub fn eval_as_mysql_bools(
-        &self,
-        context: &mut EvalContext,
-        rows: usize,
-        schema: &[FieldType],
-        columns: &mut LazyBatchColumnVec,
-        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
-    ) -> Result<()> {
-        use crate::coprocessor::codec::data_type::AsMySQLBool;
-
-        assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, schema, columns)?;
-        match values {
-            RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_mysql_bool(context)?;
-                for i in 0..rows {
-                    outputs[i] = b;
-                }
-            }
-            RpnStackNode::Vector { value, .. } => {
-                let vec_ref = value.as_ref();
-                assert_eq!(vec_ref.len(), rows);
-                vec_ref.eval_as_mysql_bools(context, outputs)?;
-            }
-        }
-        Ok(())
-    }
 
     /// Transforms eval tree nodes into RPN nodes.
     ///
@@ -995,7 +670,7 @@ mod tests {
         node_fn_d.mut_children().push(node_fn_a_2);
 
         let mut vec = vec![];
-        RpnExpressionNodeVec::append_rpn_nodes_recursively(
+        RpnExpression::append_rpn_nodes_recursively(
             node_fn_d,
             &Tz::utc(),
             &mut vec,
@@ -1122,7 +797,7 @@ mod tests {
     #[test]
     fn test_build_from_expr_tree() {
         let expr = new_gt_int_def(1, 123);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_expr_tree(expr, &Tz::utc()).unwrap();
+        let rpn_nodes = RpnExpression::build_from_expr_tree(expr, &Tz::utc()).unwrap();
 
         assert_eq!(rpn_nodes.len(), 3);
         assert!(rpn_nodes[0].field_type().is_none());
@@ -1147,7 +822,7 @@ mod tests {
     #[test]
     fn test_eval() {
         let expr = new_gt_int_def(0, 10);
-        let rpn_nodes = RpnExpressionNodeVec::build_from_expr_tree(expr, &Tz::utc()).unwrap();
+        let rpn_nodes = RpnExpression::build_from_expr_tree(expr, &Tz::utc()).unwrap();
 
         let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(100, EvalType::Int);
         col.mut_decoded().push_int(Some(1));
