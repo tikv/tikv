@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::i64;
+use std::iter;
 
 use hex::{self, FromHex};
 
@@ -62,54 +63,37 @@ impl ScalarFunc {
     }
 
     #[inline]
+    fn find_str(text: &str, pattern: &str) -> Option<usize> {
+        twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
+    }
+
+    #[inline]
     pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        if s.is_empty() {
-            return Ok(Some(0));
-        }
-        let substr = substr.to_lowercase();
-        let s = s.to_lowercase();
-        let result = match s.find(&substr) {
-            None => 0,
-            Some(i) => 1 + s[..i].chars().count() as i64,
-        };
-        Ok(Some(result))
+        Ok(Self::find_str(&s.to_lowercase(), &substr.to_lowercase())
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 
     #[inline]
     pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
-
-        pos -= 1; // transfer 1-based argument to 0-based real index
-        if pos < 0 {
+        let pos = try_opt!(self.children[2].eval_int(ctx, row));
+        if pos < 1 {
             return Ok(Some(0));
         }
-        let substr = substr.to_lowercase();
-        let s = s.to_lowercase();
-        if pos > (s.chars().count() as i64 - substr.chars().count() as i64) {
-            return Ok(Some(0));
-        }
-        if substr.is_empty() {
-            return Ok(Some(pos + 1));
-        }
-
-        let slice = s
-            .char_indices()
-            .nth(pos as usize)
-            .map(|(offset, _)| &s[offset..]);
-
-        if let Some(slice) = slice {
-            if let Some(idx) = slice.find(&substr) {
-                return Ok(Some(1 + pos + slice[..idx].chars().count() as i64));
-            }
-        }
-        Ok(Some(0))
+        Ok(s.char_indices()
+            .map(|(i, _)| i)
+            .chain(iter::once(s.len()))
+            .nth(pos as usize - 1)
+            .map(|offset| {
+                Self::find_str(&s[offset..].to_lowercase(), &substr.to_lowercase())
+                    .map(|i| i as i64 + pos)
+                    .unwrap_or(0)
+            })
+            .or(Some(0)))
     }
 
     #[inline]
@@ -120,11 +104,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        let idx = s.windows(substr.len()).position(|w| w == &*substr);
-        Ok(Some(idx.map(|i| i as i64 + 1).unwrap_or(0)))
+        Ok(twoway::find_bytes(&s, &substr)
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -135,20 +117,14 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string(ctx, row));
         let s = try_opt!(self.children[1].eval_string(ctx, row));
-        let mut pos = try_opt!(self.children[2].eval_int(ctx, row));
+        let pos = try_opt!(self.children[2].eval_int(ctx, row));
 
-        pos -= 1; // transfer 1-based argument to 0-based real index
-        if pos < 0 || pos > (s.len() as i64 - substr.len() as i64) {
+        if pos < 1 || pos as usize > s.len() + 1 {
             return Ok(Some(0));
         }
-        if substr.is_empty() {
-            return Ok(Some(pos + 1));
-        }
-
-        let idx = s[pos as usize..]
-            .windows(substr.len())
-            .position(|w| w == &*substr);
-        Ok(Some(idx.map(|i| pos + i as i64 + 1).unwrap_or(0)))
+        Ok(twoway::find_bytes(&s[pos as usize - 1..], &substr)
+            .map(|i| pos + i as i64)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -953,14 +929,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
         let substr = try_opt!(self.children[1].eval_string(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        if s.is_empty() {
-            return Ok(Some(0));
-        }
-        let idz = s.windows(substr.len()).position(|w| w == &*substr);
-        Ok(Some(idz.map(|i| i as i64 + 1).unwrap_or(0)))
+        Ok(twoway::find_bytes(&s, &substr)
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 }
 
