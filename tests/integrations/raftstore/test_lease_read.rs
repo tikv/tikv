@@ -22,7 +22,6 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::engine::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
@@ -68,7 +67,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_transfer_leader(region_id, peer.clone());
     let engine = cluster.get_raft_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
     let detector = LeaseReadFilter::default();
@@ -101,7 +100,7 @@ fn test_renew_lease<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Check if the leader has renewed its lease so that it can do lease read.
     assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // Issue a read request and check the value on response.
@@ -207,12 +206,12 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
     let engine = cluster.get_raft_engine(store_id);
     let state_key = keys::raft_state_key(region_id);
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index);
     assert_eq!(detector.ctx.rl().len(), 0);
 
@@ -248,7 +247,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     assert_eq!(detector.ctx.rl().len(), 3);
 
     // Check if the leader also propose an entry to renew its lease.
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
 
     // wait some time for the proposal to be applied.
@@ -256,7 +255,7 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
 
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
-    let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
+    let state: RaftLocalState = engine.get_msg(region_id, &state_key).unwrap().unwrap();
     assert_eq!(state.get_last_index(), last_index + 1);
     assert_eq!(detector.ctx.rl().len(), 3);
 }

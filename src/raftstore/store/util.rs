@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::{fmt, u64};
 
+use crate::raftengine::RaftEngine;
 use crate::raftstore::store::keys;
 use crate::raftstore::{Error, Result};
 use kvproto::metapb;
@@ -946,11 +947,11 @@ pub fn conf_state_from_region(region: &metapb::Region) -> ConfState {
 #[derive(Clone, Debug)]
 pub struct Engines {
     pub kv: Arc<DB>,
-    pub raft: Arc<DB>,
+    pub raft: Arc<RaftEngine>,
 }
 
 impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<RaftEngine>) -> Engines {
         Engines {
             kv: kv_engine,
             raft: raft_engine,

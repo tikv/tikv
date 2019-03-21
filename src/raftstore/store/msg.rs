@@ -109,6 +109,7 @@ impl fmt::Debug for Callback {
 pub enum PeerTick {
     Raft,
     RaftLogGc,
+    RaftLogExpiredFilesGc,
     SplitRegionCheck,
     PdHeartbeat,
     CheckMerge,
@@ -121,6 +122,7 @@ impl PeerTick {
         match self {
             PeerTick::Raft => "raft",
             PeerTick::RaftLogGc => "raft_log_gc",
+            PeerTick::RaftLogExpiredFilesGc => "raft_log_expired_files_gc",
             PeerTick::SplitRegionCheck => "split_region_check",
             PeerTick::PdHeartbeat => "pd_heartbeat",
             PeerTick::CheckMerge => "check_merge",
@@ -300,6 +302,8 @@ pub enum PeerMsg {
     Noop,
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage),
+    /// This region's raft log need to force compact.
+    ForceCompactRaftLog,
 }
 
 impl fmt::Debug for PeerMsg {
@@ -317,6 +321,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
+            PeerMsg::ForceCompactRaftLog => write!(fmt, "ForceCompactRaftLog"),
         }
     }
 }

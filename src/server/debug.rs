@@ -31,6 +31,7 @@ use rocksdb::{
     WriteBatch, WriteOptions, DB,
 };
 
+use crate::raftengine::LogBatch;
 use crate::raftstore::store::engine::{IterOption, Mutable};
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{
@@ -171,7 +172,6 @@ impl Debugger {
     fn get_db_from_type(&self, db: DBType) -> Result<&DB> {
         match db {
             DBType::KV => Ok(&self.engines.kv),
-            DBType::RAFT => Ok(&self.engines.raft),
             _ => Err(box_err!("invalid DBType type")),
         }
     }
@@ -190,8 +190,7 @@ impl Debugger {
     }
 
     pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
-        let key = keys::raft_log_key(region_id, log_index);
-        match self.engines.raft.get_msg(&key) {
+        match self.engines.raft.get_entry(region_id, log_index) {
             Ok(Some(entry)) => Ok(entry),
             Ok(None) => Err(Error::NotFound(format!(
                 "raft log for region {} at index {}",
@@ -203,7 +202,10 @@ impl Debugger {
 
     pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
         let raft_state_key = keys::raft_state_key(region_id);
-        let raft_state = box_try!(self.engines.raft.get_msg::<RaftLocalState>(&raft_state_key));
+        let raft_state = box_try!(self
+            .engines
+            .raft
+            .get_msg::<RaftLocalState>(region_id, &raft_state_key));
 
         let apply_state_key = keys::apply_state_key(region_id);
         let apply_state = box_try!(self
@@ -586,7 +588,7 @@ impl Debugger {
         let raft = self.engines.raft.as_ref();
 
         let kv_wb = WriteBatch::new();
-        let raft_wb = WriteBatch::new();
+        let raft_wb = LogBatch::default();
         let kv_handle = box_try!(get_cf_handle(kv, CF_RAFT));
 
         if region.get_start_key() >= region.get_end_key() && !region.get_end_key().is_empty() {
@@ -646,7 +648,7 @@ impl Debugger {
 
         // RaftLocalState.
         let key = keys::raft_state_key(region_id);
-        if box_try!(raft.get_msg::<RaftLocalState>(&key)).is_some() {
+        if box_try!(raft.get_msg::<RaftLocalState>(region_id, &key)).is_some() {
             return Err(Error::Other("Store already has the RaftLocalState".into()));
         }
         box_try!(write_initial_raft_state(&raft_wb, region_id));
@@ -654,7 +656,7 @@ impl Debugger {
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
         box_try!(kv.write_opt(kv_wb, &write_opts));
-        box_try!(raft.write_opt(raft_wb, &write_opts));
+        box_try!(raft.write(raft_wb, true));
         Ok(())
     }
 
@@ -1397,6 +1399,7 @@ fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec
 #[cfg(test)]
 mod tests {
     use std::iter::FromIterator;
+    use std::path::Path;
     use std::sync::Arc;
 
     use kvproto::metapb::{Peer, Region};
@@ -1405,6 +1408,7 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
+    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::store::engine::Mutable;
     use crate::storage::mvcc::{Lock, LockType};
     use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -1519,8 +1523,16 @@ mod tests {
             )
             .unwrap(),
         );
-
-        let engines = Engines::new(Arc::clone(&engine), engine);
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(
+            tmp.path()
+                .join(Path::new("raft"))
+                .as_path()
+                .to_str()
+                .unwrap(),
+        );
+        let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
+        let engines = Engines::new(Arc::clone(&engine), raft_engine);
         Debugger::new(engines)
     }
 
@@ -1555,14 +1567,18 @@ mod tests {
         let debugger = new_debugger();
         let engine = &debugger.engines.raft;
         let (region_id, log_index) = (1, 1);
-        let key = keys::raft_log_key(region_id, log_index);
         let mut entry = Entry::new();
         entry.set_term(1);
         entry.set_index(1);
         entry.set_entry_type(EntryType::EntryNormal);
         entry.set_data(vec![42]);
-        engine.put_msg(&key, &entry).unwrap();
-        assert_eq!(engine.get_msg::<Entry>(&key).unwrap().unwrap(), entry);
+        let raft_wb = LogBatch::new();
+        raft_wb.add_entries(region_id, vec![entry.clone()]);
+        engine.write(raft_wb, true).unwrap();
+        assert_eq!(
+            engine.get_entry(region_id, log_index).unwrap().unwrap(),
+            entry
+        );
 
         assert_eq!(debugger.raft_log(region_id, log_index).unwrap(), entry);
         match debugger.raft_log(region_id + 1, log_index + 1) {
@@ -1582,10 +1598,12 @@ mod tests {
         let raft_state_key = keys::raft_state_key(region_id);
         let mut raft_state = RaftLocalState::new();
         raft_state.set_last_index(42);
-        raft_engine.put_msg(&raft_state_key, &raft_state).unwrap();
+        raft_engine
+            .put_msg(region_id, &raft_state_key, &raft_state)
+            .unwrap();
         assert_eq!(
             raft_engine
-                .get_msg::<RaftLocalState>(&raft_state_key)
+                .get_msg::<RaftLocalState>(region_id, &raft_state_key)
                 .unwrap()
                 .unwrap(),
             raft_state
@@ -1815,8 +1833,7 @@ mod tests {
         let raft_engine = debugger.engines.raft.as_ref();
         let store_id = 1; // It's a fake id.
 
-        let wb1 = WriteBatch::new();
-        let handle1 = get_cf_handle(raft_engine, CF_DEFAULT).unwrap();
+        let wb1 = LogBatch::new();
 
         let wb2 = WriteBatch::new();
         let handle2 = get_cf_handle(kv_engine, CF_RAFT).unwrap();
@@ -1845,7 +1862,7 @@ mod tests {
                 let mut raft_state = RaftLocalState::new();
                 raft_state.set_last_index(last_index);
                 raft_state.mut_hard_state().set_commit(commit_index);
-                wb1.put_msg_cf(handle1, &raft_state_key, &raft_state)
+                wb1.put_msg(region_id, &raft_state_key, &raft_state)
                     .unwrap();
             };
             let mock_apply_state = |region_id: u64, apply_index: u64| {
@@ -1873,7 +1890,7 @@ mod tests {
             mock_region_state(13, &[]);
         }
 
-        raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
+        raft_engine.write(wb1, true).unwrap();
         kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::path::Path;
+use std::string::String;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
 use std::{result, thread};
@@ -28,11 +29,11 @@ use kvproto::raft_serverpb::RaftMessage;
 
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::{escape, rocksdb_util, HandyRwLock};
 
@@ -146,10 +147,9 @@ impl<T: Simulator> Cluster<T> {
                     .unwrap(),
             );
             let raft_path = path.path().join(Path::new("raft"));
-            let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
+            let mut cfg = RaftEngineCfg::new();
+            cfg.dir = String::from(raft_path.to_str().unwrap());
+            let raft_engine = Arc::new(RaftEngine::new(cfg));
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
             self.paths.push(path);
@@ -226,7 +226,7 @@ impl<T: Simulator> Cluster<T> {
         Arc::clone(&self.engines[&node_id].kv)
     }
 
-    pub fn get_raft_engine(&self, node_id: u64) -> Arc<DB> {
+    pub fn get_raft_engine(&self, node_id: u64) -> Arc<RaftEngine> {
         Arc::clone(&self.engines[&node_id].raft)
     }
 

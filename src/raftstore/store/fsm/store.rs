@@ -45,6 +45,7 @@ use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 use crate::import::SSTImporter;
+use crate::raftengine::LogBatch;
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
 use crate::raftstore::store::fsm::metrics::*;
@@ -206,7 +207,7 @@ pub struct PollContext<T, C: 'static> {
     pub store_stat: LocalStoreStat,
     pub engines: Engines,
     pub kv_wb: WriteBatch,
-    pub raft_wb: WriteBatch,
+    pub raft_wb: LogBatch,
     pub pending_count: usize,
     pub sync_log: bool,
     pub is_busy: bool,
@@ -228,12 +229,12 @@ impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
     }
 
     #[inline]
-    fn raft_wb(&self) -> &WriteBatch {
+    fn raft_wb(&self) -> &LogBatch {
         &self.raft_wb
     }
 
     #[inline]
-    fn raft_wb_mut(&mut self) -> &mut WriteBatch {
+    fn raft_wb_mut(&mut self) -> &mut LogBatch {
         &mut self.raft_wb
     }
 
@@ -480,16 +481,17 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
             let raft_wb = mem::replace(
                 &mut self.poll_ctx.raft_wb,
-                WriteBatch::with_capacity(4 * 1024),
+                LogBatch::with_capacity(4 * 1024),
             );
             self.poll_ctx
                 .engines
                 .raft
-                .write_opt(raft_wb, &write_opts)
+                .write(
+                    raft_wb,
+                    self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log,
+                )
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
@@ -688,8 +690,8 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut region_peers = vec![];
 
         let t = Instant::now();
-        let mut kv_wb = WriteBatch::new();
-        let mut raft_wb = WriteBatch::new();
+        let kv_wb = WriteBatch::new();
+        let raft_wb = LogBatch::new();
         let mut applying_regions = vec![];
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
@@ -706,7 +708,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             if local_state.get_state() == PeerState::Tombstone {
                 tombstone_count += 1;
                 debug!("region is tombstone"; "region" => ?region, "store_id" => store_id);
-                self.clear_stale_meta(&mut kv_wb, &mut raft_wb, &local_state);
+                self.clear_stale_meta(&kv_wb, &raft_wb, &local_state);
                 return Ok(true);
             }
             if local_state.get_state() == PeerState::Applying {
@@ -748,8 +750,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.write(raft_wb).unwrap();
-            self.engines.raft.sync_wal().unwrap();
+            self.engines.raft.write(raft_wb, true).unwrap();
         }
 
         // schedule applying snapshot after raft writebatch were written.
@@ -786,20 +787,12 @@ impl<T, C> RaftPollerBuilder<T, C> {
 
     fn clear_stale_meta(
         &self,
-        kv_wb: &mut WriteBatch,
-        raft_wb: &mut WriteBatch,
+        kv_wb: &WriteBatch,
+        raft_wb: &LogBatch,
         origin_state: &RegionLocalState,
     ) {
         let region = origin_state.get_region();
-        let raft_key = keys::raft_state_key(region.get_id());
-        let raft_state = match self.engines.raft.get_msg(&raft_key).unwrap() {
-            // it has been cleaned up.
-            None => return,
-            Some(value) => value,
-        };
-
-        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
-            .unwrap();
+        peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id()).unwrap();
         let key = keys::region_state_key(region.get_id());
         let handle = rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
         kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
@@ -867,7 +860,7 @@ where
             store_stat: self.global_stat.local(),
             engines: self.engines.clone(),
             kv_wb: WriteBatch::new(),
-            raft_wb: WriteBatch::with_capacity(4 * 1024),
+            raft_wb: LogBatch::with_capacity(4 * 1024),
             pending_count: 0,
             sync_log: false,
             is_busy: false,
@@ -1007,7 +1000,7 @@ impl RaftBatchSystem {
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
 
-        let raftlog_gc_runner = RaftlogGcRunner::new(None);
+        let raftlog_gc_runner = RaftlogGcRunner::new(None, Some(self.router.clone()));
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
         let compact_runner = CompactRunner::new(Arc::clone(&builder.engines.kv));

@@ -36,7 +36,6 @@ mod imp {
                     info!("{}", metrics::dump());
                     if let Some(ref engines) = engines {
                         info!("{:?}", rocksdb_stats::dump(&engines.kv));
-                        info!("{:?}", rocksdb_stats::dump(&engines.raft));
                     }
                 }
                 SIGUSR2 => tikv_alloc::dump_prof(None),

@@ -21,6 +21,7 @@ use kvproto::raft_serverpb::RegionLocalState;
 
 use test_raftstore::*;
 use tikv::import::SSTImporter;
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, Engines, Peekable, SnapManager};
 use tikv::server::Node;
@@ -55,10 +56,9 @@ fn test_node_bootstrap_with_prepared_data() {
         rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
-    );
-    let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
+    let mut raft_cfg = RaftEngineCfg::new();
+    raft_cfg.dir = String::from(tmp_path_raft.to_str().unwrap());
+    let engines = Engines::new(Arc::clone(&engine), Arc::new(RaftEngine::new(raft_cfg)));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));

@@ -332,11 +332,12 @@ mod tests {
     use rocksdb::Writable;
     use tempdir::TempDir;
 
+    use crate::raftengine::{Config as RaftEngineCfg, RaftEngine};
     use crate::raftstore::store::engine::*;
     use crate::raftstore::store::keys::*;
     use crate::raftstore::store::{Engines, PeerStorage};
     use crate::raftstore::Result;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS};
     use crate::util::rocksdb_util::{self, compact_files_in_range};
     use crate::util::{escape, worker};
 
@@ -346,15 +347,14 @@ mod tests {
 
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
+        let mut raft_cfg = RaftEngineCfg::new();
+        raft_cfg.dir = String::from(raft_path.to_str().unwrap());
         Engines::new(
             Arc::new(
                 rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                     .unwrap(),
             ),
-            Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            ),
+            Arc::new(RaftEngine::new(raft_cfg)),
         )
     }
 

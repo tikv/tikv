@@ -29,6 +29,7 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
@@ -102,16 +103,14 @@ pub fn must_region_cleared(engine: &Engines, region: &metapb::Region) {
             })
             .unwrap();
     }
-    let log_min_key = keys::raft_log_key(id, 0);
-    let log_max_key = keys::raft_log_key(id, u64::MAX);
-    engine
-        .raft
-        .scan(&log_min_key, &log_max_key, false, |k, v| {
-            panic!("[region {}] unexpected log ({:?}, {:?})", id, k, v);
-        })
-        .unwrap();
+
+    let entries = engine.raft.fetch_all_entries_for_region(id).unwrap();
+    if !entries.is_empty() {
+        panic!("[region {}] unexpected log", id);
+    }
+
     let state_key = keys::raft_state_key(id);
-    let state: Option<RaftLocalState> = engine.raft.get_msg(&state_key).unwrap();
+    let state: Option<RaftLocalState> = engine.raft.get_msg(id, &state_key).unwrap();
     assert!(
         state.is_none(),
         "[region {}] raft state key should be removed: {:?}",
@@ -514,10 +513,9 @@ pub fn create_test_engine(
                 .unwrap(),
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
-            let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
-                    .unwrap(),
-            );
+            let mut raft_cfg = RaftEngineCfg::new();
+            raft_cfg.dir = String::from(raft_path.to_str().unwrap());
+            let raft_engine = Arc::new(RaftEngine::new(raft_cfg));
             Engines::new(engine, raft_engine)
         }
     };
@@ -527,7 +525,6 @@ pub fn create_test_engine(
 pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 2;
     cluster.cfg.raft_store.merge_max_log_gap = 1;
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
@@ -535,8 +532,6 @@ pub fn configure_for_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     // Avoid log compaction which will prevent merge.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
-    cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
 }

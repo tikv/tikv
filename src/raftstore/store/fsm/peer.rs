@@ -280,6 +280,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
                 PeerMsg::Start => self.start(),
                 PeerMsg::Noop => {}
+                PeerMsg::ForceCompactRaftLog => {
+                    self.fsm.peer.need_force_compact_raft_log = true;
+                }
             }
         }
     }
@@ -336,6 +339,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         match tick {
             PeerTick::Raft => self.on_raft_base_tick(),
             PeerTick::RaftLogGc => self.on_raft_gc_log_tick(),
+            PeerTick::RaftLogExpiredFilesGc => self.on_raft_gc_expired_files(),
             PeerTick::PdHeartbeat => self.on_pd_heartbeat_tick(),
             PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
             PeerTick::CheckMerge => self.on_check_merge(),
@@ -349,6 +353,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.register_raft_base_tick();
         self.register_raft_gc_log_tick();
+        self.register_raft_gc_expired_files_tick();
         self.register_pd_heartbeat_tick();
         self.register_split_region_check_tick();
         self.register_check_peer_stale_state_tick();
@@ -649,7 +654,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_raft_base_tick(&mut self) {
         if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_cache_metrics();
             return;
         }
         // When having pending snapshot, if election timeout is met, it can't pass
@@ -665,7 +669,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.fsm.has_ready = true;
         }
 
-        self.fsm.peer.mut_store().flush_cache_metrics();
         self.register_raft_base_tick();
     }
 
@@ -1340,20 +1343,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_ready_compact_log(&mut self, first_index: u64, state: RaftTruncatedState) {
-        let total_cnt = self.fsm.peer.last_applying_idx - first_index;
-        // the size of current CompactLog command can be ignored.
-        let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
-        self.fsm.peer.raft_log_size_hint =
-            self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
-        let task = RaftlogGcTask {
-            raft_engine: Arc::clone(&self.fsm.peer.get_store().get_raft_engine()),
-            region_id: self.fsm.peer.get_store().get_region_id(),
-            start_idx: self.fsm.peer.last_compacted_idx,
-            end_idx: state.get_index() + 1,
-        };
-        self.fsm.peer.last_compacted_idx = task.end_idx;
-        self.fsm.peer.mut_store().compact_to(task.end_idx);
+    fn on_ready_compact_log(&mut self, state: RaftTruncatedState) {
+        let task = RaftlogGcTask::region_task(
+            Arc::clone(&self.fsm.peer.get_store().get_raft_engine()),
+            self.fsm.peer.get_store().get_region_id(),
+            state.get_index() + 1,
+        );
         if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
             error!(
                 "failed to schedule compact task";
@@ -1971,9 +1966,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         while let Some(result) = exec_results.pop_front() {
             match result {
                 ExecResult::ChangePeer(cp) => self.on_ready_change_peer(cp),
-                ExecResult::CompactLog { first_index, state } => {
+                ExecResult::CompactLog { state } => {
                     if !merged {
-                        self.on_ready_compact_log(first_index, state)
+                        self.on_ready_compact_log(state)
                     }
                 }
                 ExecResult::SplitRegion { derived, regions } => {
@@ -2199,9 +2194,38 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         )
     }
 
+    fn register_raft_gc_expired_files_tick(&self) {
+        self.schedule_tick(
+            PeerTick::RaftLogExpiredFilesGc,
+            self.ctx.cfg.raft_log_gc_expired_files_tick_interval.0,
+        )
+    }
+
+    fn on_raft_gc_expired_files(&mut self) {
+        self.register_raft_gc_expired_files_tick();
+
+        if let Err(e) = self
+            .ctx
+            .raftlog_gc_scheduler
+            .schedule(RaftlogGcTask::engine_task(Arc::clone(
+                &self.fsm.peer.get_store().get_raft_engine(),
+            )))
+        {
+            error!(
+                "failed to schedule raft engine task";
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "err" => %e,
+            );
+        }
+    }
+
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
+
+        let need_force_compact = self.fsm.peer.need_force_compact_raft_log;
+        self.fsm.peer.need_force_compact_raft_log = false;
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -2214,7 +2238,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         let applied_idx = self.fsm.peer.get_store().applied_index();
         if !self.fsm.peer.is_leader() {
-            self.fsm.peer.mut_store().compact_to(applied_idx + 1);
             return;
         }
 
@@ -2258,22 +2281,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             );
             REGION_MAX_LOG_LAG.observe((last_idx - replicated_idx) as f64);
         }
-        self.fsm
-            .peer
-            .mut_store()
-            .maybe_gc_cache(alive_cache_idx, applied_idx);
         let first_idx = self.fsm.peer.get_store().first_index();
         let mut compact_idx;
-        if applied_idx > first_idx
-            && applied_idx - first_idx >= self.ctx.cfg.raft_log_gc_count_limit
-        {
-            compact_idx = applied_idx;
-        } else if self.fsm.peer.raft_log_size_hint >= self.ctx.cfg.raft_log_gc_size_limit.0 {
-            compact_idx = applied_idx;
-        } else if replicated_idx < first_idx
-            || replicated_idx - first_idx <= self.ctx.cfg.raft_log_gc_threshold
-        {
+        let last_replicated_idx = self.fsm.peer.last_replicated_idx;
+        self.fsm.peer.last_replicated_idx = replicated_idx;
+        if replicated_idx < first_idx {
             return;
+        }
+        if replicated_idx - first_idx < self.ctx.cfg.raft_log_gc_threshold {
+            // The replicated_idx is same as the last time we check, it means this region
+            // probably has no new writing. Compact these few entries have been replicated,
+            // so we don't rewriting them again and again.
+            if last_replicated_idx == replicated_idx && replicated_idx - first_idx > 0 {
+                compact_idx = replicated_idx;
+            } else {
+                return;
+            }
+        } else if need_force_compact {
+            compact_idx = applied_idx;
         } else {
             compact_idx = replicated_idx;
         }

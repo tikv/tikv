@@ -343,7 +343,6 @@ impl<T: RaftStoreRouter + 'static> debugpb_grpc::Debug for Service<T> {
             if req.get_all() {
                 let engines = debugger.get_engine();
                 resp.set_rocksdb_kv(box_try!(rocksdb_stats::dump(&engines.kv)));
-                resp.set_rocksdb_raft(box_try!(rocksdb_stats::dump(&engines.raft)));
                 resp.set_jemalloc(tikv_alloc::dump_stats());
             }
             Ok(resp)

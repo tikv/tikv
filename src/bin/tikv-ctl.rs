@@ -59,6 +59,7 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
+use tikv::raftengine::{Config as RaftEngineCfg, RaftEngine};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -98,16 +99,9 @@ fn new_debug_executor(
             let raft_path = raft_db
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
-            let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-
-            if !mgr.cipher_file().is_empty() {
-                let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
-                raft_db_opts.set_env(encrypted_env);
-            }
-            let raft_db =
-                rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+            let mut raft_cfg = RaftEngineCfg::new();
+            raft_cfg.dir = raft_path;
+            let raft_db = RaftEngine::new(raft_cfg);
 
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
@@ -184,8 +178,6 @@ trait DebugExecutor {
     }
 
     fn dump_raft_log(&self, region: u64, index: u64) {
-        let idx_key = keys::raft_log_key(region, index);
-        v1!("idx_key: {}", escape(&idx_key));
         v1!("region: {}", region);
         v1!("log index: {}", index);
 
@@ -1777,13 +1769,8 @@ fn main() {
         debug_executor.dump_value(cf, key);
     } else if let Some(matches) = matches.subcommand_matches("raft") {
         if let Some(matches) = matches.subcommand_matches("log") {
-            let (id, index) = if let Some(key) = matches.value_of("key") {
-                keys::decode_raft_log_key(&unescape(key)).unwrap()
-            } else {
-                let id = matches.value_of("region").unwrap().parse().unwrap();
-                let index = matches.value_of("index").unwrap().parse().unwrap();
-                (id, index)
-            };
+            let id = matches.value_of("region").unwrap().parse().unwrap();
+            let index = matches.value_of("index").unwrap().parse().unwrap();
             debug_executor.dump_raft_log(id, index);
         } else if let Some(matches) = matches.subcommand_matches("region") {
             let skip_tombstone = matches.is_present("skip-tombstone");

@@ -26,6 +26,7 @@ use raft;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
+use crate::raftengine;
 use crate::util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
@@ -149,6 +150,12 @@ quick_error! {
             cause(err)
             description(err.description())
             display("Snapshot {}", err)
+        }
+        RaftEngingErr(err: raftengine::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("RaftEngine {}", err)
         }
     }
 }
