@@ -60,6 +60,19 @@ impl DAGBuilder {
                         }
                     }
                 }
+                ExecType::TypeIndexScan => {
+                    let descriptor = ed.get_idx_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
+                            return false;
+                        }
+                    }
+                }
                 _ => {
                     debug!(
                         "Coprocessor request cannot be batched";
