@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use codec::prelude::BufferNumberEncoder;
 use std::cmp;
 use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, HashMap};
@@ -21,8 +22,7 @@ use std::u64;
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::{Error, Result};
+use crate::util::codec::{number, Error, Result};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -248,10 +248,10 @@ impl IndexHandles {
     fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(1024);
         for (k, v) in &self.0 {
-            buf.encode_u64(k.len() as u64).unwrap();
+            buf.write_u64(k.len() as u64).unwrap();
             buf.extend(k);
-            buf.encode_u64(v.size).unwrap();
-            buf.encode_u64(v.offset).unwrap();
+            buf.write_u64(v.size).unwrap();
+            buf.write_u64(v.offset).unwrap();
         }
         buf
     }
@@ -439,7 +439,7 @@ impl UserProperties {
 
     pub fn encode_u64(&mut self, name: &str, value: u64) {
         let mut buf = Vec::with_capacity(8);
-        buf.encode_u64(value).unwrap();
+        buf.write_u64(value).unwrap();
         self.encode(name, buf);
     }
 
@@ -510,10 +510,10 @@ impl RangeProperties {
     pub fn encode(&self) -> UserProperties {
         let mut buf = Vec::with_capacity(1024);
         for (k, offsets) in &self.offsets {
-            buf.encode_u64(k.len() as u64).unwrap();
+            buf.write_u64(k.len() as u64).unwrap();
             buf.extend(k);
-            buf.encode_u64(offsets.size).unwrap();
-            buf.encode_u64(offsets.keys).unwrap();
+            buf.write_u64(offsets.size).unwrap();
+            buf.write_u64(offsets.keys).unwrap();
         }
         let mut props = UserProperties::new();
         props.encode(PROP_RANGE_INDEX, buf);

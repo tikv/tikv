@@ -23,6 +23,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
+use codec::prelude::BufferByteEncoder;
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
@@ -42,7 +43,7 @@ use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use crate::util::codec::bytes::CompactBytesFromFileDecoder;
 use crate::util::collections::{HashMap, HashMapEntry as Entry};
 use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
 use crate::util::io_limiter::{IOLimiter, LimitWriter};
@@ -796,13 +797,19 @@ impl Snap {
             snap.scan_cf(cf, start_key, end_key, false, |key, value| {
                 cf_key_count += 1;
                 cf_size += key.len() + value.len();
-                file.encode_compact_bytes(key)?;
-                file.encode_compact_bytes(value)?;
+                // TODO: improve this
+                let mut content = Vec::with_capacity(8 + cf_size);
+                content.write_compact_bytes(key)?;
+                content.write_compact_bytes(value)?;
+                file.write_all(&content)?;
                 Ok(true)
             })?;
             if cf_key_count > 0 {
                 // use an empty byte array to indicate that cf reaches an end.
-                box_try!(file.encode_compact_bytes(b""));
+                // TODO: improve this
+                let mut content = Vec::with_capacity(5);
+                content.write_compact_bytes(b"")?;
+                box_try!(file.write_all(&content));
             }
         }
 

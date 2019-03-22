@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::WriteBytesExt;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::io::Write;
 use std::str::FromStr;
 use std::{i64, str};
 
+use codec::prelude::{BufferByteEncoder, BufferNumberEncoder};
 use cop_datatype::FieldTypeTp;
 
 use super::mysql::{
@@ -27,7 +26,7 @@ use super::mysql::{
 };
 use super::{convert, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util::codec::bytes::{self, BytesEncoder};
+use crate::util::codec::bytes;
 use crate::util::codec::{number, BytesSlice};
 use crate::util::escape;
 
@@ -861,7 +860,7 @@ pub fn decode(data: &mut BytesSlice<'_>) -> Result<Vec<Datum>> {
 }
 
 /// `DatumEncoder` encodes the datum.
-pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
+pub trait DatumEncoder: DecimalEncoder + JsonEncoder + BufferByteEncoder {
     /// Encode values to buf slice.
     fn encode(&mut self, values: &[Datum], comparable: bool) -> Result<()> {
         let mut find_min = false;
@@ -875,33 +874,34 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 Datum::I64(i) => {
                     if comparable {
                         self.write_u8(INT_FLAG)?;
-                        self.encode_i64(i)?;
+                        self.write_i64(i)?;
                     } else {
                         self.write_u8(VAR_INT_FLAG)?;
-                        self.encode_var_i64(i)?;
+                        self.write_var_i64(i)?;
                     }
                 }
                 Datum::U64(u) => {
                     if comparable {
                         self.write_u8(UINT_FLAG)?;
-                        self.encode_u64(u)?;
+                        self.write_u64(u)?;
                     } else {
                         self.write_u8(VAR_UINT_FLAG)?;
-                        self.encode_var_u64(u)?;
+                        self.write_var_u64(u)?;
                     }
                 }
                 Datum::Bytes(ref bs) => {
                     if comparable {
                         self.write_u8(BYTES_FLAG)?;
-                        self.encode_bytes(bs, false)?;
+                        self.write_bytes(bs, false)?;
                     } else {
                         self.write_u8(COMPACT_BYTES_FLAG)?;
-                        self.encode_compact_bytes(bs)?;
+                        self.write_var_i64(bs.len() as i64)?;
+                        self.write_all(bs)?;
                     }
                 }
                 Datum::F64(f) => {
                     self.write_u8(FLOAT_FLAG)?;
-                    self.encode_f64(f)?;
+                    self.write_f64(f)?;
                 }
                 Datum::Null => self.write_u8(NIL_FLAG)?,
                 Datum::Min => {
@@ -911,11 +911,11 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
                 Datum::Max => self.write_u8(MAX_FLAG)?,
                 Datum::Time(ref t) => {
                     self.write_u8(UINT_FLAG)?;
-                    self.encode_u64(t.to_packed_u64())?;
+                    self.write_u64(t.to_packed_u64())?;
                 }
                 Datum::Dur(ref d) => {
                     self.write_u8(DURATION_FLAG)?;
-                    self.encode_i64(d.to_nanos())?;
+                    self.write_i64(d.to_nanos())?;
                 }
                 Datum::Dec(ref d) => {
                     self.write_u8(DECIMAL_FLAG)?;
@@ -932,7 +932,7 @@ pub trait DatumEncoder: BytesEncoder + DecimalEncoder + JsonEncoder {
     }
 }
 
-impl<T: Write> DatumEncoder for T {}
+impl<T> DatumEncoder for T where T: BufferNumberEncoder {}
 
 /// Get the approximate needed buffer size of values.
 ///

@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
+use crate::util::codec::{number, BytesSlice};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
@@ -22,6 +21,7 @@ use time::{self, Tm};
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
+use codec::prelude::BufferNumberEncoder;
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
@@ -310,11 +310,11 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
-pub trait DurationEncoder: NumberEncoder {
+impl<T: BufferNumberEncoder> DurationEncoder for T {}
+pub trait DurationEncoder: BufferNumberEncoder {
     fn encode_duration(&mut self, v: &Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.fsp)).map_err(From::from)
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.fsp)).map_err(From::from)
     }
 }
 

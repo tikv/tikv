@@ -172,8 +172,8 @@ pub mod tests {
     use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
-    use crate::util::codec::number::NumberEncoder;
     use crate::util::collections::HashMap;
+    use codec::prelude::BufferNumberEncoder;
 
     use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
     use super::*;
@@ -182,7 +182,7 @@ pub mod tests {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(offset).unwrap();
+        expr.mut_val().write_i64(offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item

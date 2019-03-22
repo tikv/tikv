@@ -25,9 +25,9 @@ use tipb::expression::{ByItem, Expr, ExprType};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest};
 
+use codec::prelude::BufferNumberEncoder;
 use tikv::coprocessor::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::util::codec::number::NumberEncoder;
 
 pub struct DAGSelect {
     pub execs: Vec<Executor>,
@@ -99,7 +99,7 @@ impl DAGSelect {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(col_offset).unwrap();
+        expr.mut_val().write_i64(col_offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         self.order_by.push(item);
@@ -117,7 +117,7 @@ impl DAGSelect {
         let col_offset = offset_for_column(&self.cols, col.id);
         let mut col_expr = Expr::new();
         col_expr.set_tp(ExprType::ColumnRef);
-        col_expr.mut_val().encode_i64(col_offset).unwrap();
+        col_expr.mut_val().write_i64(col_offset).unwrap();
         let mut expr = Expr::new();
         expr.set_tp(aggr_t);
         expr.mut_children().push(col_expr);
@@ -162,7 +162,7 @@ impl DAGSelect {
             let offset = offset_for_column(&self.cols, col.id);
             let mut expr = Expr::new();
             expr.set_tp(ExprType::ColumnRef);
-            expr.mut_val().encode_i64(offset).unwrap();
+            expr.mut_val().write_i64(offset).unwrap();
             self.group_by.push(expr);
         }
         self

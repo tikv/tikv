@@ -22,6 +22,12 @@ const MAX_VARINT64_LENGTH: usize = 10;
 pub struct NumberCodec;
 
 impl NumberCodec {
+    #[inline]
+    pub fn encode_u8(buf: &mut [u8], v: u8) {
+        assert!(!buf.is_empty());
+        buf[0] = v;
+    }
+
     /// Encodes an unsigned 16 bit integer `v` to `buf`,
     /// which is memory-comparable in ascending order.
     ///
@@ -708,6 +714,26 @@ macro_rules! write {
 }
 
 pub trait BufferNumberEncoder: BufferWriter {
+    #[inline]
+    fn write_u8(&mut self, v: u8) -> Result<()> {
+        write!(self, v, 1, encode_u8)
+    }
+
+    #[inline]
+    fn write_all(&mut self, values: &[u8]) -> Result<()> {
+        let buf = unsafe { self.bytes_mut(values.len()) };
+        if buf.len() < values.len() {
+            return Err(Error::BufferTooSmall);
+        }
+        for i in 0..values.len() {
+            buf[i].clone_from(&values[i]);
+        }
+        unsafe {
+            self.advance_mut(values.len());
+        }
+        Ok(())
+    }
+
     /// Writes an unsigned 16 bit integer `v`,
     /// which is memory-comparable in ascending order.
     ///

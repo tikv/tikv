@@ -10,3 +10,4 @@ path = "mod.rs"
 byteorder = "1"
 failure = "0.1"
 tikv = {path = "../.."}
+codec = {path = "../../components/codec"}

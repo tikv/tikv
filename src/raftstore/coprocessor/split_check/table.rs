@@ -225,10 +225,10 @@ fn is_same_table(left_key: &[u8], right_key: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use codec::prelude::BufferNumberEncoder;
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
     use rocksdb::Writable;
@@ -238,7 +238,6 @@ mod tests {
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
     use crate::storage::ALL_CFS;
-    use crate::util::codec::number::NumberEncoder;
     use crate::util::config::ReadableSize;
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
@@ -251,7 +250,7 @@ mod tests {
     fn gen_table_prefix(table_id: i64) -> Vec<u8> {
         let mut buf = Vec::with_capacity(TABLE_PREFIX_KEY_LEN);
         buf.write_all(TABLE_PREFIX).unwrap();
-        buf.encode_i64(table_id).unwrap();
+        buf.write_i64(table_id).unwrap();
         buf
     }
 

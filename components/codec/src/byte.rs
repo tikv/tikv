@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use super::{Error, Result};
+use crate::number::BufferNumberEncoder;
 
 /// Memory-comparable encoding and decoding utility for bytes.
 pub struct MemComparableByteCodec;
@@ -351,6 +352,35 @@ impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
         Self::PADDING.as_ptr()
     }
 }
+
+pub trait BufferByteEncoder: BufferNumberEncoder {
+    fn write_bytes(&mut self, bs: &[u8], desc: bool) -> Result<()> {
+        let len = MemComparableByteCodec::encoded_len(bs.len());
+        let buf = unsafe { self.bytes_mut(len) };
+        if buf.len() < len {
+            return Err(Error::BufferTooSmall);
+        }
+        if desc {
+            MemComparableByteCodec::encode_all_desc(bs, buf);
+        } else {
+            MemComparableByteCodec::encode_all(bs, buf);
+        }
+        unsafe {
+            self.advance_mut(len);
+        }
+        Ok(())
+    }
+
+    /// Joins bytes with its length into a byte slice. It is more
+    /// efficient in both space and time compared to `encode_bytes`. Note that the encoded
+    /// result is not memcomparable.
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.write_var_i64(data.len() as i64)?;
+        self.write_all(data).map_err(From::from)
+    }
+}
+
+impl<T: BufferNumberEncoder> BufferByteEncoder for T {}
 
 #[cfg(test)]
 mod tests {

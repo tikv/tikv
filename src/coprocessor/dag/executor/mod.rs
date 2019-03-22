@@ -278,7 +278,7 @@ pub mod tests {
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
-    use crate::util::codec::number::NumberEncoder;
+    use codec::prelude::BufferNumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::{
         coprocessor::KeyRange,
@@ -295,7 +295,7 @@ pub mod tests {
         let mut expr = Expr::new();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+            expr.mut_val().write_i64(id.unwrap()).unwrap();
         } else {
             expr.mut_children().push(child.unwrap());
         }

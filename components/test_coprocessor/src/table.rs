@@ -20,9 +20,9 @@ use tipb::schema::{self, ColumnInfo};
 
 use protobuf::RepeatedField;
 
+use codec::prelude::BufferNumberEncoder;
 use tikv::coprocessor;
 use tikv::coprocessor::codec::table;
-use tikv::util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
 pub struct Table {
@@ -118,10 +118,10 @@ impl Table {
     pub fn get_index_range_all(&self, idx: i64) -> KeyRange {
         let mut range = KeyRange::new();
         let mut buf = Vec::with_capacity(8);
-        buf.encode_i64(::std::i64::MIN).unwrap();
+        buf.write_i64(::std::i64::MIN).unwrap();
         range.set_start(table::encode_index_seek_key(self.id, idx, &buf));
         buf.clear();
-        buf.encode_i64(::std::i64::MAX).unwrap();
+        buf.write_i64(::std::i64::MAX).unwrap();
         range.set_end(table::encode_index_seek_key(self.id, idx, &buf));
         range
     }

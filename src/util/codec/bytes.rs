@@ -12,10 +12,11 @@
 // limitations under the License.
 
 use byteorder::ReadBytesExt;
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 
 use super::{BytesSlice, Error, Result};
-use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::number;
+use codec::prelude::BufferByteEncoder;
 use std::ptr;
 
 const ENC_GROUP_SIZE: usize = 8;
@@ -28,64 +29,6 @@ pub fn max_encoded_bytes_size(n: usize) -> usize {
     (n / ENC_GROUP_SIZE + 1) * (ENC_GROUP_SIZE + 1)
 }
 
-pub trait BytesEncoder: NumberEncoder {
-    /// Refer: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format#memcomparable-format
-    fn encode_bytes(&mut self, key: &[u8], desc: bool) -> Result<()> {
-        let len = key.len();
-        let mut index = 0;
-        let mut buf = [0; ENC_GROUP_SIZE];
-        while index <= len {
-            let remain = len - index;
-            let mut pad: usize = 0;
-            if remain > ENC_GROUP_SIZE {
-                self.write_all(adjust_bytes_order(
-                    &key[index..index + ENC_GROUP_SIZE],
-                    desc,
-                    &mut buf,
-                ))?;
-            } else {
-                pad = ENC_GROUP_SIZE - remain;
-                self.write_all(adjust_bytes_order(&key[index..], desc, &mut buf))?;
-                if desc {
-                    self.write_all(&ENC_DESC_PADDING[..pad])?;
-                } else {
-                    self.write_all(&ENC_ASC_PADDING[..pad])?;
-                }
-            }
-            self.write_all(adjust_bytes_order(
-                &[ENC_MARKER - (pad as u8)],
-                desc,
-                &mut buf,
-            ))?;
-            index += ENC_GROUP_SIZE;
-        }
-        Ok(())
-    }
-
-    /// Joins bytes with its length into a byte slice. It is more
-    /// efficient in both space and time compared to `encode_bytes`. Note that the encoded
-    /// result is not memcomparable.
-    fn encode_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
-        self.encode_var_i64(data.len() as i64)?;
-        self.write_all(data).map_err(From::from)
-    }
-}
-
-fn adjust_bytes_order<'a>(bs: &'a [u8], desc: bool, buf: &'a mut [u8]) -> &'a [u8] {
-    if desc {
-        let mut buf_idx = 0;
-        for &b in bs {
-            buf[buf_idx] = !b;
-            buf_idx += 1;
-        }
-        &buf[..buf_idx]
-    } else {
-        bs
-    }
-}
-
-impl<T: Write> BytesEncoder for T {}
-
 pub fn encode_bytes(bs: &[u8]) -> Vec<u8> {
     encode_order_bytes(bs, false)
 }
@@ -97,7 +40,7 @@ pub fn encode_bytes_desc(bs: &[u8]) -> Vec<u8> {
 fn encode_order_bytes(bs: &[u8], desc: bool) -> Vec<u8> {
     let cap = max_encoded_bytes_size(bs.len());
     let mut encoded = Vec::with_capacity(cap);
-    encoded.encode_bytes(bs, desc).unwrap();
+    encoded.write_bytes(bs, desc).unwrap();
     encoded
 }
 
@@ -182,6 +125,7 @@ pub fn decode_compact_bytes(data: &mut BytesSlice<'_>) -> Result<Vec<u8>> {
 /// Please note that, data is a mut reference to slice. After calling this the
 /// slice that data point to would change.
 pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
+    use std::io::Write;
     let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
     let mut offset = 0;
     let chunk_len = ENC_GROUP_SIZE + 1;
@@ -293,6 +237,7 @@ pub fn decode_bytes_in_place(data: &mut Vec<u8>, desc: bool) -> Result<()> {
 mod tests {
     use super::*;
     use crate::util::codec::{bytes, number};
+    use codec::prelude::BufferNumberEncoder;
     use std::cmp::Ordering;
 
     #[test]
@@ -354,8 +299,8 @@ mod tests {
             assert_eq!(encode_bytes_desc(&source), desc);
 
             // apppend timestamp, the timestamp bytes should not affect decode result
-            asc.encode_u64_desc(0).unwrap();
-            desc.encode_u64_desc(0).unwrap();
+            asc.write_u64_desc(0).unwrap();
+            desc.write_u64_desc(0).unwrap();
             {
                 let asc_offset = asc.as_ptr() as usize;
                 let mut asc_input = asc.as_slice();
@@ -464,7 +409,7 @@ mod tests {
         for &s in &tests {
             let max_size = s.len() + number::MAX_VAR_I64_LEN;
             let mut buf = Vec::with_capacity(max_size);
-            buf.encode_compact_bytes(s.as_bytes()).unwrap();
+            buf.write_compact_bytes(s.as_bytes()).unwrap();
             assert!(buf.len() <= max_size);
             let mut input = buf.as_slice();
             let decoded = decode_compact_bytes(&mut input).unwrap();
@@ -479,7 +424,7 @@ mod tests {
         for &s in &tests {
             let max_size = s.len() + number::MAX_VAR_I64_LEN;
             let mut buf = Vec::with_capacity(max_size);
-            buf.encode_compact_bytes(s.as_bytes()).unwrap();
+            buf.write_compact_bytes(s.as_bytes()).unwrap();
             assert!(buf.len() <= max_size);
             let mut input = buf.as_slice();
             let decoded = input.decode_compact_bytes().unwrap();

@@ -120,6 +120,7 @@ panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
+codec = { path = "components/codec" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

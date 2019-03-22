@@ -14,6 +14,7 @@
 //! DO NOT MOVE THIS FILE. IT WILL BE PARSED BY `fuzz/cli.rs`. SEE `discover_fuzz_targets()`.
 
 extern crate byteorder;
+extern crate codec;
 extern crate failure;
 extern crate tikv;
 
@@ -34,52 +35,52 @@ pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
 
 #[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
-    use tikv::util::codec::number::NumberEncoder;
+    use codec::prelude::BufferNumberEncoder;
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u64()?;
         let mut buf = vec![];
-        let _ = buf.encode_u64(n);
-        let _ = buf.encode_u64_le(n);
-        let _ = buf.encode_u64_desc(n);
-        let _ = buf.encode_var_u64(n);
+        let _ = buf.write_u64(n);
+        let _ = buf.write_u64_le(n);
+        let _ = buf.write_u64_desc(n);
+        let _ = buf.write_var_u64(n);
     }
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_i64()?;
         let mut buf = vec![];
-        let _ = buf.encode_i64(n);
-        let _ = buf.encode_i64_le(n);
-        let _ = buf.encode_i64_desc(n);
-        let _ = buf.encode_var_i64(n);
+        let _ = buf.write_i64(n);
+        let _ = buf.write_i64_le(n);
+        let _ = buf.write_i64_desc(n);
+        let _ = buf.write_var_i64(n);
     }
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_f64()?;
         let mut buf = vec![];
-        let _ = buf.encode_f64(n);
-        let _ = buf.encode_f64_le(n);
-        let _ = buf.encode_f64_desc(n);
+        let _ = buf.write_f64(n);
+        let _ = buf.write_f64_le(n);
+        let _ = buf.write_f64_desc(n);
     }
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u32()?;
         let mut buf = vec![];
-        let _ = buf.encode_u32(n);
-        let _ = buf.encode_u32_le(n);
+        let _ = buf.write_u32(n);
+        let _ = buf.write_u32_le(n);
     }
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_i32()?;
         let mut buf = vec![];
-        let _ = buf.encode_i32_le(n);
+        let _ = buf.write_i32_le(n);
     }
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u16()?;
         let mut buf = vec![];
-        let _ = buf.encode_u16(n);
-        let _ = buf.encode_u16_le(n);
+        let _ = buf.write_u16(n);
+        let _ = buf.write_u16_le(n);
     }
     {
         let buf = data.to_owned();

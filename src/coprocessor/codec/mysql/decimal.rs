@@ -11,20 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use byteorder::WriteBytesExt;
+use codec::prelude::BufferNumberEncoder;
 use num;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, i32, i64, mem, u32, u64};
 
 use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
-
-use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::number;
 use crate::util::codec::BytesSlice;
 use crate::util::escape;
 
@@ -1868,15 +1866,15 @@ macro_rules! read_word {
             *$data = &$data[size..];
             Ok(res)
         } else {
-            Err(Error::unexpected_eof())
+            Err(codec::Error::UnexpectedEOF)
         }
     }};
 }
 
-pub trait DecimalEncoder: NumberEncoder {
+pub trait DecimalEncoder: BufferNumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
-    fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
+    fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> codec::Result<Res<()>> {
         self.write_all(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
@@ -1985,20 +1983,20 @@ pub trait DecimalEncoder: NumberEncoder {
         Ok(res)
     }
 
-    fn encode_decimal_to_chunk(&mut self, v: &Decimal) -> Result<()> {
+    fn encode_decimal_to_chunk(&mut self, v: &Decimal) -> codec::Result<()> {
         self.write_u8(v.int_cnt)?;
         self.write_u8(v.frac_cnt)?;
         self.write_u8(v.result_frac_cnt)?;
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
-            self.encode_i32_le(v.word_buf[id] as i32)?;
+            self.write_i32_le(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> DecimalEncoder for T {}
+impl<T: BufferNumberEncoder> DecimalEncoder for T {}
 
 impl Decimal {
     /// `decode` decodes value encoded by `encode_decimal`.

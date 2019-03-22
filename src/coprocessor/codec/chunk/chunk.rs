@@ -16,7 +16,6 @@ use super::Result;
 use crate::coprocessor::codec::Datum;
 #[cfg(test)]
 use crate::util::codec::BytesSlice;
-use std::io::Write;
 use tipb::expression::FieldType;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
@@ -105,7 +104,7 @@ pub trait ChunkEncoder: ColumnEncoder {
     }
 }
 
-impl<T: Write> ChunkEncoder for T {}
+impl<T: ColumnEncoder> ChunkEncoder for T {}
 
 /// `Row` represents one row in the chunk.
 pub struct Row<'a> {

@@ -177,6 +177,12 @@ impl From<util::codec::Error> for Error {
     }
 }
 
+impl From<codec::Error> for Error {
+    fn from(err: codec::Error) -> Error {
+        box_err!("codec:{:?}", err)
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
         let uerr: util::codec::Error = err.into();

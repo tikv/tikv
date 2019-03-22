@@ -18,10 +18,8 @@ pub mod weekmode;
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{mem, str};
 
-use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
@@ -31,13 +29,13 @@ use crate::coprocessor::codec::mysql::duration::{
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
+use crate::util::codec::{number, BytesSlice};
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
 
 pub use self::tz::Tz;
+use codec::prelude::BufferNumberEncoder;
 
 const ZERO_DATETIME_STR: &str = "0000-00-00 00:00:00";
 const ZERO_DATE_STR: &str = "0000-00-00";
@@ -822,21 +820,21 @@ impl Display for Time {
     }
 }
 
-impl<T: Write> TimeEncoder for T {}
+impl<T: BufferNumberEncoder> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
-pub trait TimeEncoder: NumberEncoder {
+pub trait TimeEncoder: BufferNumberEncoder {
     fn encode_time(&mut self, v: &Time) -> Result<()> {
         use num::ToPrimitive;
 
         if !v.is_zero() {
-            self.encode_u16(v.time.year() as u16)?;
+            self.write_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
             self.write_u8(v.time.day() as u8)?;
             self.write_u8(v.time.hour() as u8)?;
             self.write_u8(v.time.minute() as u8)?;
             self.write_u8(v.time.second() as u8)?;
-            self.encode_u32(v.time.nanosecond() / 1000)?;
+            self.write_u32(v.time.nanosecond() / 1000)?;
         } else {
             let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
             let buf = vec![0; len];

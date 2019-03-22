@@ -13,6 +13,7 @@
 
 //! Core data types.
 
+use codec::prelude::{BufferByteEncoder, BufferNumberEncoder};
 use std::fmt::{self, Display, Formatter};
 use std::u64;
 
@@ -20,10 +21,7 @@ use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 
 use crate::storage::mvcc::{Lock, Write};
-use crate::util::codec;
-use crate::util::codec::bytes;
-use crate::util::codec::bytes::BytesEncoder;
-use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::{bytes, number, Error};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -63,15 +61,15 @@ impl Key {
     #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
         // adding extra length for appending timestamp
-        let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
+        let len = bytes::max_encoded_bytes_size(key.len()) + number::U64_SIZE;
         let mut encoded = Vec::with_capacity(len);
-        encoded.encode_bytes(key, false).unwrap();
+        encoded.write_bytes(key, false).unwrap();
         Key(encoded)
     }
 
     /// Gets and moves the raw representation of this key.
     #[inline]
-    pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
+    pub fn into_raw(self) -> Result<Vec<u8>, Error> {
         let mut k = self.0;
         bytes::decode_bytes_in_place(&mut k, false)?;
         Ok(k)
@@ -79,7 +77,7 @@ impl Key {
 
     /// Gets the raw representation of this key.
     #[inline]
-    pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
+    pub fn to_raw(&self) -> Result<Vec<u8>, Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
@@ -113,7 +111,7 @@ impl Key {
     #[inline]
     pub fn append_ts(self, ts: u64) -> Key {
         let mut encoded = self.0;
-        encoded.encode_u64_desc(ts).unwrap();
+        encoded.write_u64_desc(ts).unwrap();
         Key(encoded)
     }
 
@@ -122,7 +120,7 @@ impl Key {
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
     #[inline]
-    pub fn decode_ts(&self) -> Result<u64, codec::Error> {
+    pub fn decode_ts(&self) -> Result<u64, Error> {
         Ok(Self::decode_ts_from(&self.0)?)
     }
 
@@ -130,7 +128,7 @@ impl Key {
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped key.
     #[inline]
-    pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
+    pub fn truncate_ts(mut self) -> Result<Key, Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
             // TODO: IMHO, this should be an assertion failure instead of
@@ -142,7 +140,7 @@ impl Key {
             // functions to convert between `TimestampedKey` and `Key`.
             // `TimestampedKey` is in a higher (MVCC) layer, while `Key` is
             // in the core storage engine layer.
-            Err(codec::Error::KeyLength)
+            Err(Error::KeyLength)
         } else {
             self.0.truncate(len - number::U64_SIZE);
             Ok(self)
@@ -151,9 +149,9 @@ impl Key {
 
     /// Split a ts encoded key, return the user key and timestamp.
     #[inline]
-    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
+    pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), Error> {
         if key.len() < number::U64_SIZE {
-            Err(codec::Error::KeyLength)
+            Err(Error::KeyLength)
         } else {
             let pos = key.len() - number::U64_SIZE;
             let k = &key[..pos];
@@ -164,20 +162,20 @@ impl Key {
 
     /// Extract the user key from a ts encoded key.
     #[inline]
-    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
+    pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+            return Err(Error::KeyLength);
         }
         Ok(&key[..key.len() - number::U64_SIZE])
     }
 
     /// Decode the timestamp from a ts encoded key.
     #[inline]
-    pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
+    pub fn decode_ts_from(key: &[u8]) -> Result<u64, Error> {
         let len = key.len();
         if len < number::U64_SIZE {
-            return Err(codec::Error::KeyLength);
+            return Err(Error::KeyLength);
         }
         let mut ts = &key[len - number::U64_SIZE..];
         number::decode_u64_desc(&mut ts)

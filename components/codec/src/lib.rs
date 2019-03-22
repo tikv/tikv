@@ -30,7 +30,7 @@ mod number;
 
 pub mod prelude {
     pub use super::buffer::{BufferReader, BufferWriter};
-    pub use super::byte::MemComparableByteCodec;
+    pub use super::byte::{BufferByteEncoder, MemComparableByteCodec};
     pub use super::number::{BufferNumberDecoder, BufferNumberEncoder};
 }
 

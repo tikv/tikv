@@ -15,8 +15,9 @@ use super::super::types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use crate::util::codec::number::{self, MAX_VAR_U64_LEN};
 use byteorder::ReadBytesExt;
+use codec::prelude::BufferNumberEncoder;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WriteType {
@@ -79,7 +80,7 @@ impl Write {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts).unwrap();
+        b.write_var_u64(self.start_ts).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);

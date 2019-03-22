@@ -309,8 +309,7 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_append_rpn_nodes_recursively() {
-        use crate::util::codec::number::NumberEncoder;
-
+        use codec::prelude::BufferNumberEncoder;
         // Input:
         // FnD(a, FnA(FnC(b, c, d)), FnA(FnB(e, f))
         //
@@ -334,7 +333,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_b.mut_val().encode_i64(7).unwrap();
+            node_b.mut_val().write_i64(7).unwrap();
 
             // node c
             let mut node_c = Expr::new();
@@ -343,7 +342,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_c.mut_val().encode_i64(3).unwrap();
+            node_c.mut_val().write_i64(3).unwrap();
 
             // node d
             let mut node_d = Expr::new();
@@ -352,7 +351,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_d.mut_val().encode_i64(11).unwrap();
+            node_d.mut_val().write_i64(11).unwrap();
 
             // FnC
             let mut node_fn_c = Expr::new();
@@ -386,7 +385,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::Double);
-            node_e.mut_val().encode_f64(-1.5).unwrap();
+            node_e.mut_val().write_f64(-1.5).unwrap();
 
             // node f
             let mut node_f = Expr::new();
@@ -395,7 +394,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::Double);
-            node_f.mut_val().encode_f64(100.12).unwrap();
+            node_f.mut_val().write_f64(100.12).unwrap();
 
             // FnB
             let mut node_fn_b = Expr::new();

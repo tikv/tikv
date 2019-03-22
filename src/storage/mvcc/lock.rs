@@ -14,9 +14,10 @@
 use super::super::types::Value;
 use super::{Error, Result};
 use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use crate::util::codec::bytes::{self, BytesEncoder};
-use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+use crate::util::codec::bytes;
+use crate::util::codec::number::{self, MAX_VAR_U64_LEN};
 use byteorder::ReadBytesExt;
+use codec::prelude::{BufferByteEncoder, BufferNumberEncoder};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -87,9 +88,9 @@ impl Lock {
             1 + MAX_VAR_U64_LEN + self.primary.len() + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2,
         );
         b.push(self.lock_type.to_u8());
-        b.encode_compact_bytes(&self.primary).unwrap();
-        b.encode_var_u64(self.ts).unwrap();
-        b.encode_var_u64(self.ttl).unwrap();
+        b.write_compact_bytes(&self.primary).unwrap();
+        b.write_var_u64(self.ts).unwrap();
+        b.write_var_u64(self.ttl).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);

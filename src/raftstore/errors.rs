@@ -20,7 +20,7 @@ use crossbeam::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
 use crate::pd;
-use crate::util::codec;
+use crate::util;
 use kvproto::{errorpb, metapb};
 use raft;
 
@@ -98,6 +98,13 @@ quick_error! {
             cause(err)
             description(err.description())
             display("Protobuf {}", err)
+        }
+        // TOOD: this will be removed when switch to component/codec finished
+        CodecDeprecated(err: util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+            display("Codec {}", err)
         }
         Codec(err: codec::Error) {
             from()

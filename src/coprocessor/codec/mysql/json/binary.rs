@@ -12,14 +12,13 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::{f64, str};
 
 use super::{Json, ERR_CONVERT_FAILED};
 use crate::coprocessor::codec::{Error, Result};
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::{read_slice, BytesSlice};
-use byteorder::WriteBytesExt;
+use crate::util::codec::{number, read_slice, BytesSlice};
+use codec::prelude::BufferNumberEncoder;
+
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;
@@ -93,7 +92,7 @@ impl Json {
     }
 }
 
-pub trait JsonEncoder: NumberEncoder {
+pub trait JsonEncoder: BufferNumberEncoder {
     fn encode_json(&mut self, data: &Json) -> Result<()> {
         self.write_u8(data.get_type_code())?;
         self.encode_json_body(data)
@@ -126,10 +125,10 @@ pub trait JsonEncoder: NumberEncoder {
         let mut key_offset = ELEMENT_COUNT_LEN + SIZE_LEN + key_entries_len + value_entries_len;
         for key in data.keys() {
             let encode_key = key.as_bytes();
-            let key_len = encode_keys.write(encode_key)?;
-            key_entries.encode_u32_le(key_offset as u32)?;
-            key_entries.encode_u16_le(key_len as u16)?;
-            key_offset += key_len;
+            encode_keys.write_all(encode_key)?;
+            key_entries.write_u32_le(key_offset as u32)?;
+            key_entries.write_u16_le(encode_key.len() as u16)?;
+            key_offset += encode_key.len();
         }
 
         let mut value_offset = key_offset as u32;
@@ -144,8 +143,8 @@ pub trait JsonEncoder: NumberEncoder {
             + value_entries_len
             + encode_keys.len()
             + encode_values.len();
-        self.encode_u32_le(element_count as u32)?;
-        self.encode_u32_le(size as u32)?;
+        self.write_u32_le(element_count as u32)?;
+        self.write_u32_le(size as u32)?;
         self.write_all(key_entries.as_mut())?;
         self.write_all(value_entries.as_mut())?;
         self.write_all(encode_keys.as_mut())?;
@@ -164,8 +163,8 @@ pub trait JsonEncoder: NumberEncoder {
             value_entries.encode_json_item(value, &mut value_offset, &mut encode_values)?;
         }
         let total_size = ELEMENT_COUNT_LEN + SIZE_LEN + value_entries_len + encode_values.len();
-        self.encode_u32_le(element_count as u32)?;
-        self.encode_u32_le(total_size as u32)?;
+        self.write_u32_le(element_count as u32)?;
+        self.write_u32_le(total_size as u32)?;
         self.write_all(value_entries.as_mut())?;
         self.write_all(encode_values.as_mut())?;
         Ok(())
@@ -177,21 +176,21 @@ pub trait JsonEncoder: NumberEncoder {
     }
 
     fn encode_json_i64(&mut self, data: i64) -> Result<()> {
-        self.encode_i64_le(data).map_err(Error::from)
+        self.write_i64_le(data).map_err(Error::from)
     }
 
     fn encode_json_u64(&mut self, data: u64) -> Result<()> {
-        self.encode_u64_le(data).map_err(Error::from)
+        self.write_u64_le(data).map_err(Error::from)
     }
 
     fn encode_json_f64(&mut self, data: f64) -> Result<()> {
-        self.encode_f64_le(data).map_err(Error::from)
+        self.write_f64_le(data).map_err(Error::from)
     }
 
     fn encode_str(&mut self, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
         let bytes_len = bytes.len() as u64;
-        self.encode_var_u64(bytes_len)?;
+        self.write_var_u64(bytes_len)?;
         self.write_all(bytes)?;
         Ok(())
     }
@@ -216,7 +215,7 @@ pub trait JsonEncoder: NumberEncoder {
                 }
             }
             _ => {
-                self.encode_u32_le(*offset)?;
+                self.write_u32_le(*offset)?;
                 let start_len = data_buf.len();
                 data_buf.encode_json_body(data)?;
                 *offset += (data_buf.len() - start_len) as u32;
@@ -226,7 +225,7 @@ pub trait JsonEncoder: NumberEncoder {
     }
 }
 
-impl<T: Write> JsonEncoder for T {}
+impl<T: BufferNumberEncoder> JsonEncoder for T {}
 
 impl Json {
     // `decode` decodes value encoded by `encode_json` before.
