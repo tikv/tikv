@@ -257,6 +257,13 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    /// Rollback the key. A rollback record will be inserted into write cf, so that if the
+    /// transaction's prewrite request arrives later than the rollback, the prewrite should not
+    /// succeed.
+    /// We allow a transaction's commit_ts be the same as another transaction's start_ts. The
+    /// rollback records are inserted into write_cf with the start_ts appended to the key, but the
+    /// start_ts might also be another transaction's commit_ts. In this case the rollback record
+    /// will not be inserted if it will overwrite another write record.
     pub fn rollback(&mut self, key: Key) -> Result<()> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
@@ -293,6 +300,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             self.collapse_prev_rollback(key.clone())?;
                         }
 
+                        // Avoid replacing another write record with the same key and commit_ts.
                         if !write_ts_collision {
                             // insert a Rollback to WriteCF when receives Rollback before Prewrite
                             let write = Write::new(WriteType::Rollback, ts, None);
@@ -303,8 +311,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         }
-        // If the key "key{self.start_ts}" is already occupied, it should not be replaced by a
-        // Rollback record.
+        // Avoid replacing another write record with the same key and commit_ts.
         if self
             .reader
             .seek_write(&key, self.start_ts)?
