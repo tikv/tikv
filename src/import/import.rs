@@ -66,6 +66,8 @@ impl<Client: ImportClient> ImportJob<Client> {
             self.client.clone(),
             Arc::clone(&self.engine),
         );
+
+        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(1.0);
         let mut ranges = job.run()?.into_iter().map(|range| range.range).collect();
         for i in 0..MAX_RETRY_TIMES {
             let retry_ranges = Arc::new(Mutex::new(Vec::new()));
@@ -87,6 +89,7 @@ impl<Client: ImportClient> ImportJob<Client> {
                 "current round" => %i,
             );
         }
+        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(0.0);
 
         match res {
             Ok(_) => {

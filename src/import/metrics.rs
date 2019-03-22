@@ -87,4 +87,10 @@ lazy_static! {
         exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref IMPORT_EACH_PHASE: GaugeVec = register_gauge_vec!(
+        "tikv_import_each_phase",
+        "Import each phase duration of importer",
+        &["phase"]
+    )
+    .unwrap();
 }

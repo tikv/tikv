@@ -22,6 +22,7 @@ use futures::{Async, Future, Poll, Stream};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
+use kvproto::pdpb::RequestHeader;
 use kvproto::tikvpb_grpc::*;
 
 use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
@@ -55,6 +56,10 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
     }
 
     fn has_region_id(&self, _: u64) -> Result<bool> {
+        unimplemented!()
+    }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
         unimplemented!()
     }
 }
@@ -217,6 +222,13 @@ impl ImportClient for Client {
 
     fn has_region_id(&self, id: u64) -> Result<bool> {
         Ok(self.pd.get_region_by_id(id).wait()?.is_some())
+    }
+
+    fn is_scatter_region_finished(&self, _id: u64) -> Result<bool> {
+        // TODO: gRPC have not ready for now
+        let mut header = RequestHeader::new();
+        header.set_cluster_id(self.pd.get_cluster_id()?);
+        Ok(true)
     }
 }
 

@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -25,13 +24,16 @@ use crate::util::rocksdb_util::properties::SizeProperties;
 use super::client::*;
 use super::common::*;
 use super::engine::*;
+use super::metrics::*;
 use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
 
-const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 125;
-const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 8;
+const SPLIT_WAIT_MAX_RETRY_TIMES: u64 = 125;
+const SPLIT_WAIT_INTERVAL_MILLIS: u64 = 8;
+const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 512;
+const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 50;
 
 /// PrepareJob is responsible for improving cluster data balance
 ///
@@ -72,16 +74,9 @@ impl<Client: ImportClient> PrepareJob<Client> {
             }
         };
 
+        IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(1.0);
         let num_prepares = self.prepare(&props);
-
-        // PD needs some time to scatter regions. But we don't know how much
-        // time it should take, so we just calculate an approximate duration.
-        let wait_duration = Duration::from_millis(num_prepares as u64 * 100);
-        let wait_duration = cmp::min(wait_duration, self.cfg.max_prepare_duration.0);
-        info!(
-            "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "waits" => ?wait_duration,
-        );
-        thread::sleep(wait_duration);
+        IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(0.0);
 
         info!(
             "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "takes" => ?start.elapsed(),
@@ -188,19 +183,37 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 // that PD cannot create scatter operator for the new split
                 // region because it doesn't have the meta data of the new split
                 // region.
-                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
+                for i in 0..SPLIT_WAIT_MAX_RETRY_TIMES {
                     if self.client.has_region_id(new_region.region.id)? {
                         if i > 0 {
-                            debug!("waited between split and scatter"; "retry times" => %i);
+                            debug!("waited between split"; "retry times" => %i);
+                        }
+                        break;
+                    } else if i == SPLIT_WAIT_MAX_RETRY_TIMES - 1 {
+                        warn!("split region still failed after exhausting all retries");
+                    } else {
+                        thread::sleep(Duration::from_millis(SPLIT_WAIT_INTERVAL_MILLIS));
+                    }
+                }
+                self.scatter_region(&new_region)?;
+
+                // We need to wait for scattering region finished.
+                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
+                    if self
+                        .client
+                        .is_scatter_region_finished(new_region.region.id)?
+                    {
+                        if i > 0 {
+                            debug!("waited between scatter"; "retry times" => %i);
                         }
                         break;
                     } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
-                        warn!("split region still failed after exhausting all retries");
+                        warn!("scatter region still failed after exhausting all retries");
                     } else {
                         thread::sleep(Duration::from_millis(SCATTER_WAIT_INTERVAL_MILLIS));
                     }
                 }
-                self.scatter_region(&new_region)?;
+
                 Ok(true)
             }
             Err(Error::NotLeader(new_leader)) => {
