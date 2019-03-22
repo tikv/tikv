@@ -176,6 +176,24 @@ pub struct FixtureStore {
     data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
 }
 
+impl Clone for FixtureStore {
+    fn clone(&self) -> Self {
+        let data = self
+            .data
+            .iter()
+            .map(|(k, v)| {
+                let owned_k = k.clone();
+                let owned_v = match v {
+                    Ok(v) => Ok(v.clone()),
+                    Err(e) => Err(e.maybe_clone().unwrap()),
+                };
+                (owned_k, owned_v)
+            })
+            .collect();
+        Self { data }
+    }
+}
+
 impl FixtureStore {
     pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }

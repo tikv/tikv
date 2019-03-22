@@ -61,7 +61,7 @@ impl LazyBatchColumnVec {
             self.columns[i].append(&mut other[i]);
         }
 
-        self.debug_assert_columns_equal_length();
+        self.assert_columns_equal_length();
     }
 
     /// Ensures that a column at specified `column_index` is decoded and returns a reference
@@ -105,14 +105,12 @@ impl LazyBatchColumnVec {
         self.columns[0].len()
     }
 
-    /// Debug asserts that all columns have equal length.
+    /// Asserts that all columns have equal length.
     #[inline]
-    pub fn debug_assert_columns_equal_length(&self) {
-        if cfg!(debug_assertions) {
-            let len = self.rows_len();
-            for column in &self.columns {
-                debug_assert_eq!(len, column.len());
-            }
+    pub fn assert_columns_equal_length(&self) {
+        let len = self.rows_len();
+        for column in &self.columns {
+            assert_eq!(len, column.len());
         }
     }
 
@@ -145,7 +143,7 @@ impl LazyBatchColumnVec {
             col.retain_by_index(&mut f);
         }
 
-        self.debug_assert_columns_equal_length();
+        self.assert_columns_equal_length();
     }
 
     /// Returns maximum encoded size.
@@ -174,6 +172,19 @@ impl LazyBatchColumnVec {
             }
         }
         Ok(())
+    }
+
+    /// Truncates columns into equal length. The new length of all columns would be the length of
+    /// the shortest column before calling this function.
+    pub fn truncate_into_equal_length(&mut self) {
+        let mut min_len = self.rows_len();
+        for col in &self.columns {
+            min_len = min_len.min(col.len());
+        }
+        for col in &mut self.columns {
+            col.truncate(min_len);
+        }
+        self.assert_columns_equal_length();
     }
 }
 
@@ -223,7 +234,7 @@ mod tests {
             lazy_col.push_raw(raw_datum);
         }
 
-        columns.debug_assert_columns_equal_length();
+        columns.assert_columns_equal_length();
     }
 
     /// Pushes a raw row via a datum vector.
