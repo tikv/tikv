@@ -666,11 +666,13 @@ mod tests {
 
         let mut expected_result = Vec::new();
 
+        let read_ts = 6;
+
         for (i, ts) in [5u64, 6, 7, 5, 7, 6, 5].iter().enumerate() {
             let i = i as u8;
             must_prewrite_put(&engine, &[i], &[i], &[i], ts - 1);
             must_commit(&engine, &[i], ts - 1, *ts);
-            if *ts <= 6 {
+            if *ts <= read_ts {
                 expected_result.push((Key::from_raw(&[i]), vec![i]));
             }
         }
@@ -678,7 +680,7 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ScannerBuilder::new(snapshot.clone(), 6, false)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), read_ts, false)
             .build()
             .unwrap();
 
