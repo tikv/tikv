@@ -18,7 +18,6 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use protobuf;
 use raft::{Ready, StateRole};
 use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
