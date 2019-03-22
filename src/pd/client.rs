@@ -37,6 +37,7 @@ const CLIENT_PREFIX: &str = "pd";
 const MAX_RETRY_TIMES: u64 = 10;
 const RETRY_INTERVAL_MS: u64 = 300;
 
+/// A TSO is composed by calculating `(physical << TSO_PHYSICAL_SHIFT) + logical`.
 const TSO_PHYSICAL_SHIFT: u64 = 18;
 
 pub struct RpcClient {
@@ -540,21 +541,30 @@ impl PdClient for RpcClient {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
             let (sender, receiver) = client.rl().client.tso_opt(option).unwrap();
             let send = sender.send((req, WriteFlags::default().buffer_hint(false)));
-            Box::new(
-                send.and_then(|mut s| {
-                    let _ = s.close();
-                    receiver.collect().map(|mut v| v.remove(0))
-                })
-                .map_err(Error::Grpc)
-                .and_then(move |resp| {
-                    PD_REQUEST_HISTOGRAM_VEC
-                        .with_label_values(&["get_timestamp"])
-                        .observe(duration_to_sec(timer.elapsed()));
-                    check_resp_header(resp.get_header())?;
-                    let ts = resp.get_timestamp();
-                    Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) | ts.get_logical()) as u64)
-                }),
-            ) as PdFuture<_>
+            Box::new(send.map_err(Error::Grpc).and_then(move |mut s| {
+                receiver
+                    .into_future()
+                    .then(move |res| {
+                        // After receiving, close the sink and continue
+                        future::poll_fn(move || s.close()).then(move |_| res)
+                    })
+                    .map_err(|(e, _)| Error::Grpc(e))
+                    .and_then(|(res, _)| {
+                        res.ok_or_else(|| {
+                            let e = box_err!("no response received from pd");
+                            error!("get tso failed"; "err" => ?e);
+                            e
+                        })
+                    })
+                    .and_then(move |resp| {
+                        PD_REQUEST_HISTOGRAM_VEC
+                            .with_label_values(&["get_timestamp"])
+                            .observe(duration_to_sec(timer.elapsed()));
+                        check_resp_header(resp.get_header())?;
+                        let ts = resp.get_timestamp();
+                        Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) | ts.get_logical()) as u64)
+                    })
+            })) as PdFuture<_>
         };
 
         self.leader_client
