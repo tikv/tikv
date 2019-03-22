@@ -303,6 +303,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         }
+        // If the key "key{self.start_ts}" is already occupied, it should not be replaced by a
+        // Rollback record.
         if self
             .reader
             .seek_write(&key, self.start_ts)?
