@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::mem;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::u64;
@@ -52,6 +53,15 @@ pub enum ProcessResult {
     Locks { locks: Vec<LockInfo> },
     NextCommand { cmd: Command },
     Failed { err: StorageError },
+}
+
+impl ProcessResult {
+    pub fn has_next_command(&self) -> bool {
+        match *self {
+            ProcessResult::NextCommand { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 /// Delivers the process result of a command to the storage callback.
@@ -147,7 +157,13 @@ impl<E: Engine> Executor<E> {
     }
 
     /// Start the execution of the task.
-    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
+    pub fn execute(
+        mut self,
+        cb_ctx: CbContext,
+        snapshot: EngineResult<E::Snap>,
+        task: Task,
+        storage_cb: Arc<Mutex<Option<StorageCb>>>,
+    ) {
         debug!(
             "receive snapshot finish msg";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -159,7 +175,7 @@ impl<E: Engine> Executor<E> {
                     .with_label_values(&[task.tag, "snapshot_ok"])
                     .inc();
 
-                self.process_by_worker(cb_ctx, snapshot, task);
+                self.process_by_worker(cb_ctx, snapshot, task, storage_cb);
             }
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC
@@ -173,6 +189,7 @@ impl<E: Engine> Executor<E> {
                         cid: task.cid,
                         err: Error::from(err),
                         tag: task.tag,
+                        cb: storage_cb,
                     },
                 );
             }
@@ -180,7 +197,13 @@ impl<E: Engine> Executor<E> {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
+    fn process_by_worker(
+        mut self,
+        cb_ctx: CbContext,
+        snapshot: E::Snap,
+        mut task: Task,
+        storage_cb: Arc<Mutex<Option<StorageCb>>>,
+    ) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[task.tag, "process"])
             .inc();
@@ -207,9 +230,9 @@ impl<E: Engine> Executor<E> {
             let timer = SlowTimer::new();
 
             let statistics = if readonly {
-                self.process_read(ctx, snapshot, task)
+                self.process_read(ctx, snapshot, task, storage_cb)
             } else {
-                self.process_write(ctx, snapshot, task)
+                self.process_write(ctx, snapshot, task, storage_cb)
             };
             ctx.add_statistics(tag, &statistics);
             slow_log!(
@@ -229,6 +252,7 @@ impl<E: Engine> Executor<E> {
         sched_ctx: &mut SchedContext<E>,
         snapshot: E::Snap,
         task: Task,
+        storage_cb: Arc<Mutex<Option<StorageCb>>>,
     ) -> Statistics {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
@@ -239,7 +263,15 @@ impl<E: Engine> Executor<E> {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        notify_scheduler(
+            self.take_scheduler(),
+            Msg::ReadFinished {
+                cid,
+                pr,
+                tag,
+                cb: storage_cb,
+            },
+        );
         statistics
     }
 
@@ -250,6 +282,7 @@ impl<E: Engine> Executor<E> {
         sched_ctx: &SchedContext<E>,
         snapshot: E::Snap,
         task: Task,
+        storage_cb: Arc<Mutex<Option<StorageCb>>>,
     ) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
@@ -263,29 +296,56 @@ impl<E: Engine> Executor<E> {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "write"])
                     .inc();
+                let has_next_command = pr.has_next_command();
                 if to_be_write.is_empty() {
                     Msg::WriteFinished {
                         cid,
-                        pr,
-                        result: Ok(()),
+                        pr: Some(pr),
                         tag,
+                        cb: storage_cb,
                     }
                 } else {
                     let sched = scheduler.clone();
                     // The callback to receive async results of write prepare from the storage engine.
+                    let cb = storage_cb.clone();
                     let engine_cb = Box::new(move |(_, result)| {
-                        if notify_scheduler(
-                            sched,
-                            Msg::WriteFinished {
-                                cid,
-                                pr,
-                                result,
-                                tag,
+                        let pr = match result {
+                            Ok(()) => pr,
+                            Err(e) => ProcessResult::Failed {
+                                err: crate::storage::Error::from(e),
                             },
-                        ) {
-                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .with_label_values(&[tag])
-                                .observe(rows as f64);
+                        };
+                        if has_next_command {
+                            if notify_scheduler(
+                                sched,
+                                Msg::WriteFinished {
+                                    cid,
+                                    pr: Some(pr),
+                                    tag,
+                                    cb,
+                                },
+                            ) {
+                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                    .with_label_values(&[tag])
+                                    .observe(rows as f64);
+                            }
+                        } else {
+                            let cb_inner = cb.lock().unwrap().take().unwrap();
+                            if notify_scheduler(
+                                sched,
+                                Msg::WriteFinished {
+                                    cid,
+                                    pr: None,
+                                    tag,
+                                    cb,
+                                },
+                            ) {
+                                KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                    .with_label_values(&[tag])
+                                    .observe(rows as f64);
+                            }
+                            // Notify caller in engine, this can shortcut the latency.
+                            execute_callback(cb_inner, pr);
                         }
                     });
 
@@ -296,7 +356,12 @@ impl<E: Engine> Executor<E> {
 
                         error!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
-                        Msg::FinishedWithErr { cid, err, tag }
+                        Msg::FinishedWithErr {
+                            cid,
+                            err,
+                            tag,
+                            cb: storage_cb,
+                        }
                     } else {
                         return statistics;
                     }
@@ -310,7 +375,12 @@ impl<E: Engine> Executor<E> {
                     .inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);
-                Msg::FinishedWithErr { cid, err, tag }
+                Msg::FinishedWithErr {
+                    cid,
+                    err,
+                    tag,
+                    cb: storage_cb,
+                }
             }
         };
         notify_scheduler(scheduler, msg);

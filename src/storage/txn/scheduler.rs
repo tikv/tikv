@@ -32,12 +32,12 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::{Arc, Mutex};
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use crate::storage::engine::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 use crate::util::collections::HashMap;
@@ -64,17 +64,19 @@ pub enum Msg {
         cid: u64,
         pr: ProcessResult,
         tag: &'static str,
+        cb: Arc<Mutex<Option<StorageCb>>>,
     },
     WriteFinished {
         cid: u64,
-        pr: ProcessResult,
-        result: EngineResult<()>,
+        pr: Option<ProcessResult>,
         tag: &'static str,
+        cb: Arc<Mutex<Option<StorageCb>>>,
     },
     FinishedWithErr {
         cid: u64,
         err: Error,
         tag: &'static str,
+        cb: Arc<Mutex<Option<StorageCb>>>,
     },
 }
 
@@ -101,7 +103,7 @@ impl Display for Msg {
 // It stores context of a task.
 struct TaskContext {
     lock: Lock,
-    cb: StorageCb,
+    cb: Option<StorageCb>,
     write_bytes: usize,
     tag: &'static str,
     // How long it waits on latches.
@@ -111,7 +113,7 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(lock: Lock, cb: StorageCb, cmd: &Command) -> TaskContext {
+    fn new(lock: Lock, cb: Option<StorageCb>, cmd: &Command) -> TaskContext {
         let write_bytes = if lock.is_write_lock() {
             cmd.write_bytes()
         } else {
@@ -218,7 +220,7 @@ impl<E: Engine> Scheduler<E> {
         let tctx = {
             let cmd = task.cmd();
             let lock = self.gen_lock(cmd);
-            TaskContext::new(lock, callback, cmd)
+            TaskContext::new(lock, Some(callback), cmd)
         };
 
         self.running_write_bytes += tctx.write_bytes;
@@ -285,14 +287,10 @@ impl<E: Engine> Scheduler<E> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for furthur processing.
     fn try_to_wake_up(&mut self, cid: u64) {
-        let wake = if let Some(tctx) = self.acquire_lock(cid) {
+        if let Some(tctx) = self.acquire_lock(cid) {
             tctx.on_schedule();
-            true
-        } else {
-            false
-        };
-        if wake {
-            self.get_snapshot(cid);
+            let cb = Arc::new(Mutex::new(tctx.cb.take()));
+            self.get_snapshot(cid, cb);
         }
     }
 
@@ -320,14 +318,15 @@ impl<E: Engine> Scheduler<E> {
 
     /// Initiates an async operation to get a snapshot from the storage engine, then posts a
     /// `SnapshotFinished` message back to the event loop when it finishes.
-    fn get_snapshot(&mut self, cid: u64) {
+    fn get_snapshot(&mut self, cid: u64, storage_cb: Arc<Mutex<Option<StorageCb>>>) {
         let task = self.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority());
 
+        let storage_cb_clone = storage_cb.clone();
         let cb = Box::new(move |(cb_ctx, snapshot)| {
-            executor.execute(cb_ctx, snapshot, task);
+            executor.execute(cb_ctx, snapshot, task, storage_cb);
         });
         if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
             SCHED_STAGE_COUNTER_VEC
@@ -335,7 +334,7 @@ impl<E: Engine> Scheduler<E> {
                 .inc();
 
             error!("engine async_snapshot failed"; "err" => ?e);
-            self.finish_with_err(cid, e.into());
+            self.finish_with_err(cid, e.into(), storage_cb_clone);
         } else {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[tag, "snapshot"])
@@ -344,7 +343,7 @@ impl<E: Engine> Scheduler<E> {
     }
 
     /// Calls the callback with an error.
-    fn finish_with_err(&mut self, cid: u64, err: Error) {
+    fn finish_with_err(&mut self, cid: u64, err: Error, cb: Arc<Mutex<Option<StorageCb>>>) {
         debug!("command finished with error"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
 
@@ -352,10 +351,11 @@ impl<E: Engine> Scheduler<E> {
             .with_label_values(&[tctx.tag, "error"])
             .inc();
 
+        let cb = cb.lock().unwrap().take().unwrap();
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        execute_callback(tctx.cb, pr);
+        execute_callback(cb, pr);
 
         self.release_lock(&tctx.lock, cid);
     }
@@ -364,20 +364,27 @@ impl<E: Engine> Scheduler<E> {
     ///
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
-    fn on_read_finished(&mut self, cid: u64, pr: ProcessResult, tag: &str) {
+    fn on_read_finished(
+        &mut self,
+        cid: u64,
+        pr: ProcessResult,
+        tag: &str,
+        storage_cb: Arc<Mutex<Option<StorageCb>>>,
+    ) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tag, "read_finish"])
             .inc();
 
         debug!("read command finished"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
+        let cb = storage_cb.lock().unwrap().take().unwrap();
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[tag, "next_cmd"])
                 .inc();
-            self.schedule_command(cmd, tctx.cb);
+            self.schedule_command(cmd, cb);
         } else {
-            execute_callback(tctx.cb, pr);
+            execute_callback(cb, pr);
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -387,9 +394,9 @@ impl<E: Engine> Scheduler<E> {
     fn on_write_finished(
         &mut self,
         cid: u64,
-        pr: ProcessResult,
-        result: EngineResult<()>,
+        pr: Option<ProcessResult>,
         tag: &str,
+        cb: Arc<Mutex<Option<StorageCb>>>,
     ) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tag, "write_finish"])
@@ -397,19 +404,17 @@ impl<E: Engine> Scheduler<E> {
 
         debug!("write finished for command"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
-        let pr = match result {
-            Ok(()) => pr,
-            Err(e) => ProcessResult::Failed {
-                err: crate::storage::Error::from(e),
-            },
-        };
-        if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "next_cmd"])
-                .inc();
-            self.schedule_command(cmd, tctx.cb);
-        } else {
-            execute_callback(tctx.cb, pr);
+
+        if let Some(pr) = pr {
+            let cb = cb.lock().unwrap().take().unwrap();
+            if let ProcessResult::NextCommand { cmd } = pr {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[tag, "next_cmd"])
+                    .inc();
+                self.schedule_command(cmd, cb);
+            } else {
+                execute_callback(cb, pr);
+            }
         }
 
         self.release_lock(&tctx.lock, cid);
@@ -453,14 +458,9 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                     return;
                 }
                 Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
-                Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
-                Msg::WriteFinished {
-                    cid,
-                    tag,
-                    pr,
-                    result,
-                } => self.on_write_finished(cid, pr, result, tag),
-                Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+                Msg::ReadFinished { cid, tag, pr, cb } => self.on_read_finished(cid, pr, tag, cb),
+                Msg::WriteFinished { cid, tag, pr, cb } => self.on_write_finished(cid, pr, tag, cb),
+                Msg::FinishedWithErr { cid, err, cb, .. } => self.finish_with_err(cid, err, cb),
             }
         }
     }
