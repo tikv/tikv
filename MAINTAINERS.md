@@ -20,7 +20,7 @@ Name | Email | Focus
 
 Name | Email | Focus
 ----|---|---
-[[Xiaoguang Sun](https://github.com/sunxiaoguang)] | [sunxiaoguang@zhihu.com](mailto:sunxiaoguang@zhihu.com) | Focus Areas: Client, Storage
+[Xiaoguang Sun](https://github.com/sunxiaoguang) | [sunxiaoguang@zhihu.com](mailto:sunxiaoguang@zhihu.com) | Focus Areas: Client, Storage
 
 # Maintaining Organizations
 
