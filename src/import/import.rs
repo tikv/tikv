@@ -30,7 +30,6 @@ use super::metrics::*;
 use super::prepare::*;
 use super::stream::*;
 use super::{Config, Error, Result};
-use tokio_timer::sleep;
 
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;

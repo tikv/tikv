@@ -165,4 +165,12 @@ impl ImportClient for MockClient {
         let regions = self.regions.lock().unwrap();
         Ok(regions.contains_key(&region_id))
     }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn is_store_available(&self, _: u64) -> Result<bool> {
+        Ok(true)
+    }
 }
