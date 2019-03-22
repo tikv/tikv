@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tikv::util::collections::HashMap;
 
@@ -30,6 +30,7 @@ pub struct Service {
     stores: Mutex<HashMap<u64, Store>>,
     regions: Mutex<HashMap<u64, Region>>,
     leaders: Mutex<HashMap<u64, Peer>>,
+    tso: AtomicU64,
 }
 
 impl Service {
@@ -41,6 +42,7 @@ impl Service {
             stores: Mutex::new(HashMap::default()),
             regions: Mutex::new(HashMap::default()),
             leaders: Mutex::new(HashMap::default()),
+            tso: AtomicU64::new(100),
         }
     }
 
@@ -281,5 +283,18 @@ impl PdMocker for Service {
         info!("[Service] members_resp {:?}", members_resp);
         let mut resp = self.members_resp.lock().unwrap();
         *resp = Some(members_resp);
+    }
+
+    fn get_timestamp(&self, req: &TsoRequest) -> Option<Result<TsoResponse>> {
+        let mut resp = TsoResponse::new();
+        let header = Service::header();
+        resp.set_header(header);
+        let ts = self.tso.fetch_add(req.get_count() as u64, Ordering::SeqCst);
+        resp.set_count(req.get_count());
+        let mut timestamp = Timestamp::new();
+        timestamp.set_physical((ts >> 18) as i64);
+        timestamp.set_logical((ts & 0x3ffff) as i64);
+        resp.set_timestamp(timestamp);
+        Some(Ok(resp))
     }
 }

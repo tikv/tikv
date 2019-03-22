@@ -178,8 +178,35 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         hijack_unary(self, ctx, sink, |c| c.get_members(&req))
     }
 
-    fn tso(&mut self, _: RpcContext<'_>, _: RequestStream<TsoRequest>, _: DuplexSink<TsoResponse>) {
-        unimplemented!()
+    fn tso(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<TsoRequest>,
+        sink: DuplexSink<TsoResponse>,
+    ) {
+        let mock = self.clone();
+        let f = sink
+            .sink_map_err(PdError::from)
+            .send_all(
+                stream
+                    .map_err(PdError::from)
+                    .and_then(move |req| {
+                        let resp = mock
+                            .case
+                            .as_ref()
+                            .and_then(|case| case.get_timestamp(&req))
+                            .or_else(|| mock.default_handler.get_timestamp(&req));
+                        match resp {
+                            None => Ok(None),
+                            Some(Ok(resp)) => Ok(Some((resp, WriteFlags::default()))),
+                            Some(Err(e)) => Err(box_err!("{:?}", e)),
+                        }
+                    })
+                    .filter_map(|o| o),
+            )
+            .map(|_| ())
+            .map_err(|e| error!("failed to handle heartbeat: {:?}", e));
+        ctx.spawn(f)
     }
 
     fn bootstrap(
