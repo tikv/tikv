@@ -562,7 +562,7 @@ impl PdClient for RpcClient {
                             .observe(duration_to_sec(timer.elapsed()));
                         check_resp_header(resp.get_header())?;
                         let ts = resp.get_timestamp();
-                        Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) | ts.get_logical()) as u64)
+                        Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) + ts.get_logical()) as u64)
                     })
             })) as PdFuture<_>
         };
