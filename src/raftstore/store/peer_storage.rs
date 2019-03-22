@@ -1542,7 +1542,7 @@ pub fn maybe_upgrade_from_2_to_3(
             if suffix == keys::APPLY_STATE_SUFFIX {
                 // apply_state_key
                 upgrade_raft_wb.put(key, value)?;
-                info!("upgrading apply state"; "region_id" => region_id, "value" => ?value);
+                info!("upgrading apply state"; "region_id" => region_id);
                 return Ok(true);
             } else if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
                 // snapshot_raft_state_key
@@ -1579,7 +1579,7 @@ pub fn maybe_upgrade_from_2_to_3(
         } else if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
             if suffix == keys::REGION_STATE_SUFFIX {
                 upgrade_raft_wb.put(key, value)?;
-                info!("upgrading region state"; "region_id" => region_id, "value" => ?value);
+                info!("upgrading region state"; "region_id" => region_id);
                 return Ok(true);
             }
         }
