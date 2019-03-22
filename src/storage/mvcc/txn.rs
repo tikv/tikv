@@ -263,7 +263,9 @@ impl<S: Snapshot> MvccTxn<S> {
     /// We allow a transaction's commit_ts be the same as another transaction's start_ts. The
     /// rollback records are inserted into write_cf with the start_ts appended to the key, but the
     /// start_ts might also be another transaction's commit_ts. In this case the rollback record
-    /// will not be inserted if it will overwrite another write record.
+    /// will not be inserted if it will overwrite another write record. Prewrite will meet conflict
+    /// if its start_ts is the same as the timestamp of a record in write cf, no matter whether it's
+    /// a rollback record or not.
     pub fn rollback(&mut self, key: Key) -> Result<()> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
