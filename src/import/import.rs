@@ -30,9 +30,11 @@ use super::metrics::*;
 use super::prepare::*;
 use super::stream::*;
 use super::{Config, Error, Result};
+use tokio_timer::sleep;
 
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
+const STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS: u64 = 1000;
 
 /// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
@@ -389,6 +391,12 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             let file = self.sst.info.open()?;
             let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();
+            while !self.client.is_store_available(store_id)? {
+                IMPORT_WAIT_STORE_AVAILABLE_COUNTER.inc();
+                thread::sleep(Duration::from_millis(
+                    STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS,
+                ))
+            }
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
                     info!("upload"; "tag" => %self.tag, "store" => %store_id);

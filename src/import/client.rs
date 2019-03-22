@@ -62,6 +62,10 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
     fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
         unimplemented!()
     }
+
+    fn is_store_available(&self, _: u64) -> Result<bool> {
+        unimplemented!()
+    }
 }
 
 pub struct Client {
@@ -224,7 +228,14 @@ impl ImportClient for Client {
         Ok(self.pd.get_region_by_id(id).wait()?.is_some())
     }
 
-    fn is_scatter_region_finished(&self, _id: u64) -> Result<bool> {
+    fn is_scatter_region_finished(&self, _region_id: u64) -> Result<bool> {
+        // TODO: gRPC have not ready for now
+        let mut header = RequestHeader::new();
+        header.set_cluster_id(self.pd.get_cluster_id()?);
+        Ok(true)
+    }
+
+    fn is_store_available(&self, _store_id: u64) -> Result<bool> {
         // TODO: gRPC have not ready for now
         let mut header = RequestHeader::new();
         header.set_cluster_id(self.pd.get_cluster_id()?);
