@@ -115,7 +115,7 @@ impl Column {
             Datum::F64(v) => self.append_f64(*v),
             Datum::Bytes(ref v) => self.append_bytes(v),
             Datum::Dec(ref v) => self.append_decimal(v),
-            Datum::Dur(ref v) => self.append_duration(v),
+            Datum::Dur(v) => self.append_duration(*v),
             Datum::Time(ref v) => self.append_time(v),
             Datum::Json(ref v) => self.append_json(v),
             _ => Err(box_err!("unsupported datum {:?}", data)),
@@ -291,7 +291,7 @@ impl Column {
     }
 
     /// Append a duration datum to the column.
-    pub fn append_duration(&mut self, d: &Duration) -> Result<()> {
+    pub fn append_duration(&mut self, d: Duration) -> Result<()> {
         self.data.encode_duration(d)?;
         self.finish_append_fixed()
     }

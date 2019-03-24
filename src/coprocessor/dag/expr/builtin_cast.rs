@@ -419,8 +419,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
-        let mut val =
-            Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+        let mut val = Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, *val)?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }

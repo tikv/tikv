@@ -133,7 +133,7 @@ impl Datum {
             Datum::U64(u) => self.cmp_u64(ctx, u),
             Datum::F64(f) => self.cmp_f64(ctx, f),
             Datum::Bytes(ref bs) => self.cmp_bytes(ctx, bs),
-            Datum::Dur(ref d) => self.cmp_dur(ctx, d),
+            Datum::Dur(d) => self.cmp_dur(ctx, d),
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(ref t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(j),
@@ -236,12 +236,12 @@ impl Datum {
         }
     }
 
-    fn cmp_dur(&self, ctx: &mut EvalContext, d: &Duration) -> Result<Ordering> {
+    fn cmp_dur(&self, ctx: &mut EvalContext, d: Duration) -> Result<Ordering> {
         match *self {
-            Datum::Dur(ref d2) => Ok(d2.cmp(d)),
+            Datum::Dur(ref d2) => Ok(d2.cmp(&d)),
             Datum::Bytes(ref bs) => {
                 let d2 = Duration::parse(bs, MAX_FSP)?;
-                Ok(d2.cmp(d))
+                Ok(d2.cmp(&d))
             }
             _ => self.cmp_f64(ctx, d.to_secs()),
         }

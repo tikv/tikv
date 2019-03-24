@@ -77,7 +77,7 @@ impl ScalarFunc {
     #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-        Ok(Some(i64::from(dur.micro_secs())))
+        Ok(Some(dur.micro_secs() as i64))
     }
 
     #[inline]
@@ -286,7 +286,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_add(&arg1) {
+        let mut res = match arg0.into_owned().checked_add(*arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -305,7 +305,7 @@ impl ScalarFunc {
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_add(&arg1) {
+        let mut res = match arg0.into_owned().checked_add(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -358,7 +358,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(&arg1) {
+        let res = match arg0.into_owned().checked_add(*arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -376,7 +376,7 @@ impl ScalarFunc {
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(&arg1) {
+        let res = match arg0.into_owned().checked_add(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -401,7 +401,7 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_sub(&arg1) {
+        let mut res = match arg0.into_owned().checked_sub(*arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -420,7 +420,7 @@ impl ScalarFunc {
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_sub(&arg1) {
+        let mut res = match arg0.into_owned().checked_sub(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };

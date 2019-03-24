@@ -36,27 +36,24 @@ fn check_fsp(fsp: i8) -> Result<u8> {
 
 /// Parse string as if it's a fraction part of a number and keep
 /// only `fsp` precision.
-fn parse_frac(s: &[u8], fsp: u8) -> Result<u32> {
-    if s.is_empty() {
+fn parse_frac(frac: &str, fsp: u8) -> Result<u32> {
+    if frac.is_empty() {
         return Ok(0);
     }
 
-    if s.iter().any(|&c| c < b'0' || c > b'9') {
-        return Err(invalid_type!("{} contains invalid char", escape(s)));
-    }
-    let res = s
-        .iter()
-        .take(fsp as usize + 1)
-        .fold(0, |l, r| l * 10 + u32::from(r - b'0'));
-    if s.len() > fsp as usize {
-        if res % 10 >= 5 {
-            Ok(res / 10 + 1)
-        } else {
-            Ok(res / 10)
-        }
+    let fsp = fsp as usize;
+    let mapping = |_| invalid_type!("{} contains invalid char", escape(frac.as_bytes()));
+
+    Ok(if frac.len() <= fsp {
+        frac.parse::<u32>().map_err(mapping)? * 10u32.pow((fsp - frac.len()) as u32)
     } else {
-        Ok(res * 10u32.pow((fsp as usize - s.len()) as u32))
-    }
+        let result = frac[..=fsp].parse::<u32>().map_err(mapping)?;
+        if result % 10 > 4 {
+            result / 10 + 1
+        } else {
+            result / 10
+        }
+    })
 }
 
 pub mod charset;
@@ -84,7 +81,7 @@ mod tests {
         ];
 
         for (s, fsp, exp) in cases {
-            let res = super::parse_frac(s.as_bytes(), fsp).unwrap();
+            let res = super::parse_frac(s, fsp).unwrap();
             assert_eq!(res, exp);
         }
     }
