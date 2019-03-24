@@ -342,26 +342,12 @@ impl ScalarFunc {
             return 0;
         }
         let year = month / 12;
-        const FINAL_PERIOD: u64 = 206812;
-        let (period, overflowing) = year.overflowing_mul(100);
-        if overflowing {
-            return FINAL_PERIOD;
-        }
-        let (period, overflowing) = period.overflowing_add(if year < 70 {
-            month % 12 + 1 + 200000 // 2000*100
+        if year < 70 {
+            year * 100 + month % 12 + 1 + 200000 // 2000*100
         } else if year < 100 {
-            month % 12 + 1 + 190000 // 1900*100
+            year * 100 + month % 12 + 1 + 190000 // 1900*100
         } else {
-            month % 12 + 1
-        });
-        if overflowing {
-            return FINAL_PERIOD;
-        }
-        const MAX_SIGNED: u64 = 9223372036854775807;
-        if period > MAX_SIGNED {
-            FINAL_PERIOD
-        } else {
-            period
+            year * 100 + month % 12 + 1
         }
     }
 
@@ -371,12 +357,8 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, overflowing) = Self::period_to_month(p as u64).overflowing_add(n as u64);
-        const FINAL_PERIOD: i64 = 206812;
-        if overflowing {
-            return Ok(Some(FINAL_PERIOD));
-        }
-        Ok(Some(Self::month_to_period(month) as i64))
+        let (month, _) = (Self::period_to_month(p as u64) as i32 as i64).overflowing_add(n);
+        Ok(Some(Self::month_to_period(month as u32 as u64) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -1414,7 +1396,7 @@ mod tests {
             (196802, 14, 196904),
             (6901, 13, 207002),
             (7001, 13, 197102),
-            (200212, 9223372036854775807, 206812),
+            (200212, 9223372036854775807, 200211),
         ];
         let mut ctx = EvalContext::default();
         for (arg1, arg2, exp) in cases {
