@@ -174,26 +174,18 @@ impl<S: Store> Scanner<S> {
 pub mod tests {
     use std::i64;
 
-    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use cop_datatype::FieldTypeTp;
+    use kvproto::kvrpcpb::IsolationLevel;
     use tipb::schema::ColumnInfo;
 
+    use super::super::executor::tests::{get_range, new_col_info, TestStore};
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::codec::table;
     use crate::coprocessor::util;
-    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
-    use crate::storage::mvcc::MvccTxn;
-    use crate::storage::{Key, Mutation, Options, SnapshotStore};
+    use crate::storage::SnapshotStore;
     use crate::util::collections::HashMap;
 
     use super::*;
-
-    pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
-        let mut col_info = ColumnInfo::new();
-        col_info.as_mut_accessor().set_tp(tp);
-        col_info.set_column_id(cid);
-        col_info
-    }
 
     pub struct Data {
         pub kv_data: Vec<(Vec<u8>, Vec<u8>)>,
@@ -254,83 +246,6 @@ pub mod tests {
             expect_rows,
             cols,
         }
-    }
-
-    const START_TS: u64 = 10;
-    const COMMIT_TS: u64 = 20;
-
-    pub struct TestStore {
-        snapshot: RocksSnapshot,
-        ctx: Context,
-        engine: RocksEngine,
-    }
-
-    impl TestStore {
-        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
-            let engine = TestEngineBuilder::new().build().unwrap();
-            let ctx = Context::new();
-            let snapshot = engine.snapshot(&ctx).unwrap();
-            let mut store = TestStore {
-                snapshot,
-                ctx,
-                engine,
-            };
-            store.init_data(kv_data);
-            store
-        }
-
-        fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
-            if kv_data.is_empty() {
-                return;
-            }
-
-            // do prewrite.
-            let txn_motifies = {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
-                let mut pk = vec![];
-                for &(ref key, ref value) in kv_data {
-                    if pk.is_empty() {
-                        pk = key.clone();
-                    }
-                    txn.prewrite(
-                        Mutation::Put((Key::from_raw(key), value.to_vec())),
-                        &pk,
-                        &Options::default(),
-                    )
-                    .unwrap();
-                }
-                txn.into_modifies()
-            };
-            self.write_modifies(txn_motifies);
-
-            // do commit
-            let txn_modifies = {
-                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
-                for &(ref key, _) in kv_data {
-                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
-                }
-                txn.into_modifies()
-            };
-            self.write_modifies(txn_modifies);
-        }
-
-        #[inline]
-        fn write_modifies(&mut self, txn: Vec<Modify>) {
-            self.engine.write(&self.ctx, txn).unwrap();
-            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
-        }
-
-        pub fn get_snapshot(&mut self) -> (RocksSnapshot, u64) {
-            (self.snapshot.clone(), COMMIT_TS + 1)
-        }
-    }
-
-    #[inline]
-    pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
-        let mut key_range = KeyRange::new();
-        key_range.set_start(table::encode_row_key(table_id, start));
-        key_range.set_end(table::encode_row_key(table_id, end));
-        key_range
     }
 
     pub fn get_point_range(table_id: i64, handle: i64) -> KeyRange {

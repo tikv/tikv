@@ -166,23 +166,17 @@ pub mod tests {
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
-    use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
-    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
-    use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::table::{self, RowColsDict};
+    use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
     use crate::util::codec::number::NumberEncoder;
     use crate::util::collections::HashMap;
 
-    use crate::storage::SnapshotStore;
-
-    use super::super::table_scan::TableScanExecutor;
+    use super::super::tests::*;
     use super::*;
-    use crate::coprocessor::dag::scanner::tests::{get_range, new_col_info, TestStore};
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -351,23 +345,6 @@ pub mod tests {
         assert!(topn_heap.into_sorted_vec().is_err());
     }
 
-    // the first column should be i64 since it will be used as row handle
-    pub fn gen_table_data(
-        tid: i64,
-        cis: &[ColumnInfo],
-        rows: &[Vec<Datum>],
-    ) -> Vec<(Vec<u8>, Vec<u8>)> {
-        let mut kv_data = Vec::new();
-        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
-        for cols in rows.iter() {
-            let col_values: Vec<_> = cols.to_vec();
-            let value = table::encode_row(col_values, &col_ids).unwrap();
-            let key = table::encode_row_key(tid, cols[0].i64());
-            kv_data.push((key, value));
-        }
-        kv_data
-    }
-
     #[test]
     fn test_topn_executor() {
         // prepare data and store
@@ -414,20 +391,11 @@ pub mod tests {
                 Datum::Dec(6.into()),
             ],
         ];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
         // prepare range
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        // init TableScan
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, snap, true).unwrap();
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -439,7 +407,7 @@ pub mod tests {
         topn.set_limit(limit);
         // init topn executor
         let mut topn_ect =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), Box::new(ts_ect)).unwrap();
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
             topn_rows.push(row.take_origin());
@@ -469,19 +437,11 @@ pub mod tests {
             Datum::Bytes(b"a".to_vec()),
             Datum::Dec(7.into()),
         ]];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
         // prepare range
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        // init TableScan
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let snap = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -491,12 +451,8 @@ pub mod tests {
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
         // test with limit=0
         topn.set_limit(0);
-        let mut topn_ect = TopNExecutor::new(
-            topn,
-            Arc::new(EvalConfig::default()),
-            Box::new(TableScanExecutor::new(table_scan, key_ranges, snap, false).unwrap()),
-        )
-        .unwrap();
+        let mut topn_ect =
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }
 }
