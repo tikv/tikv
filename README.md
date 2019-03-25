@@ -1,6 +1,9 @@
 ![tikv_logo](images/tikv-logo.png)
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/) [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
+[![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
+![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
 TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
@@ -205,7 +208,13 @@ Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invit
 
 ### WeChat
 
-The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personal information (WeChat ID, and other basic information) included. We will invite you in right away.
+The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
+
+- WeChat ID (**Required**)
+- PR you submitted to TiKV Repos (**Required**)
+- Other basic information
+
+We will invite you in right away.
 
 ## License
 

@@ -261,7 +261,7 @@ impl VectorValue {
     pub fn push_datum(
         &mut self,
         mut raw_datum: &[u8],
-        time_zone: Tz,
+        time_zone: &Tz,
         field_type: &FieldType,
     ) -> Result<()> {
         #[inline]
@@ -328,7 +328,7 @@ impl VectorValue {
         #[inline]
         fn decode_date_time_from_uint(
             v: u64,
-            time_zone: Tz,
+            time_zone: &Tz,
             field_type: &FieldType,
         ) -> Result<DateTime> {
             let fsp = field_type.decimal() as i8;
@@ -966,7 +966,7 @@ mod benches {
                 column
                     .push_datum(
                         test::black_box(&datum_raw),
-                        test::black_box(tz),
+                        test::black_box(&tz),
                         test::black_box(&field_type),
                     )
                     .unwrap();
