@@ -133,4 +133,8 @@ pub trait PdMocker {
     ) -> Option<Result<GetGCSafePointResponse>> {
         None
     }
+
+    fn get_timestamp(&self, _: &TsoRequest) -> Option<Result<TsoResponse>> {
+        None
+    }
 }

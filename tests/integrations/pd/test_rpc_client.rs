@@ -455,3 +455,18 @@ fn test_region_heartbeat_on_leader_change() {
     // Change PD leader twice without update the heartbeat sender, then heartbeat PD.
     heartbeat_on_leader_change(2);
 }
+
+#[test]
+fn test_get_timestamp() {
+    let eps_count = 1;
+    let server = MockServer::new(eps_count);
+    let eps = server.bind_addrs();
+    let client = new_client(eps.clone(), None);
+
+    let mut ts = client.get_timestamp().wait().unwrap();
+    for _ in 0..20 {
+        let new_ts = client.get_timestamp().wait().unwrap();
+        assert!(ts < new_ts);
+        ts = new_ts;
+    }
+}

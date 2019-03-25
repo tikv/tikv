@@ -1163,6 +1163,7 @@ impl PdClient for TestPdClient {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
+
         let ts = self.cluster.rl().get_timestamp();
         Box::new(ok(ts))
     }
