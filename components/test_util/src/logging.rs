@@ -22,7 +22,7 @@ use time;
 
 use tikv;
 
-struct Serializer<'a>(&'a mut dyn std::io::Write);
+struct Serializer<'a>(&'a mut dyn io::Write);
 
 impl<'a> slog::ser::Serializer for Serializer<'a> {
     fn emit_arguments(&mut self, key: slog::Key, val: &std::fmt::Arguments<'_>) -> slog::Result {
@@ -38,10 +38,10 @@ struct CaseTraceLogger {
 
 impl CaseTraceLogger {
     fn write_log(
-        w: &mut dyn::std::io::Write,
+        w: &mut dyn io::Write,
         record: &Record<'_>,
         values: &OwnedKVList,
-    ) -> Result<(), ::std::io::Error> {
+    ) -> Result<(), io::Error> {
         use slog::KV;
 
         let tag = tikv::util::get_tag_from_thread_name().map_or_else(|| "".to_owned(), |s| s + " ");
