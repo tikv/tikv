@@ -45,6 +45,7 @@ extern crate serde_derive;
     slog_warn,
     slog_info,
     slog_debug,
+    slog_crit,
     slog_log,
     slog_record,
     slog_b,
