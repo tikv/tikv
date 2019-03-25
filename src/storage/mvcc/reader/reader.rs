@@ -256,6 +256,9 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    /// Gets `commit_ts` and `WriteType` of the transaction with specified `start_ts`.
+    /// The second return value indicates whether there is a write value with commit_ts equals to
+    /// the given `start_ts`.
     pub fn get_txn_commit_info(
         &mut self,
         key: &Key,

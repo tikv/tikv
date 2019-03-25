@@ -257,6 +257,15 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    /// Rollback the key. A rollback record will be inserted into write cf, so that if the
+    /// transaction's prewrite request arrives later than the rollback, the prewrite should not
+    /// succeed.
+    /// We allow a transaction's commit_ts be the same as another transaction's start_ts. The
+    /// rollback records are inserted into write_cf with the start_ts appended to the key, but the
+    /// start_ts might also be another transaction's commit_ts. In this case the rollback record
+    /// will not be inserted if it will overwrite another write record. And it's safe to skip
+    /// writing the rollback record, because prewrite will still not succeed since its start_ts is
+    /// the same as another transaction's commit_ts.
     pub fn rollback(&mut self, key: Key) -> Result<()> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
@@ -293,6 +302,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             self.collapse_prev_rollback(key.clone())?;
                         }
 
+                        // Avoid replacing another write record with the same key and commit_ts.
                         if !write_ts_collision {
                             // insert a Rollback to WriteCF when receives Rollback before Prewrite
                             let write = Write::new(WriteType::Rollback, ts, None);
@@ -303,6 +313,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         }
+        // Avoid replacing another write record with the same key and commit_ts.
         if self
             .reader
             .seek_write(&key, self.start_ts)?
@@ -1006,6 +1017,8 @@ mod tests {
     fn test_rollback_key_collision() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
+        // Rollback before prewrite with key collision (rollback's start_ts is the same as another
+        // transaction's commit_ts)
         must_prewrite_put(&engine, b"k5", b"v5", b"k5", 10);
         must_commit(&engine, b"k5", 10, 11);
         must_get(&engine, b"k5", 11, b"v5");
@@ -1020,18 +1033,32 @@ mod tests {
         must_rollback(&engine, b"k5", 13);
         must_get_none(&engine, b"k5", 13);
 
-        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 12);
-        must_commit(&engine, b"k4", 12, 13);
-        must_get(&engine, b"k4", 13, b"v4");
+        // Commit overwrites rollback
+        must_prewrite_put(&engine, b"k4", b"v4", b"k4", 14);
+        must_rollback(&engine, b"k4", 15);
+        must_commit(&engine, b"k4", 14, 15);
+        must_get(&engine, b"k4", 15, b"v4");
 
-        must_rollback(&engine, b"k4", 13);
-        must_get(&engine, b"k4", 13, b"v4");
+        // Rollback doesn't overwrite commit when there's another transaction's lock
+        must_prewrite_delete(&engine, b"k4", b"v4", 16);
+        must_rollback(&engine, b"k4", 15);
+        must_get(&engine, b"k4", 15, b"v4");
+        must_commit(&engine, b"k4", 16, 17);
+        must_get_none(&engine, b"k4", 17);
 
-        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 13);
-        must_rollback(&engine, b"k3", 13);
-        must_seek_write(&engine, b"k3", 13, 13, 13, WriteType::Rollback);
+        // Ensure rollback doesn't goes out of range and mistakenly find the next key
+        // Rollback after prewrite
+        must_prewrite_put(&engine, b"k3", b"v3", b"k3", 17);
+        must_rollback(&engine, b"k3", 17);
+        must_seek_write(&engine, b"k3", 17, 17, 17, WriteType::Rollback);
 
-        must_rollback(&engine, b"k2", 13);
-        must_seek_write(&engine, b"k2", 13, 13, 13, WriteType::Rollback);
+        // Rollback after another prewrite
+        must_prewrite_put(&engine, b"k2", b"v2", b"k2", 16);
+        must_rollback(&engine, b"k3", 17);
+        must_seek_write(&engine, b"k3", 17, 17, 17, WriteType::Rollback);
+
+        // Rollback before prewrite
+        must_rollback(&engine, b"k1", 17);
+        must_seek_write(&engine, b"k1", 17, 17, 17, WriteType::Rollback);
     }
 }
