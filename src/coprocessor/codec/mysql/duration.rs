@@ -27,7 +27,7 @@ pub const NANOS_PER_SEC: u64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
-const MINUTE_PER_HOUR: u64 = 60;
+const MINUTES_PER_HOUR: u64 = 60;
 const NANOS_PER_MICRO: u64 = 1_000;
 
 /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
@@ -59,7 +59,7 @@ fn check_minute(minute: u64) -> Result<u64> {
         Err(invalid_type!(
             "invalid minute: {}, larger than {}",
             minute,
-            60
+            59
         ))
     } else {
         Ok(minute)
@@ -71,7 +71,7 @@ fn check_second(second: u64) -> Result<u64> {
         Err(invalid_type!(
             "invalid second: {}, larger than {}",
             second,
-            60
+            59
         ))
     } else {
         Ok(second)
@@ -82,10 +82,10 @@ fn check_second(second: u64) -> Result<u64> {
 fn round_hms(hour: &mut u64, minute: &mut u64, second: &mut u64, nano: &mut u64) {
     *second += *nano / NANOS_PER_SEC;
     *minute += *second / SECS_PER_MINUTE;
-    *hour += *minute / MINUTE_PER_HOUR;
+    *hour += *minute / MINUTES_PER_HOUR;
     *nano %= NANOS_PER_SEC;
     *second %= SECS_PER_MINUTE;
-    *minute %= MINUTE_PER_HOUR;
+    *minute %= MINUTES_PER_HOUR;
 }
 
 /// `Duration` is the type for MySQL `time` type.
@@ -166,7 +166,7 @@ impl Duration {
     }
 
     pub fn is_zero(self) -> bool {
-        self.hour() == 0 && self.minute() == 0 && self.second() == 0 && self.nano() == 0
+        self.strip() == 0
     }
 
     pub fn to_nanos(self) -> i64 {
@@ -271,8 +271,8 @@ impl Duration {
             .ok_or(invalid_type!("invalid time format: {}", origin))?;
 
         let first_try = first.parse::<u64>();
-        let (mut minute, mut second) = (0, 0);
         let mut hour;
+        let (mut minute, mut second) = (0, 0);
         match parts.next() {
             Some(part) => {
                 hour =
@@ -282,11 +282,12 @@ impl Duration {
                     .map_err(|_| invalid_type!("fail to parse minute from: {}", part))
                     .and_then(check_minute)?;
 
-                let part = parts.next().unwrap_or("0");
-                second = part
-                    .parse::<u64>()
-                    .map_err(|_| invalid_type!("fail to parse second from: {}", part))
-                    .and_then(check_second)?;
+                if let Some(part) = parts.next() {
+                    second = part
+                        .parse::<u64>()
+                        .map_err(|_| invalid_type!("fail to parse second from: {}", part))
+                        .and_then(check_second)?;
+                }
             }
             None if day.is_some() => {
                 hour =
@@ -350,7 +351,6 @@ impl Duration {
         } else {
             nano / 10
         } * round;
-        dbg!(nano);
         round_hms(&mut hour, &mut minute, &mut second, &mut nano);
         Duration::with_detail(self.sign(), hour, minute, second, nano, fsp as u8)
     }
@@ -367,9 +367,14 @@ impl Duration {
         Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
     }
 
-    pub fn abs(self) -> u64 {
+    fn strip(self) -> u64 {
         let mask = 0x1 << 63 | 0x1ff;
         self.0 & !mask
+    }
+
+    pub fn abs(mut self) -> Self {
+        self.set_sign(false);
+        self
     }
 }
 
@@ -404,10 +409,10 @@ impl PartialEq for Duration {
 impl PartialOrd for Duration {
     fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
         Some(match (self.sign(), dur.sign()) {
-            (true, true) => dur.abs().cmp(&self.abs()),
+            (true, true) => dur.strip().cmp(&self.strip()),
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
-            (false, false) => self.abs().cmp(&dur.abs()),
+            (false, false) => self.strip().cmp(&dur.strip()),
         })
     }
 }
@@ -579,9 +584,12 @@ mod tests {
             (b"00:00:00.777777", 6, Some("00:00:00.777777")),
             (b"00:00:00.001", 3, Some("00:00:00.001")),
             (b"1:2:3", 0, Some("01:02:03")),
+            (b"1:2:3.123456", 5, Some("01:02:03.12346")),
             (b"-1:2:3", 0, Some("-01:02:03")),
             (b"-1 1:2:3", 0, Some("-25:02:03")),
             (b"1:2", 0, Some("01:02:00")),
+            (b"12345", 0, Some("01:23:45")),
+            (b"10305", 0, Some("01:03:05")),
         ];
 
         for (input, fsp, expect) in cases {
