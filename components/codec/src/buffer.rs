@@ -29,7 +29,7 @@ pub trait BufferReader {
     fn advance(&mut self, count: usize);
 }
 
-impl<T: AsRef<[u8]>> BufferReader for ::std::io::Cursor<T> {
+impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
@@ -109,7 +109,7 @@ pub trait BufferWriter {
     unsafe fn advance_mut(&mut self, count: usize);
 }
 
-impl<T: AsMut<[u8]>> BufferWriter for ::std::io::Cursor<T> {
+impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
     unsafe fn bytes_mut(&mut self, _size: usize) -> &mut [u8] {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
@@ -133,7 +133,7 @@ impl<'a> BufferWriter for &'a mut [u8] {
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {
-        let original_self = ::std::mem::replace(self, &mut []);
+        let original_self = std::mem::replace(self, &mut []);
         *self = &mut original_self[count..];
     }
 }
@@ -146,7 +146,7 @@ impl BufferWriter for Vec<u8> {
         // Ensure returned slice has enough space
         self.reserve(size);
         let ptr = self.as_mut_ptr();
-        &mut ::std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
+        &mut std::slice::from_raw_parts_mut(ptr, self.capacity())[self.len()..]
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {
@@ -188,7 +188,7 @@ mod tests {
             base.push(rand::random());
         }
 
-        let mut buffer = ::std::io::Cursor::new(base.clone());
+        let mut buffer = std::io::Cursor::new(base.clone());
 
         assert_eq!(buffer.bytes(), &base[0..40]);
         buffer.advance(13);
@@ -264,7 +264,7 @@ mod tests {
                 base_write.push(rand::random());
             }
 
-            let mut buffer = ::std::io::Cursor::new(base.clone());
+            let mut buffer = std::io::Cursor::new(base.clone());
 
             buffer.bytes_mut(13)[..13].clone_from_slice(&base_write[0..13]);
             buffer.advance_mut(13);
@@ -406,6 +406,8 @@ mod tests {
     /// Test whether it is safe to store values in `Vec` after `len()`, i.e. during
     /// reallocation these values are copied.
     #[test]
+    // FIXME(#4331) Don't ignore this test.
+    #[ignore]
     fn test_vec_reallocate() {
         // FIXME: This test, and presumably the WriteBuffer API, relies on
         // unspecified behavior of Vec::reserve (that it copies bytes

@@ -16,12 +16,12 @@ use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use kvproto::kvrpcpb::IsolationLevel;
-use std::fmt;
-use storage::engine::{Modify, ScanMode, Snapshot};
-use storage::{
+use crate::storage::engine::{Modify, ScanMode, Snapshot};
+use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
+use kvproto::kvrpcpb::IsolationLevel;
+use std::fmt;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -42,7 +42,7 @@ pub struct MvccTxn<S: Snapshot> {
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
 }
@@ -139,16 +139,27 @@ impl<S: Snapshot> MvccTxn<S> {
         self.writes.push(Modify::Delete(CF_WRITE, key));
     }
 
+    fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
+        Ok(self.reader.get_write(&key, ts)?.is_some())
+    }
+
     pub fn prewrite(
         &mut self,
         mutation: Mutation,
         primary: &[u8],
         options: &Options,
     ) -> Result<()> {
+        let lock_type = LockType::from_mutation(&mutation);
+        let (key, value, should_not_exist) = match mutation {
+            Mutation::Put((key, value)) => (key, Some(value), false),
+            Mutation::Delete(key) => (key, None, false),
+            Mutation::Lock(key) => (key, None, false),
+            Mutation::Insert((key, value)) => (key, Some(value), true),
+        };
+
         {
-            let key = mutation.key();
             if !options.skip_constraint_check {
-                if let Some((commit, write)) = self.reader.seek_write(key, u64::max_value())? {
+                if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
                     // current start timestamp, we should abort current prewrite, even if the commit
@@ -163,10 +174,18 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
+                    if should_not_exist {
+                        if write.write_type == WriteType::Put
+                            || (write.write_type != WriteType::Delete
+                                && self.key_exist(&key, write.start_ts - 1)?)
+                        {
+                            return Err(Error::AlreadyExist { key: key.to_raw()? });
+                        }
+                    }
                 }
             }
             // ... or locks at any timestamp.
-            if let Some(lock) = self.reader.load_lock(key)? {
+            if let Some(lock) = self.reader.load_lock(&key)? {
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked {
                         key: key.to_raw()?,
@@ -181,14 +200,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 return Ok(());
             }
         }
-
-        let lock_type = LockType::from_mutation(&mutation);
-
-        let (key, value) = match mutation {
-            Mutation::Put((key, value)) => (key, Some(value)),
-            Mutation::Delete(key) => (key, None),
-            Mutation::Lock(key) => (key, None),
-        };
 
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
             self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
@@ -379,11 +390,13 @@ impl<S: Snapshot> MvccTxn<S> {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use storage::engine::Engine;
-    use storage::mvcc::tests::*;
-    use storage::mvcc::WriteType;
-    use storage::mvcc::{MvccReader, MvccTxn};
-    use storage::{Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN};
+    use crate::storage::engine::Engine;
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::mvcc::WriteType;
+    use crate::storage::mvcc::{MvccReader, MvccTxn};
+    use crate::storage::{
+        Key, Mutation, Options, ScanMode, TestEngineBuilder, SHORT_VALUE_MAX_LEN,
+    };
 
     fn test_mvcc_txn_read_imp(k: &[u8], v: &[u8]) {
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -443,6 +456,43 @@ mod tests {
         must_prewrite_delete(&engine, k, k, 13);
         must_rollback(&engine, k, 13);
         must_unlocked(&engine, k);
+    }
+
+    #[test]
+    fn test_mvcc_txn_prewrite_insert() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let (k1, v1, v2, v3) = (b"k1", b"v1", b"v2", b"v3");
+        must_prewrite_put(&engine, k1, v1, k1, 1);
+        must_commit(&engine, k1, 1, 2);
+
+        // "k1" already exist, returns AlreadyExist error.
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 3).is_err());
+
+        // Delete "k1"
+        must_prewrite_delete(&engine, k1, k1, 4);
+        must_commit(&engine, k1, 4, 5);
+
+        // After delete "k1", insert returns ok.
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 6).is_ok());
+        must_commit(&engine, k1, 6, 7);
+
+        // Rollback
+        must_prewrite_put(&engine, k1, v3, k1, 8);
+        must_rollback(&engine, k1, 8);
+
+        assert!(try_prewrite_insert(&engine, k1, v3, k1, 9).is_err());
+
+        // Delete "k1" again
+        must_prewrite_delete(&engine, k1, k1, 10);
+        must_commit(&engine, k1, 10, 11);
+
+        // Rollback again
+        must_prewrite_put(&engine, k1, v3, k1, 12);
+        must_rollback(&engine, k1, 12);
+
+        // After delete "k1", insert returns ok.
+        assert!(try_prewrite_insert(&engine, k1, v2, k1, 13).is_ok());
+        must_commit(&engine, k1, 13, 14);
     }
 
     #[test]

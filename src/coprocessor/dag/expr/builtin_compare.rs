@@ -18,9 +18,9 @@ use std::{f64, i64};
 use chrono::TimeZone;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
-use coprocessor::codec::{datum, mysql, Datum};
-use coprocessor::dag::expr::Expression;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, TimeType};
+use crate::coprocessor::codec::{datum, mysql, Datum};
+use crate::coprocessor::dag::expr::Expression;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CmpOp {
@@ -181,11 +181,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut greatest = mysql::time::zero_datetime(ctx.cfg.tz);
+        let mut greatest = mysql::time::zero_datetime(&ctx.cfg.tz);
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
-            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), &ctx.cfg.tz) {
                 Ok(t) => greatest = max(greatest, t),
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
@@ -241,7 +241,7 @@ impl ScalarFunc {
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
-            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), &ctx.cfg.tz) {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
@@ -481,11 +481,11 @@ where
 mod tests {
     use super::super::EvalConfig;
     use super::*;
-    use coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};

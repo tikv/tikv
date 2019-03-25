@@ -15,158 +15,62 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::engine::SEEK_BOUND;
-use storage::mvcc::write::{Write, WriteType};
-use storage::mvcc::Result;
-use storage::{Cursor, CursorBuilder, Key, Lock, Snapshot, Statistics, Value};
-use storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::engine::SEEK_BOUND;
+use crate::storage::mvcc::write::{Write, WriteType};
+use crate::storage::mvcc::Result;
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value, CF_DEFAULT};
 
 use super::util::CheckLockResult;
-
-/// `ForwardScanner` factory.
-pub struct ForwardScannerBuilder<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-    ts: u64,
-}
-
-impl<S: Snapshot> ForwardScannerBuilder<S> {
-    /// Initialize a new `ForwardScanner`
-    pub fn new(snapshot: S, ts: u64) -> Self {
-        Self {
-            snapshot,
-            fill_cache: true,
-            omit_value: false,
-            isolation_level: IsolationLevel::SI,
-            lower_bound: None,
-            upper_bound: None,
-            ts,
-        }
-    }
-
-    /// Set whether or not read operations should fill the cache.
-    ///
-    /// Defaults to `true`.
-    #[inline]
-    pub fn fill_cache(mut self, fill_cache: bool) -> Self {
-        self.fill_cache = fill_cache;
-        self
-    }
-
-    /// Set whether values of the user key should be omitted. When `omit_value` is `true`, the
-    /// length of returned value will be 0.
-    ///
-    /// Previously this option is called `key_only`.
-    ///
-    /// Defaults to `false`.
-    #[inline]
-    pub fn omit_value(mut self, omit_value: bool) -> Self {
-        self.omit_value = omit_value;
-        self
-    }
-
-    /// Set the isolation level.
-    ///
-    /// Defaults to `IsolationLevel::SI`.
-    #[inline]
-    pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
-        self.isolation_level = isolation_level;
-        self
-    }
-
-    /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardScanner` should scan.
-    /// `None` means unbounded.
-    ///
-    /// Default is `(None, None)`.
-    #[inline]
-    pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
-        self.lower_bound = lower_bound;
-        self.upper_bound = upper_bound;
-        self
-    }
-
-    /// Build `ForwardScanner` from the current configuration.
-    pub fn build(self) -> Result<ForwardScanner<S>> {
-        let lock_cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache)
-            .build()?;
-
-        let write_cursor = CursorBuilder::new(&self.snapshot, CF_WRITE)
-            .range(self.lower_bound.clone(), self.upper_bound.clone())
-            .fill_cache(self.fill_cache)
-            .build()?;
-
-        Ok(ForwardScanner {
-            snapshot: self.snapshot,
-            fill_cache: self.fill_cache,
-            omit_value: self.omit_value,
-            isolation_level: self.isolation_level,
-            lower_bound: self.lower_bound,
-            upper_bound: self.upper_bound,
-            ts: self.ts,
-            lock_cursor,
-            write_cursor,
-            default_cursor: None,
-            is_started: false,
-            statistics: Statistics::default(),
-        })
-    }
-}
-
+use super::ScannerConfig;
 /// This struct can be used to scan keys starting from the given user key (greater than or equal).
 ///
 /// Internally, for each key, rollbacks are ignored and smaller version will be tried. If the
 /// isolation level is SI, locks will be checked first.
 ///
-/// Use `ForwardScannerBuilder` to build `ForwardScanner`.
+/// Use `ScannerBuilder` to build `ForwardScanner`.
 pub struct ForwardScanner<S: Snapshot> {
-    snapshot: S,
-    fill_cache: bool,
-    omit_value: bool,
-    isolation_level: IsolationLevel,
-
-    /// `lower_bound` and `upper_bound` is used to create `default_cursor`. `lower_bound`
-    /// is used in initial seek as well. They will be consumed after `default_cursor` is being
-    /// created.
-    lower_bound: Option<Key>,
-    upper_bound: Option<Key>,
-
-    ts: u64,
-
+    cfg: ScannerConfig<S>,
     lock_cursor: Cursor<S::Iter>,
     write_cursor: Cursor<S::Iter>,
-
     /// `default cursor` is lazy created only when it's needed.
     default_cursor: Option<Cursor<S::Iter>>,
-
     /// Is iteration started
     is_started: bool,
-
     statistics: Statistics,
 }
 
 impl<S: Snapshot> ForwardScanner<S> {
+    pub fn new(
+        cfg: ScannerConfig<S>,
+        lock_cursor: Cursor<S::Iter>,
+        write_cursor: Cursor<S::Iter>,
+    ) -> ForwardScanner<S> {
+        ForwardScanner {
+            cfg,
+            lock_cursor,
+            write_cursor,
+            statistics: Statistics::default(),
+            default_cursor: None,
+            is_started: false,
+        }
+    }
+
     /// Take out and reset the statistics collected so far.
     pub fn take_statistics(&mut self) -> Statistics {
-        ::std::mem::replace(&mut self.statistics, Statistics::default())
+        std::mem::replace(&mut self.statistics, Statistics::default())
     }
 
     /// Get the next key-value pair, in forward order.
     pub fn read_next(&mut self) -> Result<Option<(Key, Value)>> {
         if !self.is_started {
-            if self.lower_bound.is_some() {
+            if self.cfg.lower_bound.is_some() {
                 // TODO: `seek_to_first` is better, however it has performance issues currently.
                 self.write_cursor.seek(
-                    self.lower_bound.as_ref().unwrap(),
+                    self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
                 self.lock_cursor.seek(
-                    self.lower_bound.as_ref().unwrap(),
+                    self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.lock,
                 )?;
             } else {
@@ -256,7 +160,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
             // `get_ts` is the real used timestamp. If user specifies `MaxInt64` as the timestamp,
             // we need to change it to a most recently available one.
-            let mut get_ts = self.ts;
+            let mut get_ts = self.cfg.ts;
 
             // `met_next_user_key` stores whether the write cursor has been already pointing to
             // the next user key. If so, we don't need to compare it again when trying to step
@@ -264,14 +168,14 @@ impl<S: Snapshot> ForwardScanner<S> {
             let mut met_next_user_key = false;
 
             if has_lock {
-                match self.isolation_level {
+                match self.cfg.isolation_level {
                     IsolationLevel::SI => {
                         // Only needs to check lock in SI
                         let lock = {
                             let lock_value = self.lock_cursor.value(&mut self.statistics.lock);
                             Lock::parse(lock_value)?
                         };
-                        match super::util::check_lock(&current_user_key, self.ts, &lock)? {
+                        match super::util::check_lock(&current_user_key, self.cfg.ts, &lock)? {
                             CheckLockResult::NotLocked => {}
                             CheckLockResult::Locked(e) => result = Err(e),
                             CheckLockResult::Ignored(ts) => get_ts = ts,
@@ -304,7 +208,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         }
     }
 
-    /// Attempt to get the value of a key specified by `user_key` and `self.ts`. This function
+    /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts`. This function
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
     #[inline]
     fn get(
@@ -398,7 +302,7 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// The implementation is the same as `PointGetter::load_data_by_write`.
     #[inline]
     fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
-        if self.omit_value {
+        if self.cfg.omit_value {
             return Ok(vec![]);
         }
         match write.short_value {
@@ -464,20 +368,18 @@ impl<S: Snapshot> ForwardScanner<S> {
         if self.default_cursor.is_some() {
             return Ok(());
         }
-        let cursor = CursorBuilder::new(&self.snapshot, CF_DEFAULT)
-            .range(self.lower_bound.take(), self.upper_bound.take())
-            .fill_cache(self.fill_cache)
-            .build()?;
-        self.default_cursor = Some(cursor);
+        self.default_cursor = Some(self.cfg.create_cf_cursor(CF_DEFAULT)?);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::ScannerBuilder;
     use super::*;
-    use storage::mvcc::tests::*;
-    use storage::{Engine, Key, TestEngineBuilder};
+    use crate::storage::mvcc::tests::*;
+    use crate::storage::Scanner;
+    use crate::storage::{Engine, Key, TestEngineBuilder};
 
     use kvproto::kvrpcpb::Context;
 
@@ -496,7 +398,7 @@ mod tests {
         }
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ForwardScannerBuilder::new(snapshot, 10)
+        let mut scanner = ScannerBuilder::new(snapshot, 10, false)
             .range(None, None)
             .build()
             .unwrap();
@@ -508,7 +410,7 @@ mod tests {
         //   a_7 b_4 b_3 b_2 b_1 b_0
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"a"), b"value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -518,13 +420,13 @@ mod tests {
         // Use 5 next and reach out of bound:
         //   a_7 b_4 b_3 b_2 b_1 b_0
         //                           ^cursor
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 5);
 
         // Cursor remains invalid, so nothing should happen.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
@@ -550,7 +452,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND / 2, SEEK_BOUND / 2);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ForwardScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
             .range(None, None)
             .build()
             .unwrap();
@@ -564,7 +466,7 @@ mod tests {
         //   a_8 b_2 b_1 b_0
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"a"), b"a_value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -579,7 +481,7 @@ mod tests {
         //   a_8 b_2 b_1 b_0
         //                   ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), b"b_value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -587,7 +489,7 @@ mod tests {
         assert_eq!(statistics.write.next, (SEEK_BOUND / 2 + 1) as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
@@ -613,7 +515,7 @@ mod tests {
         must_commit(&engine, b"b", SEEK_BOUND, SEEK_BOUND);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();
-        let mut scanner = ForwardScannerBuilder::new(snapshot, SEEK_BOUND * 2)
+        let mut scanner = ScannerBuilder::new(snapshot, SEEK_BOUND * 2, false)
             .range(None, None)
             .build()
             .unwrap();
@@ -627,7 +529,7 @@ mod tests {
         //   a_8 b_4 b_3 b_2 b_1
         //       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"a"), b"a_value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -645,7 +547,7 @@ mod tests {
         //   a_8 b_4 b_3 b_2 b_1
         //                       ^cursor
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(b"b"), b"b_value".to_vec())),
         );
         let statistics = scanner.take_statistics();
@@ -653,7 +555,7 @@ mod tests {
         assert_eq!(statistics.write.next, (SEEK_BOUND - 1) as usize);
 
         // Next we should get nothing.
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
         let statistics = scanner.take_statistics();
         assert_eq!(statistics.write.seek, 0);
         assert_eq!(statistics.write.next, 0);
@@ -682,79 +584,79 @@ mod tests {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
 
         // Test both bound specified.
-        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
             .range(Some(Key::from_raw(&[3u8])), Some(Key::from_raw(&[5u8])))
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test left bound not specified.
-        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
             .range(None, Some(Key::from_raw(&[3u8])))
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test right bound not specified.
-        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
             .range(Some(Key::from_raw(&[5u8])), None)
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
 
         // Test both bound not specified.
-        let mut scanner = ForwardScannerBuilder::new(snapshot.clone(), 10)
+        let mut scanner = ScannerBuilder::new(snapshot.clone(), 10, false)
             .range(None, None)
             .build()
             .unwrap();
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[1u8]), vec![1u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[2u8]), vec![2u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[3u8]), vec![3u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[4u8]), vec![4u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[5u8]), vec![5u8]))
         );
         assert_eq!(
-            scanner.read_next().unwrap(),
+            scanner.next().unwrap(),
             Some((Key::from_raw(&[6u8]), vec![6u8]))
         );
-        assert_eq!(scanner.read_next().unwrap(), None);
+        assert_eq!(scanner.next().unwrap(), None);
     }
 }

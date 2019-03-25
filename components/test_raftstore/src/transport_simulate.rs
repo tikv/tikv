@@ -15,75 +15,38 @@ use std::marker::PhantomData;
 use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use std::{thread, time, usize};
 
 use rand;
 
+use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
-use tikv::raftstore::store::{Msg as StoreMsg, PeerMsg, SignificantMsg, Transport};
-use tikv::raftstore::{Error, Result};
+use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
+use tikv::raftstore::{DiscardReason, Error, Result};
 use tikv::server::transport::*;
-use tikv::server::StoreAddrResolver;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{transport, Either, HandyRwLock};
+use tikv::util::{Either, HandyRwLock};
 
-pub trait Channel<M>: Send + Clone {
-    fn send(&self, m: M) -> Result<()>;
-    fn significant_send(&self, _region_id: u64, _: SignificantMsg) -> Result<()> {
-        unimplemented!()
-    }
-    fn flush(&mut self) {}
-}
-
-impl<T, S> Channel<RaftMessage> for ServerTransport<T, S>
-where
-    T: RaftStoreRouter,
-    S: StoreAddrResolver,
-{
-    fn send(&self, m: RaftMessage) -> Result<()> {
-        Transport::send(self, m)
-    }
-
-    fn flush(&mut self) {
-        self.flush_raft_client();
-    }
-}
-
-impl Channel<StoreMsg> for ServerRaftStoreRouter {
-    fn send(&self, m: StoreMsg) -> Result<()> {
-        RaftStoreRouter::try_send(self, m)
-    }
-
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
-        RaftStoreRouter::significant_send(self, region_id, msg)
-    }
-}
-
-pub fn check_messages<M>(msgs: &[M]) -> Result<()> {
+pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
-        Err(Error::Transport(transport::Error::Discard(String::from(
-            "messages dropped by \
-             SimulateTransport Filter",
-        ))))
+        Err(Error::Transport(DiscardReason::Filtered))
     } else {
         Ok(())
     }
 }
 
-pub trait Filter<M>: Send + Sync {
+pub trait Filter: Send + Sync {
     /// `before` is run before sending the messages.
-    fn before(&self, msgs: &mut Vec<M>) -> Result<()>;
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()>;
     /// `after` is run after sending the messages,
     /// so that the returned value could be changed if necessary.
     fn after(&self, res: Result<()>) -> Result<()> {
         res
     }
 }
-
-pub type SendFilter = Box<Filter<RaftMessage>>;
-pub type RecvFilter = Box<Filter<StoreMsg>>;
 
 /// Emits a notification for each given message type that it sees.
 #[allow(dead_code)]
@@ -95,7 +58,6 @@ pub struct MessageTypeNotifier {
 }
 
 impl MessageTypeNotifier {
-    #[allow(dead_code)]
     pub fn new(
         message_type: MessageType,
         notifier: Sender<()>,
@@ -110,7 +72,7 @@ impl MessageTypeNotifier {
     }
 }
 
-impl Filter<RaftMessage> for MessageTypeNotifier {
+impl Filter for MessageTypeNotifier {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         for msg in msgs.iter() {
             if msg.get_message().get_msg_type() == self.message_type
@@ -144,8 +106,8 @@ impl DropPacketFilter {
     }
 }
 
-impl<M> Filter<M> for DropPacketFilter {
-    fn before(&self, msgs: &mut Vec<M>) -> Result<()> {
+impl Filter for DropPacketFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|_| rand::random::<u32>() % 100u32 >= self.rate);
         check_messages(msgs)
     }
@@ -162,23 +124,24 @@ impl DelayFilter {
     }
 }
 
-impl<M> Filter<M> for DelayFilter {
-    fn before(&self, _: &mut Vec<M>) -> Result<()> {
+impl Filter for DelayFilter {
+    fn before(&self, _: &mut Vec<RaftMessage>) -> Result<()> {
         thread::sleep(self.duration);
         Ok(())
     }
 }
 
-pub struct SimulateTransport<M, C: Channel<M>> {
-    filters: Arc<RwLock<Vec<Box<Filter<M>>>>>,
-    ch: Arc<Mutex<C>>,
+#[derive(Clone)]
+pub struct SimulateTransport<C> {
+    filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
+    ch: C,
 }
 
-impl<M, C: Channel<M>> SimulateTransport<M, C> {
-    pub fn new(ch: C) -> SimulateTransport<M, C> {
+impl<C> SimulateTransport<C> {
+    pub fn new(ch: C) -> SimulateTransport<C> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
-            ch: Arc::new(Mutex::new(ch)),
+            ch,
         }
     }
 
@@ -186,89 +149,90 @@ impl<M, C: Channel<M>> SimulateTransport<M, C> {
         self.filters.wl().clear();
     }
 
-    pub fn add_filter(&mut self, filter: Box<Filter<M>>) {
+    pub fn add_filter(&mut self, filter: Box<dyn Filter>) {
         self.filters.wl().push(filter);
     }
 }
 
-impl<M, C: Channel<M>> Channel<M> for SimulateTransport<M, C> {
-    fn send(&self, msg: M) -> Result<()> {
-        let mut taken = 0;
-        let mut msgs = vec![msg];
-        let filters = self.filters.rl();
-        let mut res = Ok(());
-        for filter in filters.iter() {
-            taken += 1;
-            res = filter.before(&mut msgs);
+fn filter_send<H>(
+    filters: &Arc<RwLock<Vec<Box<dyn Filter>>>>,
+    msg: RaftMessage,
+    mut h: H,
+) -> Result<()>
+where
+    H: FnMut(RaftMessage) -> Result<()>,
+{
+    let mut taken = 0;
+    let mut msgs = vec![msg];
+    let filters = filters.rl();
+    let mut res = Ok(());
+    for filter in filters.iter() {
+        taken += 1;
+        res = filter.before(&mut msgs);
+        if res.is_err() {
+            break;
+        }
+    }
+    if res.is_ok() {
+        for msg in msgs {
+            res = h(msg);
             if res.is_err() {
                 break;
             }
         }
-        if res.is_ok() {
-            for msg in msgs {
-                res = self.ch.lock().unwrap().send(msg);
-                if res.is_err() {
-                    break;
-                }
-            }
-        }
-        for filter in filters[..taken].iter().rev() {
-            res = filter.after(res);
-        }
-        res
     }
+    for filter in filters[..taken].iter().rev() {
+        res = filter.after(res);
+    }
+    res
 }
 
-impl<M, C: Channel<M>> Clone for SimulateTransport<M, C> {
-    fn clone(&self) -> SimulateTransport<M, C> {
-        SimulateTransport {
-            filters: Arc::clone(&self.filters),
-            ch: Arc::clone(&self.ch),
-        }
-    }
-}
-
-impl<C: Channel<RaftMessage>> Transport for SimulateTransport<RaftMessage, C> {
-    fn send(&self, m: RaftMessage) -> Result<()> {
-        Channel::send(self, m)
+impl<C: Transport> Transport for SimulateTransport<C> {
+    fn send(&mut self, m: RaftMessage) -> Result<()> {
+        let ch = &mut self.ch;
+        filter_send(&self.filters, m, |m| ch.send(m))
     }
 
     fn flush(&mut self) {
-        self.ch.lock().unwrap().flush();
+        self.ch.flush();
     }
 }
 
-impl<C: Channel<StoreMsg>> RaftStoreRouter for SimulateTransport<StoreMsg, C> {
-    fn send(&self, m: StoreMsg) -> Result<()> {
-        Channel::send(self, m)
+impl<C: RaftStoreRouter> RaftStoreRouter for SimulateTransport<C> {
+    fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
+        filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn try_send(&self, m: StoreMsg) -> Result<()> {
-        Channel::send(self, m)
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+        self.ch.send_command(req, cb)
     }
 
-    fn significant_send(&self, region_id: u64, m: SignificantMsg) -> Result<()> {
-        self.ch.lock().unwrap().significant_send(region_id, m)
+    fn casual_send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+        self.ch.casual_send(region_id, msg)
+    }
+
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg) -> Result<()> {
+        self.ch.significant_send(region_id, msg)
     }
 }
 
 pub trait FilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<SendFilter>;
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
 }
 
 #[derive(Default)]
-pub struct DefaultFilterFactory<F: Filter<RaftMessage> + Default>(PhantomData<F>);
+pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 
-impl<F: Filter<RaftMessage> + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
-    fn generate(&self, _: u64) -> Vec<SendFilter> {
+impl<F: Filter + Default + 'static> FilterFactory for DefaultFilterFactory<F> {
+    fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
         vec![Box::new(F::default())]
     }
 }
 
-pub struct CloneFilterFactory<F: Filter<RaftMessage> + Clone>(pub F);
+pub struct CloneFilterFactory<F: Filter + Clone>(pub F);
 
-impl<F: Filter<RaftMessage> + Clone + 'static> FilterFactory for CloneFilterFactory<F> {
-    fn generate(&self, _: u64) -> Vec<SendFilter> {
+impl<F: Filter + Clone + 'static> FilterFactory for CloneFilterFactory<F> {
+    fn generate(&self, _: u64) -> Vec<Box<dyn Filter>> {
         vec![Box::new(self.0.clone())]
     }
 }
@@ -277,7 +241,7 @@ struct PartitionFilter {
     node_ids: Vec<u64>,
 }
 
-impl Filter<RaftMessage> for PartitionFilter {
+impl Filter for PartitionFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| !self.node_ids.contains(&m.get_to_peer().get_store_id()));
         check_messages(msgs)
@@ -296,15 +260,15 @@ impl PartitionFilterFactory {
 }
 
 impl FilterFactory for PartitionFilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<SendFilter> {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if self.s1.contains(&node_id) {
-            return vec![box PartitionFilter {
+            return vec![Box::new(PartitionFilter {
                 node_ids: self.s2.clone(),
-            }];
+            })];
         }
-        return vec![box PartitionFilter {
+        return vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        }];
+        })];
     }
 }
 
@@ -319,13 +283,13 @@ impl IsolationFilterFactory {
 }
 
 impl FilterFactory for IsolationFilterFactory {
-    fn generate(&self, node_id: u64) -> Vec<SendFilter> {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if node_id == self.node_id {
-            return vec![box DropPacketFilter { rate: 100 }];
+            return vec![Box::new(DropPacketFilter { rate: 100 })];
         }
-        vec![box PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: vec![self.node_id],
-        }]
+        })]
     }
 }
 
@@ -364,7 +328,7 @@ pub struct RegionPacketFilter {
     msg_type: Option<MessageType>,
 }
 
-impl Filter<RaftMessage> for RegionPacketFilter {
+impl Filter for RegionPacketFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| {
             let region_id = m.get_region_id();
@@ -435,7 +399,7 @@ pub struct SnapshotFilter {
     drop: AtomicBool,
 }
 
-impl Filter<RaftMessage> for SnapshotFilter {
+impl Filter for SnapshotFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         msgs.retain(|m| m.get_message().get_msg_type() != MessageType::MsgSnapshot);
         self.drop.store(msgs.is_empty(), Ordering::Relaxed);
@@ -458,7 +422,7 @@ impl Filter<RaftMessage> for SnapshotFilter {
 pub struct CollectSnapshotFilter {
     dropped: AtomicBool,
     stale: AtomicBool,
-    pending_msg: Mutex<HashMap<u64, StoreMsg>>,
+    pending_msg: Mutex<HashMap<u64, RaftMessage>>,
     pending_count_sender: Mutex<Sender<usize>>,
 }
 
@@ -473,39 +437,36 @@ impl CollectSnapshotFilter {
     }
 }
 
-impl Filter<StoreMsg> for CollectSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+impl Filter for CollectSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         if self.stale.load(Ordering::Relaxed) {
             return Ok(());
         }
         let mut to_send = vec![];
         let mut pending_msg = self.pending_msg.lock().unwrap();
-        for m in msgs.drain(..) {
-            let (is_pending, from_peer_id) = match m {
-                StoreMsg::PeerMsg(PeerMsg::RaftMessage(ref msg)) => {
-                    if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
-                        let from_peer_id = msg.get_from_peer().get_id();
-                        if pending_msg.contains_key(&from_peer_id) {
-                            // Drop this snapshot message directly since it's from a seen peer
-                            continue;
-                        } else {
-                            // Pile the snapshot from unseen peer
-                            (true, from_peer_id)
-                        }
+        for msg in msgs.drain(..) {
+            let (is_pending, from_peer_id) = {
+                if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
+                    let from_peer_id = msg.get_from_peer().get_id();
+                    if pending_msg.contains_key(&from_peer_id) {
+                        // Drop this snapshot message directly since it's from a seen peer
+                        continue;
                     } else {
-                        (false, 0)
+                        // Pile the snapshot from unseen peer
+                        (true, from_peer_id)
                     }
+                } else {
+                    (false, 0)
                 }
-                _ => (false, 0),
             };
             if is_pending {
                 self.dropped
                     .compare_and_swap(false, true, Ordering::Relaxed);
-                pending_msg.insert(from_peer_id, m);
+                pending_msg.insert(from_peer_id, msg);
                 let sender = self.pending_count_sender.lock().unwrap();
                 sender.send(pending_msg.len()).unwrap();
             } else {
-                to_send.push(m);
+                to_send.push(msg);
             }
         }
         // Deliver those pending snapshots if there are more than 1.
@@ -542,22 +503,19 @@ impl DropSnapshotFilter {
     }
 }
 
-impl Filter<StoreMsg> for DropSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+impl Filter for DropSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let notifier = self.notifier.lock().unwrap();
-        msgs.retain(|m| match *m {
-            StoreMsg::PeerMsg(PeerMsg::RaftMessage(ref msg)) => {
-                if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
-                    true
-                } else {
-                    let idx = msg.get_message().get_snapshot().get_metadata().get_index();
-                    if let Err(e) = notifier.send(idx) {
-                        error!("failed to notify snapshot {:?}: {:?}", msg, e);
-                    }
-                    false
+        msgs.retain(|msg| {
+            if msg.get_message().get_msg_type() != MessageType::MsgSnapshot {
+                true
+            } else {
+                let idx = msg.get_message().get_snapshot().get_metadata().get_index();
+                if let Err(e) = notifier.send(idx) {
+                    error!("failed to notify snapshot {:?}: {:?}", msg, e);
                 }
+                false
             }
-            _ => true,
         });
         Ok(())
     }
@@ -565,7 +523,7 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
 
 /// Filter leading duplicated Snap.
 ///
-/// It will pause the first snapshot and fiter out all the snapshot that
+/// It will pause the first snapshot and filter out all the snapshot that
 /// are same as first snapshot msg until the first different snapshot shows up.
 pub struct LeadingDuplicatedSnapshotFilter {
     dropped: AtomicBool,
@@ -586,44 +544,35 @@ impl LeadingDuplicatedSnapshotFilter {
     }
 }
 
-impl Filter<StoreMsg> for LeadingDuplicatedSnapshotFilter {
-    fn before(&self, msgs: &mut Vec<StoreMsg>) -> Result<()> {
+impl Filter for LeadingDuplicatedSnapshotFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut last_msg = self.last_msg.lock().unwrap();
         let mut stale = self.stale.load(Ordering::Relaxed);
         if stale {
             if last_msg.is_some() {
-                msgs.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(
-                    last_msg.take().unwrap(),
-                )));
+                // To make sure the messages will not handled in one raftstore batch.
+                thread::sleep(Duration::from_millis(100));
+                msgs.push(last_msg.take().unwrap());
             }
             return check_messages(msgs);
         }
         let mut to_send = vec![];
-        for m in msgs.drain(..) {
-            match m {
-                StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)) => {
-                    if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
-                        if last_msg.as_ref().map_or(false, |l| l != &msg) {
-                            to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(
-                                last_msg.take().unwrap(),
-                            )));
-                            if self.together {
-                                to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)));
-                            } else {
-                                *last_msg = Some(msg);
-                            }
-                            stale = true;
-                        } else {
-                            self.dropped.store(true, Ordering::Relaxed);
-                            *last_msg = Some(msg);
-                        }
+        for msg in msgs.drain(..) {
+            if msg.get_message().get_msg_type() == MessageType::MsgSnapshot && !stale {
+                if last_msg.as_ref().map_or(false, |l| l != &msg) {
+                    to_send.push(last_msg.take().unwrap());
+                    if self.together {
+                        to_send.push(msg);
                     } else {
-                        to_send.push(StoreMsg::PeerMsg(PeerMsg::RaftMessage(msg)));
+                        *last_msg = Some(msg);
                     }
+                    stale = true;
+                } else {
+                    self.dropped.store(true, Ordering::Relaxed);
+                    *last_msg = Some(msg);
                 }
-                _ => {
-                    to_send.push(m);
-                }
+            } else {
+                to_send.push(msg);
             }
         }
         self.stale.store(stale, Ordering::Relaxed);
@@ -665,7 +614,7 @@ impl RandomLatencyFilter {
     }
 }
 
-impl Filter<RaftMessage> for RandomLatencyFilter {
+impl Filter for RandomLatencyFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut to_send = vec![];
         let mut to_delay = vec![];
@@ -701,7 +650,7 @@ pub struct LeaseReadFilter {
     pub take: bool,
 }
 
-impl Filter<RaftMessage> for LeaseReadFilter {
+impl Filter for LeaseReadFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
         let mut ctx = self.ctx.wl();
         for m in msgs {

@@ -11,19 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
-
-extern crate futures;
-extern crate kvproto;
-
 #[macro_use]
 extern crate tikv;
-extern crate test_raftstore;
 
 mod assert_storage;
 mod sync_storage;
 mod util;
 
-pub use assert_storage::*;
-pub use sync_storage::*;
-pub use util::*;
+pub use crate::assert_storage::*;
+pub use crate::sync_storage::*;
+pub use crate::util::*;

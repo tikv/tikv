@@ -18,14 +18,15 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use raftstore::store::keys;
+use crate::raftstore::store::keys;
+use crate::storage::mvcc::{Write, WriteType};
+use crate::storage::types::Key;
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::{Error, Result};
 use rocksdb::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, UserCollectedProperties,
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
+    UserCollectedProperties,
 };
-use storage::mvcc::{Write, WriteType};
-use storage::types::Key;
-use util::codec::number::{self, NumberEncoder};
-use util::codec::{Error, Result};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -41,6 +42,17 @@ const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
 const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
 const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
+
+fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
+    match entry_type {
+        DBEntryType::Put => Ok(value.len() as u64),
+        DBEntryType::BlobIndex => match TitanBlobIndex::decode(value) {
+            Ok(index) => Ok(index.blob_size + value.len() as u64),
+            Err(_) => Err(()),
+        },
+        _ => Err(()),
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -196,7 +208,7 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(MvccPropertiesCollector::new())
     }
 }
@@ -364,11 +376,11 @@ impl SizePropertiesCollector {
 
 impl TablePropertiesCollector for SizePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
-            return;
-        }
-        let size = key.len() + value.len();
-        self.index_handle.size += size as u64;
+        let size = match get_entry_size(value, entry_type) {
+            Ok(entry_size) => key.len() as u64 + entry_size,
+            Err(_) => return,
+        };
+        self.index_handle.size += size;
         self.index_handle.offset += size as u64;
         // Add the start key for convenience.
         if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
@@ -396,7 +408,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
 pub struct SizePropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for SizePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(SizePropertiesCollector::new())
     }
 }
@@ -615,15 +627,14 @@ impl RangePropertiesCollector {
 
 impl TablePropertiesCollector for RangePropertiesCollector {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        if entry_type != DBEntryType::Put {
-            return;
-        }
-
+        // size
+        let size = match get_entry_size(value, entry_type) {
+            Ok(entry_size) => key.len() as u64 + entry_size,
+            Err(_) => return,
+        };
+        self.cur_offsets.size += size;
         // keys
         self.cur_offsets.keys += 1;
-        // size
-        let size = key.len() + value.len();
-        self.cur_offsets.size += size as u64;
         // Add the start key for convenience.
         if self.last_key.is_empty()
             || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE
@@ -648,7 +659,7 @@ impl TablePropertiesCollector for RangePropertiesCollector {
 pub struct RangePropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<TablePropertiesCollector> {
+    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
         Box::new(RangePropertiesCollector::default())
     }
 }
@@ -656,10 +667,11 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raftstore::store::keys;
+    use crate::raftstore::store::keys;
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::Key;
+    use rand::Rng;
     use rocksdb::{DBEntryType, TablePropertiesCollector};
-    use storage::mvcc::{Write, WriteType};
-    use storage::Key;
     use test::Bencher;
 
     #[test]
@@ -939,5 +951,61 @@ mod tests {
                 keys
             );
         }
+    }
+
+    #[test]
+    fn test_range_properties_with_blob_index() {
+        let cases = [
+            ("a", 0),
+            // handle "a": size(size = 1, offset = 1),keys(1,1)
+            ("b", PROP_SIZE_INDEX_DISTANCE / 8),
+            ("c", PROP_SIZE_INDEX_DISTANCE / 4),
+            ("d", PROP_SIZE_INDEX_DISTANCE / 2),
+            ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+            // handle "e": size(size = DISTANCE + 4, offset = DISTANCE + 5),keys(4,5)
+            ("f", PROP_SIZE_INDEX_DISTANCE / 4),
+            ("g", PROP_SIZE_INDEX_DISTANCE / 2),
+            ("h", PROP_SIZE_INDEX_DISTANCE / 8),
+            ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+            // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
+            ("j", PROP_SIZE_INDEX_DISTANCE / 2),
+            ("k", PROP_SIZE_INDEX_DISTANCE / 2),
+            // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
+        ];
+
+        let handles = ["a", "e", "i", "k"];
+
+        let mut rng = rand::thread_rng();
+        let mut collector = RangePropertiesCollector::default();
+        let mut extra_value_size: u64 = 0;
+        for &(k, vlen) in &cases {
+            if handles.contains(&k) || rng.gen_range(0, 2) == 0 {
+                let v = vec![0; vlen as usize - extra_value_size as usize];
+                extra_value_size = 0;
+                collector.add(k.as_bytes(), &v, DBEntryType::Put, 0, 0);
+            } else {
+                let mut blob_index = TitanBlobIndex::default();
+                blob_index.blob_size = vlen - extra_value_size;
+                let v = blob_index.encode();
+                extra_value_size = v.len() as u64;
+                collector.add(k.as_bytes(), &v, DBEntryType::BlobIndex, 0, 0);
+            }
+        }
+        let result = UserProperties(collector.finish());
+
+        let props = RangeProperties::decode(&result).unwrap();
+        assert_eq!(props.smallest_key().unwrap(), cases[0].0.as_bytes());
+        assert_eq!(
+            props.largest_key().unwrap(),
+            cases[cases.len() - 1].0.as_bytes()
+        );
+        assert_eq!(
+            props.get_approximate_size_in_range(b"e", b"i"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4
+        );
+        assert_eq!(
+            props.get_approximate_size_in_range(b"", b"k"),
+            PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
+        );
     }
 }

@@ -20,8 +20,8 @@ use rand::{Rng, SeedableRng, XorShiftRng};
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
+use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     #[inline]
@@ -429,7 +429,7 @@ impl ScalarFunc {
         &self,
         ctx: &mut EvalContext,
         row: &[Datum],
-    ) -> Result<Option<Cow<Decimal>>> {
+    ) -> Result<Option<Cow<'_, Decimal>>> {
         let x = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
         let d = if self.children[1].is_unsigned() {
@@ -485,7 +485,7 @@ impl ScalarFunc {
             return Ok(None);
         }
 
-        let n = n.trim_left();
+        let n = n.trim_start();
         let mut start = 0;
         let mut end = n.len();
         for (idx, c) in n.char_indices() {
@@ -537,7 +537,7 @@ fn format_radix(mut x: u64, radix: u32) -> String {
         let m = x % u64::from(radix);
         x /= u64::from(radix);
         r.push(
-            ::std::char::from_digit(m as u32, radix)
+            std::char::from_digit(m as u32, radix)
                 .unwrap()
                 .to_ascii_uppercase(),
         );
@@ -578,8 +578,10 @@ mod tests {
     use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::expression::ScalarFuncSig;
 
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{
+        check_overflow, eval_func, eval_func_with, str2dec,
+    };
 
     #[test]
     fn test_abs() {

@@ -10,10 +10,10 @@ As a command line tool of PD, PD Control obtains the state information of the cl
 
 ## Source code compiling
 
-1. [Go](https://golang.org/) Version 1.9 or later
+1. [Go](https://golang.org/) Version 1.11 or later
 2. In the root directory of the [PD project](https://github.com/pingcap/pd), use the `make` command to compile and generate `bin/pd-ctl`
 
-> **Note:** Generally, you don't need to compile source code as the PD Control tool already exists in the released Binary or Docker. However, dev users can refer to the above instruction for compiling source code.
+> **Note:** Generally, you do not need to compile source code because the PD Control tool already exists in the released Binary or Docker. For developer users, the `make` command can be used to compile source code.
 
 ## Usage
 
@@ -48,7 +48,7 @@ Use TLS to encrypt:
 
 + PD address
 + Default address: http://127.0.0.1:2379
-+ Enviroment variable: PD_ADDR
++ Environment variable: PD_ADDR
 
 ### \-\-detach,-d
 
@@ -102,9 +102,9 @@ Usage:
 {
   "max-snapshot-count": 3,
   "max-pending-peer-count": 16,
-  "max-merge-region-size": 50,
+  "max-merge-region-size": 20,
   "max-merge-region-rows": 200000,
-  "split-merge-interval": "1h",
+  "split-merge-interval": "1h0m0s",
   "patrol-region-interval": "100ms",
   "max-store-down-time": "1h0m0s",
   "leader-schedule-limit": 4,
@@ -124,15 +124,18 @@ Usage:
   "schedulers-v2": [
     {
       "type": "balance-region",
-      "args": null
+      "args": null,
+      "disable": false
     },
     {
       "type": "balance-leader",
-      "args": null
+      "args": null,
+      "disable": false
     },
     {
       "type": "hot-region",
-      "args": null
+      "args": null,
+      "disable": false
     }
   ]
 }
@@ -142,12 +145,13 @@ Usage:
   "leader-schedule-limit": 4,
   "region-schedule-limit": 4,
   "replica-schedule-limit": 8,
+  "merge-schedule-limit": 8,
   "max-replicas": 3,
 }
 >> config show replication                    // Display the config information of replication
 {
   "max-replicas": 3,
-  "location-labels": ""
+  "location-labels": "zone,host"
 }
 >> config show cluster-version                // Display the current version of the cluster, which is the current minimum version of TiKV nodes in the cluster and does not correspond to the binary version.
 "2.0.0"
@@ -156,7 +160,7 @@ Usage:
 - `max-snapshot-count` controls the maximum number of snapshots that a single store receives or sends out at the same time. The scheduler is restricted by this configuration to avoid taking up normal application resources. When you need to improve the speed of adding replicas or balancing, increase this value.
 
     ```bash
-    >> config set max-snapshort-count 16  // Set the maximum number of snapshots to 16
+    >> config set max-snapshot-count 16  // Set the maximum number of snapshots to 16
     ```
 
 - `max-pending-peer-count` controls the maximum number of pending peers in a single store. The scheduler is restricted by this configuration to avoid producing a large number of Regions without the latest log in some nodes. When you need to improve the speed of adding replicas or balancing, increase this value. Setting it to 0 indicates no limit.
@@ -302,10 +306,9 @@ Usage:
     "member_id": 13195394291058371180,
     "client_urls": [
       "http://127.0.0.1:2379"
-      ...
     ],
     "health": true
-  }
+  },
   ...
 ]
 ```
@@ -342,9 +345,24 @@ Usage:
 ```bash
 >> member                               // Display the information of all members
 {
-  "members": [...],
+  "header": {
+    "cluster_id": 6493707687106161130
+  },
+  "members": [
+    {
+      "name": "pd1",
+      "member_id": 9724873857558226554,
+      "peer_urls": [
+        "http://127.0.0.1:2380"
+      ],
+      "client_urls": [
+        "http://127.0.0.1:2379"
+      ]
+    },
+    ...
+  ],
   "leader": {...},
-  "etcd_leader": {...},
+  "etcd_leader": {...}
 }
 >> member delete name pd2               // Delete "pd2"
 Success!
@@ -357,9 +375,9 @@ Success!
   "id": 9724873857558226554
 }
 >> member leader resign // Move leader away from the current member
-...
+Success!
 >> member leader transfer pd3 // Migrate leader to a specified member
-...
+Success!
 ```
 
 ### `operator [show | add | remove]`
@@ -406,42 +424,66 @@ Usage:
 ```bash
 >> region                               //　Display the information of all regions
 {
-  "count": 1,
-  "regions": [...]
+  "count": 10,
+  "regions": [
+    {
+      "id": 4,
+      "start_key": "",
+      "end_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x05\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+      "epoch": {...},
+      "peers": [...],
+      "leader": {...},
+      "written_bytes": 251302,
+      "read_bytes": 60472,
+      "approximate_size": 1,
+      "approximate_keys": 367
+    },
+    ...
+  ]
 }
 
 >> region 2                             // Display the information of the region with the id of 2
 {
-  "region": {
-      "id": 2,
-      ...
-  }
-  "leader": {
-      ...
-  }
+  "id": 2,
+  "start_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x1d\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+  "end_key": "",
+  "epoch": {...},
+  "peers": [...],
+  "leader": {...},
+  "written_bytes": 251302,
+  "read_bytes": 60472,
+  "approximate_size": 96,
+  "approximate_keys": 524442
 }
 ```
 
-### `region key [--format=raw|pb|proto|protobuf] <key>`
+### `region key [--format=raw|encode] <key>`
 
-Use this command to query the region that a specific key resides in. It supports the raw and protobuf formats.
+Use this command to query the region that a specific key resides in. It supports the raw and encoding formats. And you need to use single quotes around the key when it is in the encoding format.
 
 Raw format usage (default):
 
 ```bash
 >> region key abc
+>> region key xyz
 {
-  "region": {
-    "id": 2,
-    ...
-  }
+  "id": 2,
+  "start_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x1d\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+  "end_key": "",
+  "epoch": {...},
+  "peers": [...],
+  "leader": {...},
+  "written_bytes": 251302,
+  "read_bytes": 60472,
+  "approximate_size": 96,
+  "approximate_keys": 524442
 }
 ```
 
-Protobuf format usage:
+Encoding format usage:
 
 ```bash
->> region key --format=pb t\200\000\000\000\000\000\000\377\035_r\200\000\000\000\000\377\017U\320\000\000\000\000\000\372
+>> region key --format=encode 't\200\000\000\000\000\000\000\377\035_r\200\000\000\000\000\377\017U\320\000\000\000\000\000\372'
 {
   "region": {
     "id": 2,
@@ -457,11 +499,21 @@ Use this command to check the adjacent Regions of a specific Region.
 Usage:
 
 ```bash
->> region sibling 2
-{
-  "count": 2,
-  "regions": [...],
-}
+>> region sibling 28
+[
+  {
+    "id": 26,
+    "start_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x19\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+    "end_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x1b\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+    ...
+  },
+  {
+    "id": 2,
+    "start_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\x1d\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+    "end_key": "",
+    ...
+  }
+]
 ```
 
 ### `region store <store_id>`
@@ -471,10 +523,20 @@ Use this command to list all Regions of a specific store.
 Usage:
 
 ```bash
->> region store 2
+>> region store 1
 {
   "count": 10,
-  "regions": [...],
+  "regions": [
+    {
+      "id": 8,
+      "start_key": "t\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\xff\\a\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\xf8",
+      ...
+    },
+    {
+      ...
+    },
+    ...
+  ]
 }
 ```
 
@@ -488,7 +550,7 @@ Usage:
 >> region topread
 {
   "count": 16,
-  "regions": [...],
+  "regions": [...]
 }
 ```
 
@@ -502,7 +564,7 @@ Usage:
 >> region topwrite
 {
   "count": 16,
-  "regions": [...],
+  "regions": [...]
 }
 ```
 
@@ -516,7 +578,7 @@ Usage:
 >> region topconfver
 {
   "count": 16,
-  "regions": [...],
+  "regions": [...]
 }
 ```
 
@@ -530,7 +592,7 @@ Usage:
 >> region topversion
 {
   "count": 16,
-  "regions": [...],
+  "regions": [...]
 }
 ```
 
@@ -544,7 +606,7 @@ Usage:
 >> region topsize
 {
    "count": 16,
-   "regions": [...],
+   "regions": [...]
 }
 
 ```
@@ -567,7 +629,7 @@ Usage:
 >> region miss-peer
 {
   "count": 2,
-  "regions": [...],
+  "regions": [...]
 }
 ```
 
@@ -599,9 +661,31 @@ Usage:
   "stores": [...]
 }
 >> store 1                      // Get the store with the store id of 1
-  ...
+{
+  "store": {
+    "id": 1,
+    "address": "127.0.0.1:20160",
+    "version": "2.1.0-rc.5",
+    "state_name": "Up"
+  },
+  "status": {
+    "capacity": "10 GiB",
+    "available": "10 GiB",
+    "leader_count": 14,
+    "leader_weight": 1,
+    "leader_score": 14,
+    "leader_size": 14,
+    "region_count": 14,
+    "region_weight": 1,
+    "region_score": 14,
+    "region_size": 14,
+    "start_ts": "2018-11-26T18:59:05+08:00",
+    "last_heartbeat_ts": "2018-11-26T19:38:41.335120555+08:00",
+    "uptime": "39m36.335120555s"
+  }
+}
 >> store delete 1               // Delete the store with the store id of 1
-  ...
+Success!
 >> store label 1 zone cn        // Set the value of the label with the "zone" key to "cn" for the store with the store id of 1
 >> store weight 1 5 10          // Set the leader weight to 5 and region weight to 10 for the store with the store id of 1
 ```
@@ -630,7 +714,7 @@ Usage:
 
 ```bash
 >> tso 395181938313123110        // Parse TSO
-system:  2017-10-09 05:50:59 +0800 CST
+system:  2017-10-09 05:50:59.507 +0800 CST
 logic:  120102
 ```
 
@@ -648,9 +732,9 @@ logic:  120102
 ### Query the remaining space of the node
 
 ```bash
-» store --jq=".stores[] | {id: .store.id, avaiable: .status.available}"
-{"id":1,"avaiable":"10 GiB"}
-{"id":30,"avaiable":"10 GiB"}
+» store --jq=".stores[] | {id: .store.id, available: .status.available}"
+{"id":1,"available":"10 GiB"}
+{"id":30,"available":"10 GiB"}
 ...
 ```
 

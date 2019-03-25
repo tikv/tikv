@@ -11,12 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
 use kvproto::pdpb::CheckPolicy;
-use raftstore::store::{keys, util, Msg, PeerMsg};
 use rocksdb::DB;
 use std::mem;
 use std::sync::Mutex;
-use util::transport::{RetryableSendCh, Sender};
 
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -50,7 +49,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
         }
@@ -92,31 +91,31 @@ pub struct KeysCheckObserver<C> {
     region_max_keys: u64,
     split_keys: u64,
     batch_split_limit: u64,
-    ch: Mutex<RetryableSendCh<Msg, C>>,
+    router: Mutex<C>,
 }
 
-impl<C: Sender<Msg>> KeysCheckObserver<C> {
+impl<C: CasualRouter> KeysCheckObserver<C> {
     pub fn new(
         region_max_keys: u64,
         split_keys: u64,
         batch_split_limit: u64,
-        ch: RetryableSendCh<Msg, C>,
+        router: C,
     ) -> KeysCheckObserver<C> {
         KeysCheckObserver {
             region_max_keys,
             split_keys,
             batch_split_limit,
-            ch: Mutex::new(ch),
+            router: Mutex::new(router),
         }
     }
 }
 
 impl<C> Coprocessor for KeysCheckObserver<C> {}
 
-impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
+impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         policy: CheckPolicy,
@@ -127,8 +126,9 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
-                    "[region {}] failed to get approximate keys: {}",
-                    region_id, e
+                    "failed to get approximate keys";
+                    "region_id" => region_id,
+                    "err" => %e,
                 );
                 // Need to check keys.
                 host.add_checker(Box::new(Checker::new(
@@ -141,24 +141,22 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
             }
         };
 
-        let res = Msg::PeerMsg(PeerMsg::RegionApproximateKeys {
-            region_id,
-            keys: region_keys,
-        });
-        if let Err(e) = self.ch.lock().unwrap().try_send(res) {
+        let res = CasualMessage::RegionApproximateKeys { keys: region_keys };
+        if let Err(e) = self.router.lock().unwrap().send(region_id, res) {
             warn!(
-                "[region {}] failed to send approximate region keys: {}",
-                region_id, e
+                "failed to send approximate region keys";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
         if region_keys >= self.region_max_keys {
             info!(
-                "[region {}] approximate keys {} >= {}, need to do split check",
-                region.get_id(),
-                region_keys,
-                self.region_max_keys
+                "approximate keys over threshold, need to do split check";
+                "region_id" => region.get_id(),
+                "keys" => region_keys,
+                "threshold" => self.region_max_keys,
             );
             // Need to check keys.
             host.add_checker(Box::new(Checker::new(
@@ -170,10 +168,10 @@ impl<C: Sender<Msg> + Send> SplitCheckObserver for KeysCheckObserver<C> {
         } else {
             // Does not need to check keys.
             debug!(
-                "[region {}] approximate keys {} < {}, does not need to do split check",
-                region.get_id(),
-                region_keys,
-                self.region_max_keys
+                "approximate keys less than threshold, does not need to do split check";
+                "region_id" => region.get_id(),
+                "keys" => region_keys,
+                "threshold" => self.region_max_keys,
             );
         }
     }
@@ -189,15 +187,15 @@ mod tests {
     use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use raftstore::store::{keys, Msg, PeerMsg, SplitCheckRunner, SplitCheckTask};
-    use storage::mvcc::{Write, WriteType};
-    use storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use util::properties::RangePropertiesCollectorFactory;
-    use util::rocksdb::{new_engine_opt, CFOptions};
-    use util::transport::RetryableSendCh;
-    use util::worker::Runnable;
+    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
+    use crate::util::rocksdb_util::{
+        new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
+    };
+    use crate::util::worker::Runnable;
 
-    use raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
 
     use super::super::size::tests::must_split_at;
 
@@ -253,7 +251,6 @@ mod tests {
         region.mut_region_epoch().set_conf_ver(5);
 
         let (tx, rx) = mpsc::sync_channel(100);
-        let ch = RetryableSendCh::new(tx, "test-batch-split");
         let mut cfg = Config::default();
         cfg.region_max_keys = 100;
         cfg.region_split_keys = 80;
@@ -261,8 +258,8 @@ mod tests {
 
         let mut runnable = SplitCheckRunner::new(
             Arc::clone(&engine),
-            ch.clone(),
-            Arc::new(CoprocessorHost::new(cfg, ch.clone())),
+            tx.clone(),
+            Arc::new(CoprocessorHost::new(cfg, tx.clone())),
         );
 
         // so split key will be z0080
@@ -270,8 +267,8 @@ mod tests {
         runnable.run(SplitCheckTask::new(region.clone(), true, CheckPolicy::SCAN));
         // keys has not reached the max_keys 100 yet.
         match rx.try_recv() {
-            Ok(Msg::PeerMsg(PeerMsg::RegionApproximateSize { region_id, .. }))
-            | Ok(Msg::PeerMsg(PeerMsg::RegionApproximateKeys { region_id, .. })) => {
+            Ok((region_id, CasualMessage::RegionApproximateSize { .. }))
+            | Ok((region_id, CasualMessage::RegionApproximateKeys { .. })) => {
                 assert_eq!(region_id, region.get_id());
             }
             others => panic!("expect recv empty, but got {:?}", others),

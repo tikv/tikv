@@ -25,7 +25,7 @@ use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, Engines, Peekable, SnapManager};
 use tikv::server::Node;
 use tikv::storage::{ALL_CFS, CF_RAFT};
-use tikv::util::rocksdb;
+use tikv::util::rocksdb_util;
 use tikv::util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -34,11 +34,11 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // now  at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
     cluster.shutdown();
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
 }
 
@@ -51,16 +51,18 @@ fn test_node_bootstrap_with_prepared_data() {
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store);
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
-    let engine =
-        Arc::new(rocksdb::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+    let engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+    );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
-    let raft_engine =
-        Arc::new(rocksdb::new_engine(tmp_path_raft.to_str().unwrap(), &[], None).unwrap());
+    let raft_engine = Arc::new(
+        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+    );
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
-    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_sendch()));
+    let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
     let local_reader = Worker::new("test-local-reader");
 
@@ -82,7 +84,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .is_some());
 
     // Create coprocessor.
-    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_sendch());
+    let coprocessor_host = CoprocessorHost::new(cfg.coprocessor, node.get_router());
 
     let importer = {
         let dir = tmp_path.path().join("import-sst");
@@ -109,7 +111,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
-    node.stop().unwrap();
+    node.stop();
 }
 
 #[test]

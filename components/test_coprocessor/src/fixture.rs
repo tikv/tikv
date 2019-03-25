@@ -50,7 +50,7 @@ impl ProductTable {
     }
 }
 
-impl ::std::ops::Deref for ProductTable {
+impl std::ops::Deref for ProductTable {
     type Target = Table;
 
     fn deref(&self) -> &Table {
@@ -92,7 +92,7 @@ pub fn init_data_with_details<E: Engine>(
         store
             .insert_into(&tbl)
             .set(&tbl["id"], Datum::I64(id))
-            .set(&tbl["name"], name.map(|s| s.as_bytes()).into())
+            .set(&tbl["name"], name.map(str::as_bytes).into())
             .set(&tbl["count"], Datum::I64(count))
             .execute_with_ctx(ctx.clone());
     }

@@ -19,10 +19,10 @@ use cop_datatype::prelude::*;
 use cop_datatype::{self, FieldTypeFlag, FieldTypeTp};
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
-use coprocessor::codec::mysql::decimal::RoundMode;
-use coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
-use coprocessor::codec::{mysql, Datum};
+use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_float_to_uint};
+use crate::coprocessor::codec::mysql::decimal::RoundMode;
+use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
+use crate::coprocessor::codec::{mysql, Datum};
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -420,7 +420,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val =
-            Time::from_duration(ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+            Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -689,15 +689,18 @@ impl ScalarFunc {
         Ok(s)
     }
 
-    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
+        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, &ctx.cfg.tz)?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
-    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t =
-            Time::parse_datetime_from_float_string(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
+        let mut t = Time::parse_datetime_from_float_string(
+            s,
+            self.field_type.decimal() as i8,
+            &ctx.cfg.tz,
+        )?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
@@ -733,12 +736,14 @@ mod tests {
 
     use chrono::Utc;
 
-    use coprocessor::codec::error::*;
-    use coprocessor::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
-    use coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::codec::error::*;
+    use crate::coprocessor::codec::mysql::{
+        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
+    };
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);
@@ -869,7 +874,7 @@ mod tests {
         ];
         for (sig, tp, col, expect) in cases {
             let col_expr = col_expr(0, tp);
-            let mut exp = scalar_func_expr(sig, &[col_expr]);
+            let exp = scalar_func_expr(sig, &[col_expr]);
             let e = Expression::build(&ctx, exp).unwrap();
             let res = e.eval_int(&mut ctx, &col).unwrap();
             assert_eq!(res.unwrap(), expect);
@@ -1793,7 +1798,7 @@ mod tests {
         let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
         let time_stamp = {
             let t = time.to_packed_u64();
-            Time::from_packed_u64(t, TimeType::Timestamp, mysql::DEFAULT_FSP, tz).unwrap()
+            Time::from_packed_u64(t, TimeType::Timestamp, mysql::DEFAULT_FSP, &tz).unwrap()
         };
         let date = {
             let mut t = time.clone();
@@ -1900,7 +1905,7 @@ mod tests {
             ),
         ];
         for (flag, cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::NewDecimal);
+            let col_expr = col_expr(0, FieldTypeTp::NewDecimal);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1948,7 +1953,7 @@ mod tests {
         ];
 
         for (flag, cols, exp, warnings_cnt) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let mut ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             ex.mut_field_type().as_mut_accessor().set_flag(flag);
 
@@ -1974,7 +1979,7 @@ mod tests {
         ];
 
         for (cols, exp) in cases {
-            let mut col_expr = col_expr(0, FieldTypeTp::String);
+            let col_expr = col_expr(0, FieldTypeTp::String);
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();

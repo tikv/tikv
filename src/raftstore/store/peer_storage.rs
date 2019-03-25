@@ -26,14 +26,15 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{Writable, WriteBatch, DB};
+use rocksdb::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
 
-use raftstore::store::util::{conf_state_from_region, Engines};
-use raftstore::store::ProposalContext;
-use raftstore::{Error, Result};
-use storage::CF_RAFT;
-use util::worker::Scheduler;
-use util::{self, rocksdb};
+use crate::config;
+use crate::raftstore::store::util::{conf_state_from_region, Engines};
+use crate::raftstore::store::ProposalContext;
+use crate::raftstore::{Error, Result};
+use crate::storage::CF_RAFT;
+use crate::util::worker::Scheduler;
+use crate::util::{self, rocksdb_util};
 
 use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -79,35 +80,6 @@ impl PartialEq for SnapState {
             _ => false,
         }
     }
-}
-
-/// Updates the `state` with given `compact_index` and `compact_term`.
-///
-/// Remember the Raft log is not deleted here.
-pub fn compact_raft_log(
-    tag: &str,
-    state: &mut RaftApplyState,
-    compact_index: u64,
-    compact_term: u64,
-) -> Result<()> {
-    debug!("{} compact log entries to prior to {}", tag, compact_index);
-
-    if compact_index <= state.get_truncated_state().get_index() {
-        return Err(box_err!("try to truncate compacted entries"));
-    } else if compact_index > state.get_applied_index() {
-        return Err(box_err!(
-            "compact index {} > applied index {}",
-            compact_index,
-            state.get_applied_index()
-        ));
-    }
-
-    // we don't actually delete the logs now, we add an async task to do it.
-
-    state.mut_truncated_state().set_index(compact_index);
-    state.mut_truncated_state().set_term(compact_term);
-
-    Ok(())
 }
 
 #[inline]
@@ -265,6 +237,7 @@ pub trait HandleRaftReadyContext {
 pub struct PeerStorage {
     pub engines: Engines,
 
+    peer_id: u64,
     region: metapb::Region,
     raft_state: RaftLocalState,
     apply_state: RaftApplyState,
@@ -283,7 +256,7 @@ pub struct PeerStorage {
 
 fn storage_error<E>(error: E) -> raft::Error
 where
-    E: Into<Box<error::Error + Send + Sync>>,
+    E: Into<Box<dyn error::Error + Send + Sync>>,
 {
     raft::Error::Store(StorageError::Other(error.into()))
 }
@@ -348,7 +321,7 @@ impl InvokeContext {
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::snapshot_raft_state_key(self.region_id),
@@ -359,7 +332,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::apply_state_key(self.region_id),
@@ -475,13 +448,14 @@ impl PeerStorage {
         engines: Engines,
         region: &metapb::Region,
         region_sched: Scheduler<RegionTask>,
+        peer_id: u64,
         tag: String,
     ) -> Result<PeerStorage> {
         debug!(
-            "{} creating storage on {} for {:?}",
-            tag,
-            engines.kv.path(),
-            region
+            "creating storage on specified path";
+            "region_id" => region.get_id(),
+            "peer_id" => peer_id,
+            "path" => ?engines.kv.path(),
         );
         let raft_state = init_raft_state(&engines.raft, region)?;
         let apply_state = init_apply_state(&engines.kv, region)?;
@@ -497,6 +471,7 @@ impl PeerStorage {
 
         Ok(PeerStorage {
             engines,
+            peer_id,
             region: region.clone(),
             raft_state,
             apply_state,
@@ -681,10 +656,11 @@ impl PeerStorage {
         if idx < self.truncated_index() {
             // stale snapshot, should generate again.
             info!(
-                "{} snapshot {} < {} is stale, generate again.",
-                self.tag,
-                idx,
-                self.truncated_index()
+                "snapshot is stale, generate again";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "snap_index" => idx,
+                "truncated_index" => self.truncated_index(),
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["stale"])
@@ -695,8 +671,10 @@ impl PeerStorage {
         let mut snap_data = RaftSnapshotData::new();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
             error!(
-                "{} decode snapshot fail, it may be corrupted: {:?}",
-                self.tag, e
+                "failed to decode snapshot, it may be corrupted";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["decode"])
@@ -707,8 +685,11 @@ impl PeerStorage {
         let latest_epoch = self.region().get_region_epoch();
         if snap_epoch.get_conf_ver() < latest_epoch.get_conf_ver() {
             info!(
-                "{} snapshot epoch {:?} < {:?}, generate again.",
-                self.tag, snap_epoch, latest_epoch
+                "snapshot epoch is stale";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "snap_epoch" => ?snap_epoch,
+                "latest_epoch" => ?latest_epoch,
             );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER
                 .with_label_values(&["epoch"])
@@ -750,8 +731,10 @@ impl PeerStorage {
                 }
                 None => {
                     warn!(
-                        "{} snapshot generating failed at {} try time",
-                        self.tag, *tried_cnt
+                        "failed to try generating snapshot";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                        "times" => *tried_cnt,
                     );
                 }
             }
@@ -770,7 +753,11 @@ impl PeerStorage {
             )));
         }
 
-        info!("{} requesting snapshot...", self.tag);
+        info!(
+            "requesting snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+        );
         *tried_cnt += 1;
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
@@ -781,8 +768,10 @@ impl PeerStorage {
         };
         if let Err(e) = self.region_sched.schedule(task) {
             error!(
-                "{} failed to schedule task snap generation: {:?}",
-                self.tag, e
+                "failed to schedule task snap generation";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
             // update the status next time the function is called, also backoff for retry.
         }
@@ -800,7 +789,12 @@ impl PeerStorage {
         entries: &[Entry],
         ready_ctx: &mut H,
     ) -> Result<u64> {
-        debug!("{} append {} entries", self.tag, entries.len());
+        debug!(
+            "append entries";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "count" => entries.len(),
+        );
         let prev_last_index = invoke_ctx.raft_state.get_last_index();
         if entries.is_empty() {
             return Ok(prev_last_index);
@@ -871,7 +865,11 @@ impl PeerStorage {
         kv_wb: &WriteBatch,
         raft_wb: &WriteBatch,
     ) -> Result<()> {
-        info!("{} begin to apply snapshot", self.tag);
+        info!(
+            "begin to apply snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+        );
 
         let mut snap_data = RaftSnapshotData::new();
         snap_data.merge_from_bytes(snap.get_data())?;
@@ -908,8 +906,11 @@ impl PeerStorage {
             .set_term(snap.get_metadata().get_term());
 
         info!(
-            "{} apply snapshot for region {:?} with state {:?} ok",
-            self.tag, region, ctx.apply_state
+            "apply snapshot with state ok";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "region" => ?region,
+            "state" => ?ctx.apply_state,
         );
 
         ctx.snap_region = Some(region);
@@ -983,7 +984,7 @@ impl PeerStorage {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
                     // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag);
+                    panic!("{} applying snapshot failed", self.tag,);
                 } else {
                     return true;
                 }
@@ -1059,10 +1060,12 @@ impl PeerStorage {
             status,
         };
         // TODO: gracefully remove region instead.
-        if self.region_sched.schedule(task).is_err() {
+        if let Err(e) = self.region_sched.schedule(task) {
             info!(
-                "{} fail to schedule apply job, are we shutting down?",
-                self.tag
+                "failed to to schedule apply job, are we shutting down?";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "err" => ?e,
             );
         }
     }
@@ -1152,8 +1155,10 @@ impl PeerStorage {
                 // [b, c) will be kept in rocksdb until a covered snapshot is applied or
                 // store is restarted.
                 error!(
-                    "{} cleanup data fail, may leave some dirty data: {:?}",
-                    self.tag, e
+                    "failed to cleanup data, may leave some dirty data";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "err" => ?e,
                 );
             }
         }
@@ -1265,7 +1270,7 @@ pub fn clear_meta(
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    let handle = rocksdb::get_cf_handle(&engines.kv, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     kv_wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     kv_wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
 
@@ -1285,10 +1290,13 @@ pub fn clear_meta(
     raft_wb.delete(&keys::raft_state_key(region_id))?;
 
     info!(
-        "[region {}] clear peer 1 meta key, 1 apply key, 1 raft key and {} raft logs, takes {:?}",
-        region_id,
-        last_index + 1 - first_index,
-        t.elapsed()
+        "finish clear peer meta";
+        "region_id" => region_id,
+        "meta_key" => 1,
+        "apply_key" => 1,
+        "raft_key" => 1,
+        "raft_logs" => last_index + 1 - first_index,
+        "takes" => ?t.elapsed(),
     );
     Ok(())
 }
@@ -1299,7 +1307,10 @@ pub fn do_snapshot(
     snap: &DbSnapshot,
     region_id: u64,
 ) -> raft::Result<Snapshot> {
-    debug!("[region {}] begin to generate a snapshot", region_id);
+    debug!(
+        "begin to generate a snapshot";
+        "region_id" => region_id,
+    );
 
     let apply_state: RaftApplyState =
         match snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
@@ -1404,7 +1415,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
@@ -1424,10 +1435,11 @@ pub fn write_peer_state<T: Mutable>(
         region_state.set_merge_state(state);
     }
 
-    let handle = rocksdb::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
-        "[region {}] writing merge state: {:?}",
-        region_id, region_state
+        "writing merge state";
+        "region_id" => region_id,
+        "state" => ?region_state,
     );
     kv_wb.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
     Ok(())
@@ -1459,17 +1471,164 @@ impl Storage for PeerStorage {
     }
 }
 
+/// Upgreade from v2.x to v3.x
+///
+/// For backward compatiblity, it needs to check whether there are any
+/// meta data in the raft cf of the kv engine, if there are, it moves them
+/// into raft engine.
+pub fn maybe_upgrade_from_2_to_3(
+    raft_engine: &DB,
+    kv_path: &str,
+    kv_db_opts: DBOptions,
+    kv_cfg: &config::DbConfig,
+) -> Result<()> {
+    use crate::storage::CF_RAFT;
+    if !util::rocksdb_util::db_exist(kv_path) {
+        debug!("no need upgrade to v3.x");
+        return Ok(());
+    }
+
+    if DB::list_column_families(&kv_db_opts, kv_path)
+        .unwrap()
+        .into_iter()
+        .find(|cf| *cf == CF_RAFT)
+        .is_none()
+    {
+        // We have upgraded from v2.x to v3.x.
+        return Ok(());
+    }
+
+    info!("start upgrading from v2.x to v3.x");
+    let t = Instant::now();
+
+    // Create v2.0.x kv engine.
+    let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
+    let mut kv_engine = util::rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
+
+    // Move meta data from kv engine to raft engine.
+    let upgrade_raft_wb = WriteBatch::new();
+    // Cleanup meta data in kv engine.
+    let cleanup_kv_wb = WriteBatch::new();
+
+    // For meta data in the default CF.
+    //
+    //  1. store_ident_key: 0x01 0x01
+    //  2. prepare_boostrap_key: 0x01 0x02
+    if let Some(m) =
+        kv_engine.get_msg::<kvproto::raft_serverpb::StoreIdent>(keys::STORE_IDENT_KEY)?
+    {
+        info!("upgrading STORE_IDENT_KEY";
+            "store_id" => m.get_store_id(),
+            "cluster_id" => m.get_cluster_id(),
+        );
+        upgrade_raft_wb.put_msg(keys::STORE_IDENT_KEY, &m)?;
+        cleanup_kv_wb.delete(keys::STORE_IDENT_KEY)?;
+    }
+    if let Some(m) = kv_engine.get_msg::<kvproto::metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)? {
+        info!("upgrading PREPARE_BOOTSTRAP_KEY"; "region" => ?m);
+        upgrade_raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &m)?;
+        cleanup_kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+    }
+
+    // For meta data in the raft CF.
+    //
+    //  1. apply_state_key:         0x01 0x02 region_id 0x03
+    //  2. snapshot_raft_state_key: 0x01 0x02 region_id 0x04
+    //  3. region_state_key:        0x01 0x03 region_id 0x01
+    let start_key = keys::LOCAL_MIN_KEY;
+    let end_key = keys::LOCAL_MAX_KEY;
+    kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
+        if let Ok((region_id, suffix)) = keys::decode_region_raft_key(key) {
+            if suffix == keys::APPLY_STATE_SUFFIX {
+                // apply_state_key
+                upgrade_raft_wb.put(key, value)?;
+                info!("upgrading apply state"; "region_id" => region_id);
+                return Ok(true);
+            } else if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
+                // snapshot_raft_state_key
+                //
+                // In v2.x, we keep an raft local state in kv engine too,
+                // in case of restart happen when we just write region state
+                // to Applying, but not write raft_local_state to
+                // raft engine in time.
+                let raft_state_key = keys::raft_state_key(region_id);
+                let raft_state = raft_engine
+                    .get_msg(&raft_state_key)?
+                    .unwrap_or_else(RaftLocalState::new);
+                let mut snapshot_raft_state = RaftLocalState::new();
+                snapshot_raft_state.merge_from_bytes(value)?;
+                // if we recv append log when applying snapshot, last_index in
+                // raft_local_state will larger than snapshot_index. since
+                // raft_local_state is written to raft engine, and raft
+                // write_batch is written after kv write_batch, raft_local_state
+                // may wrong if restart happen between the two write. so we copy
+                // raft_local_state to kv engine (snapshot_raft_state), and set
+                // snapshot_raft_state.last_index = snapshot_index.
+                // After restart, we need check last_index.
+                if last_index(&snapshot_raft_state) > last_index(&raft_state) {
+                    upgrade_raft_wb.put(&raft_state_key, value)?;
+                    info!(
+                        "upgrading snapshot raft state";
+                        "region_id" => region_id,
+                        "snapshot_raft_state" => ?snapshot_raft_state,
+                        "raft_state" => ?raft_state
+                    );
+                }
+                return Ok(true);
+            }
+        } else if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
+            if suffix == keys::REGION_STATE_SUFFIX {
+                upgrade_raft_wb.put(key, value)?;
+                info!("upgrading region state"; "region_id" => region_id);
+                return Ok(true);
+            }
+        }
+        Err(box_err!(
+            "unexpect key {:?} when upgrading from v2.x to v3.x",
+            key
+        ))
+    })?;
+
+    let mut sync_opt = WriteOptions::new();
+    sync_opt.set_sync(true);
+
+    fail_point!("upgrade_2_3_before_update_raft", |_| {
+        Err(box_err!("injected error: upgrade_2_3_before_update_raft"))
+    });
+    raft_engine.write_opt(upgrade_raft_wb, &sync_opt).unwrap();
+
+    fail_point!("upgrade_2_3_before_update_kv", |_| {
+        Err(box_err!("injected error: upgrade_2_3_before_update_kv"))
+    });
+    kv_engine.write_opt(cleanup_kv_wb, &sync_opt).unwrap();
+
+    // Drop the raft cf.
+    fail_point!("upgrade_2_3_before_drop_raft_cf", |_| {
+        Err(box_err!("injected error: upgrade_2_3_before_drop_raft_cf"))
+    });
+    kv_engine.drop_cf(CF_RAFT).unwrap();
+
+    info!(
+        "finish upgrading from v2.x to v3.x";
+        "takes" => ?t.elapsed(),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::store::fsm::apply::compact_raft_log;
+    use crate::raftstore::store::util::Engines;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::worker::RegionTask;
+    use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
+    use crate::storage::{ALL_CFS, CF_DEFAULT};
+    use crate::util::rocksdb_util::new_engine;
+    use crate::util::worker::{Scheduler, Worker};
     use kvproto::raft_serverpb::RaftSnapshotData;
-    use protobuf;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::bootstrap;
-    use raftstore::store::util::Engines;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::worker::RegionTask;
     use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
@@ -1477,22 +1636,22 @@ mod tests {
     use std::sync::mpsc::*;
     use std::sync::*;
     use std::time::Duration;
-    use storage::{ALL_CFS, CF_DEFAULT};
     use tempdir::*;
-    use util::rocksdb::new_engine;
-    use util::worker::{Scheduler, Worker};
 
     use super::*;
 
     fn new_storage(sched: Scheduler<RegionTask>, path: &TempDir) -> PeerStorage {
-        let kv_db = Arc::new(new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap());
+        let kv_db =
+            Arc::new(new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap());
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db =
-            Arc::new(new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap());
+            Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
         let engines = Engines::new(kv_db, raft_db);
-        bootstrap::bootstrap_store(&engines, 1, 1).expect("");
-        let region = bootstrap::prepare_bootstrap(&engines, 1, 1, 1).expect("");
-        PeerStorage::new(engines, &region, sched, "".to_owned()).unwrap()
+        bootstrap_store(&engines, 1, 1).unwrap();
+
+        let region = initial_region(1, 1, 1);
+        prepare_bootstrap_cluster(&engines, &region).unwrap();
+        PeerStorage::new(engines, &region, sched, 0, "".to_owned()).unwrap()
     }
 
     #[derive(Default)]
@@ -1532,9 +1691,7 @@ mod tests {
         let mut kv_wb = WriteBatch::new();
         let mut ctx = InvokeContext::new(&store);
         let mut ready_ctx = ReadyContext::default();
-        store
-            .append(&mut ctx, &ents[1..], &mut ready_ctx)
-            .expect("");
+        store.append(&mut ctx, &ents[1..], &mut ready_ctx).unwrap();
         ctx.apply_state
             .mut_truncated_state()
             .set_index(ents[0].get_index());
@@ -1545,8 +1702,8 @@ mod tests {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
             .unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).expect("");
-        store.engines.kv.write(kv_wb).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
+        store.engines.kv.write(kv_wb).unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1557,7 +1714,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).expect("");
+        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1767,7 +1924,7 @@ mod tests {
                 let mut kv_wb = WriteBatch::new();
                 ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
                     .unwrap();
-                store.engines.kv.write(kv_wb).expect("");
+                store.engines.kv.write(kv_wb).unwrap();
             }
         }
     }
@@ -1800,7 +1957,7 @@ mod tests {
         assert!(!snap.get_data().is_empty());
 
         let mut data = RaftSnapshotData::new();
-        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).expect("");
+        protobuf::Message::merge_from_bytes(&mut data, snap.get_data()).unwrap();
         assert_eq!(data.get_region().get_id(), 1);
         assert_eq!(data.get_region().get_peers().len(), 1);
 
@@ -1920,7 +2077,7 @@ mod tests {
             let mut store = new_storage_from_ents(sched, &td, &ents);
             append_ents(&mut store, &entries);
             let li = store.last_index();
-            let actual_entries = store.entries(4, li + 1, u64::max_value()).expect("");
+            let actual_entries = store.entries(4, li + 1, u64::max_value()).unwrap();
             if actual_entries != wentries {
                 panic!("#{}: want {:?}, got {:?}", i, wentries, actual_entries);
             }
@@ -2167,7 +2324,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.cancel_applying_snap());
+        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
         assert!(res.is_err());
     }
 
@@ -2216,7 +2373,7 @@ mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = ::panic_hook::recover_safe(|| s.check_applying_snap());
+        let res = panic_hook::recover_safe(|| s.check_applying_snap());
         assert!(res.is_err());
     }
 

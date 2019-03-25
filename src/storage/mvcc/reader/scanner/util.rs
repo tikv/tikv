@@ -11,9 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use storage::mvcc::{Error, Result};
-use storage::mvcc::{Lock, LockType, Write};
-use storage::{Cursor, Iterator, Key, Statistics, Value};
+use crate::storage::mvcc::default_not_found_error;
+use crate::storage::mvcc::{Error, Result};
+use crate::storage::mvcc::{Lock, LockType, Write};
+use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
 
 /// Representing check lock result.
 #[derive(Debug)]
@@ -40,7 +41,7 @@ pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
 
     let raw_key = key.to_raw()?;
 
-    if ts == ::std::u64::MAX && raw_key == lock.primary {
+    if ts == std::u64::MAX && raw_key == lock.primary {
         // When `ts == u64::MAX` (which means to get latest committed version for
         // primary key), and current key is the primary key, we return the latest
         // committed version.
@@ -81,8 +82,15 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
-    assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
+    if !default_cursor.valid()
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_load_data_by_write",
+        ));
+    }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
@@ -101,8 +109,15 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
-    assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
+    if !default_cursor.valid()
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_reverse_load_data_by_write",
+        ));
+    }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }

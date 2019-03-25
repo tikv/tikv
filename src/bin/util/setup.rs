@@ -11,8 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::ToOwned;
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
 use clap::ArgMatches;
@@ -22,7 +23,7 @@ use tikv::util::collections::HashMap;
 use tikv::util::{self, logger};
 
 // A workaround for checking if log is initialized.
-pub static LOG_INITIALIZED: AtomicBool = ATOMIC_BOOL_INIT;
+pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
@@ -44,20 +45,20 @@ pub fn initial_logger(config: &TiKvConfig) {
         let drainer = logger::term_drainer();
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
+            fatal!("failed to initialize log: {}", e);
         });
     } else {
         let drainer =
             logger::file_drainer(&config.log_file, log_rotation_timespan).unwrap_or_else(|e| {
                 fatal!(
-                    "failed to initialize log with file {:?}: {:?}",
+                    "failed to initialize log with file {}: {}",
                     config.log_file,
                     e
                 );
             });
         // use async drainer and init std log.
         logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
-            fatal!("failed to initialize log: {:?}", e);
+            fatal!("failed to initialize log: {}", e);
         });
     };
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
@@ -66,7 +67,9 @@ pub fn initial_logger(config: &TiKvConfig) {
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::monitor_threads("tikv")
-        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {:?}", e));
+        .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+    util::metrics::monitor_allocator_stats("tikv")
+        .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;
@@ -82,7 +85,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
 }
 
 #[allow(dead_code)]
-pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches) {
+pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
         config.log_level = logger::get_level_by_string(level).unwrap();
     }
@@ -108,7 +111,7 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
     }
 
     if let Some(endpoints) = matches.values_of("pd-endpoints") {
-        config.pd.endpoints = endpoints.map(|e| e.to_owned()).collect();
+        config.pd.endpoints = endpoints.map(ToOwned::to_owned).collect();
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {
@@ -118,11 +121,11 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
                 let mut parts = s.split('=');
                 let key = parts.next().unwrap().to_owned();
                 let value = match parts.next() {
-                    None => fatal!("invalid label: {:?}", s),
+                    None => fatal!("invalid label: {}", s),
                     Some(v) => v.to_owned(),
                 };
                 if parts.next().is_some() {
-                    fatal!("invalid label: {:?}", s);
+                    fatal!("invalid label: {}", s);
                 }
                 labels.insert(key, value);
             })
@@ -139,5 +142,9 @@ pub fn overwrite_config_with_cmd_args(config: &mut TiKvConfig, matches: &ArgMatc
 
     if let Some(import_dir) = matches.value_of("import-dir") {
         config.import.import_dir = import_dir.to_owned();
+    }
+
+    if let Some(metrics_addr) = matches.value_of("metrics-addr") {
+        config.metric.address = metrics_addr.to_owned()
     }
 }

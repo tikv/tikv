@@ -17,24 +17,24 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::{error, result};
 
+use crate::raftstore::store::engine::IterOption;
+use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
+use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
-use raftstore::store::engine::IterOption;
-use raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use rocksdb::TablePropertiesCollection;
-use storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 mod btree_engine;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
-mod rocksdb;
+mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
-pub use self::rocksdb::{RocksEngine, RocksSnapshot, TestEngineBuilder};
+pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
 
 pub const SEEK_BOUND: u64 = 8;
 
@@ -49,7 +49,7 @@ const STAT_SEEK: &str = "seek";
 const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
-pub type Callback<T> = Box<FnBox((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnBox((CbContext, Result<T>)) + Send>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -653,7 +653,7 @@ quick_error! {
             description("an empty request")
             display("an empty request")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -681,10 +681,10 @@ pub mod tests {
     use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
     use super::*;
+    use crate::storage::{CfName, Key, CF_DEFAULT};
+    use crate::util::codec::bytes;
+    use crate::util::escape;
     use kvproto::kvrpcpb::Context;
-    use storage::{CfName, Key, CF_DEFAULT};
-    use util::codec::bytes;
-    use util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {

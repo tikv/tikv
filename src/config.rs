@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate toml;
-
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -24,31 +22,33 @@ use std::usize;
 
 use rocksdb::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRecoveryMode, TitanDBOptions,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
 
-use import::Config as ImportConfig;
-use pd::Config as PdConfig;
-use raftstore::coprocessor::Config as CopConfig;
-use raftstore::store::keys::region_raft_prefix_len;
-use raftstore::store::Config as RaftstoreConfig;
-use server::readpool;
-use server::Config as ServerConfig;
-use storage::{
+use crate::import::Config as ImportConfig;
+use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::Config as CopConfig;
+use crate::raftstore::store::keys::region_raft_prefix_len;
+use crate::raftstore::store::Config as RaftstoreConfig;
+use crate::server::readpool;
+use crate::server::Config as ServerConfig;
+use crate::server::CONFIG_ROCKSDB_GAUGE;
+use crate::storage::{
     Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
 };
-use util::config::{
+use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
 };
-use util::properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory};
-use util::rocksdb::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::util::rocksdb_util::{
+    db_exist,
+    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
+    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use util::security::SecurityConfig;
-use util::time::duration_to_sec;
+use crate::util::security::SecurityConfig;
+use crate::util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -159,6 +159,114 @@ macro_rules! cf_config {
             pub titan: TitanCfConfig,
         }
     };
+}
+
+macro_rules! write_into_metrics {
+    ($cf:expr, $tag:expr,$metrics:expr) => {{
+        $metrics
+            .with_label_values(&[$tag, "block_size"])
+            .set($cf.block_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "block_cache_size"])
+            .set($cf.block_cache_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "disable_block_cache"])
+            .set(($cf.disable_block_cache as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "cache_index_and_filter_blocks"])
+            .set(($cf.cache_index_and_filter_blocks as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "pin_l0_filter_and_index_blocks"])
+            .set(($cf.pin_l0_filter_and_index_blocks as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "use_bloom_filter"])
+            .set(($cf.use_bloom_filter as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "optimize_filters_for_hits"])
+            .set(($cf.optimize_filters_for_hits as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "whole_key_filtering"])
+            .set(($cf.whole_key_filtering as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "bloom_filter_bits_per_key"])
+            .set($cf.bloom_filter_bits_per_key.into());
+        $metrics
+            .with_label_values(&[$tag, "block_based_bloom_filter"])
+            .set(($cf.block_based_bloom_filter as i32).into());
+
+        $metrics
+            .with_label_values(&[$tag, "read_amp_bytes_per_bit"])
+            .set($cf.read_amp_bytes_per_bit.into());
+        $metrics
+            .with_label_values(&[$tag, "write_buffer_size"])
+            .set($cf.write_buffer_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "max_write_buffer_number"])
+            .set($cf.max_write_buffer_number.into());
+        $metrics
+            .with_label_values(&[$tag, "min_write_buffer_number_to_merge"])
+            .set($cf.min_write_buffer_number_to_merge.into());
+        $metrics
+            .with_label_values(&[$tag, "max_bytes_for_level_base"])
+            .set($cf.max_bytes_for_level_base.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "target_file_size_base"])
+            .set($cf.target_file_size_base.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "level0_file_num_compaction_trigger"])
+            .set($cf.level0_file_num_compaction_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "level0_slowdown_writes_trigger"])
+            .set($cf.level0_slowdown_writes_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "level0_stop_writes_trigger"])
+            .set($cf.level0_stop_writes_trigger.into());
+        $metrics
+            .with_label_values(&[$tag, "max_compaction_bytes"])
+            .set($cf.max_compaction_bytes.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "dynamic_level_bytes"])
+            .set(($cf.dynamic_level_bytes as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "num_levels"])
+            .set($cf.num_levels.into());
+        $metrics
+            .with_label_values(&[$tag, "max_bytes_for_level_multiplier"])
+            .set($cf.max_bytes_for_level_multiplier.into());
+
+        $metrics
+            .with_label_values(&[$tag, "disable_auto_compactions"])
+            .set(($cf.disable_auto_compactions as i32).into());
+        $metrics
+            .with_label_values(&[$tag, "soft_pending_compaction_bytes_limit"])
+            .set($cf.soft_pending_compaction_bytes_limit.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "hard_pending_compaction_bytes_limit"])
+            .set($cf.hard_pending_compaction_bytes_limit.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_min_blob_size"])
+            .set($cf.titan.min_blob_size as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_blob_cache_size"])
+            .set($cf.titan.blob_cache_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_min_gc_batch_size"])
+            .set($cf.titan.min_gc_batch_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_max_gc_batch_size"])
+            .set($cf.titan.max_gc_batch_size.0 as f64);
+        $metrics
+            .with_label_values(&[$tag, "titan_discardable_ratio"])
+            .set($cf.titan.discardable_ratio);
+        $metrics
+            .with_label_values(&[$tag, "titan_sample_ratio"])
+            .set($cf.titan.sample_ratio);
+        $metrics
+            .with_label_values(&[$tag, "titan_merge_small_file_threshold"])
+            .set($cf.titan.merge_small_file_threshold.0 as f64);
+    }};
 }
 
 macro_rules! build_cf_opt {
@@ -493,6 +601,9 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[serde(with = "config::rate_limiter_mode_serde")]
+    pub rate_limiter_mode: DBRateLimiterMode,
+    pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
@@ -526,6 +637,8 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_mode: DBRateLimiterMode::WriteOnly,
+            auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
@@ -570,9 +683,15 @@ impl DbConfig {
                     );
                 })
         }
+
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
+            opts.set_ratelimiter_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                self.rate_limiter_mode,
+                self.auto_tuned,
+            );
         }
+
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -589,7 +708,17 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            // TODO: rmeove CF_RAFT.
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+        ]
+    }
+
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -598,8 +727,15 @@ impl DbConfig {
         ]
     }
 
-    fn validate(&mut self) -> Result<(), Box<Error>> {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         Ok(())
+    }
+
+    fn write_into_metrics(&self) {
+        write_into_metrics!(self.defaultcf, CF_DEFAULT, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.lockcf, CF_LOCK, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.writecf, CF_WRITE, CONFIG_ROCKSDB_GAUGE);
+        write_into_metrics!(self.raftcf, CF_RAFT, CONFIG_ROCKSDB_GAUGE);
     }
 }
 
@@ -771,7 +907,7 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
     }
 }
@@ -796,12 +932,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
+    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
-    use util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -849,7 +985,7 @@ macro_rules! readpool_config {
                 }
             }
 
-            pub fn validate(&self) -> Result<(), Box<Error>> {
+            pub fn validate(&self) -> Result<(), Box<dyn Error>> {
                 if self.high_concurrency == 0 {
                     return Err(format!(
                         "readpool.{}.high-concurrency should be > 0",
@@ -865,9 +1001,11 @@ macro_rules! readpool_config {
                     .into());
                 }
                 if self.low_concurrency == 0 {
-                    return Err(
-                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
-                    );
+                    return Err(format!(
+                        "readpool.{}.low-concurrency should be > 0",
+                        $display_name
+                    )
+                    .into());
                 }
                 if self.stack_size.0 < ReadableSize::mb(2).0 {
                     return Err(
@@ -1008,7 +1146,7 @@ pub struct ReadPoolConfig {
 }
 
 impl ReadPoolConfig {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.storage.validate()?;
         self.coprocessor.validate()?;
         Ok(())
@@ -1023,6 +1161,7 @@ pub struct TiKvConfig {
     pub log_level: slog::Level,
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
+    pub panic_when_unexpected_key_or_data: bool,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -1043,6 +1182,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
+            panic_when_unexpected_key_or_data: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -1059,7 +1199,7 @@ impl Default for TiKvConfig {
 }
 
 impl TiKvConfig {
-    pub fn validate(&mut self) -> Result<(), Box<Error>> {
+    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         self.readpool.validate()?;
         self.storage.validate()?;
 
@@ -1180,25 +1320,23 @@ impl TiKvConfig {
         }
     }
 
-    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), Box<Error>> {
+    pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
         if last_cfg.rocksdb.wal_dir != self.rocksdb.wal_dir {
             return Err(format!(
-                "db wal_dir have been changed, former db wal_dir is {}, \
-                 current db wal_dir is {}, please guarantee all data wal log \
+                "db wal_dir have been changed, former db wal_dir is '{}', \
+                 current db wal_dir is '{}', please guarantee all data wal logs \
                  have been moved to destination directory.",
                 last_cfg.rocksdb.wal_dir, self.rocksdb.wal_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.raftdb.wal_dir != self.raftdb.wal_dir {
             return Err(format!(
-                "raftdb wal_dir have been changed, former raftdb wal_dir is {}, \
-                 current raftdb wal_dir is {}, please guarantee all raft wal log \
+                "raftdb wal_dir have been changed, former raftdb wal_dir is '{}', \
+                 current raftdb wal_dir is '{}', please guarantee all raft wal logs \
                  have been moved to destination directory.",
                 last_cfg.raftdb.wal_dir, self.rocksdb.wal_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
@@ -1206,17 +1344,15 @@ impl TiKvConfig {
                 "storage data dir have been changed, former data dir is {}, \
                  current data dir is {}, please check if it is expected.",
                 last_cfg.storage.data_dir, self.storage.data_dir
-            )
-            .into());
+            ));
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
             return Err(format!(
-                "raft dir have been changed, former raft dir is {}, \
-                 current raft dir is {}, please check if it is expected.",
+                "raft dir have been changed, former raft dir is '{}', \
+                 current raft dir is '{}', please check if it is expected.",
                 last_cfg.raft_store.raftdb_path, self.raft_store.raftdb_path
-            )
-            .into());
+            ));
         }
 
         Ok(())
@@ -1227,11 +1363,11 @@ impl TiKvConfig {
         P: fmt::Debug,
     {
         fs::File::open(&path)
-            .map_err::<Box<Error>, _>(|e| Box::new(e))
+            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
             .and_then(|mut f| {
                 let mut s = String::new();
                 f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
+                let c = ::toml::from_str(&s)?;
                 Ok(c)
             })
             .unwrap_or_else(|e| {
@@ -1243,12 +1379,17 @@ impl TiKvConfig {
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = ::toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;
 
         Ok(())
+    }
+
+    pub fn write_into_metrics(&self) {
+        self.raft_store.write_into_metrics();
+        self.rocksdb.write_into_metrics();
     }
 }
 
@@ -1259,15 +1400,13 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     let last_cfg_path = store_path.join(LAST_CONFIG_FILE);
     if last_cfg_path.exists() {
         let last_cfg = TiKvConfig::from_file(&last_cfg_path);
-        if let Err(e) = config.check_critical_cfg_with(&last_cfg) {
-            return Err(format!("check critical config failed, err {:?}", e));
-        }
+        config.check_critical_cfg_with(&last_cfg)?;
     }
 
     // Create parent directory if missing.
     if let Err(e) = fs::create_dir_all(&store_path) {
         return Err(format!(
-            "create parent directory {} failed, err {:?}",
+            "create parent directory '{}' failed: {}",
             store_path.to_str().unwrap(),
             e
         ));
@@ -1276,7 +1415,7 @@ pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), Stri
     // Persist current critical configurations to file.
     if let Err(e) = config.write_to_file(&last_cfg_path) {
         return Err(format!(
-            "persist critical config to {} failed, err {:?}",
+            "persist critical config to '{}' failed: {}",
             last_cfg_path.to_str().unwrap(),
             e
         ));

@@ -15,12 +15,12 @@ use prometheus::local::{LocalHistogramTimer, LocalHistogramVec, LocalIntCounterV
 use std::fmt;
 use std::mem;
 
-use pd;
-use server::readpool;
-use storage;
-use util::collections::HashMap;
-use util::futurepool;
-use util::worker;
+use crate::pd;
+use crate::server::readpool;
+use crate::storage;
+use crate::util::collections::HashMap;
+use crate::util::futurepool;
+use crate::util::worker;
 
 use super::metrics::*;
 
@@ -40,7 +40,7 @@ pub struct Context {
 }
 
 impl fmt::Debug for Context {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("storage::ReadPoolContext").finish()
     }
 }

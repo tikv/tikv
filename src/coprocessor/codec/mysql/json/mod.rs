@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};
-use util::is_even;
+use crate::util::is_even;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 
@@ -93,6 +93,17 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
         }
     }
     Ok(Json::Object(map))
+}
+
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Json {
+    #[inline]
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::coprocessor::dag::expr::EvalContext,
+    ) -> crate::coprocessor::Result<bool> {
+        // TODO: This logic is not correct. See pingcap/tidb#9593
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

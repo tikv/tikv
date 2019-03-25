@@ -11,24 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::Either;
 use futures::sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
 use std::boxed;
-use util::Either;
 
 /// Generates a paired future and callback so that when callback is being called, its result
 /// is automatically passed as a future result.
-pub fn paired_future_callback<T>() -> (Box<boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
+pub fn paired_future_callback<T>() -> (Box<dyn boxed::FnBox(T) + Send>, oneshot::Receiver<T>)
 where
     T: Send + 'static,
 {
     let (tx, future) = oneshot::channel::<T>();
-    let callback = box move |result| {
+    let callback = Box::new(move |result| {
         let r = tx.send(result);
         if r.is_err() {
             warn!("paired_future_callback: Failed to send result to the future rx, discarded.");
         }
-    };
+    });
     (callback, future)
 }
 

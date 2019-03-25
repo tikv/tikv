@@ -30,7 +30,7 @@ pub use self::table::TableCheckObserver;
 
 #[derive(Default)]
 pub struct Host {
-    checkers: Vec<Box<SplitChecker>>,
+    checkers: Vec<Box<dyn SplitChecker>>,
     auto_split: bool,
 }
 
@@ -95,7 +95,7 @@ impl Host {
     }
 
     #[inline]
-    pub fn add_checker(&mut self, checker: Box<SplitChecker>) {
+    pub fn add_checker(&mut self, checker: Box<dyn SplitChecker>) {
         self.checkers.push(checker);
     }
 }

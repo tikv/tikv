@@ -18,8 +18,8 @@ use std::time::Duration;
 use kvproto::{errorpb, kvrpcpb};
 use tipb;
 
-use coprocessor;
-use storage;
+use crate::coprocessor;
+use crate::storage;
 
 quick_error! {
     #[derive(Debug)]
@@ -43,7 +43,7 @@ quick_error! {
             description("eval failed")
             display("eval error {:?}", err)
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -58,7 +58,7 @@ impl From<storage::engine::Error> for Error {
     fn from(e: storage::engine::Error) -> Error {
         match e {
             storage::engine::Error::Request(e) => Error::Region(e),
-            _ => Error::Other(box e),
+            _ => Error::Other(Box::new(e)),
         }
     }
 }
@@ -85,7 +85,7 @@ impl From<storage::txn::Error> for Error {
                 info.set_lock_ttl(ttl);
                 Error::Locked(info)
             }
-            _ => Error::Other(box e),
+            _ => Error::Other(Box::new(e)),
         }
     }
 }

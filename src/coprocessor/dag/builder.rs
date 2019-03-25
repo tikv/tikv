@@ -16,14 +16,17 @@ use std::sync::Arc;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
 
-use storage::Store;
+use crate::storage::Store;
 
+use super::batch_executor::executors::*;
+use super::batch_executor::interface::*;
 use super::executor::{
-    Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
-    StreamAggExecutor, TableScanExecutor, TopNExecutor,
+    Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
+    TopNExecutor,
 };
-use coprocessor::dag::expr::EvalConfig;
-use coprocessor::*;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::metrics::*;
+use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
 ///
@@ -35,6 +38,89 @@ use coprocessor::*;
 pub struct DAGBuilder;
 
 impl DAGBuilder {
+    /// Given a list of executor descriptors and returns whether all executor descriptors can
+    /// be used to build batch executors.
+    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
+        use cop_datatype::EvalType;
+        use cop_datatype::FieldTypeAccessor;
+        use std::convert::TryFrom;
+
+        for ed in exec_descriptors {
+            match ed.get_tp() {
+                ExecType::TypeTableScan => {
+                    let descriptor = ed.get_tbl_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
+                            return false;
+                        }
+                    }
+                }
+                _ => {
+                    debug!(
+                        "Coprocessor request cannot be batched";
+                        "unsupported_executor_tp" => ?ed.get_tp(),
+                    );
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    // Note: `S` is `'static` because we have trait objects `Executor`.
+    pub fn build_batch<S: Store + 'static>(
+        executor_descriptors: Vec<executor::Executor>,
+        store: S,
+        ranges: Vec<KeyRange>,
+        config: Arc<EvalConfig>,
+    ) -> Result<Box<dyn BatchExecutor>> {
+        let mut executor_descriptors = executor_descriptors.into_iter();
+        let mut first_ed = executor_descriptors
+            .next()
+            .ok_or_else(|| Error::Other(box_err!("No executors")))?;
+
+        let mut executor: Box<dyn BatchExecutor>;
+
+        match first_ed.get_tp() {
+            ExecType::TypeTableScan => {
+                // TODO: Use static metrics.
+                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+
+                let mut descriptor = first_ed.take_tbl_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchTableScanExecutor::new(
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                )?);
+            }
+            _ => {
+                return Err(Error::Other(box_err!(
+                    "Unexpected first executor {:?}",
+                    first_ed.get_tp()
+                )));
+            }
+        }
+
+        // Currently we only support table scan executor. So if there are more
+        // executors, it is unexpected.
+        if executor_descriptors.next().is_some() {
+            return Err(Error::Other(box_err!(
+                "Unexpected non-first executor {:?}",
+                first_ed.get_tp()
+            )));
+        }
+
+        Ok(executor)
+    }
+
     /// Builds a normal executor pipeline.
     ///
     /// Normal executors iterate rows one by one.
@@ -44,14 +130,14 @@ impl DAGBuilder {
         ranges: Vec<KeyRange>,
         ctx: Arc<EvalConfig>,
         collect: bool,
-    ) -> Result<Box<Executor + Send>> {
+    ) -> Result<Box<dyn Executor + Send>> {
         let mut exec_descriptors = exec_descriptors.into_iter();
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
         let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
         for mut exec in exec_descriptors {
-            let curr: Box<Executor + Send> = match exec.get_tp() {
+            let curr: Box<dyn Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
@@ -89,10 +175,10 @@ impl DAGBuilder {
         store: S,
         ranges: Vec<KeyRange>,
         collect: bool,
-    ) -> Result<Box<Executor + Send>> {
+    ) -> Result<Box<dyn Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                let ex = Box::new(TableScanExecutor::new(
+                let ex = Box::new(ScanExecutor::table_scan(
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -102,7 +188,7 @@ impl DAGBuilder {
             }
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
-                let ex = Box::new(IndexScanExecutor::new(
+                let ex = Box::new(ScanExecutor::index_scan(
                     first.take_idx_scan(),
                     ranges,
                     store,

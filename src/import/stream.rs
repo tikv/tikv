@@ -14,7 +14,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::*;
@@ -28,7 +27,7 @@ use super::{Config, Result};
 
 pub struct SSTFile {
     pub meta: SSTMeta,
-    pub data: Vec<u8>,
+    pub(crate) info: LazySSTInfo,
 }
 
 impl SSTFile {
@@ -40,7 +39,7 @@ impl SSTFile {
 }
 
 impl fmt::Debug for SSTFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let uuid = Uuid::from_bytes(self.meta.get_uuid()).unwrap();
         f.debug_struct("SSTFile")
             .field("uuid", &uuid)
@@ -51,7 +50,7 @@ impl fmt::Debug for SSTFile {
     }
 }
 
-pub type SSTRange = (Range, Vec<SSTFile>);
+pub type LazySSTRange = (Range, Vec<LazySSTInfo>);
 
 pub struct SSTFileStream<Client> {
     ctx: RangeContext<Client>,
@@ -80,7 +79,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTRange>> {
+    pub fn next(&mut self) -> Result<Option<LazySSTRange>> {
         if !self.iter.valid() {
             return Ok(None);
         }
@@ -109,31 +108,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         let range = new_range(&start, end);
 
         let infos = w.finish()?;
-        let mut ssts = Vec::new();
-        for info in infos {
-            ssts.push(self.new_sst_file(info));
-        }
-
-        Ok(Some((range, ssts)))
-    }
-
-    fn new_sst_file(&self, info: SSTInfo) -> SSTFile {
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&info.data);
-        let crc32 = digest.sum32();
-        let length = info.data.len() as u64;
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(info.range.clone());
-        meta.set_crc32(crc32);
-        meta.set_length(length);
-        meta.set_cf_name(info.cf_name.clone());
-
-        SSTFile {
-            meta,
-            data: info.data,
-        }
+        Ok(Some((range, infos)))
     }
 }
 
@@ -227,7 +202,7 @@ impl RangeIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
     use std::path::Path;
     use std::sync::Arc;
@@ -235,8 +210,9 @@ mod tests {
     use rocksdb::{DBIterator, DBOptions, ReadOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use config::DbConfig;
-    use storage::types::Key;
+    use crate::config::DbConfig;
+    use crate::storage::types::Key;
+    use crate::util::security::SecurityConfig;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();
@@ -400,8 +376,9 @@ mod tests {
     fn test_sst_file_stream() {
         let dir = TempDir::new("test_import_sst_file_stream").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
 
         for i in 0..16 {
             let k = Key::from_raw(&[i]).append_ts(0);
@@ -490,8 +467,8 @@ mod tests {
             assert_eq!(range.get_start(), start.as_slice());
             assert_eq!(range.get_end(), range_end.as_slice());
             for sst in ssts {
-                assert_eq!(sst.meta.get_range().get_start(), start.as_slice());
-                assert_eq!(sst.meta.get_range().get_end(), end.as_slice());
+                assert_eq!(sst.range.get_start(), start.as_slice());
+                assert_eq!(sst.range.get_end(), end.as_slice());
             }
         }
         assert!(stream.next().unwrap().is_none());

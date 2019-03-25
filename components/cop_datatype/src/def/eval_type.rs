@@ -30,39 +30,39 @@ pub enum EvalType {
 }
 
 impl fmt::Display for EvalType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }
 
-impl ::std::convert::TryFrom<::FieldTypeTp> for EvalType {
-    type Error = ::DataTypeError;
+impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
+    type Error = crate::DataTypeError;
 
-    fn try_from(tp: ::FieldTypeTp) -> Result<Self, ::DataTypeError> {
+    fn try_from(tp: crate::FieldTypeTp) -> Result<Self, crate::DataTypeError> {
         let eval_type = match tp {
-            ::FieldTypeTp::Tiny
-            | ::FieldTypeTp::Short
-            | ::FieldTypeTp::Int24
-            | ::FieldTypeTp::Long
-            | ::FieldTypeTp::LongLong
-            | ::FieldTypeTp::Year => EvalType::Int,
-            ::FieldTypeTp::Float | ::FieldTypeTp::Double => EvalType::Real,
-            ::FieldTypeTp::NewDecimal => EvalType::Decimal,
-            ::FieldTypeTp::Timestamp | ::FieldTypeTp::Date | ::FieldTypeTp::DateTime => {
-                EvalType::DateTime
-            }
-            ::FieldTypeTp::Duration => EvalType::Duration,
-            ::FieldTypeTp::JSON => EvalType::Json,
-            ::FieldTypeTp::VarChar
-            | ::FieldTypeTp::TinyBlob
-            | ::FieldTypeTp::MediumBlob
-            | ::FieldTypeTp::LongBlob
-            | ::FieldTypeTp::Blob
-            | ::FieldTypeTp::VarString
-            | ::FieldTypeTp::String => EvalType::Bytes,
+            crate::FieldTypeTp::Tiny
+            | crate::FieldTypeTp::Short
+            | crate::FieldTypeTp::Int24
+            | crate::FieldTypeTp::Long
+            | crate::FieldTypeTp::LongLong
+            | crate::FieldTypeTp::Year => EvalType::Int,
+            crate::FieldTypeTp::Float | crate::FieldTypeTp::Double => EvalType::Real,
+            crate::FieldTypeTp::NewDecimal => EvalType::Decimal,
+            crate::FieldTypeTp::Timestamp
+            | crate::FieldTypeTp::Date
+            | crate::FieldTypeTp::DateTime => EvalType::DateTime,
+            crate::FieldTypeTp::Duration => EvalType::Duration,
+            crate::FieldTypeTp::JSON => EvalType::Json,
+            crate::FieldTypeTp::VarChar
+            | crate::FieldTypeTp::TinyBlob
+            | crate::FieldTypeTp::MediumBlob
+            | crate::FieldTypeTp::LongBlob
+            | crate::FieldTypeTp::Blob
+            | crate::FieldTypeTp::VarString
+            | crate::FieldTypeTp::String => EvalType::Bytes,
             _ => {
                 // Note: In TiDB, Bit's eval type is Int, but it is not yet supported in TiKV.
-                return Err(::DataTypeError::UnsupportedType {
+                return Err(crate::DataTypeError::UnsupportedType {
                     name: tp.to_string(),
                 });
             }

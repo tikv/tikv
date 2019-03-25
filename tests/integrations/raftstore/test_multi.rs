@@ -59,7 +59,7 @@ fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.assert_quorum(|engine| engine.get_value(&keys::data_key(key)).unwrap().is_none());
 
-    // TODO add stale epoch test cases.
+    // TODO add epoch not match test cases.
 }
 
 fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -93,7 +93,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     );
 
     // week up
-    cluster.run_node(last_leader.get_store_id());
+    cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
         &cluster.engines[&last_leader.get_store_id()].kv,
@@ -118,7 +118,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     // avoid TIMEWAIT
     sleep_ms(500);
 
-    cluster.start();
+    cluster.start().unwrap();
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
@@ -161,7 +161,7 @@ fn test_multi_random_restart<T: Simulator>(
         cluster.must_put(&key, &value);
         assert_eq!(cluster.get(&key), Some(value.to_vec()));
 
-        cluster.run_node(id);
+        cluster.run_node(id).unwrap();
 
         // verify whether data is actually being replicated and waiting for node online.
         must_get_equal(&cluster.get_engine(id), &key, &value);
@@ -461,11 +461,11 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
-            }),
+            })),
         )
         .unwrap();
 
@@ -713,9 +713,9 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
-            }),
+            })),
         )
         .unwrap();
 

@@ -26,6 +26,12 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
+use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::util::file::{calc_crc32, copy_and_sync};
 use rocksdb::load_latest_options;
 use rocksdb::rocksdb::supported_compression;
 use rocksdb::set_external_sst_file_global_seq_no;
@@ -33,14 +39,7 @@ use rocksdb::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use storage::{ALL_CFS, CF_DEFAULT};
 use sys_info;
-use util::file::{calc_crc32, copy_and_sync};
-use util::rocksdb;
-use util::rocksdb::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
 
 pub use rocksdb::CFHandle;
 
@@ -86,8 +85,16 @@ impl<'a> CFOptions<'a> {
     }
 }
 
-pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Result<DB, String> {
-    let mut db_opts = DBOptions::new();
+pub fn new_engine(
+    path: &str,
+    db_opts: Option<DBOptions>,
+    cfs: &[&str],
+    opts: Option<Vec<CFOptions<'_>>>,
+) -> Result<DB, String> {
+    let mut db_opts = match db_opts {
+        Some(opt) => opt,
+        None => DBOptions::new(),
+    };
     db_opts.enable_statistics(true);
     let cf_opts = match opts {
         Some(opts_vec) => opts_vec,
@@ -104,7 +111,10 @@ pub fn new_engine(path: &str, cfs: &[&str], opts: Option<Vec<CFOptions>>) -> Res
 
 /// Turns "dynamic level size" off for the existing column family which was off before.
 /// Column families are small, HashMap isn't necessary.
-fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: &mut CFOptions) {
+fn adjust_dynamic_level_bytes(
+    cf_descs: &[CColumnFamilyDescriptor],
+    cf_options: &mut CFOptions<'_>,
+) {
     if let Some(ref cf_desc) = cf_descs
         .iter()
         .find(|cf_desc| cf_desc.name() == cf_options.cf)
@@ -117,11 +127,9 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
                 .get_level_compaction_dynamic_level_bytes()
         {
             warn!(
-                "change dynamic_level_bytes for existing column family is danger, old: {}, new: {}",
-                existed_dynamic_level_bytes,
-                cf_options
-                    .options
-                    .get_level_compaction_dynamic_level_bytes()
+                "change dynamic_level_bytes for existing column family is danger";
+                "old_value" => existed_dynamic_level_bytes,
+                "new_value" => cf_options.options.get_level_compaction_dynamic_level_bytes(),
             );
         }
         cf_options
@@ -133,7 +141,7 @@ fn adjust_dynamic_level_bytes(cf_descs: &[CColumnFamilyDescriptor], cf_options: 
 fn check_and_open(
     path: &str,
     mut db_opt: DBOptions,
-    cfs_opts: Vec<CFOptions>,
+    cfs_opts: Vec<CFOptions<'_>>,
 ) -> Result<DB, String> {
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
@@ -164,8 +172,12 @@ fn check_and_open(
     let needed: Vec<&str> = cfs_opts.iter().map(|x| x.cf).collect();
 
     let cf_descs = if !existed.is_empty() {
+        let env = match db_opt.env() {
+            Some(env) => env,
+            None => Arc::new(Env::default()),
+        };
         // panic if OPTIONS not found for existing instance?
-        let (_, tmp) = load_latest_options(path, &Env::default(), true)
+        let (_, tmp) = load_latest_options(path, &env, true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
             .unwrap_or_else(|| panic!("couldn't find the OPTIONS file"));
         tmp
@@ -229,7 +241,11 @@ fn check_and_open(
     Ok(db)
 }
 
-pub fn new_engine_opt(path: &str, opts: DBOptions, cfs_opts: Vec<CFOptions>) -> Result<DB, String> {
+pub fn new_engine_opt(
+    path: &str,
+    opts: DBOptions,
+    cfs_opts: Vec<CFOptions<'_>>,
+) -> Result<DB, String> {
     check_and_open(path, opts, cfs_opts)
 }
 
@@ -252,7 +268,7 @@ pub fn db_exist(path: &str) -> bool {
 pub fn get_engine_used_size(engine: Arc<DB>) -> u64 {
     let mut used_size: u64 = 0;
     for cf in ALL_CFS {
-        let handle = rocksdb::get_cf_handle(&engine, cf).unwrap();
+        let handle = get_cf_handle(&engine, cf).unwrap();
         let cf_used_size = engine
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE)
             .expect("rocksdb is too old, missing total-sst-files-size property");
@@ -581,11 +597,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::CF_DEFAULT;
     use rocksdb::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]
@@ -708,7 +724,7 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, &[cf_name], None).unwrap();
+        let db = new_engine(path_str, None, &[cf_name], None).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -757,6 +773,7 @@ mod tests {
         ];
         let db = new_engine(
             temp_dir.path().to_str().unwrap(),
+            None,
             &["default", "test"],
             Some(cfs_opts),
         )

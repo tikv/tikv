@@ -24,13 +24,13 @@ use kvproto::metapb::*;
 use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
-use pd::RegionInfo;
-use raftstore::store::keys;
+use crate::pd::RegionInfo;
+use crate::raftstore::store::keys;
 
 use super::client::*;
 use super::common::*;
 use super::Result;
-use util::collections::HashMap;
+use crate::util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -161,5 +161,10 @@ impl ImportClient for MockClient {
         let mut regions = self.scatter_regions.lock().unwrap();
         regions.insert(region.get_id(), region.region.clone());
         Ok(())
+    }
+
+    fn has_region_id(&self, region_id: u64) -> Result<bool> {
+        let regions = self.regions.lock().unwrap();
+        Ok(regions.contains_key(&region_id))
     }
 }

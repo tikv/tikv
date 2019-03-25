@@ -13,11 +13,11 @@
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
+#[cfg(test)]
+use crate::util::codec::BytesSlice;
 use std::io::Write;
 use tipb::expression::FieldType;
-#[cfg(test)]
-use util::codec::BytesSlice;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
 /// See https://arrow.apache.org/docs/memory_layout.html
@@ -69,7 +69,7 @@ impl Chunk {
 
     /// Get the Row in the chunk with the row index.
     #[inline]
-    pub fn get_row(&self, idx: usize) -> Option<Row> {
+    pub fn get_row(&self, idx: usize) -> Option<Row<'_>> {
         if idx < self.num_rows() {
             Some(Row::new(self, idx))
         } else {
@@ -79,12 +79,12 @@ impl Chunk {
 
     // Get the Iterator for Row in the Chunk.
     #[inline]
-    pub fn iter(&self) -> RowIterator {
+    pub fn iter(&self) -> RowIterator<'_> {
         RowIterator::new(self)
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tps: &[FieldType]) -> Result<Chunk> {
+    pub fn decode(buf: &mut BytesSlice<'_>, tps: &[FieldType]) -> Result<Chunk> {
         let mut chunk = Chunk {
             columns: Vec::with_capacity(tps.len()),
         };
@@ -168,9 +168,9 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use super::*;
-    use coprocessor::codec::chunk::tests::*;
-    use coprocessor::codec::datum::Datum;
-    use coprocessor::codec::mysql::*;
+    use crate::coprocessor::codec::chunk::tests::*;
+    use crate::coprocessor::codec::datum::Datum;
+    use crate::coprocessor::codec::mysql::*;
 
     #[test]
     fn test_append_datum() {

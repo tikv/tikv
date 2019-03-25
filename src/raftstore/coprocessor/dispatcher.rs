@@ -17,8 +17,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use raftstore::store::msg::Msg;
-use util::transport::{RetryableSendCh, Sender};
+use crate::raftstore::store::CasualRouter;
 
 use super::*;
 
@@ -28,11 +27,11 @@ struct Entry<T> {
 }
 
 // TODO: change it to Send + Clone.
-pub type BoxAdminObserver = Box<AdminObserver + Send + Sync>;
-pub type BoxQueryObserver = Box<QueryObserver + Send + Sync>;
-pub type BoxSplitCheckObserver = Box<SplitCheckObserver + Send + Sync>;
-pub type BoxRoleObserver = Box<RoleObserver + Send + Sync>;
-pub type BoxRegionChangeObserver = Box<RegionChangeObserver + Send + Sync>;
+pub type BoxAdminObserver = Box<dyn AdminObserver + Send + Sync>;
+pub type BoxQueryObserver = Box<dyn QueryObserver + Send + Sync>;
+pub type BoxSplitCheckObserver = Box<dyn SplitCheckObserver + Send + Sync>;
+pub type BoxRoleObserver = Box<dyn RoleObserver + Send + Sync>;
+pub type BoxRegionChangeObserver = Box<dyn RegionChangeObserver + Send + Sync>;
 
 /// Registry contains all registered coprocessors.
 #[derive(Default)]
@@ -131,10 +130,7 @@ pub struct CoprocessorHost {
 }
 
 impl CoprocessorHost {
-    pub fn new<C: Sender<Msg> + Send + 'static>(
-        cfg: Config,
-        ch: RetryableSendCh<Msg, C>,
-    ) -> CoprocessorHost {
+    pub fn new<C: CasualRouter + Clone + Send + 'static>(cfg: Config, ch: C) -> CoprocessorHost {
         let mut registry = Registry::default();
         let split_size_check_observer = SizeCheckObserver::new(
             cfg.region_max_size.0,
@@ -273,8 +269,8 @@ impl CoprocessorHost {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::*;
     use protobuf::RepeatedField;
-    use raftstore::coprocessor::*;
     use std::sync::atomic::*;
     use std::sync::*;
 
@@ -293,7 +289,11 @@ mod tests {
     impl Coprocessor for TestCoprocessor {}
 
     impl AdminObserver for TestCoprocessor {
-        fn pre_propose_admin(&self, ctx: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
+        fn pre_propose_admin(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &mut AdminRequest,
+        ) -> Result<()> {
             self.called.fetch_add(1, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {
@@ -302,12 +302,12 @@ mod tests {
             Ok(())
         }
 
-        fn pre_apply_admin(&self, ctx: &mut ObserverContext, _: &AdminRequest) {
+        fn pre_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminRequest) {
             self.called.fetch_add(2, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_admin(&self, ctx: &mut ObserverContext, _: &mut AdminResponse) {
+        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &mut AdminResponse) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -316,7 +316,7 @@ mod tests {
     impl QueryObserver for TestCoprocessor {
         fn pre_propose_query(
             &self,
-            ctx: &mut ObserverContext,
+            ctx: &mut ObserverContext<'_>,
             _: &mut RepeatedField<Request>,
         ) -> Result<()> {
             self.called.fetch_add(4, Ordering::SeqCst);
@@ -327,26 +327,31 @@ mod tests {
             Ok(())
         }
 
-        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &[Request]) {
+        fn pre_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request]) {
             self.called.fetch_add(5, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Response>) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext, _: StateRole) {
+        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
 
     impl RegionChangeObserver for TestCoprocessor {
-        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {
+        fn on_region_changed(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: RegionChangeEvent,
+            _: StateRole,
+        ) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }

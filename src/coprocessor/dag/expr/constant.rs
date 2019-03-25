@@ -14,8 +14,8 @@
 use std::borrow::Cow;
 
 use super::{Constant, Result};
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 impl Datum {
     #[inline]
@@ -38,7 +38,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_decimal(&self) -> Result<Option<Cow<Decimal>>> {
+    pub fn as_decimal(&self) -> Result<Option<Cow<'_, Decimal>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dec(ref d) => Ok(Some(Cow::Borrowed(d))),
@@ -47,7 +47,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_string(&self) -> Result<Option<Cow<[u8]>>> {
+    pub fn as_string(&self) -> Result<Option<Cow<'_, [u8]>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Bytes(ref b) => Ok(Some(Cow::Borrowed(b))),
@@ -56,7 +56,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_time(&self) -> Result<Option<Cow<Time>>> {
+    pub fn as_time(&self) -> Result<Option<Cow<'_, Time>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Time(ref t) => Ok(Some(Cow::Borrowed(t))),
@@ -65,7 +65,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_duration(&self) -> Result<Option<Cow<Duration>>> {
+    pub fn as_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Dur(ref d) => Ok(Some(Cow::Borrowed(d))),
@@ -74,7 +74,7 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_json(&self) -> Result<Option<Cow<Json>>> {
+    pub fn as_json(&self) -> Result<Option<Cow<'_, Json>>> {
         match *self {
             Datum::Null => Ok(None),
             Datum::Json(ref j) => Ok(Some(Cow::Borrowed(j))),
@@ -99,37 +99,37 @@ impl Constant {
     }
 
     #[inline]
-    pub fn eval_decimal(&self) -> Result<Option<Cow<Decimal>>> {
+    pub fn eval_decimal(&self) -> Result<Option<Cow<'_, Decimal>>> {
         self.val.as_decimal()
     }
 
     #[inline]
-    pub fn eval_string(&self) -> Result<Option<Cow<[u8]>>> {
+    pub fn eval_string(&self) -> Result<Option<Cow<'_, [u8]>>> {
         self.val.as_string()
     }
 
     #[inline]
-    pub fn eval_time(&self) -> Result<Option<Cow<Time>>> {
+    pub fn eval_time(&self) -> Result<Option<Cow<'_, Time>>> {
         self.val.as_time()
     }
 
     #[inline]
-    pub fn eval_duration(&self) -> Result<Option<Cow<Duration>>> {
+    pub fn eval_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
         self.val.as_duration()
     }
 
     #[inline]
-    pub fn eval_json(&self) -> Result<Option<Cow<Json>>> {
+    pub fn eval_json(&self) -> Result<Option<Cow<'_, Json>>> {
         self.val.as_json()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::datum_expr;
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::datum_expr;
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use std::u64;
 
     #[derive(PartialEq, Debug)]

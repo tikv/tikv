@@ -15,23 +15,27 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
+use crate::grpc::*;
 use futures::{Future, Stream};
-use grpc::*;
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 use tikv::util::security::{SecurityConfig, SecurityManager};
-use tokio::runtime::Builder as RuntimeBuilder;
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client() -> RaftClient {
+pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
     let grpc_thread_load = Arc::new(ThreadLoad::with_threshold(1000));
-    let async_runtime = Arc::new(RuntimeBuilder::new().core_threads(1).build().unwrap());
-    RaftClient::new(env, cfg, security_mgr, grpc_thread_load, async_runtime)
+    RaftClient::new(
+        env,
+        cfg,
+        security_mgr,
+        grpc_thread_load,
+        pool.sender().clone(),
+    )
 }
 
 #[test]
@@ -42,7 +46,7 @@ fn test_batch_raft_fallback() {
     impl MockKvService for MockKvForRaft {
         fn raft(
             &mut self,
-            ctx: RpcContext,
+            ctx: RpcContext<'_>,
             stream: RequestStream<RaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
@@ -59,7 +63,7 @@ fn test_batch_raft_fallback() {
 
         fn batch_raft(
             &mut self,
-            ctx: RpcContext,
+            ctx: RpcContext<'_>,
             _stream: RequestStream<BatchRaftMessage>,
             sink: ClientStreamingSink<Done>,
         ) {
@@ -68,7 +72,8 @@ fn test_batch_raft_fallback() {
         }
     }
 
-    let mut raft_client = get_raft_client();
+    let pool = tokio_threadpool::Builder::new().pool_size(1).build();
+    let mut raft_client = get_raft_client(&pool);
     let counter = Arc::new(AtomicUsize::new(0));
 
     // Try to bind the mock server on a TCP port, and then do test.
@@ -91,4 +96,5 @@ fn test_batch_raft_fallback() {
         assert!(counter.load(Ordering::SeqCst) > 0);
         break;
     }
+    pool.shutdown().wait().unwrap();
 }

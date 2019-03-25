@@ -14,7 +14,7 @@
 use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
 
-use util::collections::HashSet;
+use crate::util::collections::HashSet;
 
 use super::metrics::*;
 
@@ -312,7 +312,7 @@ pub struct RaftInvalidProposeMetrics {
     pub not_leader: u64,
     pub mismatch_peer_id: u64,
     pub stale_command: u64,
-    pub stale_epoch: u64,
+    pub epoch_not_match: u64,
 }
 
 impl Default for RaftInvalidProposeMetrics {
@@ -323,7 +323,7 @@ impl Default for RaftInvalidProposeMetrics {
             not_leader: 0,
             mismatch_peer_id: 0,
             stale_command: 0,
-            stale_epoch: 0,
+            epoch_not_match: 0,
         }
     }
 }
@@ -360,11 +360,11 @@ impl RaftInvalidProposeMetrics {
                 .inc_by(self.stale_command as i64);
             self.stale_command = 0;
         }
-        if self.stale_epoch > 0 {
+        if self.epoch_not_match > 0 {
             RAFT_INVALID_PROPOSAL_COUNTER_VEC
-                .with_label_values(&["stale_epoch"])
-                .inc_by(self.stale_epoch as i64);
-            self.stale_epoch = 0;
+                .with_label_values(&["epoch_not_match"])
+                .inc_by(self.epoch_not_match as i64);
+            self.epoch_not_match = 0;
         }
     }
 }
@@ -375,7 +375,6 @@ pub struct RaftMetrics {
     pub message: RaftMessageMetrics,
     pub message_dropped: RaftMessageDropMetrics,
     pub propose: RaftProposeMetrics,
-    pub process_tick: LocalHistogram,
     pub process_ready: LocalHistogram,
     pub append_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
@@ -389,9 +388,6 @@ impl Default for RaftMetrics {
             message: Default::default(),
             message_dropped: Default::default(),
             propose: Default::default(),
-            process_tick: PEER_RAFT_PROCESS_DURATION
-                .with_label_values(&["tick"])
-                .local(),
             process_ready: PEER_RAFT_PROCESS_DURATION
                 .with_label_values(&["ready"])
                 .local(),
@@ -408,7 +404,6 @@ impl RaftMetrics {
         self.ready.flush();
         self.message.flush();
         self.propose.flush();
-        self.process_tick.flush();
         self.process_ready.flush();
         self.append_log.flush();
         self.message_dropped.flush();

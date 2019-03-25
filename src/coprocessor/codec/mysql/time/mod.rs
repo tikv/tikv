@@ -26,11 +26,13 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
 
-use coprocessor::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
-use coprocessor::codec::mysql::{self, Decimal};
-use coprocessor::codec::{Error, Result, TEN_POW};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
+use crate::coprocessor::codec::mysql::duration::{
+    Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
+};
+use crate::coprocessor::codec::mysql::{self, Decimal};
+use crate::coprocessor::codec::{Error, Result, TEN_POW};
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
@@ -68,19 +70,19 @@ const MONTH_NAMES_ABBR: &[&str] = &[
 ];
 
 #[inline]
-fn zero_time(tz: Tz) -> DateTime<Tz> {
+fn zero_time(tz: &Tz) -> DateTime<Tz> {
     tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
 #[inline]
-pub fn zero_datetime(tz: Tz) -> Time {
+pub fn zero_datetime(tz: &Tz) -> Time {
     Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
 fn ymd_hms_nanos<T: TimeZone>(
-    tz: T,
+    tz: &T,
     year: i32,
     month: u32,
     day: u32,
@@ -339,22 +341,22 @@ impl Time {
     }
 
     pub fn parse_utc_datetime(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime(s, fsp, Tz::utc())
+        Time::parse_datetime(s, fsp, &Tz::utc())
     }
 
     pub fn parse_utc_datetime_from_float_string(s: &str, fsp: i8) -> Result<Time> {
-        Time::parse_datetime_from_float_string(s, fsp, Tz::utc())
+        Time::parse_datetime_from_float_string(s, fsp, &Tz::utc())
     }
 
-    pub fn parse_datetime(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
+    pub fn parse_datetime(s: &str, fsp: i8, tz: &Tz) -> Result<Time> {
         Time::parse_datetime_internal(s, fsp, tz, false)
     }
 
-    pub fn parse_datetime_from_float_string(s: &str, fsp: i8, tz: Tz) -> Result<Time> {
+    pub fn parse_datetime_from_float_string(s: &str, fsp: i8, tz: &Tz) -> Result<Time> {
         Time::parse_datetime_internal(s, fsp, tz, true)
     }
 
-    fn parse_datetime_internal(s: &str, fsp: i8, tz: Tz, is_float: bool) -> Result<Time> {
+    fn parse_datetime_internal(s: &str, fsp: i8, tz: &Tz, is_float: bool) -> Result<Time> {
         let fsp = mysql::check_fsp(fsp)?;
         let mut need_adjust = false;
         let mut has_hhmmss = false;
@@ -454,7 +456,7 @@ impl Time {
     /// Get time from packed u64. When `tp` is `TIMESTAMP`, the packed time should
     /// be a UTC time; otherwise the packed time should be in the same timezone as `tz`
     /// specified.
-    pub fn from_packed_u64(u: u64, time_type: TimeType, fsp: i8, tz: Tz) -> Result<Time> {
+    pub fn from_packed_u64(u: u64, time_type: TimeType, fsp: i8, tz: &Tz) -> Result<Time> {
         if u == 0 {
             return Time::new(zero_time(tz), time_type, fsp);
         }
@@ -471,7 +473,7 @@ impl Time {
         let hour = (hms >> 12) as u32;
         let nanosec = ((u & ((1 << 24) - 1)) * 1000) as u32;
         let t = if time_type == TimeType::Timestamp {
-            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanosec)?;
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanosec)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(tz, year, month, day, hour, minute, second, nanosec)?
@@ -479,10 +481,10 @@ impl Time {
         Time::new(t, time_type, fsp as i8)
     }
 
-    pub fn from_duration(tz: Tz, time_type: TimeType, d: &MyDuration) -> Result<Time> {
+    pub fn from_duration(tz: &Tz, time_type: TimeType, d: &MyDuration) -> Result<Time> {
         let dur = Duration::nanoseconds(d.to_nanos());
         let t = Utc::now()
-            .with_timezone(&tz)
+            .with_timezone(tz)
             .date()
             .and_hms(0, 0, 0) // TODO: might panic!
             .checked_add_signed(dur);
@@ -732,6 +734,40 @@ impl Time {
             _ => 31,
         }
     }
+
+    /// Checked time addition. Computes self + rhs, returning None if overflow occurred.
+    pub fn checked_add(self, rhs: &MyDuration) -> Option<Time> {
+        if let Some(add) = self
+            .time
+            .checked_add_signed(Duration::nanoseconds(rhs.to_nanos()))
+        {
+            if add.year() > 9999 {
+                return None;
+            }
+            let mut res = self;
+            res.set_time(add);
+            Some(res)
+        } else {
+            None
+        }
+    }
+
+    /// Checked time subtraction. Computes self - rhs, returning None if overflow occurred.
+    pub fn checked_sub(self, rhs: &MyDuration) -> Option<Time> {
+        if let Some(sub) = self
+            .time
+            .checked_sub_signed(Duration::nanoseconds(rhs.to_nanos()))
+        {
+            if sub.year() < 0 {
+                return None;
+            }
+            let mut res = self;
+            res.set_time(sub);
+            Some(res)
+        } else {
+            None
+        }
+    }
 }
 
 impl PartialOrd for Time {
@@ -755,7 +791,7 @@ impl Ord for Time {
 }
 
 impl Display for Time {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if self.is_zero() {
             if self.time_type == TimeType::Date {
                 return f.write_str(ZERO_DATE_STR);
@@ -815,7 +851,7 @@ pub trait TimeEncoder: NumberEncoder {
 
 impl Time {
     /// `decode` decodes time encoded by `encode_time` for Chunk format.
-    pub fn decode(data: &mut BytesSlice) -> Result<Time> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
         use num_traits::FromPrimitive;
 
         let year = i32::from(number::decode_u16(data)?);
@@ -850,14 +886,14 @@ impl Time {
             && second == 0
             && nanoseconds == 0
         {
-            return Ok(zero_datetime(tz));
+            return Ok(zero_datetime(&tz));
         }
         let t = if tp == FieldTypeTp::Timestamp {
-            let t = ymd_hms_nanos(Utc, year, month, day, hour, minute, second, nanoseconds)?;
+            let t = ymd_hms_nanos(&Utc, year, month, day, hour, minute, second, nanoseconds)?;
             tz.from_utc_datetime(&t.naive_utc())
         } else {
             ymd_hms_nanos(
-                Tz::utc(),
+                &Tz::utc(),
                 year,
                 month,
                 day,
@@ -871,6 +907,16 @@ impl Time {
     }
 }
 
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Time {
+    #[inline]
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::coprocessor::dag::expr::EvalContext,
+    ) -> crate::coprocessor::Result<bool> {
+        Ok(!self.is_zero())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,7 +925,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -975,7 +1021,7 @@ mod tests {
             assert_eq!(format!("{}", utc_t), exp);
 
             for_each_tz(move |tz, offset| {
-                let t = Time::parse_datetime(input, fsp, tz).unwrap();
+                let t = Time::parse_datetime(input, fsp, &tz).unwrap();
                 if utc_t.is_zero() {
                     assert_eq!(t, utc_t);
                 } else {
@@ -1037,7 +1083,7 @@ mod tests {
 
         for t in fail_tbl {
             let tz = Tz::utc();
-            assert!(Time::parse_datetime(t, 0, tz).is_err(), t);
+            assert!(Time::parse_datetime(t, 0, &tz).is_err(), t);
         }
     }
 
@@ -1063,7 +1109,7 @@ mod tests {
 
         for (tz_name, time_str, utc_timestamp) in ok_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            let t = Time::parse_datetime(time_str, UNSPECIFIED_FSP, tz).unwrap();
+            let t = Time::parse_datetime(time_str, UNSPECIFIED_FSP, &tz).unwrap();
             assert_eq!(t.time.timestamp(), utc_timestamp);
         }
 
@@ -1081,7 +1127,7 @@ mod tests {
 
         for (tz_name, time_str) in fail_tables {
             let tz = Tz::from_tz_name(tz_name).unwrap();
-            assert!(Time::parse_datetime(time_str, UNSPECIFIED_FSP, tz).is_err());
+            assert!(Time::parse_datetime(time_str, UNSPECIFIED_FSP, &tz).is_err());
         }
     }
 
@@ -1121,7 +1167,7 @@ mod tests {
                 if let Some(local_time) = local_time {
                     let time_str =
                         format!("{}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
-                    let t = Time::parse_datetime(&time_str, UNSPECIFIED_FSP, *tz).unwrap();
+                    let t = Time::parse_datetime(&time_str, UNSPECIFIED_FSP, tz).unwrap();
                     assert_eq!(t.time, local_time);
                 }
             }
@@ -1141,15 +1187,15 @@ mod tests {
         ];
         for (s, fsp) in cases {
             for_each_tz(move |tz, offset| {
-                let t = Time::parse_datetime(s, fsp, tz).unwrap();
+                let t = Time::parse_datetime(s, fsp, &tz).unwrap();
                 let packed = t.to_packed_u64();
                 let reverted_datetime =
-                    Time::from_packed_u64(packed, TimeType::DateTime, fsp, tz).unwrap();
+                    Time::from_packed_u64(packed, TimeType::DateTime, fsp, &tz).unwrap();
                 assert_eq!(reverted_datetime, t);
                 assert_eq!(reverted_datetime.to_packed_u64(), packed);
 
                 let reverted_timestamp =
-                    Time::from_packed_u64(packed, TimeType::Timestamp, fsp, tz).unwrap();
+                    Time::from_packed_u64(packed, TimeType::Timestamp, fsp, &tz).unwrap();
                 assert_eq!(
                     reverted_timestamp.time,
                     reverted_datetime.time + Duration::seconds(offset)
@@ -1200,11 +1246,11 @@ mod tests {
 
         for (t_str, fsp, datetime_dec, date_dec) in cases {
             for_each_tz(move |tz, _offset| {
-                let mut t = Time::parse_datetime(t_str, fsp, tz).unwrap();
+                let mut t = Time::parse_datetime(t_str, fsp, &tz).unwrap();
                 let mut res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, datetime_dec);
 
-                t = Time::parse_datetime(t_str, 0, tz).unwrap();
+                t = Time::parse_datetime(t_str, 0, &tz).unwrap();
                 t.set_time_type(TimeType::Date).unwrap();
                 res = format!("{}", t.to_decimal().unwrap());
                 assert_eq!(res, date_dec);
@@ -1240,8 +1286,8 @@ mod tests {
 
         for (l, r, exp) in cases {
             for_each_tz(move |tz, _offset| {
-                let l_t = Time::parse_datetime(l, MAX_FSP, tz).unwrap();
-                let r_t = Time::parse_datetime(r, MAX_FSP, tz).unwrap();
+                let l_t = Time::parse_datetime(l, MAX_FSP, &tz).unwrap();
+                let r_t = Time::parse_datetime(r, MAX_FSP, &tz).unwrap();
                 assert_eq!(exp, l_t.cmp(&r_t));
             });
         }
@@ -1352,9 +1398,9 @@ mod tests {
             );
 
             for_each_tz(move |tz, offset| {
-                let mut t = Time::parse_datetime(input, UNSPECIFIED_FSP, tz).unwrap();
+                let mut t = Time::parse_datetime(input, UNSPECIFIED_FSP, &tz).unwrap();
                 t.round_frac(fsp).unwrap();
-                let expect = Time::parse_datetime(exp, UNSPECIFIED_FSP, tz).unwrap();
+                let expect = Time::parse_datetime(exp, UNSPECIFIED_FSP, &tz).unwrap();
                 assert_eq!(
                     t, expect,
                     "tz:{:?},input:{:?}, exp:{:?}, utc_t:{:?}, expect:{:?}",
@@ -1388,7 +1434,7 @@ mod tests {
         let tz = Tz::utc();
         for s in cases {
             let d = MyDuration::parse(s.as_bytes(), MAX_FSP).unwrap();
-            let get = Time::from_duration(tz, TimeType::DateTime, &d).unwrap();
+            let get = Time::from_duration(&tz, TimeType::DateTime, &d).unwrap();
             let get_today = get
                 .time
                 .checked_sub_signed(Duration::nanoseconds(d.to_nanos()))
@@ -1505,5 +1551,52 @@ mod tests {
             let t = Time::parse_fsp(s);
             assert_eq!(fsp, t);
         }
+    }
+
+    #[test]
+    fn test_checked_add_and_sub_duration() {
+        let cases = vec![
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:00:14.876545",
+                "2018-12-30 11:31:00.000001",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "00:30:00",
+                "2018-12-30 12:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "12:30:00",
+                "2018-12-31 00:00:45.123456",
+            ),
+            (
+                "2018-12-30 11:30:45.123456",
+                "1 12:30:00",
+                "2019-01-01 00:00:45.123456",
+            ),
+        ];
+        for (lhs, rhs, exp) in cases.clone() {
+            let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
+            let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_add(&rhs).unwrap();
+            let exp = Time::parse_utc_datetime(exp, 6).unwrap();
+            assert_eq!(res, exp);
+        }
+        for (exp, rhs, lhs) in cases {
+            let lhs = Time::parse_utc_datetime(lhs, 6).unwrap();
+            let rhs = MyDuration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_sub(&rhs).unwrap();
+            let exp = Time::parse_utc_datetime(exp, 6).unwrap();
+            assert_eq!(res, exp);
+        }
+
+        let lhs = Time::parse_utc_datetime("9999-12-31 23:59:59", 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
+        assert_eq!(lhs.checked_add(&rhs), None);
+        let lhs = Time::parse_utc_datetime("0000-01-01 00:00:01", 6).unwrap();
+        let rhs = MyDuration::parse(b"01:00:00", 6).unwrap();
+        assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }

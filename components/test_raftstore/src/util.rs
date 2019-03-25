@@ -29,14 +29,14 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
-use tikv::raftstore::store::fsm::SendCh;
+use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
 use tikv::util::config::*;
 use tikv::util::escape;
-use tikv::util::rocksdb::{self, CompactionListener};
+use tikv::util::rocksdb_util::{self, CompactionListener};
 
 use super::*;
 
@@ -482,7 +482,7 @@ fn dummpy_filter(_: &CompactionJobInfo) -> bool {
 
 pub fn create_test_engine(
     engines: Option<Engines>,
-    tx: SendCh,
+    router: RaftRouter,
     cfg: &TiKvConfig,
 ) -> (Engines, Option<TempDir>) {
     // Create engine
@@ -492,20 +492,21 @@ pub fn create_test_engine(
         None => {
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
-            let tx = Mutex::new(tx);
-            let cmpacted_handler = box move |event| {
-                tx.lock()
+            let router = Mutex::new(router);
+            let cmpacted_handler = Box::new(move |event| {
+                router
+                    .lock()
                     .unwrap()
-                    .send(Msg::StoreMsg(StoreMsg::CompactedEvent(event)))
+                    .send_control(StoreMsg::CompactedEvent(event))
                     .unwrap();
-            };
+            });
             kv_db_opt.add_event_listener(CompactionListener::new(
                 cmpacted_handler,
                 Some(dummpy_filter),
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb::new_engine_opt(
+                rocksdb_util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
@@ -514,7 +515,8 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             );
             Engines::new(engine, raft_engine)
         }
@@ -573,7 +575,7 @@ pub fn configure_for_lease_read<T: Simulator>(
 pub fn put_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     limit: u64,
-    range: &mut Iterator<Item = u64>,
+    range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
@@ -582,7 +584,7 @@ pub fn put_cf_till_size<T: Simulator>(
     cluster: &mut Cluster<T>,
     cf: &'static str,
     limit: u64,
-    range: &mut Iterator<Item = u64>,
+    range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     assert!(limit > 0);
     let mut len = 0;

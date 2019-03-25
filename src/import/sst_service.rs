@@ -13,20 +13,20 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
-use grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 use rocksdb::DB;
 
-use raftstore::store::Callback;
-use server::transport::RaftStoreRouter;
-use util::future::paired_future_callback;
-use util::rocksdb::compact_files_in_range;
-use util::time::Instant;
+use crate::raftstore::store::Callback;
+use crate::server::transport::RaftStoreRouter;
+use crate::util::future::paired_future_callback;
+use crate::util::rocksdb_util::compact_files_in_range;
+use crate::util::time::Instant;
 
 use super::import_mode::*;
 use super::metrics::*;
@@ -72,7 +72,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
@@ -87,8 +87,8 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             }
         };
         match res {
-            Ok(_) => info!("switch mode {:?}", req.get_mode()),
-            Err(ref e) => error!("switch mode {:?}: {:?}", req.get_mode(), e),
+            Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
+            Err(ref e) => error!("switch mode failed"; "mode" => ?req.get_mode(), "err" => %e),
         }
 
         ctx.spawn(
@@ -101,7 +101,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
     ) {
@@ -154,7 +154,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     /// If the ingestion fails because the region is not found or the epoch does
     /// not match, the remaining files will eventually be cleaned up by
     /// CleanupSSTWorker.
-    fn ingest(&mut self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
+    fn ingest(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: IngestRequest,
+        sink: UnarySink<IngestResponse>,
+    ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
@@ -194,7 +199,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
-    fn compact(&mut self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+    fn compact(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: CompactRequest,
+        sink: UnarySink<CompactResponse>,
+    ) {
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = Arc::clone(&self.engine);
@@ -217,15 +227,16 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
             let res = compact_files_in_range(&engine, start, end, output_level);
             match res {
                 Ok(_) => info!(
-                    "compact files in range [{:?}, {:?}) to level {:?} takes {:?}",
-                    start,
-                    end,
-                    output_level,
-                    timer.elapsed()
+                    "compact files in range";
+                    "start" => start.map(log_wrappers::Key),
+                    "end" => end.map(log_wrappers::Key),
+                    "output_level" => ?output_level, "takes" => ?timer.elapsed()
                 ),
                 Err(ref e) => error!(
-                    "compact files in range [{:?}, {:?}) to level {:?}: {:?}",
-                    start, end, output_level, e
+                    "compact files in range failed";
+                    "start" => start.map(log_wrappers::Key),
+                    "end" => end.map(log_wrappers::Key),
+                    "output_level" => ?output_level, "err" => %e
                 ),
             }
 

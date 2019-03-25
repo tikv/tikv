@@ -21,7 +21,9 @@ use kvproto::import_sstpb::*;
 use rocksdb::{IngestExternalFileOptions, DB};
 use uuid::Uuid;
 
-use util::rocksdb::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use crate::util::rocksdb_util::{
+    get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion,
+};
 
 use super::{Error, Result};
 
@@ -40,11 +42,11 @@ impl SSTImporter {
     pub fn create(&self, meta: &SSTMeta) -> Result<ImportFile> {
         match self.dir.create(meta) {
             Ok(f) => {
-                info!("create {:?}", f);
+                info!("create"; "file" => ?f);
                 Ok(f)
             }
             Err(e) => {
-                error!("create {:?}: {:?}", meta, e);
+                error!("create failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -53,11 +55,11 @@ impl SSTImporter {
     pub fn delete(&self, meta: &SSTMeta) -> Result<()> {
         match self.dir.delete(meta) {
             Ok(path) => {
-                info!("delete {:?}", path);
+                info!("delete"; "path" => ?path);
                 Ok(())
             }
             Err(e) => {
-                error!("delete {:?}: {:?}", meta, e);
+                error!("delete failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -66,11 +68,11 @@ impl SSTImporter {
     pub fn ingest(&self, meta: &SSTMeta, db: &DB) -> Result<()> {
         match self.dir.ingest(meta, db) {
             Ok(_) => {
-                info!("ingest {:?}", meta);
+                info!("ingest"; "meta" => ?meta);
                 Ok(())
             }
             Err(e) => {
-                error!("ingest {:?}: {:?}", meta, e);
+                error!("ingest failed"; "meta" => ?meta, "err" => %e);
                 Err(e)
             }
         }
@@ -175,7 +177,9 @@ impl ImportDir {
             let path = e.path();
             match path_to_sst_meta(&path) {
                 Ok(sst) => ssts.push(sst),
-                Err(e) => error!("{}: {:?}", path.to_str().unwrap(), e),
+                Err(e) => {
+                    error!("path_to_sst_meta failed"; "path" => %path.to_str().unwrap(), "err" => %e)
+                }
             }
         }
         Ok(ssts)
@@ -193,7 +197,7 @@ pub struct ImportPath {
 }
 
 impl fmt::Debug for ImportPath {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportPath")
             .field("save", &self.save)
             .field("temp", &self.temp)
@@ -270,13 +274,13 @@ impl ImportFile {
 impl Drop for ImportFile {
     fn drop(&mut self) {
         if let Err(e) = self.cleanup() {
-            warn!("cleanup {:?}: {:?}", self, e);
+            warn!("cleanup failed"; "file" => ?self, "err" => %e);
         }
     }
 }
 
 impl fmt::Debug for ImportFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportFile")
             .field("meta", &self.meta)
             .field("path", &self.path)
@@ -309,10 +313,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
     if !file_name.ends_with(SST_SUFFIX) {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
-    let elems: Vec<_> = file_name
-        .trim_right_matches(SST_SUFFIX)
-        .split('_')
-        .collect();
+    let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
     if elems.len() != 4 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
@@ -329,10 +330,10 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
+    use crate::util::rocksdb_util::new_engine;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_import_dir() {
@@ -368,7 +369,7 @@ mod tests {
         // Test ImportDir::ingest()
 
         let db_path = temp_dir.path().join("db");
-        let db = new_engine(db_path.to_str().unwrap(), &["default"], None).unwrap();
+        let db = new_engine(db_path.to_str().unwrap(), None, &["default"], None).unwrap();
 
         let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
 

@@ -14,8 +14,7 @@
 use std::error::Error;
 use std::result::Result;
 
-use raftstore::coprocessor::config::SPLIT_SIZE_MB;
-use util::config::{ReadableDuration, ReadableSize};
+use crate::util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -39,7 +38,7 @@ impl Default for Config {
             num_import_jobs: 8,
             num_import_sst_jobs: 2,
             max_prepare_duration: ReadableDuration::minutes(5),
-            region_split_size: ReadableSize::mb(SPLIT_SIZE_MB),
+            region_split_size: ReadableSize::mb(512),
             stream_channel_window: 128,
             max_open_engines: 8,
         }
@@ -47,7 +46,7 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), Box<Error>> {
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.num_threads == 0 {
             return Err("import.num_threads can not be 0".into());
         }

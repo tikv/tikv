@@ -13,10 +13,10 @@
 
 use super::super::types::Value;
 use super::{Error, Result};
+use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::util::codec::bytes::{self, BytesEncoder};
+use crate::util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 use byteorder::ReadBytesExt;
-use storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
-use util::codec::bytes::{self, BytesEncoder};
-use util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {
@@ -32,7 +32,7 @@ const FLAG_LOCK: u8 = b'L';
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
         match *mutation {
-            Mutation::Put(_) => LockType::Put,
+            Mutation::Put(_) | Mutation::Insert(_) => LockType::Put,
             Mutation::Delete(_) => LockType::Delete,
             Mutation::Lock(_) => LockType::Lock,
         }
@@ -138,7 +138,7 @@ impl Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use storage::{Key, Mutation};
+    use crate::storage::{Key, Mutation};
 
     #[test]
     fn test_lock_type() {

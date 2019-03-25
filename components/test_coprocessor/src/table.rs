@@ -34,7 +34,7 @@ pub struct Table {
     pub(crate) idxs: BTreeMap<i64, Vec<i64>>,
 }
 
-fn normalize_column_name(name: impl ::std::borrow::Borrow<str>) -> String {
+fn normalize_column_name(name: impl std::borrow::Borrow<str>) -> String {
     name.borrow().to_lowercase()
 }
 
@@ -46,7 +46,7 @@ impl Table {
     }
 
     /// Get a column reference in the table by column name (case insensitive).
-    pub fn column_by_name(&self, name: impl ::std::borrow::Borrow<str>) -> Option<&Column> {
+    pub fn column_by_name(&self, name: impl std::borrow::Borrow<str>) -> Option<&Column> {
         let normalized_name = normalize_column_name(name);
         let idx = self.column_index_by_name.get(&normalized_name);
         idx.map(|idx| &self.columns[*idx].1)
@@ -98,8 +98,8 @@ impl Table {
     /// Create a `KeyRange` which select all records in current table.
     pub fn get_record_range_all(&self) -> KeyRange {
         let mut range = KeyRange::new();
-        range.set_start(table::encode_row_key(self.id, ::std::i64::MIN));
-        range.set_end(table::encode_row_key(self.id, ::std::i64::MAX));
+        range.set_start(table::encode_row_key(self.id, std::i64::MIN));
+        range.set_end(table::encode_row_key(self.id, std::i64::MAX));
         range
     }
 
@@ -127,7 +127,7 @@ impl Table {
     }
 }
 
-impl<T: ::std::borrow::Borrow<str>> ::std::ops::Index<T> for Table {
+impl<T: std::borrow::Borrow<str>> std::ops::Index<T> for Table {
     type Output = Column;
 
     fn index(&self, key: T) -> &Column {
@@ -148,7 +148,7 @@ impl TableBuilder {
         }
     }
 
-    pub fn add_col(mut self, name: impl ::std::borrow::Borrow<str>, col: Column) -> TableBuilder {
+    pub fn add_col(mut self, name: impl std::borrow::Borrow<str>, col: Column) -> TableBuilder {
         if col.index == 0 {
             if self.handle_id > 0 {
                 self.handle_id = 0;

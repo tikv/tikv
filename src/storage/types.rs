@@ -19,11 +19,11 @@ use std::u64;
 use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 
-use storage::mvcc::{Lock, Write};
-use util::codec;
-use util::codec::bytes;
-use util::codec::bytes::BytesEncoder;
-use util::codec::number::{self, NumberEncoder};
+use crate::storage::mvcc::{Lock, Write};
+use crate::util::codec;
+use crate::util::codec::bytes;
+use crate::util::codec::bytes::BytesEncoder;
+use crate::util::codec::number::{self, NumberEncoder};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -224,7 +224,7 @@ impl Clone for Key {
 }
 
 impl Display for Key {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.write_hex_upper(f)
     }
 }
