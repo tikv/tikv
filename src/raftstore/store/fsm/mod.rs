@@ -24,7 +24,7 @@ pub mod store;
 
 pub use self::apply::{
     create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics, ApplyRes, ApplyRouter,
-    Builder as ApplyPollerBuilder, ChangePeer, ExecResult, Msg as ApplyTask,
+    Builder as ApplyPollerBuilder, ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask,
     Notifier as ApplyNotifier, Proposal, RegionProposal, Registration, TaskRes as ApplyTaskRes,
 };
 pub use self::batch::{
