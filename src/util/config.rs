@@ -244,6 +244,12 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     MinOverlappingRatio = 3,
 }}
 
+numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+    ReadOnly = 1,
+    WriteOnly = 2,
+    AllIo = 3,
+}}
+
 numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
     Level = 0,
     Universal = 1,

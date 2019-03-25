@@ -198,7 +198,7 @@ pub fn fuzz_coprocessor_codec_time_from_parse(data: &[u8]) -> Result<(), Error> 
     let fsp = cursor.read_as_i8()?;
     let mut buf: [u8; 32] = [b' '; 32];
     cursor.read_exact(&mut buf)?;
-    let t = Time::parse_datetime(::std::str::from_utf8(&buf)?, fsp, tz)?;
+    let t = Time::parse_datetime(::std::str::from_utf8(&buf)?, fsp, &tz)?;
     fuzz_time(t, cursor)
 }
 
@@ -209,6 +209,6 @@ pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
     let time_type = cursor.read_as_time_type()?;
     let tz = Tz::from_offset(cursor.read_as_i64()?).unwrap_or_else(Tz::utc);
     let fsp = cursor.read_as_i8()?;
-    let t = Time::from_packed_u64(u, time_type, fsp, tz)?;
+    let t = Time::from_packed_u64(u, time_type, fsp, &tz)?;
     fuzz_time(t, cursor)
 }

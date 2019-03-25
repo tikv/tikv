@@ -6,7 +6,8 @@ authors = ["Brian Anderson <andersrb@gmail.com>"]
 publish = false
 
 [features]
-default = ["jemallocator"]
+default = ["jemalloc"]
+jemalloc = ["jemallocator", "jemalloc-sys", "jemalloc-ctl"]
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
@@ -23,7 +24,21 @@ log = "0.3"
 tempdir = "0.3"
 
 [dependencies.jemallocator]
+version = "0.1.9"
 optional = true
 features = ["unprefixed_malloc_on_supported_platforms"]
-version = "0.1.9"
 
+# FIXME: shouldn't need to link to this crate, but the 'stats'
+# feature is missing in jemallocator.
+#
+# https://github.com/gnzlbg/jemallocator/issues/112
+# https://github.com/tikv/tikv/issues/4406
+
+[dependencies.jemalloc-sys]
+version = "0.1.8"
+optional = true
+features = ["stats"]
+
+[dependencies.jemalloc-ctl]
+version = "0.2.0"
+optional = true

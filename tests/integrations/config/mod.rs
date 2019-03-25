@@ -15,7 +15,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
+use rocksdb::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+};
 use slog::Level;
 use toml;
 
@@ -189,6 +191,8 @@ fn test_serde_custom_tikv_config() {
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_mode: DBRateLimiterMode::AllIo,
+        auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,

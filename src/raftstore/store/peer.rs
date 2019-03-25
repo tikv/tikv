@@ -1006,6 +1006,13 @@ impl Peer {
             }
         }
 
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent the apply system.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        }
+
         if !self
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
@@ -1066,11 +1073,7 @@ impl Peer {
             self.raft_log_size_hint = 0;
         }
 
-        let (apply_snap_result, gen_snap_task) = self.mut_store().post_ready(invoke_ctx);
-        if let Some(gen_task) = gen_snap_task {
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
+        let apply_snap_result = self.mut_store().post_ready(invoke_ctx);
         if apply_snap_result.is_some() && self.peer.get_is_learner() {
             // The peer may change from learner to voter after snapshot applied.
             let peer = self
