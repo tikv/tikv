@@ -22,10 +22,10 @@ use futures::{Async, Future, Poll, Stream};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
-use kvproto::pdpb::RequestHeader;
+use kvproto::pdpb::OperatorStatus;
 use kvproto::tikvpb_grpc::*;
 
-use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
+use crate::pd::{Config as PdConfig, Error as PdError, PdClient, RegionInfo, RpcClient};
 use crate::storage::engine::SequentialFile;
 use crate::storage::types::Key;
 use crate::util::collections::{HashMap, HashMapEntry};
@@ -63,7 +63,7 @@ pub trait ImportClient: Send + Sync + Clone + 'static {
         unimplemented!()
     }
 
-    fn is_store_available(&self, _: u64) -> Result<bool> {
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
         unimplemented!()
     }
 }
@@ -228,18 +228,32 @@ impl ImportClient for Client {
         Ok(self.pd.get_region_by_id(id).wait()?.is_some())
     }
 
-    fn is_scatter_region_finished(&self, _region_id: u64) -> Result<bool> {
-        // TODO: gRPC have not ready for now
-        let mut header = RequestHeader::new();
-        header.set_cluster_id(self.pd.get_cluster_id()?);
-        Ok(true)
+    fn is_scatter_region_finished(&self, region_id: u64) -> Result<bool> {
+        match self.pd.get_operator(region_id) {
+            Ok(resp) => {
+                // If the current operator of region is not `scatter-region`, we could assumption
+                // that `scatter-operator` has finished or timeout.
+                let scatter_region = "scatter-region";
+                if resp.kind.len() != scatter_region.len() || resp.kind != scatter_region.as_bytes()
+                {
+                    Ok(true)
+                } else {
+                    Ok(resp.status != OperatorStatus::RUNNING)
+                }
+            }
+            Err(PdError::RegionNotFound(_)) => Ok(true), // heartbeat may not send to PD
+            Err(err) => {
+                error!("check scatter region operater result"; "region id" => %region_id, "err" => %err);
+                Err(Error::from(err))
+            }
+        }
     }
 
-    fn is_store_available(&self, _store_id: u64) -> Result<bool> {
-        // TODO: gRPC have not ready for now
-        let mut header = RequestHeader::new();
-        header.set_cluster_id(self.pd.get_cluster_id()?);
-        Ok(true)
+    fn is_space_enough(&self, store_id: u64, size: u64) -> Result<bool> {
+        let stats = self.pd.get_store_stats(store_id)?;
+        let available_ratio = (stats.available + size) as f64 / stats.capacity as f64;
+        // Keep 5% available disk space
+        Ok(available_ratio > 0.05)
     }
 }
 

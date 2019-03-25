@@ -178,6 +178,12 @@ pub trait PdClient: Send + Sync {
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, _: F) {}
 
     fn get_gc_safe_point(&self) -> PdFuture<u64>;
+
+    /// Gets store state if it is not a tombstone store.
+    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats>;
+
+    /// Gets current operator of the region
+    fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse>;
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s

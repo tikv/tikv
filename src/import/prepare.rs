@@ -30,10 +30,12 @@ use super::{Config, Error, Result};
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
 
-const SPLIT_WAIT_MAX_RETRY_TIMES: u64 = 125;
+const SPLIT_WAIT_MAX_RETRY_TIMES: u64 = 64;
 const SPLIT_WAIT_INTERVAL_MILLIS: u64 = 8;
-const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 512;
+const SPLIT_MAX_WAIT_INTERVAL_MILLIS: u64 = 1000;
+const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 128;
 const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 50;
+const SCATTER_MAX_WAIT_INTERVAL_MILLIS: u64 = 5000;
 
 /// PrepareJob is responsible for improving cluster data balance
 ///
@@ -192,12 +194,18 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                     } else if i == SPLIT_WAIT_MAX_RETRY_TIMES - 1 {
                         warn!("split region still failed after exhausting all retries");
                     } else {
-                        thread::sleep(Duration::from_millis(SPLIT_WAIT_INTERVAL_MILLIS));
+                        // Exponential back-off with max wait duration
+                        let mut interval = SPLIT_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
+                        if interval > SPLIT_MAX_WAIT_INTERVAL_MILLIS {
+                            interval = SPLIT_MAX_WAIT_INTERVAL_MILLIS
+                        }
+                        thread::sleep(Duration::from_millis(interval));
                     }
                 }
                 self.scatter_region(&new_region)?;
 
                 // We need to wait for scattering region finished.
+                let start = Instant::now();
                 for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
                     if self
                         .client
@@ -210,9 +218,15 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                     } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
                         warn!("scatter region still failed after exhausting all retries");
                     } else {
-                        thread::sleep(Duration::from_millis(SCATTER_WAIT_INTERVAL_MILLIS));
+                        // Exponential back-off with max wait duration
+                        let mut interval = SCATTER_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
+                        if interval > SCATTER_MAX_WAIT_INTERVAL_MILLIS {
+                            interval = SCATTER_MAX_WAIT_INTERVAL_MILLIS
+                        }
+                        thread::sleep(Duration::from_millis(interval));
                     }
                 }
+                info!("scatter region finished"; "region id" => %new_region.region.id, "takes" => ?start.elapsed());
 
                 Ok(true)
             }

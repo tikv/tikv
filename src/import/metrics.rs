@@ -93,9 +93,11 @@ lazy_static! {
         &["phase"]
     )
     .unwrap();
-    pub static ref IMPORT_WAIT_STORE_AVAILABLE_COUNTER: IntCounter = register_int_counter!(
-        "tikv_import_wait_store_available_count",
-        "Counter of wait store available"
-    )
-    .unwrap();
+    pub static ref IMPORT_STORE_SAPCE_NOT_ENOUGH_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_import_wait_store_available_count",
+            "Counter of wait store available",
+            &["store_id"]
+        )
+        .unwrap();
 }

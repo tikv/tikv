@@ -390,8 +390,14 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
             let file = self.sst.info.open()?;
             let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();
-            while !self.client.is_store_available(store_id)? {
-                IMPORT_WAIT_STORE_AVAILABLE_COUNTER.inc();
+            while !self
+                .client
+                .is_space_enough(store_id, self.sst.info.file_size)?
+            {
+                let label = format!("{}", store_id);
+                IMPORT_STORE_SAPCE_NOT_ENOUGH_COUNTER
+                    .with_label_values(&[label.as_str()])
+                    .inc();
                 thread::sleep(Duration::from_millis(
                     STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS,
                 ))

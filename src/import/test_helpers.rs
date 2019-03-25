@@ -170,7 +170,7 @@ impl ImportClient for MockClient {
         Ok(true)
     }
 
-    fn is_store_available(&self, _: u64) -> Result<bool> {
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
         Ok(true)
     }
 }
