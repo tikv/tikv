@@ -143,7 +143,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.deadline,
                         batch_row_limit,
                         is_streaming,
-                        false, // TODO:fix it when batch executor is ready.
+                        true,
                     )
                 });
             }
