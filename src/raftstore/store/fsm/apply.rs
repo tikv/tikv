@@ -348,8 +348,7 @@ impl ApplyContext {
     ///
     /// A general apply progress for a delegate is:
     /// `prepare_for` -> `commit` [-> `commit` ...] -> `finish_for`.
-    /// After all delegates are handled, `write_to_db` or `finish_for_snapshot`
-    /// method should be called.
+    /// After all delegates are handled, `write_to_db` method should be called.
     pub fn prepare_for(&mut self, delegate: &ApplyDelegate) {
         if self.wb.is_none() {
             self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
@@ -416,12 +415,6 @@ impl ApplyContext {
             applied_index_term: delegate.applied_index_term,
             merged: false,
         });
-    }
-
-    /// Finishes `Snapshot`s for the delegate.
-    pub fn finish_for_snapshot(&mut self) {
-        // We need to pop the last cb, because `prepare_for` always append an empty `ApplyCallback`.
-        assert!(self.cbs.pop().unwrap().cbs.is_empty());
     }
 
     pub fn delta_bytes(&self) -> u64 {
@@ -2567,20 +2560,25 @@ impl ApplyFsm {
             return;
         }
 
-        apply_ctx.prepare_for(&self.delegate);
-        // persistent all pending changes
-        apply_ctx.commit_opt(&mut self.delegate, true);
+        // Persists any pending changes of this region.
+        let region_id = self.delegate.id();
+        if apply_ctx
+            .apply_res
+            .iter()
+            .any(|res| res.region_id == region_id)
+        {
+            apply_ctx.flush();
+        }
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
-                "region_id" => self.delegate.region_id(),
+                "region_id" => region_id,
                 "peer_id" => self.delegate.id()
             );
         }
-        apply_ctx.finish_for_snapshot();
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
@@ -2795,7 +2793,11 @@ impl ApplyRouter {
                     return;
                 }
                 Msg::Snapshot(_) => {
-                    panic!("[region {}] is removed before taking snapshot", region_id,)
+                    warn!(
+                        "region is removed before taking snapshot, are we shutting down?";
+                        "region_id" => region_id
+                    );
+                    return;
                 }
                 Msg::CatchUpLogs(cul) => panic!(
                     "[region {}] is removed before merged, failed to schedule {:?}",
