@@ -356,8 +356,8 @@ impl ScalarFunc {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, _) = (Self::period_to_month(p as u64) as i32 as i64).overflowing_add(n);
-        Ok(Some(Self::month_to_period(month as u32 as u64) as i64))
+        let (month, _) = (i64::from(Self::period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(Self::month_to_period(u64::from(month as u32)) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
