@@ -63,6 +63,7 @@ impl DAGRequestHandler {
         store: S,
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
+        let executors_len = req.get_executors().len();
 
         let config = Arc::new(config);
         let out_most_executor = super::builder::DAGBuilder::build_batch(
@@ -77,6 +78,7 @@ impl DAGRequestHandler {
             req.take_output_offsets(),
             config,
             ranges_len,
+            executors_len,
         ))
     }
 

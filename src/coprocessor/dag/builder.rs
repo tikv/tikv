@@ -24,6 +24,7 @@ use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
+use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
@@ -94,6 +95,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = Box::new(BatchTableScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
                     store,
                     config.clone(),
                     columns_info,

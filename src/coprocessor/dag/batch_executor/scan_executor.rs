@@ -49,7 +49,11 @@ pub trait ScanExecutorImpl: Send {
     ) -> Result<()>;
 }
 
-pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
+pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
+{
+    /// The execution summary collector of this executor.
+    summary_collector: C,
+
     /// The internal scanning implementation.
     imp: I,
 
@@ -75,8 +79,11 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     is_ended: bool,
 }
 
-impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
+impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
+    ScanExecutor<C, S, I, P>
+{
     pub fn new(
+        summary_collector: C,
         imp: I,
         store: S,
         desc: bool,
@@ -88,6 +95,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
             key_ranges.reverse();
         }
         Ok(Self {
+            summary_collector,
             imp,
             store,
             desc,
@@ -195,7 +203,9 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type
 }
 
-impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
+impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
+    for ScanExecutor<C, S, I, P>
+{
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
@@ -206,10 +216,14 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
 
+        self.summary_collector.inc_iterations();
+        let _guard = self.summary_collector.collect_scope_duration();
+
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
         data.assert_columns_equal_length();
+        self.summary_collector.inc_produced_rows(data.rows_len());
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
@@ -237,5 +251,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         if let Some(scanner) = &mut self.scanner {
             scanner.collect_statistics_into(&mut destination.cf_stats);
         }
+        self.summary_collector
+            .collect_into(&mut destination.summary_per_executor);
     }
 }

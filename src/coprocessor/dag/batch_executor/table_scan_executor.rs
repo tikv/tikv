@@ -27,16 +27,18 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
+pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
     super::scan_executor::ScanExecutor<
+        C,
         S,
         TableScanExecutorImpl,
         super::ranges_iter::PointRangeEnable,
     >,
 );
 
-impl<S: Store> BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     pub fn new(
+        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -81,6 +83,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             is_column_filled,
         };
         let wrapper = super::scan_executor::ScanExecutor::new(
+            summary_collector,
             imp,
             store,
             desc,
@@ -91,7 +94,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     }
 }
 
-impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor<C, S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -304,6 +307,7 @@ mod tests {
     use crate::coprocessor::codec::table;
     use crate::coprocessor::codec::{datum, Datum};
     use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
+    use crate::coprocessor::dag::batch_executor::statistics::*;
     use crate::coprocessor::dag::batch_executor::table_scan_executor::BatchTableScanExecutor;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
@@ -446,6 +450,7 @@ mod tests {
         // Case 1: Point scan PK
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone()],
@@ -478,6 +483,7 @@ mod tests {
         // Case 2: Point scan column foo, which does not have default value.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[1].clone()],
@@ -517,6 +523,7 @@ mod tests {
         // Case 3: Point scan column bar, which has default values.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[2].clone()],
@@ -540,6 +547,7 @@ mod tests {
         // Case 4: Point scan multiple columns
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[2].clone()],
@@ -575,6 +583,7 @@ mod tests {
         // Case 5: Range scan PK
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone()],
@@ -613,6 +622,7 @@ mod tests {
         // Case 6: Range scan multiple columns
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -690,6 +700,7 @@ mod tests {
             ];
 
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[2].clone()],
@@ -713,6 +724,7 @@ mod tests {
         // Case 8. PK is in the middle of the schema
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -751,6 +763,7 @@ mod tests {
         // Case 9. PK is the last column in schema
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -783,6 +796,83 @@ mod tests {
             assert_eq!(
                 result.data[2].decoded().as_int_slice(),
                 &[Some(1), Some(3), Some(4), Some(5), Some(6)]
+            );
+        }
+
+        // Case 10. Execution summary
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorNormal::new(1),
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone()],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            executor.next_batch(1);
+            executor.next_batch(2);
+
+            let mut statistics = BatchExecuteStatistics::new(2, 1);
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 3);
+            // 0 is none because our output index is 1
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                3
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                2
+            );
+
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 3);
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                3
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                2
+            );
+
+            statistics.clear();
+            executor.next_batch(10);
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 2);
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                2
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                1
             );
         }
     }
@@ -883,6 +973,7 @@ mod tests {
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
         for corrupted_row_index in 2..=4 {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -989,6 +1080,7 @@ mod tests {
         // an error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1015,6 +1107,7 @@ mod tests {
         // Let's also repeat case 1 for smaller batch size
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1047,6 +1140,7 @@ mod tests {
         // We should get error and no row, for the same reason as above.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1065,6 +1159,7 @@ mod tests {
         // We should get row 2 and row 0. There is no error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -1088,6 +1183,7 @@ mod tests {
         // We should get error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
