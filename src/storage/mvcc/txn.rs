@@ -220,7 +220,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
-                return match self.reader.get_txn_commit_info(&key, self.start_ts)?.0 {
+                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((_, WriteType::Rollback)) | None => {
                         MVCC_CONFLICT_COUNTER.commit_lock_not_found.inc();
                         // None: related Rollback has been collapsed.
@@ -275,9 +275,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             _ => {
-                let (txn_commit_info, write_ts_collision) =
-                    self.reader.get_txn_commit_info(&key, self.start_ts)?;
-                return match txn_commit_info {
+                // `get_txn_commit_info` will scan write cf in reversed order, so we use
+                // `reverse_seek_write` here to avoid flipping iterator.
+                let write_ts_collision = self
+                    .reader
+                    .reverse_seek_write(&key, self.start_ts)?
+                    .map(|(commit_ts, _)| commit_ts == self.start_ts)
+                    .unwrap_or(false);
+                return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
@@ -314,12 +319,12 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         // Avoid replacing another write record with the same key and commit_ts.
-        if self
+        let write_ts_collision = self
             .reader
             .seek_write(&key, self.start_ts)?
-            .map(|(commit_ts, _)| commit_ts != self.start_ts)
-            .unwrap_or(true)
-        {
+            .map(|(commit_ts, _)| commit_ts == self.start_ts)
+            .unwrap_or(false);
+        if !write_ts_collision {
             let write = Write::new(WriteType::Rollback, self.start_ts, None);
             let ts = self.start_ts;
             self.put_write(key.clone(), ts, write.to_bytes());

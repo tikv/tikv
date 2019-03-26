@@ -413,7 +413,6 @@ pub mod tests {
         let (ts, write_type) = reader
             .get_txn_commit_info(&Key::from_raw(key), start_ts)
             .unwrap()
-            .0
             .unwrap();
         assert_ne!(write_type, WriteType::Rollback);
         assert_eq!(ts, commit_ts);
@@ -425,7 +424,7 @@ pub mod tests {
 
         let ret = reader.get_txn_commit_info(&Key::from_raw(key), start_ts);
         assert!(ret.is_ok());
-        match ret.unwrap().0 {
+        match ret.unwrap() {
             None => {}
             Some((_, write_type)) => {
                 assert_eq!(write_type, WriteType::Rollback);
@@ -440,7 +439,6 @@ pub mod tests {
         let (ts, write_type) = reader
             .get_txn_commit_info(&Key::from_raw(key), start_ts)
             .unwrap()
-            .0
             .unwrap();
         assert_eq!(ts, start_ts);
         assert_eq!(write_type, WriteType::Rollback);
@@ -452,8 +450,7 @@ pub mod tests {
 
         let ret = reader
             .get_txn_commit_info(&Key::from_raw(key), start_ts)
-            .unwrap()
-            .0;
+            .unwrap();
         assert_eq!(ret, None);
     }
 
