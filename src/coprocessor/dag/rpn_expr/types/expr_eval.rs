@@ -249,6 +249,7 @@ mod tests {
     use super::super::RpnFnCallPayload;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
     use crate::coprocessor::Result;
@@ -501,6 +502,74 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_int_slice(),
             [Some(6), Some(10), None]
+        );
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+    }
+
+    /// Unary function (argument is raw column). The column should be decoded.
+    #[test]
+    fn test_eval_unary_function_raw_column() {
+        /// FnFoo(v) performs v + 5.
+        #[derive(Debug, Clone, Copy)]
+        struct FnFoo;
+
+        impl_template_fn! { 1 arg @ FnFoo }
+
+        impl FnFoo {
+            #[inline(always)]
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+                v: &Option<i64>,
+            ) -> Result<Option<i64>> {
+                Ok(Some(v.unwrap() + 5))
+            }
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::raw_with_capacity(3);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            col
+        }]);
+
+        let schema = &[{
+            let mut ft = FieldType::new();
+            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ft
+        }];
+
+        let rpn_nodes = vec![
+            RpnExpressionNode::ColumnRef { offset: 0 },
+            RpnExpressionNode::FnCall {
+                func: Box::new(FnFoo),
+                field_type: {
+                    let mut ft = FieldType::new();
+                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                    ft
+                },
+            },
+        ];
+
+        let exp = RpnExpression::from(rpn_nodes);
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_int_slice(),
+            [Some(0), Some(-2), Some(8)]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
@@ -774,6 +843,84 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_int_slice(),
             [Some(-2), Some(-17), Some(22)]
+        );
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+    }
+
+    /// Binary function (arguments are both raw columns). The same column is referred multiple times
+    /// and it should be Ok.
+    #[test]
+    fn test_eval_binary_function_raw_column() {
+        /// FnFoo(v1, v2) performs v1 * v2.
+        #[derive(Debug, Clone, Copy)]
+        struct FnFoo;
+
+        impl_template_fn! { 2 arg @ FnFoo }
+
+        impl FnFoo {
+            #[inline(always)]
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+                v1: &Option<i64>,
+                v2: &Option<i64>,
+            ) -> Result<Option<i64>> {
+                Ok(Some(v1.unwrap() * v2.unwrap()))
+            }
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::raw_with_capacity(3);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            col
+        }]);
+
+        let schema = &[
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+        ];
+
+        let rpn_nodes = vec![
+            RpnExpressionNode::ColumnRef { offset: 0 },
+            RpnExpressionNode::ColumnRef { offset: 0 },
+            RpnExpressionNode::FnCall {
+                func: Box::new(FnFoo),
+                field_type: {
+                    let mut ft = FieldType::new();
+                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                    ft
+                },
+            },
+        ];
+
+        let exp = RpnExpression::from(rpn_nodes);
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_int_slice(),
+            [Some(25), Some(49), Some(9)]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
