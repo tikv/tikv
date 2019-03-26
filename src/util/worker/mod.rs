@@ -189,9 +189,12 @@ impl<T> Clone for Scheduler<T> {
 ///
 /// Useful for test purpose.
 #[cfg(test)]
-pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
-    let (tx, _) = mpsc::unbounded::<Option<T>>();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
+    let (tx, rx) = mpsc::unbounded::<Option<T>>();
+    (
+        Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx),
+        rx,
+    )
 }
 
 #[derive(Copy, Clone)]

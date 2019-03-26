@@ -30,10 +30,8 @@ extern crate test;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-
 #[macro_use]
 extern crate tikv;
-
 #[macro_use]
 extern crate test_util;
 
