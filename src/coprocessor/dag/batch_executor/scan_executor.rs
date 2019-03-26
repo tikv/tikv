@@ -223,6 +223,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
         data.assert_columns_equal_length();
+        self.summary_collector.inc_produced_rows(data.rows_len());
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving

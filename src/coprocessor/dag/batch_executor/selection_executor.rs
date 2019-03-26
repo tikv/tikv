@@ -88,8 +88,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
             }
 
             result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
-            self.summary_collector
-                .inc_produced_rows(result.data.rows_len());
+            self.summary_collector.inc_produced_rows(rows_len);
         }
 
         result.warnings.merge(&mut self.context.warnings);

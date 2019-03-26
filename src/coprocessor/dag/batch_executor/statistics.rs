@@ -152,6 +152,8 @@ impl ExecSummaryCollector for ExecSummaryCollectorNormal {
         let current_summary = std::mem::replace(&mut self.counts, ExecSummary::default());
         if let Some(t) = &mut target[self.output_index] {
             current_summary.merge_into(t);
+        } else {
+            target[self.output_index] = Some(current_summary);
         }
     }
 }

@@ -313,7 +313,7 @@ mod tests {
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
+    use crate::coprocessor::dag::batch_executor::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -795,6 +795,83 @@ mod tests {
             assert_eq!(
                 result.data[2].decoded().as_int_slice(),
                 &[Some(1), Some(3), Some(4), Some(5), Some(6)]
+            );
+        }
+
+        // Case 10. Execution summary
+        {
+            let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorNormal::new(1),
+                store.clone(),
+                Arc::new(EvalConfig::default()),
+                vec![columns_info[0].clone()],
+                key_ranges_all.clone(),
+                false,
+            )
+            .unwrap();
+
+            executor.next_batch(1);
+            executor.next_batch(2);
+
+            let mut statistics = BatchExecuteStatistics::new(2, 1);
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 3);
+            // 0 is none because our output index is 1
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                3
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                2
+            );
+
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 3);
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                3
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                2
+            );
+
+            statistics.clear();
+            executor.next_batch(10);
+            executor.collect_statistics(&mut statistics);
+
+            assert_eq!(statistics.scanned_rows_per_range[0], 2);
+            assert!(statistics.summary_per_executor[0].is_none());
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_produced_rows,
+                2
+            );
+            assert_eq!(
+                statistics.summary_per_executor[1]
+                    .as_ref()
+                    .unwrap()
+                    .num_iterations,
+                1
             );
         }
     }
