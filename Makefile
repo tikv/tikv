@@ -169,7 +169,28 @@ clean:
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
+docker: docker-tikv docker-tikv-ctl docker-tikv-server docker-tikv-importer
 
+docker-rust-toolchain:
+	docker build -t tikv/rust-toolchain -f docker/rust-toolchain/Dockerfile .
+
+docker-tikv: docker-rust-toolchain
+	docker build -t tikv/tikv -f docker/tikv/Dockerfile .
+
+docker-tikv-ctl: docker-tikv
+	docker build -t tikv/tikv-ctl -f docker/tikv-ctl/Dockerfile .
+
+docker-tikv-server: docker-tikv
+	docker build -t tikv/tikv-server -f docker/tikv-server/Dockerfile .
+
+docker-tikv-importer: docker-tikv
+	docker build -t tikv/tikv-importer -f docker/tikv-importer/Dockerfile .
+
+build-docker-and-binary-release: docker
+	docker run --rm -ti -v $(pwd)/bin:/release --entrypoint=/bin/cp tikv/tikv /tikv-server /tikv-importer /tikv-ctl  /release/
+
+docker-clean:
+	docker rmi tikv/tikv tikv/tikv-ctl tikv/tikv-server tikv/tikv-importer
 
 # The below x- targets are temporary, for experimenting with new profiles,
 # specifically in pursuit of compile time speedups.
