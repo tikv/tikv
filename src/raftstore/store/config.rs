@@ -198,7 +198,7 @@ impl Default for Config {
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
             local_read_batch_size: 1024,
-            local_read_concurrency: 2,
+            local_read_concurrency: 1,
             apply_max_batch_size: 1024,
             apply_pool_size: 2,
             store_max_batch_size: 1024,

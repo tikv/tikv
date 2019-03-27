@@ -21,8 +21,8 @@ use crate::storage::Store;
 use super::batch_executor::executors::*;
 use super::batch_executor::interface::*;
 use super::executor::{
-    Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
-    StreamAggExecutor, TableScanExecutor, TopNExecutor,
+    Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
+    TopNExecutor,
 };
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::metrics::*;
@@ -178,7 +178,7 @@ impl DAGBuilder {
     ) -> Result<Box<dyn Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                let ex = Box::new(TableScanExecutor::new(
+                let ex = Box::new(ScanExecutor::table_scan(
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -188,7 +188,7 @@ impl DAGBuilder {
             }
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
-                let ex = Box::new(IndexScanExecutor::new(
+                let ex = Box::new(ScanExecutor::index_scan(
                     first.take_idx_scan(),
                     ranges,
                     store,
