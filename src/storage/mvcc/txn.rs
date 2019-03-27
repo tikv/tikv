@@ -319,9 +319,12 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
         // Avoid replacing another write record with the same key and commit_ts.
+        // Rollback may be invoked during a batch_rollback request, which means, there might be
+        // multiple rollbacks in one request. Since `get_txn_commit_info` uses `reverse_seek_write`
+        // internally, we should use `reverse_seek_write` here to to avoid flipping iterator.
         let write_ts_collision = self
             .reader
-            .seek_write(&key, self.start_ts)?
+            .reverse_seek_write(&key, self.start_ts)?
             .map(|(commit_ts, _)| commit_ts == self.start_ts)
             .unwrap_or(false);
         if !write_ts_collision {
