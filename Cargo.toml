@@ -117,7 +117,7 @@ vlog = "0.1.4"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/MyonKeminta/kvproto.git", branch="misono/prewrite-response-with-ts" }
+kvproto = { git = "https://github.com/MyonKeminta/kvproto.git", branch="misono/1pc" }
 log_wrappers = { path = "components/log_wrappers" }
 
 [dependencies.murmur3]
