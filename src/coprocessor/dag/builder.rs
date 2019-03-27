@@ -60,6 +60,19 @@ impl DAGBuilder {
                         }
                     }
                 }
+                ExecType::TypeIndexScan => {
+                    let descriptor = ed.get_idx_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
+                            return false;
+                        }
+                    }
+                }
                 _ => {
                     debug!(
                         "Coprocessor request cannot be batched";
@@ -99,6 +112,20 @@ impl DAGBuilder {
                     columns_info,
                     ranges,
                     descriptor.get_desc(),
+                )?);
+            }
+            ExecType::TypeIndexScan => {
+                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+
+                let mut descriptor = first_ed.take_idx_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchIndexScanExecutor::new(
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                    descriptor.get_unique(),
                 )?);
             }
             _ => {
