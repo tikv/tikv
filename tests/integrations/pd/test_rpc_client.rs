@@ -23,7 +23,9 @@ use kvproto::metapb;
 use kvproto::pdpb;
 
 use test_util;
-use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
+use tikv::pd::{
+    compose_ts, validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient
+};
 use tikv::util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
@@ -463,9 +465,11 @@ fn test_get_timestamp() {
     let eps = server.bind_addrs();
     let client = new_client(eps.clone(), None);
 
-    let mut ts = client.get_timestamp().wait().unwrap();
+    let ts = client.get_timestamp(1).wait().unwrap();
+    let mut ts = compose_ts(ts.0, ts.1);
     for _ in 0..20 {
-        let new_ts = client.get_timestamp().wait().unwrap();
+        let new_ts = client.get_timestamp(1).wait().unwrap();
+        let new_ts = compose_ts(new_ts.0, new_ts.1);
         assert!(ts < new_ts);
         ts = new_ts;
     }

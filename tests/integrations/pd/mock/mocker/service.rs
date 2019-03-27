@@ -289,7 +289,9 @@ impl PdMocker for Service {
         let mut resp = TsoResponse::new();
         let header = Service::header();
         resp.set_header(header);
-        let ts = self.tso.fetch_add(req.get_count() as u64, Ordering::SeqCst);
+        let ts = self
+            .tso
+            .fetch_add(u64::from(req.get_count()), Ordering::SeqCst);
         resp.set_count(req.get_count());
         let mut timestamp = Timestamp::new();
         timestamp.set_physical((ts >> 18) as i64);
