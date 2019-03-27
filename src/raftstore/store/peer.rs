@@ -48,7 +48,7 @@ use crate::raftstore::{Error, Result};
 use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
-use crate::util::{escape, hash_u64, MustConsumeVec};
+use crate::util::{escape, hash_u64_with_mod, MustConsumeVec};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,
@@ -404,7 +404,7 @@ impl Peer {
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        let l = hash_u64(self.region_id, ctx.local_readers.len() as u64) as usize;
+        let l = hash_u64_with_mod(self.region_id, ctx.local_readers.len() as u64) as usize;
         if let Err(e) = ctx.local_readers[l].schedule(ReadTask::register(self)) {
             info!(
                 "failed to schedule local reader, are we shutting down?";
@@ -1356,7 +1356,7 @@ impl Peer {
             "peer_id" => self.peer.get_id(),
             "update" => %update,
         );
-        let l = hash_u64(self.region_id, local_readers.len() as u64) as usize;
+        let l = hash_u64_with_mod(self.region_id, local_readers.len() as u64) as usize;
         if let Err(e) = local_readers[l].schedule(update) {
             info!(
                 "failed to update read progress, are we shutting down?";

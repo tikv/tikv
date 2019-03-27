@@ -29,7 +29,7 @@ use crate::server::raft_client::RaftClient;
 use crate::server::Result;
 use crate::util::collections::HashSet;
 use crate::util::worker::Scheduler;
-use crate::util::{hash_u64, HandyRwLock};
+use crate::util::{hash_u64_with_mod, HandyRwLock};
 use raft::SnapshotStatus;
 
 /// Routes messages to the raftstore.
@@ -124,7 +124,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
         let region_id = cmd.request.get_header().get_region_id();
         if ReadTask::acceptable(&cmd.request) {
             // Use hash to select a local reader.
-            let l = hash_u64(region_id, self.local_readers_ch.len() as u64) as usize;
+            let l = hash_u64_with_mod(region_id, self.local_readers_ch.len() as u64) as usize;
             self.local_readers_ch[l]
                 .schedule(ReadTask::read(cmd))
                 .map_err(|e| box_err!(e))
