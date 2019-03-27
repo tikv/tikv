@@ -31,6 +31,7 @@ pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
+use cop_datatype::EvalType;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
@@ -90,40 +91,48 @@ pub trait Evaluable: Clone {
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
     fn into_vector_value(vec: Vec<Self>) -> VectorValue;
+
+    /// Returns the corresponding eval type enum of this concrete eval type.
+    fn eval_type() -> EvalType;
 }
 
 macro_rules! impl_evaluable_type {
-    ($ty:ty) => {
-        impl Evaluable for $ty {
-            #[inline]
+    ($ty:tt) => {
+        impl Evaluable for Option<$ty> {
+            #[inline(always)]
             fn borrow_scalar_value(v: &ScalarValue) -> &Self {
                 v.as_ref()
             }
 
-            #[inline]
+            #[inline(always)]
             fn borrow_vector_value(v: &VectorValue) -> &[Self] {
                 v.as_ref()
             }
 
-            #[inline]
+            #[inline(always)]
             fn borrow_vector_like_specialized(
                 v: VectorLikeValueRef<'_>,
             ) -> VectorLikeValueRefSpecialized<'_, Self> {
                 v.into()
             }
 
-            #[inline]
+            #[inline(always)]
             fn into_vector_value(vec: Vec<Self>) -> VectorValue {
                 VectorValue::from(vec)
+            }
+
+            #[inline(always)]
+            fn eval_type() -> EvalType {
+                EvalType::$ty
             }
         }
     };
 }
 
-impl_evaluable_type! { Option<Int> }
-impl_evaluable_type! { Option<Real> }
-impl_evaluable_type! { Option<Decimal> }
-impl_evaluable_type! { Option<Bytes> }
-impl_evaluable_type! { Option<DateTime> }
-impl_evaluable_type! { Option<Duration> }
-impl_evaluable_type! { Option<Json> }
+impl_evaluable_type! { Int }
+impl_evaluable_type! { Real }
+impl_evaluable_type! { Decimal }
+impl_evaluable_type! { Bytes }
+impl_evaluable_type! { DateTime }
+impl_evaluable_type! { Duration }
+impl_evaluable_type! { Json }
