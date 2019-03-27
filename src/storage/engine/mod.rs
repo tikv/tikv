@@ -209,7 +209,7 @@ pub struct FlowStatistics {
 
 impl FlowStatistics {
     pub fn add(&mut self, other: &Self) {
-        self.read_bytes = self.read_keys.saturating_add(other.read_bytes);
+        self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
         self.read_keys = self.read_keys.saturating_add(other.read_keys);
     }
 }
