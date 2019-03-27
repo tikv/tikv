@@ -104,30 +104,28 @@ impl Runner {
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
-        cf_name: String,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
+        cf_name: &str,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[&cf_name])
+            .with_label_values(&[cf_name])
             .start_coarse_timer();
-        let start = start_key.as_ref().map(Vec::as_slice);
-        let end = end_key.as_ref().map(Vec::as_slice);
         compact_range(
             &self.engine,
             handle,
-            start,
-            end,
+            start_key,
+            end_key,
             false,
             1, /* threads */
         );
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
-            "range_start" => start.map(::log_wrappers::Key),
-            "range_end" => end.map(::log_wrappers::Key),
+            "range_start" => start_key.map(::log_wrappers::Key),
+            "range_end" => end_key.map(::log_wrappers::Key),
             "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
@@ -143,8 +141,12 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                let cf = cf_name.clone();
-                if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
+                let cf = &cf_name;
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_ref().map(Vec::as_slice),
+                    end_key.as_ref().map(Vec::as_slice),
+                ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -162,11 +164,7 @@ impl Runnable<Task> for Runner {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) = self.compact_range_cf(
-                                cf.clone(),
-                                Some(start.clone()),
-                                Some(end.clone()),
-                            ) {
+                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
                                 error!(
                                     "compact range failed";
                                     "range_start" => log_wrappers::Key(&start),
@@ -178,7 +176,7 @@ impl Runnable<Task> for Runner {
                         }
                     }
                 }
-                Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
+                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
         }
     }
