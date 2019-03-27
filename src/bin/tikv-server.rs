@@ -50,7 +50,7 @@ use fs2::FileExt;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
-use tikv::pd::{PdClient, RpcClient};
+use tikv::pd::{PdClient, PdOracle, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
@@ -166,6 +166,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    let tso = PdOracle::new(pd_sender.clone());
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
@@ -181,7 +183,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
             storage::ReadPoolContext::new(pd_sender.clone())
         });
-    let read_ts_cache = storage::ReadTsCache::new(Arc::clone(&pd_client));
+    let read_ts_cache = storage::ReadTsCache::new(tso);
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,

@@ -24,6 +24,7 @@ use tempdir::TempDir;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
+use tikv::pd::PdOracle;
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, Engines, SnapManager};
@@ -137,11 +138,12 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-future-worker");
+        let tso = PdOracle::new(pd_worker.scheduler());
         let storage_read_pool =
             ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
                 storage::ReadPoolContext::new(pd_worker.scheduler())
             });
-        let read_ts_cache = ReadTsCache::new(Arc::clone(&self.pd_client));
+        let read_ts_cache = ReadTsCache::new(tso);
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,

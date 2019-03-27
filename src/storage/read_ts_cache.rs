@@ -20,7 +20,7 @@ use raft::StateRole;
 use std::sync::mpsc as std_mpsc;
 use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 
-use crate::pd::PdClient;
+use crate::pd::Oracle;
 use crate::raftstore::coprocessor::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
@@ -204,7 +204,7 @@ struct Inner {
 }
 
 impl ReadTsCache {
-    pub fn new<C: PdClient + 'static>(pd_client: Arc<C>) -> Self {
+    pub fn new<C: Oracle + 'static + Send>(oracle: C) -> Self {
         let maps = (0..GLOBAL_REGION_SLOTS)
             .map(|_| Default::default())
             .collect();
@@ -224,8 +224,8 @@ impl ReadTsCache {
             .thread_pool
             .spawn(TaskCollector(rx).for_each(move |map| {
                 let inner2 = Arc::clone(&inner1);
-                pd_client
-                    .get_timestamp()
+                oracle
+                    .async_get_timestamp()
                     .map_err(|e| error!("get timestamp fail"; "err" => ?e))
                     .map(move |tso| (tso, map))
                     .map(move |(tso, map)| {
