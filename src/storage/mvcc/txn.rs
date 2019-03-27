@@ -275,13 +275,6 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
             }
             _ => {
-                // `get_txn_commit_info` will scan write cf in reversed order, so we use
-                // `reverse_seek_write` here to avoid flipping iterator.
-                let write_ts_collision = self
-                    .reader
-                    .reverse_seek_write(&key, self.start_ts)?
-                    .map(|(commit_ts, _)| commit_ts == self.start_ts)
-                    .unwrap_or(false);
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
                     Some((ts, write_type)) => {
                         if write_type == WriteType::Rollback {
@@ -300,15 +293,23 @@ impl<S: Snapshot> MvccTxn<S> {
                         }
                     }
                     None => {
-                        let ts = self.start_ts;
-
-                        // collapse previous rollback if exist.
-                        if self.collapse_rollback {
-                            self.collapse_prev_rollback(key.clone())?;
-                        }
+                        // `get_txn_commit_info` will scan write cf in reversed order. Use
+                        // `reverse_seek_write` here too to avoid flipping iterator.
+                        let write_ts_collision = self
+                            .reader
+                            .reverse_seek_write(&key, self.start_ts)?
+                            .map(|(commit_ts, _)| commit_ts == self.start_ts)
+                            .unwrap_or(false);
 
                         // Avoid replacing another write record with the same key and commit_ts.
                         if !write_ts_collision {
+                            let ts = self.start_ts;
+
+                            // collapse previous rollback if exist.
+                            if self.collapse_rollback {
+                                self.collapse_prev_rollback(key.clone())?;
+                            }
+
                             // insert a Rollback to WriteCF when receives Rollback before Prewrite
                             let write = Write::new(WriteType::Rollback, ts, None);
                             self.put_write(key, ts, write.to_bytes());
@@ -331,11 +332,11 @@ impl<S: Snapshot> MvccTxn<S> {
             let write = Write::new(WriteType::Rollback, self.start_ts, None);
             let ts = self.start_ts;
             self.put_write(key.clone(), ts, write.to_bytes());
+            if self.collapse_rollback {
+                self.collapse_prev_rollback(key)?;
+            }
         }
         self.unlock_key(key.clone());
-        if self.collapse_rollback {
-            self.collapse_prev_rollback(key)?;
-        }
         Ok(())
     }
 
