@@ -37,9 +37,6 @@ const CLIENT_PREFIX: &str = "pd";
 const MAX_RETRY_TIMES: u64 = 10;
 const RETRY_INTERVAL_MS: u64 = 300;
 
-/// A TSO is composed by calculating `(physical << TSO_PHYSICAL_SHIFT) + logical`.
-const TSO_PHYSICAL_SHIFT: u64 = 18;
-
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -530,12 +527,12 @@ impl PdClient for RpcClient {
             .execute()
     }
 
-    fn get_timestamp(&self) -> PdFuture<u64> {
+    fn get_timestamp(&self, count: usize) -> PdFuture<(i64, i64)> {
         let timer = Instant::now();
 
         let mut req = pdpb::TsoRequest::new();
         req.set_header(self.header());
-        req.set_count(1);
+        req.set_count(count as u32);
 
         let executor = move |client: &RwLock<Inner>, req: pdpb::TsoRequest| {
             let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
@@ -561,8 +558,13 @@ impl PdClient for RpcClient {
                             .with_label_values(&["get_timestamp"])
                             .observe(duration_to_sec(timer.elapsed()));
                         check_resp_header(resp.get_header())?;
+                        if resp.get_count() as usize != count {
+                            let e = box_err!("response count doesn't match");
+                            error!("get tso failed"; "err" => ?e);
+                            return Err(e);
+                        }
                         let ts = resp.get_timestamp();
-                        Ok(((ts.get_physical() << TSO_PHYSICAL_SHIFT) + ts.get_logical()) as u64)
+                        Ok((ts.get_physical(), ts.get_logical()))
                     })
             })) as PdFuture<_>
         };

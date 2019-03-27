@@ -11,7 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::boxed;
 use std::fmt::{self, Display, Formatter};
+use std::mem;
 use std::sync::Arc;
 
 use futures::Future;
@@ -27,7 +29,7 @@ use raft::eraftpb::ConfChangeType;
 use rocksdb::DB;
 
 use super::metrics::*;
-use crate::pd::{Error, PdClient, RegionStat};
+use crate::pd::{Error, PdClient, RegionStat, Result};
 use crate::raftstore::store::cmd_resp::new_error;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::util::{
@@ -43,6 +45,8 @@ use crate::util::rocksdb_util::*;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 use prometheus::local::LocalHistogram;
+
+pub type TsoCallback = Box<dyn boxed::FnBox(Result<(i64, i64)>) + Send>;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -90,6 +94,10 @@ pub enum Task {
     DestroyPeer {
         region_id: u64,
     },
+    Tso {
+        callback: TsoCallback,
+    },
+    FinishTso,
 }
 
 pub struct StoreStat {
@@ -185,6 +193,8 @@ impl Display for Task {
             Task::DestroyPeer { ref region_id } => {
                 write!(f, "destroy peer of region {}", region_id)
             }
+            Task::Tso { .. } => write!(f, "tso"),
+            Task::FinishTso { .. } => write!(f, "finish tso"),
         }
     }
 }
@@ -202,6 +212,8 @@ pub struct Runner<T: PdClient> {
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
     scheduler: Scheduler<Task>,
+    is_requesting_tso: bool,
+    tso_callbacks: Vec<TsoCallback>,
 }
 
 impl<T: PdClient> Runner<T> {
@@ -221,6 +233,8 @@ impl<T: PdClient> Runner<T> {
             region_peers: HashMap::default(),
             store_stat: StoreStat::default(),
             scheduler,
+            is_requesting_tso: false,
+            tso_callbacks: Vec::default(),
         }
     }
 
@@ -635,6 +649,55 @@ impl<T: PdClient> Runner<T> {
             Some(_) => info!("remove peer statistic record in pd"; "region_id" => region_id),
         }
     }
+
+    fn request_tso(&mut self, handle: &Handle) {
+        self.is_requesting_tso = true;
+
+        let scheduler = self.scheduler.clone();
+        let callbacks = mem::replace(&mut self.tso_callbacks, Vec::default());
+        let count = callbacks.len();
+
+        let f = self
+            .pd_client
+            .get_timestamp(count)
+            .then(move |res| {
+                match res {
+                    Ok((physical, logical)) => {
+                        for (i, cb) in callbacks.into_iter().enumerate() {
+                            cb(Ok((physical, logical + i as i64)));
+                        }
+                    }
+                    Err(e) => {
+                        for cb in callbacks {
+                            // The error can't be cloned.
+                            cb(Err(box_err!(e.description())))
+                        }
+                    }
+                }
+
+                if let Err(Stopped(_)) = scheduler.schedule(Task::FinishTso) {
+                    error!("failed to notify finish tso: Stopped");
+                }
+                Ok(())
+            });
+
+        handle.spawn(f);
+    }
+
+    fn handle_tso(&mut self, handle: &Handle, callback: TsoCallback) {
+        self.tso_callbacks.push(callback);
+        if !self.is_requesting_tso {
+            self.request_tso(handle);
+        }
+    }
+
+    fn handle_finish_tso(&mut self, handle: &Handle) {
+        if self.tso_callbacks.is_empty() {
+            self.is_requesting_tso = false;
+        } else {
+            self.request_tso(handle);
+        }
+    }
 }
 
 impl<T: PdClient> Runnable<Task> for Runner<T> {
@@ -740,6 +803,8 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
             } => self.handle_validate_peer(handle, region, peer, merge_source),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
             Task::DestroyPeer { region_id } => self.handle_destroy_peer(region_id),
+            Task::Tso { callback } => self.handle_tso(handle, callback),
+            Task::FinishTso => self.handle_finish_tso(handle),
         };
     }
 }

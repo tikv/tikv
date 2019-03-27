@@ -237,7 +237,7 @@ mod tests {
         fn get_gc_safe_point(&self) -> PdFuture<u64> {
             unimplemented!();
         }
-        fn get_timestamp(&self) -> PdFuture<u64> {
+        fn get_timestamp(&self, _: usize) -> PdFuture<(i64, i64)> {
             unimplemented!();
         }
     }

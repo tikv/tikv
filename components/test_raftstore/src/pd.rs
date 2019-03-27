@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -233,7 +233,7 @@ struct Cluster {
     is_bootstraped: bool,
 
     gc_safe_point: u64,
-    timestamp: AtomicU64,
+    timestamp_logical: AtomicI64,
 }
 
 impl Cluster {
@@ -260,7 +260,7 @@ impl Cluster {
             is_bootstraped: false,
 
             gc_safe_point: 0,
-            timestamp: AtomicU64::new(100),
+            timestamp_logical: AtomicI64::new(100),
         }
     }
 
@@ -601,8 +601,12 @@ impl Cluster {
         self.gc_safe_point
     }
 
-    fn get_timestamp(&self) -> u64 {
-        self.timestamp.fetch_add(1, Ordering::SeqCst)
+    fn get_timestamp(&self, count: usize) -> (i64, i64) {
+        (
+            100,
+            self.timestamp_logical
+                .fetch_add(count as i64, Ordering::SeqCst),
+        )
     }
 }
 
@@ -1159,12 +1163,12 @@ impl PdClient for TestPdClient {
         Box::new(ok(safe_point))
     }
 
-    fn get_timestamp(&self) -> PdFuture<u64> {
+    fn get_timestamp(&self, count: usize) -> PdFuture<(i64, i64)> {
         if let Err(e) = self.check_bootstrap() {
             return Box::new(err(e));
         }
 
-        let ts = self.cluster.rl().get_timestamp();
+        let ts = self.cluster.rl().get_timestamp(count);
         Box::new(ok(ts))
     }
 }

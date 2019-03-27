@@ -13,6 +13,7 @@
 
 mod client;
 mod metrics;
+mod tso;
 mod util;
 
 mod config;
@@ -22,6 +23,7 @@ pub use self::client::RpcClient;
 pub use self::config::Config;
 pub use self::errors::{Error, Result};
 pub use self::pd::{Runner as PdRunner, Task as PdTask};
+pub use self::tso::{compose_ts, Oracle, PdOracle};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
@@ -179,7 +181,7 @@ pub trait PdClient: Send + Sync {
 
     fn get_gc_safe_point(&self) -> PdFuture<u64>;
 
-    fn get_timestamp(&self) -> PdFuture<u64>;
+    fn get_timestamp(&self, count: usize) -> PdFuture<(i64, i64)>;
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
