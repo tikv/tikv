@@ -333,10 +333,10 @@ impl<S: Snapshot> MvccTxn<S> {
             let ts = self.start_ts;
             self.put_write(key.clone(), ts, write.to_bytes());
             if self.collapse_rollback {
-                self.collapse_prev_rollback(key)?;
+                self.collapse_prev_rollback(key.clone())?;
             }
         }
-        self.unlock_key(key.clone());
+        self.unlock_key(key);
         Ok(())
     }
 
