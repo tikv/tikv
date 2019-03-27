@@ -587,7 +587,7 @@ version = "0.0.1"
 dependencies = [
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 3.0.0-beta",
+ "tikv 3.0.0-beta.1",
 ]
 
 [[package]]
@@ -1977,7 +1977,7 @@ dependencies = [
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "test_storage 0.0.1",
- "tikv 3.0.0-beta",
+ "tikv 3.0.0-beta.1",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
 ]
 
@@ -1995,7 +1995,7 @@ dependencies = [
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog-global 0.1.0 (git+https://github.com/breeswish/slog-global.git?rev=91904ade)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 3.0.0-beta",
+ "tikv 3.0.0-beta.1",
  "tokio-threadpool 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-timer 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2007,7 +2007,7 @@ dependencies = [
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "test_raftstore 0.0.1",
- "tikv 3.0.0-beta",
+ "tikv 3.0.0-beta.1",
 ]
 
 [[package]]
@@ -2016,7 +2016,7 @@ version = "0.0.1"
 dependencies = [
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 3.0.0-beta",
+ "tikv 3.0.0-beta.1",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "3.0.0-beta"
+version = "3.0.0-beta.1"
 dependencies = [
  "arrow 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "backtrace 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
