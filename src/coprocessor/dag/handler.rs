@@ -91,7 +91,7 @@ impl DAGRequestHandler {
         Ok(super::batch_handler::BatchDAGHandler::new(
             deadline,
             out_most_executor,
-            req.take_output_offsets(),
+            output_offsets,
             config,
             ranges_len,
             executors_len,
