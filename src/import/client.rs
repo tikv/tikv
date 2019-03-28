@@ -243,7 +243,7 @@ impl ImportClient for Client {
             }
             Err(PdError::RegionNotFound(_)) => Ok(true), // heartbeat may not send to PD
             Err(err) => {
-                error!("check scatter region operater result"; "region id" => %region_id, "err" => %err);
+                error!("check scatter region operater result"; "region_id" => %region_id, "error" => %err);
                 Err(Error::from(err))
             }
         }

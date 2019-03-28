@@ -68,8 +68,8 @@ impl<Client: ImportClient> ImportJob<Client> {
             Arc::clone(&self.engine),
         );
 
-        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(1.0);
         let mut ranges = job.run()?.into_iter().map(|range| range.range).collect();
+        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(1.0);
         for i in 0..MAX_RETRY_TIMES {
             let retry_ranges = Arc::new(Mutex::new(Vec::new()));
             let handles = self.run_import_threads(ranges, Arc::clone(&retry_ranges));
@@ -87,7 +87,7 @@ impl<Client: ImportClient> ImportJob<Client> {
                 "still has ranges need to retry";
                 "tag" => %self.tag,
                 "retry_count" => %retry_count,
-                "current round" => %i,
+                "current_round" => %i,
             );
         }
         IMPORT_EACH_PHASE.with_label_values(&["import"]).set(0.0);
