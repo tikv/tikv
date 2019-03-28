@@ -35,7 +35,6 @@ use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
 use crate::raftstore::store::util::{delete_all_in_range_cf, find_peer};
-use crate::raftstore::store::SeekRegionResult;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::util::rocksdb_util::get_cf_handle;
 use crate::util::time::{duration_to_sec, SlowTimer};
@@ -58,7 +57,6 @@ const GC_SNAPSHOT_TIMEOUT_SECS: u64 = 10;
 const GC_TASK_SLOW_SECONDS: u64 = 30;
 
 const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
-const GC_SEEK_REGION_LIMIT: u32 = 32;
 
 const BEGIN_KEY: &[u8] = b"";
 
@@ -955,7 +953,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         processed_regions: &mut usize,
     ) -> GCManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
-        let (ctx, next_key) = self.get_next_gc_context(from_key)?;
+        let (ctx, next_key) = self.get_next_gc_context(from_key);
         if ctx.is_none() {
             // No more regions.
             return Ok(None);
@@ -985,57 +983,47 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// leader, so we can do GC on it.
     /// Returns context to call GC and end_key of the region. The returned end_key will be none if
     /// the region's end_key is empty.
-    fn get_next_gc_context(
-        &mut self,
-        mut key: Key,
-    ) -> GCManagerResult<(Option<Context>, Option<Key>)> {
-        loop {
-            self.gc_manager_ctx.check_stopped()?;
+    fn get_next_gc_context(&mut self, key: Key) -> (Option<Context>, Option<Key>) {
+        let (tx, rx) = mpsc::channel();
+        let store_id = self.cfg.self_store_id;
 
-            let res = self.cfg.region_info_provider.seek_region(
-                key.as_encoded(),
-                Box::new(|_, role| role == StateRole::Leader),
-                GC_SEEK_REGION_LIMIT,
-            );
-
-            let result = match res {
-                Ok(r) => r,
-                Err(e) => {
-                    error!(
-                        "gc_worker: failed to get next region information"; "err" => ?e
-                    );
-                    continue;
-                }
-            };
-
-            match result {
-                SeekRegionResult::Found(mut region) => {
-                    // It might be ok to leave other fields default.
-                    let end_key = Key::from_encoded(region.take_end_key());
-                    // Determine if it's the last region.
-                    let end_key = if end_key.as_encoded().is_empty() {
-                        None
-                    } else {
-                        Some(end_key)
-                    };
-
-                    if let Some(peer) = find_peer(&region, self.cfg.self_store_id).cloned() {
-                        let ctx = make_context(region, peer);
-                        return Ok((Some(ctx), end_key));
-                    }
-
-                    // `region` doesn't contains such a peer. Ignore it and continue.
-                    match end_key {
-                        Some(k) => key = k,
-                        None => {
-                            // Ended.
-                            return Ok((None, None));
+        let res = self.cfg.region_info_provider.seek_region(
+            key.as_encoded(),
+            Box::new(move |iter| {
+                for info in iter {
+                    if info.role == StateRole::Leader {
+                        if find_peer(&info.region, store_id).is_some() {
+                            let _ = tx.send(Some(info.region.clone()));
+                            return;
                         }
                     }
                 }
-                SeekRegionResult::Ended => return Ok((None, None)),
-                // Seek again from `next_key`.
-                SeekRegionResult::LimitExceeded { next_key } => key = Key::from_encoded(next_key),
+                let _ = tx.send(None);
+            }),
+        );
+
+        if let Err(e) = res {
+            error!(
+                "gc_worker: failed to get next region information"; "err" => ?e
+            );
+            return (None, None);
+        };
+
+        match rx.recv() {
+            Ok(Some(mut region)) => {
+                let peer = find_peer(&region, store_id).unwrap().clone();
+                let end_key = region.take_end_key();
+                let next_key = if end_key.is_empty() {
+                    None
+                } else {
+                    Some(Key::from_encoded(end_key))
+                };
+                (Some(make_context(region, peer)), next_key)
+            }
+            Ok(None) => (None, None),
+            Err(e) => {
+                error!("failed to get next region information"; "err" => ?e);
+                (None, None)
             }
         }
     }
@@ -1157,7 +1145,8 @@ impl<E: Engine> GCWorker<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::store::SeekRegionFilter;
+    use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
+    use crate::raftstore::store::util::new_peer;
     use crate::storage::engine::Result as EngineResult;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
@@ -1180,30 +1169,14 @@ mod tests {
     #[derive(Clone)]
     struct MockRegionInfoProvider {
         // start_key -> (region_id, end_key)
-        regions: BTreeMap<Vec<u8>, (u64, Vec<u8>)>,
+        regions: BTreeMap<Vec<u8>, RegionInfo>,
     }
 
     impl RegionInfoProvider for MockRegionInfoProvider {
-        fn seek_region(
-            &self,
-            from: &[u8],
-            _filter: SeekRegionFilter,
-            _limit: u32,
-        ) -> EngineResult<SeekRegionResult> {
+        fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
             let from = from.to_vec();
-            match self.regions.range(from..).next() {
-                Some((start_key, (region_id, end_key))) => {
-                    let mut region = metapb::Region::default();
-                    region.set_id(*region_id);
-                    region.set_start_key(start_key.clone());
-                    region.set_end_key(end_key.clone());
-                    let mut p = metapb::Peer::default();
-                    p.set_store_id(1);
-                    region.mut_peers().push(p);
-                    Ok(SeekRegionResult::Found(region))
-                }
-                None => Ok(SeekRegionResult::Ended),
-            }
+            callback(&mut self.regions.range(from..).map(|(_, v)| v));
+            Ok(())
         }
     }
 
@@ -1229,7 +1202,7 @@ mod tests {
     }
 
     impl GCManagerTestUtil {
-        pub fn new(regions: BTreeMap<Vec<u8>, (u64, Vec<u8>)>) -> Self {
+        pub fn new(regions: BTreeMap<Vec<u8>, RegionInfo>) -> Self {
             let mut worker = WorkerBuilder::new("test-gc-worker").create();
             let (gc_task_sender, gc_task_receiver) = channel();
             worker.start(MockGCRunner { tx: gc_task_sender }).unwrap();
@@ -1285,7 +1258,15 @@ mod tests {
     ) {
         let regions: BTreeMap<_, _> = regions
             .into_iter()
-            .map(|(start_key, end_key, id)| (start_key, (id, end_key)))
+            .map(|(start_key, end_key, id)| {
+                let mut r = metapb::Region::new();
+                r.set_id(id);
+                r.set_start_key(start_key.clone());
+                r.set_end_key(end_key);
+                r.mut_peers().push(new_peer(1, 1));
+                let info = RegionInfo::new(r, StateRole::Leader);
+                (start_key, info)
+            })
             .collect();
 
         let mut test_util = GCManagerTestUtil::new(regions);
