@@ -472,7 +472,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .kv
-                .write_opt(kv_wb, &write_opts)
+                .write_opt(&kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
@@ -488,7 +488,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx
                 .engines
                 .raft
-                .write_opt(raft_wb, &write_opts)
+                .write_opt(&raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
@@ -743,11 +743,11 @@ impl<T, C> RaftPollerBuilder<T, C> {
         })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.write(kv_wb).unwrap();
+            self.engines.kv.write(&kv_wb).unwrap();
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.write(raft_wb).unwrap();
+            self.engines.raft.write(&raft_wb).unwrap();
             self.engines.raft.sync_wal().unwrap();
         }
 

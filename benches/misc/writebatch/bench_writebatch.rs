@@ -23,7 +23,7 @@ fn writebatch(db: &DB, round: usize, batch_keys: usize) {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
         }
-        db.write(batch).unwrap()
+        db.write(&batch).unwrap()
     }
 }
 

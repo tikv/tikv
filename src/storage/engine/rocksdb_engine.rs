@@ -233,7 +233,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
             return Err(Error::RocksDb(msg));
         }
     }
-    if let Err(msg) = db.write(wb) {
+    if let Err(msg) = db.write(&wb) {
         return Err(Error::RocksDb(msg));
     }
     Ok(())

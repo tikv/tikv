@@ -186,7 +186,7 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
-    let mut wb = WriteBatch::new();
+    let wb = WriteBatch::new();
     // Since CF_RAFT and CF_LOCK is usually small, so using
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
@@ -205,8 +205,8 @@ pub fn delete_all_in_range_cf(
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
-                db.write(wb)?;
-                wb = WriteBatch::new();
+                db.write(&wb)?;
+                wb.clear();
             }
 
             if !it.next() {
@@ -216,7 +216,7 @@ pub fn delete_all_in_range_cf(
     }
 
     if wb.count() > 0 {
-        db.write(wb)?;
+        db.write(&wb)?;
     }
 
     Ok(())
@@ -1446,7 +1446,7 @@ mod tests {
                 wb.put_cf(handle, k, v).unwrap();
             }
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ["k2", "k4").
@@ -1545,7 +1545,7 @@ mod tests {
             let handle = get_cf_handle(&db, cf).unwrap();
             wb.put_cf(handle, k, v).unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

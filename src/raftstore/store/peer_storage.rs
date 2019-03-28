@@ -1595,12 +1595,12 @@ pub fn maybe_upgrade_from_2_to_3(
     fail_point!("upgrade_2_3_before_update_raft", |_| {
         Err(box_err!("injected error: upgrade_2_3_before_update_raft"))
     });
-    raft_engine.write_opt(upgrade_raft_wb, &sync_opt).unwrap();
+    raft_engine.write_opt(&upgrade_raft_wb, &sync_opt).unwrap();
 
     fail_point!("upgrade_2_3_before_update_kv", |_| {
         Err(box_err!("injected error: upgrade_2_3_before_update_kv"))
     });
-    kv_engine.write_opt(cleanup_kv_wb, &sync_opt).unwrap();
+    kv_engine.write_opt(&cleanup_kv_wb, &sync_opt).unwrap();
 
     // Drop the raft cf.
     fail_point!("upgrade_2_3_before_drop_raft_cf", |_| {
@@ -1702,8 +1702,8 @@ mod tests {
             .set_applied_index(ents.last().unwrap().get_index());
         ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
             .unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
-        store.engines.kv.write(kv_wb).unwrap();
+        store.engines.raft.write(&ready_ctx.raft_wb).unwrap();
+        store.engines.kv.write(&kv_wb).unwrap();
         store.raft_state = ctx.raft_state;
         store.apply_state = ctx.apply_state;
         store
@@ -1714,7 +1714,7 @@ mod tests {
         let mut ready_ctx = ReadyContext::default();
         store.append(&mut ctx, ents, &mut ready_ctx).unwrap();
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
-        store.engines.raft.write(ready_ctx.raft_wb).unwrap();
+        store.engines.raft.write(&ready_ctx.raft_wb).unwrap();
         store.raft_state = ctx.raft_state;
     }
 
@@ -1816,8 +1816,8 @@ mod tests {
         let kv_wb = WriteBatch::new();
         let raft_wb = WriteBatch::new();
         store.clear_meta(&kv_wb, &raft_wb).unwrap();
-        store.engines.kv.write(kv_wb).unwrap();
-        store.engines.raft.write(raft_wb).unwrap();
+        store.engines.kv.write(&kv_wb).unwrap();
+        store.engines.raft.write(&raft_wb).unwrap();
 
         assert_eq!(0, get_meta_key_count(&store));
     }
@@ -1924,7 +1924,7 @@ mod tests {
                 let mut kv_wb = WriteBatch::new();
                 ctx.save_apply_state_to(&store.engines.kv, &mut kv_wb)
                     .unwrap();
-                store.engines.kv.write(kv_wb).unwrap();
+                store.engines.kv.write(&kv_wb).unwrap();
             }
         }
     }
@@ -1992,8 +1992,8 @@ mod tests {
         ctx.apply_state.set_applied_index(7);
         ctx.save_raft_state_to(&mut ready_ctx.raft_wb).unwrap();
         ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
-        s.engines.kv.write(kv_wb).unwrap();
-        s.engines.raft.write(ready_ctx.raft_wb).unwrap();
+        s.engines.kv.write(&kv_wb).unwrap();
+        s.engines.raft.write(&ready_ctx.raft_wb).unwrap();
         s.apply_state = ctx.apply_state;
         s.raft_state = ctx.raft_state;
         ctx = InvokeContext::new(&s);
@@ -2001,7 +2001,7 @@ mod tests {
         compact_raft_log(&s.tag, &mut ctx.apply_state, 7, term).unwrap();
         kv_wb = WriteBatch::new();
         ctx.save_apply_state_to(&s.engines.kv, &mut kv_wb).unwrap();
-        s.engines.kv.write(kv_wb).unwrap();
+        s.engines.kv.write(&kv_wb).unwrap();
         s.apply_state = ctx.apply_state;
 
         let (tx, rx) = channel();

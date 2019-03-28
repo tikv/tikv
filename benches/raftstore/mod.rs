@@ -27,7 +27,7 @@ fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
-    db.write(wb).unwrap();
+    db.write(&wb).unwrap();
 }
 
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
