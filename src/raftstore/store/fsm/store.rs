@@ -72,6 +72,8 @@ use crate::raftstore::store::{
 
 type Key = Vec<u8>;
 
+const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
+const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
 
 pub struct StoreInfo {
@@ -468,30 +470,37 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            let kv_wb = mem::replace(&mut self.poll_ctx.kv_wb, WriteBatch::new());
             self.poll_ctx
                 .engines
                 .kv
-                .write_opt(&kv_wb, &write_opts)
+                .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
+            let data_size = self.poll_ctx.kv_wb.data_size();
+            if data_size > KV_WB_SHRINK_SIZE {
+                self.poll_ctx.kv_wb = WriteBatch::new();
+            } else {
+                self.poll_ctx.kv_wb.clear();
+            }
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            let raft_wb = mem::replace(
-                &mut self.poll_ctx.raft_wb,
-                WriteBatch::with_capacity(4 * 1024),
-            );
             self.poll_ctx
                 .engines
                 .raft
-                .write_opt(&raft_wb, &write_opts)
+                .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
+            let data_size = self.poll_ctx.raft_wb.data_size();
+            if data_size > RAFT_WB_SHRINK_SIZE {
+                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+            } else {
+                self.poll_ctx.raft_wb.clear();
+            }
         }
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
