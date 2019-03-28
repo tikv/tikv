@@ -880,6 +880,7 @@ impl<E: Engine> Storage<E> {
             duration,
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
         Ok(())
     }
 
@@ -908,9 +909,8 @@ impl<E: Engine> Storage<E> {
             start_ts,
             options,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
     }
 
@@ -929,9 +929,8 @@ impl<E: Engine> Storage<E> {
             lock_ts,
             commit_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
 
@@ -965,9 +964,7 @@ impl<E: Engine> Storage<E> {
             modifies,
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
     }
 
@@ -979,9 +976,8 @@ impl<E: Engine> Storage<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Cleanup { ctx, key, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
     }
 
@@ -998,9 +994,8 @@ impl<E: Engine> Storage<E> {
             keys,
             start_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
         Ok(())
     }
 
@@ -1023,9 +1018,8 @@ impl<E: Engine> Storage<E> {
             },
             limit,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
         Ok(())
     }
 
@@ -1060,9 +1054,8 @@ impl<E: Engine> Storage<E> {
             scan_key: None,
             key_locks: vec![],
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
         Ok(())
     }
 
@@ -1071,9 +1064,7 @@ impl<E: Engine> Storage<E> {
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_GC])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         Ok(())
     }
 
@@ -1092,9 +1083,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<()> {
         self.gc_worker
             .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_UNSAFE_DESTROY_RANGE])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         Ok(())
     }
 
@@ -1227,7 +1216,7 @@ impl<E: Engine> Storage<E> {
             )],
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
     }
 
@@ -1255,9 +1244,7 @@ impl<E: Engine> Storage<E> {
             requests,
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_put"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
     }
 
@@ -1278,9 +1265,7 @@ impl<E: Engine> Storage<E> {
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
     }
 
@@ -1310,9 +1295,7 @@ impl<E: Engine> Storage<E> {
             )],
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
     }
 
@@ -1340,9 +1323,7 @@ impl<E: Engine> Storage<E> {
             requests,
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
     }
 
@@ -1625,9 +1606,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx, key };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
+
         Ok(())
     }
 
@@ -1640,9 +1621,8 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
         let cmd = Command::MvccByStartTs { ctx, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
     }
 }

@@ -25,7 +25,32 @@ make_static_metric! {
     pub struct SchedDurationVec: Histogram {
         "type" => RawReadKind,
     }
+
+    pub label_enum KvCommandKind {
+        prewrite,
+        commit,
+        cleanup,
+        rollback,
+        scan_lock,
+        resolve_lock,
+        gc,
+        unsafe_destroy_range,
+        delete_range,
+        pause,
+        key_mvcc,
+        start_ts_mvcc,
+        raw_put,
+        raw_batch_put,
+        raw_delete,
+        raw_delete_range,
+        raw_batch_delete,
+    }
+
+    pub struct KvCommandCounterVec: IntCounter {
+        "type" => KvCommandKind,
+    }
 }
+
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -34,6 +59,9 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
+        KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
+
     pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_stage_total",
         "Total number of commands on each stage.",
