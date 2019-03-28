@@ -591,3 +591,159 @@ mod tests {
         assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    #[bench]
+    fn bench_parse(b: &mut test::Bencher) {
+        let cases = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ];
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &(s, fsp) in cases {
+                    let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_hours(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0i8),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for duration in cases {
+                    let _ = test::black_box(duration.hours());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_to_decimal(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for duration in cases {
+                    let _ = test::black_box(duration.to_decimal().unwrap());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_round_frac(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| (Duration::parse(s.as_bytes(), fsp).unwrap(), fsp))
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &(duration, fsp) in cases {
+                    let _ = test::black_box(duration.round_frac(fsp).unwrap());
+                }
+            }
+        })
+    }
+    #[bench]
+    fn bench_codec(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("10:20:30.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for duration in cases {
+                    let t = test::black_box(duration);
+                    let mut buf = vec![];
+                    buf.encode_duration(t).unwrap();
+                    let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                    assert_eq!(*t, got);
+                }
+            }
+        })
+    }
+    #[bench]
+    fn bench_check_add_and_sub_duration(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("11:30:45.123456", "00:00:14.876545"),
+            ("11:30:45.123456", "00:30:00"),
+            ("11:30:45.123456", "12:30:00"),
+            ("11:30:45.123456", "1 12:30:00"),
+        ]
+        .into_iter()
+        .map(|(lhs, rhs)| {
+            (
+                Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
+            )
+        })
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for (lhs, rhs) in cases {
+                    let _ = test::black_box(lhs.checked_add(rhs).unwrap());
+                    let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
+                }
+            }
+        })
+    }
+}
