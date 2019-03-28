@@ -21,12 +21,14 @@ name = "tikv"
 
 [[bin]]
 name = "tikv-server"
+test = false
 
 [[bin]]
 name = "tikv-ctl"
 
 [[bin]]
 name = "tikv-importer"
+test = false
 
 [[test]]
 name = "failpoints"
