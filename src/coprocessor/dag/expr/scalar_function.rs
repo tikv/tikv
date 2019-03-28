@@ -271,6 +271,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::IsIPv4Compat
+            | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -419,8 +421,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IsIPv4Compat
-            | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
@@ -832,6 +832,8 @@ dispatch_call! {
         RightShift => right_shift,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
+        IsIPv4Compat => is_ipv4_compat,
+        IsIPv4Mapped => is_ipv4_mapped,
         IsIPv6 => is_ipv6,
         InetAton => inet_aton,
 
@@ -1319,6 +1321,8 @@ mod tests {
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
+                    ScalarFuncSig::IsIPv4Compat,
+                    ScalarFuncSig::IsIPv4Mapped,
                     ScalarFuncSig::IsIPv6,
                     ScalarFuncSig::MD5,
                     ScalarFuncSig::SHA1,
@@ -1506,8 +1510,6 @@ mod tests {
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IsIPv4Compat,
-            ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
