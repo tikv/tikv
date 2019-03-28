@@ -18,6 +18,10 @@ use std::convert::TryInto;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+const IPV6_LENGTH: usize = 16;
+const IPV4_LENGTH: usize = 4;
+const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
+
 impl ScalarFunc {
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
@@ -26,6 +30,43 @@ impl ScalarFunc {
         } else {
             Ok(Some(0))
         }
+    }
+
+    pub fn is_ipv4_compat<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        // Not an IPv6 address, return 0
+        if input.len() != IPV6_LENGTH {
+            return Ok(Some(0));
+        }
+
+        if !input.starts_with(&PREFIX_COMPAT) {
+            return Ok(Some(0));
+        }
+        Ok(Some(1))
+    }
+
+    pub fn is_ipv4_mapped<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<i64>> {
+        let input = try_opt!(self.children[0].eval_string(ctx, row));
+        // Not an IPv6 address, return 0
+        if input.len() != IPV6_LENGTH {
+            return Ok(Some(0));
+        }
+
+        let mut prefix_mapped: [u8; 12] = [0x00; 12];
+        prefix_mapped[10] = 0xff;
+        prefix_mapped[11] = 0xff;
+        if !input.starts_with(&prefix_mapped) {
+            return Ok(Some(0));
+        }
+        Ok(Some(1))
     }
 
     pub fn inet_aton<'a, 'b: 'a>(
@@ -99,12 +140,12 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let s = try_opt!(self.children[0].eval_string(ctx, row));
-        if s.len() == 16 {
+        if s.len() == IPV6_LENGTH {
             let v: &[u8; 16] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
                 format!("{}", Ipv6Addr::from(*v)).into_bytes(),
             )))
-        } else if s.len() == 4 {
+        } else if s.len() == IPV4_LENGTH {
             let v: &[u8; 4] = s.as_ref().try_into().unwrap();
             Ok(Some(Cow::Owned(
                 format!("{}", Ipv4Addr::from(*v)).into_bytes(),
@@ -147,6 +188,81 @@ mod tests {
             let op = Expression::build(&ctx, op).unwrap();
             let got = op.eval(&mut ctx, &[]).unwrap();
             let exp = Datum::from(expected);
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_is_ipv4_compat() {
+        let cases = vec![
+            (Datum::Bytes(vec![]), Datum::I64(0)),
+            (Datum::Bytes(vec![0x10, 0x10, 0x10, 0x10]), Datum::I64(0)),
+            (
+                Datum::Bytes(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x1, 0x2, 0x3, 0x4,
+                ]),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]),
+                Datum::I64(0),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::IsIPv4Compat, &[input]);
+            let op = Expression::build(&ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
+            assert_eq!(got, exp);
+        }
+    }
+
+    #[test]
+    fn test_is_ipv4_mapped() {
+        let cases = vec![
+            (Datum::Bytes(vec![]), Datum::I64(0)),
+            (Datum::Bytes(vec![0x10, 0x10, 0x10, 0x10]), Datum::I64(0)),
+            (
+                Datum::Bytes(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Datum::I64(1),
+            ),
+            (
+                Datum::Bytes(vec![
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, 0xff, 0xff, 0x1, 0x2, 0x3,
+                    0x4,
+                ]),
+                Datum::I64(0),
+            ),
+            (
+                Datum::Bytes(vec![0x0, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6]),
+                Datum::I64(0),
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, exp) in cases {
+            let input = datum_expr(input);
+            let op = scalar_func_expr(ScalarFuncSig::IsIPv4Mapped, &[input]);
+            let op = Expression::build(&ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]).unwrap();
             assert_eq!(got, exp);
         }
     }
