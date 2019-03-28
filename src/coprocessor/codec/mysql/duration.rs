@@ -29,37 +29,29 @@ const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
 const MINUTES_PER_HOUR: u64 = 60;
 const NANOS_PER_MICRO: u64 = 1_000;
-
-/// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
-
-fn check_dur(duration: &StdDuration) -> Result<()> {
-    let secs = duration.as_secs();
-    if secs > MAX_TIME_IN_SECS || secs == MAX_TIME_IN_SECS && duration.subsec_nanos() > 0 {
-        return Err(invalid_type!(
-            "{:?} is larger than {:?}",
-            duration,
-            MAX_TIME_IN_SECS
-        ));
-    }
-    Ok(())
-}
+const MAX_HOURS: u64 = 838;
+const MAX_MINUTES: u64 = 59;
+const MAX_SECONDS: u64 = 59;
 
 #[inline]
 fn check_hour(hour: u64) -> Result<u64> {
-    if hour > 838 {
-        Err(invalid_type!("invalid hour: {}, larger than {}", hour, 838))
+    if hour > MAX_HOURS {
+        Err(invalid_type!(
+            "invalid hour: {}, larger than {}",
+            hour,
+            MAX_HOURS
+        ))
     } else {
         Ok(hour)
     }
 }
 #[inline]
 fn check_minute(minute: u64) -> Result<u64> {
-    if minute > 59 {
+    if minute > MAX_MINUTES {
         Err(invalid_type!(
             "invalid minute: {}, larger than {}",
             minute,
-            59
+            MAX_MINUTES
         ))
     } else {
         Ok(minute)
@@ -67,29 +59,18 @@ fn check_minute(minute: u64) -> Result<u64> {
 }
 #[inline]
 fn check_second(second: u64) -> Result<u64> {
-    if second > 59 {
+    if second > MAX_SECONDS {
         Err(invalid_type!(
             "invalid second: {}, larger than {}",
             second,
-            59
+            MAX_SECONDS
         ))
     } else {
         Ok(second)
     }
 }
 
-#[inline]
-fn round_hms(hour: &mut u64, minute: &mut u64, second: &mut u64, nano: &mut u64) {
-    *second += *nano / NANOS_PER_SEC;
-    *minute += *second / SECS_PER_MINUTE;
-    *hour += *minute / MINUTES_PER_HOUR;
-    *nano %= NANOS_PER_SEC;
-    *second %= SECS_PER_MINUTE;
-    *minute %= MINUTES_PER_HOUR;
-}
-
 /// `Duration` is the type for MySQL `time` type.
-///
 /// It only occupies 8 bytes in memory.
 bitfield! {
     // For more information:
@@ -100,7 +81,7 @@ bitfield! {
     impl Debug;
 
     #[inline]
-    bool, sign, set_sign: 63;            // 1 bit
+    bool, neg, set_neg: 63;            // 1 bit
 
     #[inline]
     u64, hour, set_hour: 62, 53;         // 10 bits
@@ -119,110 +100,149 @@ bitfield! {
     pub u8, fsp, set_fsp: 8, 1;           // 8 bits
 
     #[inline]
-    bool, unused, _: 0;                 // 1 bit
+    bool, unused, set_unused: 0;                 // 1 bit
 
 }
 
 impl Duration {
+    /// Return Duration: 00:00:00 (fsp == 0)
     pub fn zero() -> Duration {
         Duration(0)
     }
 
+    /// Return the `hour` field of `self`
     #[inline]
     pub fn hours(self) -> u64 {
         self.hour()
     }
 
+    /// Return the `minute` field of `self`
     #[inline]
     pub fn minutes(self) -> u64 {
         self.minute()
     }
 
+    /// Return the `second` field of `self`
     #[inline]
     pub fn secs(self) -> u64 {
         self.second()
     }
 
+    /// Return the `nano` field in microseconds
     #[inline]
     pub fn micro_secs(self) -> u64 {
         self.nano() / NANOS_PER_MICRO
     }
 
+    /// Return the `nano` field
     #[inline]
     pub fn nano_secs(self) -> u64 {
         self.nano()
     }
 
+    /// Returns the number of whole seconds contained by this Duration.
+    #[inline]
+    pub fn as_secs(self) -> u64 {
+        self.hour() * SECS_PER_HOUR + self.minute() * SECS_PER_MINUTE + self.second()
+    }
+
+    /// Return self in seconds including fractional part
     #[inline]
     pub fn to_secs(self) -> f64 {
-        let nonfrac = self.second() as f64;
+        let nonfrac = self.as_secs() as f64;
         let frac = self.nano() as f64 / NANOS_PER_SEC as f64;
         let res = nonfrac + frac;
-        if self.sign() {
+        if self.neg() {
             -res
         } else {
             res
         }
     }
 
+    /// Return `true` if self is zero
+    #[inline]
     pub fn is_zero(self) -> bool {
         self.strip() == 0
     }
 
+    /// Return `self` in nanoseconds
+    #[inline]
     pub fn to_nanos(self) -> i64 {
-        let hour_to_nanos = self.hour() * SECS_PER_HOUR * NANOS_PER_SEC;
-        let minute_to_nanos = self.minute() * SECS_PER_MINUTE * NANOS_PER_SEC;
-        let second_to_nanos = self.second() * NANOS_PER_SEC;
-        let nanos = (hour_to_nanos + minute_to_nanos + second_to_nanos + self.nano()) as i64;
-        if self.sign() {
+        let nanos = (self.as_secs() * NANOS_PER_SEC + self.nano()) as i64;
+        if self.neg() {
             -nanos
         } else {
             nanos
         }
     }
 
+    /// Try to build a `Duration` via nanoseconds and fsp
+    #[inline]
     pub fn from_nanos(nanos: i64, fsp: i8) -> Result<Duration> {
-        let sign = nanos < 0;
+        let neg = nanos < 0;
         let nanos = nanos.abs();
-        Duration::new(StdDuration::from_nanos(nanos as u64), sign, fsp)
+        Duration::new(StdDuration::from_nanos(nanos as u64), neg, fsp)
     }
 
+    /// Try to build a `Duration` via private field,
+    /// NOTE:
+    /// It will automatically round the `nano` field according to `fsp`
+    /// and add the carry to the nonfractional part
+    #[inline]
     fn with_detail(
-        sign: bool,
-        hour: u64,
-        minute: u64,
-        second: u64,
-        nano: u64,
+        neg: bool,
+        mut hour: u64,
+        mut minute: u64,
+        mut second: u64,
+        mut nano: u64,
         fsp: u8,
-    ) -> Result<Self> {
+    ) -> Result<Duration> {
+        // round the `nano` part
+        let round = 10u64.pow(NANO_WIDTH - u32::from(fsp) - 1);
+        if nano / round % 10 > 4 {
+            let padding = round * 10;
+            nano = (nano / padding + 1) * padding;
+        }
+
+        second += nano / NANOS_PER_SEC;
+        minute += second / SECS_PER_MINUTE;
+        hour += minute / MINUTES_PER_HOUR;
+        check_hour(hour)?;
+
+        nano %= NANOS_PER_SEC;
+        second %= SECS_PER_MINUTE;
+        minute %= MINUTES_PER_HOUR;
+
         let mut duration = Duration(0);
-        duration.set_sign(sign);
-        duration.set_hour(check_hour(hour)?);
-        duration.set_minute(check_minute(minute)?);
-        duration.set_second(check_second(second)?);
+        duration.set_neg(neg);
+        duration.set_hour(hour);
+        duration.set_minute(minute);
+        duration.set_second(second);
         duration.set_nano(nano);
         duration.set_fsp(fsp);
         Ok(duration)
     }
 
-    pub fn new(duration: StdDuration, sign: bool, fsp: i8) -> Result<Duration> {
-        check_dur(&duration)?;
-        let seconds = duration.as_secs();
+    /// Try to build a Duration from `u64`
+    #[inline]
+    fn from_u64(inner: u64) -> Result<Duration> {
+        let duration = Duration(inner);
+        check_fsp(duration.fsp() as i8)?;
+        check_hour(duration.hour())?;
+        check_minute(duration.minute())?;
+        check_second(duration.second())?;
+        Ok(duration)
+    }
 
-        let mut hour = seconds / SECS_PER_HOUR;
-        let mut minute = seconds % SECS_PER_HOUR / SECS_PER_MINUTE;
-        let mut second = seconds % SECS_PER_MINUTE;
+    /// Try to build a `Duration` from `StdDuration` with `fsp` and `neg`
+    pub fn new(duration: StdDuration, neg: bool, fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
-        let round = 10u64.pow(NANO_WIDTH - u32::from(fsp));
-        let nano = u64::from(duration.subsec_nanos()) / (round / 10);
-        let mut nano = if nano % 10 > 4 {
-            nano / 10 + 1
-        } else {
-            nano / 10
-        } * round;
-        round_hms(&mut hour, &mut minute, &mut second, &mut nano);
-
-        Duration::with_detail(sign, hour, minute, second, nano, fsp)
+        let seconds = duration.as_secs();
+        let hour = check_hour(seconds / SECS_PER_HOUR)?;
+        let minute = seconds % SECS_PER_HOUR / SECS_PER_MINUTE;
+        let second = seconds % SECS_PER_MINUTE;
+        let nano = u64::from(duration.subsec_nanos());
+        Duration::with_detail(neg, hour, minute, second, nano, fsp)
     }
 
     /// Parses the time form a formatted string with a fractional seconds part,
@@ -238,8 +258,8 @@ impl Duration {
         let mut s = str::from_utf8(s)?;
         let origin = s;
 
-        // sign
-        let sign = if s.as_bytes()[0] == b'-' {
+        // neg
+        let neg = if s.as_bytes()[0] == b'-' {
             s = &s[1..];
             true
         } else {
@@ -301,15 +321,14 @@ impl Duration {
                 hour = time / 1_00_00;
             }
         }
-
-        round_hms(&mut hour, &mut minute, &mut second, &mut nano);
         hour += day.unwrap_or(0) * 24;
-        Duration::with_detail(sign, hour, minute, second, nano, fsp)
+        Duration::with_detail(neg, hour, minute, second, nano, fsp)
     }
 
+    /// Try to parse `self` to a `Decimal`
     pub fn to_decimal(self) -> Result<Decimal> {
         let mut buf = Vec::with_capacity(14);
-        if self.sign() {
+        if self.neg() {
             write!(buf, "-")?;
         }
         write!(
@@ -340,19 +359,14 @@ impl Duration {
             return Ok(self);
         }
 
-        let mut hour = self.hour();
-        let mut minute = self.minute();
-        let mut second = self.second();
-        let mut nano = self.nano();
-        let round = 10u64.pow(NANO_WIDTH - u32::from(fsp));
-        nano /= round / 10;
-        nano = if nano % 10 > 4 {
-            nano / 10 + 1
-        } else {
-            nano / 10
-        } * round;
-        round_hms(&mut hour, &mut minute, &mut second, &mut nano);
-        Duration::with_detail(self.sign(), hour, minute, second, nano, fsp as u8)
+        Duration::with_detail(
+            self.neg(),
+            self.hour(),
+            self.minute(),
+            self.second(),
+            self.nano(),
+            fsp,
+        )
     }
 
     /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
@@ -367,20 +381,25 @@ impl Duration {
         Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
     }
 
-    fn strip(self) -> u64 {
-        let mask = 0x1 << 63 | 0x1ff;
-        self.0 & !mask
+    /// Set field `neg`, `unused` to false and fsp to zero,
+    /// make `self` numerically comparable
+    fn strip(mut self) -> u64 {
+        self.set_neg(false);
+        self.set_unused(false);
+        self.set_fsp(0);
+        self.0
     }
 
+    /// Computes the absolute value of self.
     pub fn abs(mut self) -> Self {
-        self.set_sign(false);
+        self.set_neg(false);
         self
     }
 }
 
 impl Display for Duration {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        if self.sign() {
+        if self.neg() {
             write!(formatter, "-")?;
         }
         write!(
@@ -408,7 +427,7 @@ impl PartialEq for Duration {
 
 impl PartialOrd for Duration {
     fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
-        Some(match (self.sign(), dur.sign()) {
+        Some(match (self.neg(), dur.neg()) {
             (true, true) => dur.strip().cmp(&self.strip()),
             (true, false) => Ordering::Less,
             (false, true) => Ordering::Greater,
@@ -428,17 +447,16 @@ impl Ord for Duration {
 impl<T: Write> DurationEncoder for T {}
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.fsp())).map_err(From::from)
+        self.encode_u64(v.0)?;
+        Ok(())
     }
 }
 
 impl Duration {
     /// `decode` decodes duration encoded by `encode_duration`.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
-        let nanos = number::decode_i64(data)?;
-        let fsp = number::decode_i64(data)?;
-        Duration::from_nanos(nanos, fsp as i8)
+        let inner = number::decode_u64(data)?;
+        Duration::from_u64(inner)
     }
 }
 
@@ -457,6 +475,9 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::mysql::MAX_FSP;
     use crate::util::escape;
+
+    /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
+    const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
 
     #[test]
     fn test_hours() {
@@ -711,5 +732,161 @@ mod tests {
         let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
         let rhs = Duration::from_nanos((MAX_TIME_IN_SECS * NANOS_PER_SEC) as i64, 6).unwrap();
         assert_eq!(lhs.checked_sub(rhs), None);
+    }
+}
+
+#[cfg(test)]
+mod benches {
+    use super::*;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    #[bench]
+    fn bench_parse(b: &mut test::Bencher) {
+        let cases = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("1:2:3.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ];
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &(s, fsp) in cases {
+                    let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_hours(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0i8),
+            ("12:34:56.789", 1),
+            ("1:2:3.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for duration in cases {
+                    let _ = test::black_box(duration.hours());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_to_decimal(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("1:2:3.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for duration in cases {
+                    let _ = test::black_box(duration.to_decimal().unwrap());
+                }
+            }
+        })
+    }
+
+    #[bench]
+    fn bench_round_frac(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("1:2:3.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| (Duration::parse(s.as_bytes(), fsp).unwrap(), fsp))
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &(duration, fsp) in cases {
+                    let _ = test::black_box(duration.round_frac(fsp).unwrap());
+                }
+            }
+        })
+    }
+    #[bench]
+    fn bench_codec(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("12:34:56.1234", 0),
+            ("12:34:56.789", 1),
+            ("1:2:3.189", 2),
+            ("2 27:54:32.828", 3),
+            ("2 33:44:55.666777", 4),
+            ("112233.445566", 5),
+            ("1 23", 5),
+            ("1 23:12.1234567", 6),
+        ]
+        .into_iter()
+        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &duration in cases {
+                    let t = test::black_box(duration);
+                    let mut buf = vec![];
+                    buf.encode_duration(t).unwrap();
+                    let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                    assert_eq!(t, got);
+                }
+            }
+        })
+    }
+    #[bench]
+    fn bench_check_add_and_sub_duration(b: &mut test::Bencher) {
+        let cases: Vec<_> = vec![
+            ("11:30:45.123456", "00:00:14.876545"),
+            ("11:30:45.123456", "00:30:00"),
+            ("11:30:45.123456", "12:30:00"),
+            ("11:30:45.123456", "1 12:30:00"),
+        ]
+        .into_iter()
+        .map(|(lhs, rhs)| {
+            (
+                Duration::parse(lhs.as_bytes(), MAX_FSP).unwrap(),
+                Duration::parse(rhs.as_bytes(), MAX_FSP).unwrap(),
+            )
+        })
+        .collect();
+        b.iter(|| {
+            let cases = test::black_box(&cases);
+            for _ in 0..1000 {
+                for &(lhs, rhs) in cases {
+                    let _ = test::black_box(lhs.checked_add(rhs).unwrap());
+                    let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
+                }
+            }
+        })
     }
 }
