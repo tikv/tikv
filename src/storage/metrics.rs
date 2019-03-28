@@ -51,7 +51,6 @@ make_static_metric! {
     }
 }
 
-
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_storage_command_total",
@@ -61,7 +60,6 @@ lazy_static! {
     .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
         KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
-
     pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_stage_total",
         "Total number of commands on each stage.",
