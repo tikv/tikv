@@ -561,7 +561,10 @@ pub fn is_zero_duration(d: &Duration) -> bool {
 pub fn hash_u64_with_mod(i: u64, divisor: u64) -> u64 {
     let mut hasher = DefaultHashBuilder::default().build_hasher();
     hasher.write_u64(i);
-    hasher.finish() % divisor
+    let v = hasher.finish();
+    // The hashing algorithm that hashbrown used has not good statistical distribution
+    // after modulus, so here is a simple operation for better distribution.
+    (v ^ (v >> 31) ^ (v << 31)) % divisor
 }
 
 #[cfg(test)]
