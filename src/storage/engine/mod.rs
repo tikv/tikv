@@ -17,8 +17,8 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::{error, result};
 
+use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::raftstore::store::engine::IterOption;
-use crate::raftstore::store::{SeekRegionFilter, SeekRegionResult};
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
@@ -158,12 +158,7 @@ pub trait Iterator: Send {
 pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
-    fn seek_region(
-        &self,
-        from: &[u8],
-        filter: SeekRegionFilter,
-        limit: u32,
-    ) -> Result<SeekRegionResult>;
+    fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
 }
 
 macro_rules! near_loop {
