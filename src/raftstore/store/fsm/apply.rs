@@ -390,18 +390,18 @@ impl ApplyContext {
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             self.engines
                 .kv
-                .write_opt(self.wb.as_ref().unwrap(), &write_opts)
+                .write_opt(self.wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
             self.sync_log_hint = false;
-            let data_size = self.wb.as_ref().unwrap().data_size();
+            let data_size = self.wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
                 self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
-                self.wb.as_ref().unwrap().clear();
+                self.wb().clear();
             }
             self.wb_last_bytes = 0;
             self.wb_last_keys = 0;
