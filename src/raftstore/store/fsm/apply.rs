@@ -305,8 +305,6 @@ struct ApplyContext {
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
@@ -341,7 +339,6 @@ impl ApplyContext {
             raft_wb: None,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: cfg.sync_log,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -392,32 +389,29 @@ impl ApplyContext {
     /// Writes all the changes into RocksDB.
     #[allow(clippy::useless_let_if_seq)]
     pub fn write_to_db(&mut self) {
-        let mut synced = false;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let kv_wb = self.kv_wb.take().unwrap();
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(self.sync_log_hint);
+            let kv_wb = self.kv_wb.take().unwrap();
             self.engines
                 .kv
                 .write_opt(kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
-            synced = true;
         }
-        if self.raft_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let raft_wb = self.raft_wb.take().unwrap();
+        if self.sync_log_hint && self.raft_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(true);
+            let raft_wb = self.raft_wb.take().unwrap();
             self.engines
                 .raft
                 .write_opt(raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
-            synced = true;
         }
-        if self.sync_log_hint && synced {
+        if self.sync_log_hint {
             self.sync_log_hint = false;
         }
         for cbs in self.cbs.drain(..) {
@@ -467,8 +461,14 @@ impl ApplyContext {
     pub fn flush(&mut self) {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
-            Some(t) => t,
-            None => return,
+            Some(t) => Some(t),
+            None => {
+                if self.sync_log_hint {
+                    None
+                } else {
+                    return;
+                }
+            }
         };
 
         // Write to engine
@@ -489,14 +489,15 @@ impl ApplyContext {
             }
         }
 
-        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-
-        slow_log!(
-            t,
-            "{} handle ready {} committed entries",
-            self.tag,
-            self.committed_count
-        );
+        if let Some(t) = t {
+            STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+            slow_log!(
+                t,
+                "{} handle ready {} committed entries",
+                self.tag,
+                self.committed_count
+            );
+        }
         self.committed_count = 0;
     }
 }
@@ -2582,15 +2583,16 @@ impl ApplyFsm {
             return;
         }
 
-        // Persists any pending changes of this region.
         let region_id = self.delegate.id();
-        if apply_ctx
-            .apply_res
-            .iter()
-            .any(|res| res.region_id == region_id)
-        {
-            apply_ctx.flush();
+        if apply_ctx.raft_wb.is_none() {
+            apply_ctx.raft_wb = Some(WriteBatch::with_capacity(DEFAULT_RAFT_WB_SIZE));
         }
+        self.delegate.write_apply_state(apply_ctx.raft_wb_mut());
+
+        // Because apply states are wrote to raft engine, so we have to
+        // force sync to make sure there is no lost update after restart.
+        apply_ctx.sync_log_hint = true;
+        apply_ctx.flush();
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
