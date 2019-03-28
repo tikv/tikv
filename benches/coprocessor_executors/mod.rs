@@ -34,7 +34,7 @@ fn bench_table_scan_next(
 
     b.iter_with_setup(
         || {
-            let mut executor = TableScanExecutor::new(
+            let mut executor = TableScanExecutor::table_scan(
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
@@ -424,9 +424,13 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                 for i in 0..1001 {
                     ranges.push(table.get_record_range_one(i));
                 }
-                let mut executor =
-                    TableScanExecutor::new(meta.clone(), ranges, store.to_fixture_store(), false)
-                        .unwrap();
+                let mut executor = TableScanExecutor::table_scan(
+                    meta.clone(),
+                    ranges,
+                    store.to_fixture_store(),
+                    false,
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -476,7 +480,7 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
 
         b.iter_with_setup(
             || {
-                let mut executor = TableScanExecutor::new(
+                let mut executor = TableScanExecutor::table_scan(
                     meta.clone(),
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
@@ -509,7 +513,7 @@ fn bench_index_scan_next(
 
     b.iter_with_setup(
         || {
-            let mut executor = IndexScanExecutor::new(
+            let mut executor = IndexScanExecutor::index_scan(
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),

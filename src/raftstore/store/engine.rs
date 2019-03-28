@@ -37,27 +37,6 @@ pub struct Snapshot {
 unsafe impl Send for Snapshot {}
 unsafe impl Sync for Snapshot {}
 
-#[derive(Debug, Clone)]
-pub struct SyncSnapshot(Arc<Snapshot>);
-
-impl Deref for SyncSnapshot {
-    type Target = Snapshot;
-
-    fn deref(&self) -> &Snapshot {
-        &self.0
-    }
-}
-
-impl SyncSnapshot {
-    pub fn new(db: Arc<DB>) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(Snapshot::new(db)))
-    }
-
-    pub fn clone(&self) -> SyncSnapshot {
-        SyncSnapshot(Arc::clone(&self.0))
-    }
-}
-
 impl Snapshot {
     pub fn new(db: Arc<DB>) -> Snapshot {
         unsafe {
@@ -113,6 +92,27 @@ impl Drop for Snapshot {
         unsafe {
             self.db.release_snap(&self.snap);
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncSnapshot(Arc<Snapshot>);
+
+impl Deref for SyncSnapshot {
+    type Target = Snapshot;
+
+    fn deref(&self) -> &Snapshot {
+        &self.0
+    }
+}
+
+impl SyncSnapshot {
+    pub fn new(db: Arc<DB>) -> SyncSnapshot {
+        SyncSnapshot(Arc::new(Snapshot::new(db)))
+    }
+
+    pub fn clone(&self) -> SyncSnapshot {
+        SyncSnapshot(Arc::clone(&self.0))
     }
 }
 

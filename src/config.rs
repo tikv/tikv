@@ -36,7 +36,8 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
+    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
+    DEFAULT_ROCKSDB_SUB_DIR,
 };
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
@@ -713,6 +714,16 @@ impl DbConfig {
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
             CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            // TODO: rmeove CF_RAFT.
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+        ]
+    }
+
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
         ]
     }
@@ -1330,11 +1341,18 @@ impl TiKvConfig {
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            return Err(format!(
-                "storage data dir have been changed, former data dir is {}, \
-                 current data dir is {}, please check if it is expected.",
-                last_cfg.storage.data_dir, self.storage.data_dir
-            ));
+            // In tikv 3.0 the default value of storage.data-dir changed
+            // from "" to "./"
+            let using_default_after_upgrade =
+                last_cfg.storage.data_dir.is_empty() && self.storage.data_dir == DEFAULT_DATA_DIR;
+
+            if !using_default_after_upgrade {
+                return Err(format!(
+                    "storage data dir have been changed, former data dir is {}, \
+                     current data dir is {}, please check if it is expected.",
+                    last_cfg.storage.data_dir, self.storage.data_dir
+                ));
+            }
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
