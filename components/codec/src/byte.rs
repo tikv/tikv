@@ -12,6 +12,9 @@
 // limitations under the License.
 
 use super::{Error, Result};
+use crate::number::{NumberDecoder, NumberEncoder};
+use crate::{BufferReader, NumberCodec};
+use std::io::Read;
 
 /// Memory-comparable encoding and decoding utility for bytes.
 pub struct MemComparableByteCodec;
@@ -24,6 +27,29 @@ impl MemComparableByteCodec {
     #[inline]
     pub fn encoded_len(src_len: usize) -> usize {
         (src_len / MEMCMP_GROUP_SIZE + 1) * (MEMCMP_GROUP_SIZE + 1)
+    }
+
+    /// Gets the first encoded bytes' length in memory-comparable-encoded data.
+    ///
+    /// Memory-comparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+    /// This function gets the total bytes length of memory-comparable-encoded data, including the length prefix.
+    ///
+    /// Note:
+    ///     - This function won't check whether the bytes are encoded correctly.
+    ///     - There can be multiple memory-comparable-encoded data, placed one by one. This function only returns
+    ///       the length of the first one.
+    pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
+        let mut idx = MEMCMP_GROUP_SIZE;
+        loop {
+            if encoded.len() < idx + 1 {
+                return encoded.len();
+            }
+            let marker = encoded[idx];
+            if (desc && marker != 0) || (!desc && marker != !0u8) {
+                return idx + 1;
+            }
+            idx += MEMCMP_GROUP_SIZE + 1
+        }
     }
 
     /// Encodes all bytes in the `src` into `dest` in ascending memory-comparable format.
@@ -352,11 +378,171 @@ impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
     }
 }
 
+pub trait MemComparableByteEncoder: NumberEncoder {
+    /// write all bytes in ascending memory-comparable format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BufferTooSmall` if buffer remaining size < values.len().
+    fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
+        let len = MemComparableByteCodec::encoded_len(bs.len());
+        let buf = unsafe { self.bytes_mut(len) };
+        if buf.len() < len {
+            return Err(Error::BufferTooSmall);
+        }
+        MemComparableByteCodec::encode_all(bs, buf);
+        unsafe {
+            self.advance_mut(len);
+        }
+        Ok(())
+    }
+
+    /// write all bytes in descending memory-comparable format.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BufferTooSmall` if buffer remaining size < values.len().
+    fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
+        let len = MemComparableByteCodec::encoded_len(bs.len());
+        let buf = unsafe { self.bytes_mut(len) };
+        if buf.len() < len {
+            return Err(Error::BufferTooSmall);
+        }
+        MemComparableByteCodec::encode_all_desc(bs, buf);
+        unsafe {
+            self.advance_mut(len);
+        }
+        Ok(())
+    }
+}
+
+impl<T: NumberEncoder> MemComparableByteEncoder for T {}
+
+pub trait MemComparableByteDecoder: BufferReader {
+    fn read_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = vec![0; self.bytes().len()];
+        let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
+        self.advance(read);
+        Ok(buf[..written].to_vec())
+    }
+}
+
+impl<T: BufferReader> MemComparableByteDecoder for T {}
+
+pub trait CompactByteEncoder {
+    /// Joins bytes with its length into a byte slice.
+    /// It is more efficient in both space and time compared to `encode_bytes`.
+    /// Note that the encoded result is not memory-comparable.
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()>;
+}
+
+impl<T: NumberEncoder> CompactByteEncoder for T {
+    #[inline]
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
+        self.write_var_i64(data.len() as i64)?;
+        self.write_all_bytes(data)
+    }
+}
+
+impl CompactByteEncoder for std::fs::File {
+    #[inline]
+    fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
+        use std::io::Write;
+        let mut buf = vec![0; super::number::MAX_VARINT64_LENGTH];
+        let written = NumberCodec::encode_var_i64(&mut buf, data.len() as i64);
+        self.write_all(&buf[..written])?;
+        self.write_all(data)?;
+        Ok(())
+    }
+}
+
+pub trait CompactByteDecoder {
+    /// Decodes bytes which are encoded by `write_compact_bytes` before.
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>>;
+
+    /// Gets the first encoded bytes' length in compactly encoded data.
+    ///
+    /// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+    /// This function gets the total bytes length of compact-encoded data, including the length prefix.
+    ///
+    /// Note:
+    ///     - This function won't check whether the bytes are encoded correctly.
+    ///     - There can be multiple compact-encoded data, placed one by one. This function only returns
+    ///       the length of the first one.
+    fn encoded_compact_len(&mut self) -> usize;
+}
+
+impl<T: NumberDecoder> CompactByteDecoder for T {
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
+        let vn = self.read_var_i64()? as usize;
+        let data = self.bytes();
+        if data.len() >= vn {
+            let bs = data[0..vn].to_vec();
+            self.advance(vn);
+            return Ok(bs);
+        }
+        Err(Error::UnexpectedEOF)
+    }
+
+    fn encoded_compact_len(&mut self) -> usize {
+        let last_encoded = self.bytes().as_ptr() as usize;
+        let total_len = self.bytes().len();
+        let vn = match self.read_var_i64() {
+            Ok(vn) => vn as usize,
+            Err(e) => {
+                dbg!(format!("failed to decode bytes' length: {:?}", e));
+                return total_len;
+            }
+        };
+        vn + (self.bytes().as_ptr() as usize - last_encoded)
+    }
+}
+
+impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
+    fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = vec![0; super::number::MAX_VARINT64_LENGTH];
+        for i in 0..super::number::MAX_VARINT64_LENGTH {
+            self.read_exact(&mut buf[i..=i])?;
+            if buf[i] < 0x80 {
+                unsafe {
+                    buf.set_len(i + 1);
+                }
+                break;
+            }
+        }
+        let (vn, _) = NumberCodec::try_decode_var_i64(&buf)?;
+        let mut data = vec![0; vn as usize];
+        self.read_exact(&mut data)?;
+        Ok(data)
+    }
+
+    fn encoded_compact_len(&mut self) -> usize {
+        unimplemented!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand;
 
+    use super::super::number;
     use super::MemComparableByteCodec;
+
+    #[test]
+    fn test_compact_codec() {
+        use super::{CompactByteDecoder, CompactByteEncoder};
+        let tests = vec!["", "hello", "世界"];
+        for &s in &tests {
+            let max_size = s.len() + number::MAX_VARINT64_LENGTH;
+            let mut buf = Vec::with_capacity(max_size);
+            buf.write_compact_bytes(s.as_bytes()).unwrap();
+            assert!(buf.len() <= max_size);
+            let mut input = buf.as_slice();
+            let decoded = input.read_compact_bytes().unwrap();
+            assert!(input.is_empty());
+            assert_eq!(decoded, s.as_bytes());
+        }
+    }
 
     #[test]
     fn test_memcmp_flip_bytes() {
