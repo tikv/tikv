@@ -34,8 +34,8 @@ use crate::raftstore::store::engine::Peekable;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
+use crate::storage::engine::TablePropertiesCollection;
 use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
-use rocksdb::TablePropertiesCollection;
 
 quick_error! {
     #[derive(Debug)]

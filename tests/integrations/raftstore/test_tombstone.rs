@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use protobuf::Message;
-use rocksdb::Writable;
+use tikv::storage::engine::Writable;
 
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 

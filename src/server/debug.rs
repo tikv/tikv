@@ -26,10 +26,6 @@ use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, Range, ReadOptions, SeekKey, Writable,
-    WriteBatch, WriteOptions, DB,
-};
 
 use crate::raftstore::store::engine::{IterOption, Mutable};
 use crate::raftstore::store::util as raftstore_util;
@@ -38,6 +34,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
+use crate::storage::engine::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, Range,
+    ReadOptions, SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
@@ -52,7 +52,7 @@ use crate::util::worker::Worker;
 use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = RocksIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -1399,9 +1399,9 @@ mod tests {
     use std::iter::FromIterator;
     use std::sync::Arc;
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
     use super::*;
