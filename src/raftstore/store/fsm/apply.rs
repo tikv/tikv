@@ -23,6 +23,9 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use protobuf::RepeatedField;
+use uuid::Uuid;
+
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -32,11 +35,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{Writable, WriteBatch};
-use uuid::Uuid;
 
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
@@ -50,6 +49,7 @@ use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::RegionTask;
 use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
 use crate::raftstore::{Error, Result};
+use crate::storage::engine::{Writable, WriteBatch, WriteOptions};
 use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use crate::util::time::{duration_to_sec, Instant, SlowTimer};
@@ -2850,17 +2850,17 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use kvproto::metapb::{self, RegionEpoch};
-    use kvproto::raft_cmdpb::*;
-    use protobuf::Message;
-    use rocksdb::{Writable, WriteBatch, DB};
-    use tempdir::TempDir;
-
-    use crate::import::test_helpers::*;
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
+    use crate::storage::engine::{Writable, WriteBatch, DB};
+    use kvproto::metapb::{self, RegionEpoch};
+    use kvproto::raft_cmdpb::*;
+    use protobuf::Message;
+    use tempdir::TempDir;
+
+    use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
     use crate::util::worker::dummy_scheduler;
 
