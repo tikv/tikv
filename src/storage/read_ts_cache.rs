@@ -201,10 +201,11 @@ struct Inner {
     max_read_ts_map: Vec<RwLock<TsMap>>,
     thread_pool: ThreadPool,
     sender: mpsc::UnboundedSender<UpdateTsTask>,
+    tso: Option<Box<dyn Oracle>>,
 }
 
 impl ReadTsCache {
-    pub fn new<C: Oracle + 'static + Send>(oracle: C) -> Self {
+    pub fn new<C: Oracle + Clone + 'static>(oracle: C) -> Self {
         let maps = (0..GLOBAL_REGION_SLOTS)
             .map(|_| Default::default())
             .collect();
@@ -217,6 +218,7 @@ impl ReadTsCache {
             max_read_ts_map: maps,
             thread_pool: worker,
             sender: tx,
+            tso: Some(Box::new(oracle.clone())),
         });
 
         let inner1 = Arc::clone(&inner);
@@ -250,6 +252,7 @@ impl ReadTsCache {
             max_read_ts_map: maps,
             thread_pool: worker,
             sender: tx,
+            tso: None,
         });
         let (std_tx, std_rx) = std_mpsc::channel();
         inner.thread_pool.spawn(rx.for_each(move |task| {
@@ -294,6 +297,18 @@ impl ReadTsCache {
             }
         }
         0
+    }
+
+    pub fn get_commit_ts(&self, region_id: u64, version: u64) -> u64 {
+        let max_read_ts = self.get_max_read_ts(region_id, version);
+        if max_read_ts != 0 {
+            return max_read_ts;
+        }
+        self.inner
+            .tso
+            .as_ref()
+            .and_then(|tso| tso.get_timestamp().ok())
+            .unwrap_or(0)
     }
 
     fn make_ready(inner: &Inner, region_id: u64, version: u64, tso: u64) {

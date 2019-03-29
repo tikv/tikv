@@ -1223,6 +1223,7 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.one_pc = req.get_commit();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1236,14 +1237,15 @@ fn future_prewrite<E: Engine>(
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = PrewriteResponse::new();
-        if let Ok((_, max_read_ts)) = &v {
+        if let Ok((_, max_read_ts, commit_ts)) = &v {
             resp.set_max_read_ts(*max_read_ts);
+            resp.set_commit_ts(*commit_ts);
         }
         if let Some(err) = extract_region_error(&v) {
             resp.set_region_error(err);
         } else {
             resp.set_errors(RepeatedField::from_vec(extract_key_errors(
-                v.map(|(vec, _)| vec),
+                v.map(|(vec, _, _)| vec),
             )));
         }
         resp

@@ -103,7 +103,7 @@ impl Mutation {
 
 pub enum StorageCb {
     Boolean(Callback<()>),
-    Booleans(Callback<Vec<Result<()>>>),
+    Booleans(Callback<(Vec<Result<()>>, u64)>),
     MvccInfoByKey(Callback<MvccInfo>),
     MvccInfoByStartTs(Callback<Option<(Key, MvccInfo)>>),
     Locks(Callback<Vec<LockInfo>>),
@@ -403,6 +403,7 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub one_pc: bool,
 }
 
 impl Options {
@@ -412,6 +413,7 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            one_pc: false,
         }
     }
 
@@ -622,6 +624,7 @@ impl<E: Engine> Storage<E> {
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
+            read_ts_cache.clone(),
         );
         let mut gc_worker = GCWorker::new(
             engine.clone(),
@@ -913,19 +916,19 @@ impl<E: Engine> Storage<E> {
         primary: Vec<u8>,
         start_ts: u64,
         options: Options,
-        callback: Callback<(Vec<Result<()>>, u64)>,
+        callback: Callback<(Vec<Result<()>>, u64, u64)>,
     ) -> Result<()> {
         let read_ts_cache = self.read_ts_cache.clone();
         let region_id = ctx.get_region_id();
         let version = ctx.get_region_epoch().get_version();
-        let callback = Box::new(move |res: Result<Vec<Result<()>>>| {
+        let callback = Box::new(move |res: Result<(Vec<Result<()>>, u64)>| {
             let mut max_read_ts = 0;
-            if let Ok(key_errs) = &res {
-                if key_errs.is_empty() {
+            if let Ok((key_errs, commit_ts)) = &res {
+                if key_errs.is_empty() && *commit_ts == 0 {
                     max_read_ts = read_ts_cache.get_max_read_ts(region_id, version);
                 }
             }
-            callback(res.map(|key_errs| (key_errs, max_read_ts)))
+            callback(res.map(|(key_errs, commit_ts)| (key_errs, max_read_ts, commit_ts)))
         });
 
         for m in &mutations {

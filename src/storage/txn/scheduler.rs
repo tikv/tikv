@@ -39,7 +39,7 @@ use prometheus::HistogramTimer;
 
 use crate::storage::engine::Result as EngineResult;
 use crate::storage::Key;
-use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::storage::{Command, Engine, Error as StorageError, ReadTsCache, StorageCb};
 use crate::util::collections::HashMap;
 use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
 use crate::util::worker::{self, Runnable};
@@ -170,6 +170,8 @@ pub struct Scheduler<E: Engine> {
 
     // used to control write flow
     running_write_bytes: usize,
+
+    read_ts_cache: ReadTsCache,
 }
 
 impl<E: Engine> Scheduler<E> {
@@ -180,6 +182,7 @@ impl<E: Engine> Scheduler<E> {
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
+        read_ts_cache: ReadTsCache,
     ) -> Self {
         let factory = SchedContextFactory::new(engine.clone());
         Scheduler {
@@ -197,6 +200,7 @@ impl<E: Engine> Scheduler<E> {
             high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
                 .build(),
             running_write_bytes: 0,
+            read_ts_cache,
         }
     }
 
@@ -250,7 +254,7 @@ impl<E: Engine> Scheduler<E> {
         };
         let pool_scheduler = pool.scheduler();
         let scheduler = self.scheduler.clone();
-        Executor::new(scheduler, pool_scheduler)
+        Executor::new(scheduler, pool_scheduler, self.read_ts_cache.clone())
     }
 
     /// Event handler for new command.

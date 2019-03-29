@@ -21,13 +21,14 @@ use super::{PdFuture, PdTask, Result};
 /// A TSO is composed by calculating `(physical << TSO_PHYSICAL_SHIFT) + logical`.
 const TSO_PHYSICAL_SHIFT: u64 = 18;
 
-pub trait Oracle {
+pub trait Oracle: Sync + Send {
     fn get_timestamp(&self) -> Result<u64> {
         self.async_get_timestamp().wait()
     }
     fn async_get_timestamp(&self) -> PdFuture<u64>;
 }
 
+#[derive(Clone)]
 pub struct PdOracle {
     scheduler: FutureScheduler<PdTask>,
 }

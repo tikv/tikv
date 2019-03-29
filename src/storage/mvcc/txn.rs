@@ -22,6 +22,7 @@ use crate::storage::{
 };
 use kvproto::kvrpcpb::IsolationLevel;
 use std::fmt;
+use std::mem;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -36,6 +37,7 @@ pub struct MvccTxn<S: Snapshot> {
     gc_reader: MvccReader<S>,
     start_ts: u64,
     writes: Vec<Modify>,
+    locks: Vec<(Key, Lock)>,
     write_size: usize,
     // collapse continuous rollbacks.
     collapse_rollback: bool,
@@ -74,6 +76,7 @@ impl<S: Snapshot> MvccTxn<S> {
             ),
             start_ts,
             writes: vec![],
+            locks: vec![],
             write_size: 0,
             collapse_rollback: true,
         })
@@ -83,7 +86,12 @@ impl<S: Snapshot> MvccTxn<S> {
         self.collapse_rollback = collapse;
     }
 
-    pub fn into_modifies(self) -> Vec<Modify> {
+    pub fn into_modifies(mut self) -> Vec<Modify> {
+        self.writes.extend(
+            self.locks
+                .into_iter()
+                .map(|(key, lock)| Modify::Put(CF_LOCK, key, lock.to_bytes())),
+        );
         self.writes
     }
 
@@ -105,9 +113,10 @@ impl<S: Snapshot> MvccTxn<S> {
         ttl: u64,
         short_value: Option<Value>,
     ) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
-        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
-        self.writes.push(Modify::Put(CF_LOCK, key, lock));
+        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value);
+        self.locks.push((key, lock));
+        //        self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
+        //        self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
 
     fn unlock_key(&mut self, key: Key) {
@@ -255,6 +264,18 @@ impl<S: Snapshot> MvccTxn<S> {
         self.put_write(key.clone(), commit_ts, write.to_bytes());
         self.unlock_key(key);
         Ok(())
+    }
+
+    pub fn commit_prewrited(&mut self, commit_ts: u64) {
+        let locks = mem::replace(&mut self.locks, vec![]);
+        locks.into_iter().for_each(|(key, lock)| {
+            let write = Write::new(
+                WriteType::from_lock_type(lock.lock_type),
+                self.start_ts,
+                lock.short_value,
+            );
+            self.put_write(key, commit_ts, write.to_bytes());
+        });
     }
 
     /// Rollback the key. A rollback record will be inserted into write cf, so that if the

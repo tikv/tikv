@@ -27,7 +27,7 @@ use crate::storage::{
     Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
     Statistics, StatisticsSummary, StorageCb,
 };
-use crate::storage::{Key, MvccInfo, Value};
+use crate::storage::{Key, MvccInfo, ReadTsCache, Value};
 use crate::util::collections::HashMap;
 use crate::util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
@@ -46,12 +46,25 @@ pub const RESOLVE_LOCK_BATCH_SIZE: usize = 256;
 /// Process result of a command.
 pub enum ProcessResult {
     Res,
-    MultiRes { results: Vec<StorageResult<()>> },
-    MvccKey { mvcc: MvccInfo },
-    MvccStartTs { mvcc: Option<(Key, MvccInfo)> },
-    Locks { locks: Vec<LockInfo> },
-    NextCommand { cmd: Command },
-    Failed { err: StorageError },
+    MultiRes {
+        results: Vec<StorageResult<()>>,
+        commit_ts: u64,
+    },
+    MvccKey {
+        mvcc: MvccInfo,
+    },
+    MvccStartTs {
+        mvcc: Option<(Key, MvccInfo)>,
+    },
+    Locks {
+        locks: Vec<LockInfo>,
+    },
+    NextCommand {
+        cmd: Command,
+    },
+    Failed {
+        err: StorageError,
+    },
 }
 
 /// Delivers the process result of a command to the storage callback.
@@ -63,7 +76,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
             _ => panic!("process result mismatch"),
         },
         StorageCb::Booleans(cb) => match pr {
-            ProcessResult::MultiRes { results } => cb(Ok(results)),
+            ProcessResult::MultiRes { results, commit_ts } => cb(Ok((results, commit_ts))),
             ProcessResult::Failed { err } => cb(Err(err)),
             _ => panic!("process result mismatch"),
         },
@@ -125,16 +138,20 @@ pub struct Executor<E: Engine> {
     pool: Option<threadpool::Scheduler<SchedContext<E>>>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<worker::Scheduler<Msg>>,
+
+    read_ts_cache: ReadTsCache,
 }
 
 impl<E: Engine> Executor<E> {
     pub fn new(
         scheduler: worker::Scheduler<Msg>,
         pool: threadpool::Scheduler<SchedContext<E>>,
+        read_ts_cache: ReadTsCache,
     ) -> Self {
         Executor {
             scheduler: Some(scheduler),
             pool: Some(pool),
+            read_ts_cache,
         }
     }
 
@@ -256,7 +273,8 @@ impl<E: Engine> Executor<E> {
         let cid = task.cid;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let msg = match process_write_impl(task.cmd, snapshot, &mut statistics) {
+        let msg = match process_write_impl(task.cmd, snapshot, &self.read_ts_cache, &mut statistics)
+        {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok((ctx, pr, to_be_write, rows)) => {
@@ -459,6 +477,7 @@ fn process_read_impl<E: Engine>(
 fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
+    read_ts_cache: &ReadTsCache,
     statistics: &mut Statistics,
 ) -> Result<(Context, ProcessResult, Vec<Modify>, usize)> {
     let (pr, modifies, rows, ctx) = match cmd {
@@ -485,12 +504,23 @@ fn process_write_impl<S: Snapshot>(
 
             statistics.add(&txn.take_statistics());
             if locks.is_empty() {
-                let pr = ProcessResult::MultiRes { results: vec![] };
+                let commit_ts = read_ts_cache
+                    .get_commit_ts(ctx.get_region_id(), ctx.get_region_epoch().get_version());
+                if commit_ts != 0 {
+                    txn.commit_prewrited(commit_ts);
+                }
+                let pr = ProcessResult::MultiRes {
+                    results: vec![],
+                    commit_ts,
+                };
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, ctx)
             } else {
                 // Skip write stage if some keys are locked.
-                let pr = ProcessResult::MultiRes { results: locks };
+                let pr = ProcessResult::MultiRes {
+                    results: locks,
+                    commit_ts: 0,
+                };
                 (pr, vec![], 0, ctx)
             }
         }
