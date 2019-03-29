@@ -23,6 +23,7 @@ tempdir = "0.3"
 [dependencies.jemallocator]
 version = "0.1.9"
 optional = true
+default-features = false
 features = ["unprefixed_malloc_on_supported_platforms"]
 
 # FIXME: shouldn't need to link to this crate, but the 'stats'
