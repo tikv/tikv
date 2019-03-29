@@ -28,7 +28,7 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handles.
     fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
+    /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 }

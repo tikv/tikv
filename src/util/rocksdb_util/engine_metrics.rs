@@ -13,10 +13,10 @@
 
 use std::i64;
 
-use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
-use rocksdb::{
+use crate::storage::engine::{
     DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
 };
+use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use time;
 
 use crate::util::rocksdb_util;
