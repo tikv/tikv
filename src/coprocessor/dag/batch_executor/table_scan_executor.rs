@@ -56,19 +56,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             schema.push(super::scan_executor::field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
-            if !ci.get_default_val().is_empty() {
-                columns_default_value.push(ci.take_default_val());
-            } else if !ci.flag().contains(cop_datatype::FieldTypeFlag::NOT_NULL) {
-                // Empty value means that we need to use NULL as the default value.
-                columns_default_value.push(Vec::new());
-            } else {
-                // default_value is not provided && flag contains NOT NULL:
-                // for a normal request this will never happen, so let's return an error.
-                return Err(box_err!(
-                    "Invalid request: default value must be provided for NOT NULL column (offset = {})",
-                    index
-                ));
-            }
+            columns_default_value.push(ci.take_default_val());
 
             // - Store the index of the PK handle.
             // - Check whether or not we don't need KV values (iff PK handle is given).
@@ -130,8 +118,7 @@ struct TableScanExecutorImpl {
     schema: Vec<FieldType>,
 
     /// The default value of corresponding columns in the schema. When column data is missing,
-    /// the default value will be used to fill the output. If corresponding slot is empty, it means
-    /// NULL should be used.
+    /// the default value will be used to fill the output.
     columns_default_value: Vec<Vec<u8>>,
 
     /// The output position in the schema giving the column id.
@@ -283,11 +270,22 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 
-                let default_value = if self.columns_default_value[i].is_empty() {
+                let default_value = if !self.columns_default_value[i].is_empty() {
+                    // default value is provided, use the default value
+                    self.columns_default_value[i].as_slice()
+                } else if !self.schema[i]
+                    .flag()
+                    .contains(cop_datatype::FieldTypeFlag::NOT_NULL)
+                {
+                    // NULL is allowed, use NULL
                     datum::DATUM_DATA_NULL
                 } else {
-                    self.columns_default_value[i].as_slice()
+                    return Err(box_err!(
+                        "Data is corrupted, missing data for NOT NULL column (offset = {})",
+                        i
+                    ));
                 };
+
                 columns[i].push_raw(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
@@ -301,21 +299,20 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::datum::encode_value;
+    use super::*;
+
+    use std::sync::Arc;
+
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use kvproto::coprocessor::KeyRange;
+    use tipb::expression::FieldType;
+    use tipb::schema::ColumnInfo;
+
     use crate::coprocessor::codec::mysql::Tz;
-    use crate::coprocessor::codec::table;
-    use crate::coprocessor::codec::{datum, Datum};
-    use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch_executor::table_scan_executor::BatchTableScanExecutor;
+    use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
-    use cop_datatype::FieldTypeAccessor;
-    use cop_datatype::FieldTypeTp;
-    use kvproto::coprocessor::KeyRange;
-    use std::sync::Arc;
-    use tipb::expression::FieldType;
-    use tipb::schema::ColumnInfo;
 
     #[test]
     fn test_basic() {
@@ -397,7 +394,7 @@ mod tests {
                 let mut ci = ColumnInfo::new();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                 ci.set_column_id(4);
-                ci.set_default_val(encode_value(&[Datum::F64(4.5)]).unwrap());
+                ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
                 ci
             },
         ];
