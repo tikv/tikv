@@ -37,7 +37,7 @@ pub use self::split_check::{
 
 pub use crate::raftstore::store::KeyEntry;
 
-/// Coprocessor is used to provide a convient way to inject code to
+/// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.
 pub trait Coprocessor {
     fn start(&self) {}
