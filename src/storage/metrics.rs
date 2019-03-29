@@ -15,18 +15,7 @@ use prometheus::*;
 use prometheus_static_metric::*;
 
 make_static_metric! {
-    pub label_enum RawReadKind {
-        raw_get,
-        raw_batch_get,
-        raw_scan,
-        raw_batch_scan,
-    }
-
-    pub struct SchedDurationVec: Histogram {
-        "type" => RawReadKind,
-    }
-
-    pub label_enum KvCommandKind {
+    pub label_enum CommandKind {
         prewrite,
         commit,
         cleanup,
@@ -39,6 +28,10 @@ make_static_metric! {
         pause,
         key_mvcc,
         start_ts_mvcc,
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
         raw_put,
         raw_batch_put,
         raw_delete,
@@ -46,8 +39,12 @@ make_static_metric! {
         raw_batch_delete,
     }
 
+    pub struct SchedDurationVec: Histogram {
+        "type" => CommandKind,
+    }
+
     pub struct KvCommandCounterVec: IntCounter {
-        "type" => KvCommandKind,
+        "type" => CommandKind,
     }
 }
 
