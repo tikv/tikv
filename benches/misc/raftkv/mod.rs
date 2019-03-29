@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use crate::test;
-use rocksdb::DB;
 use tempdir::TempDir;
+use tikv::storage::engine::DB;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;

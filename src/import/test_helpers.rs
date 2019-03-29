@@ -21,16 +21,16 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
-use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
+use crate::storage::engine::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
+use crate::util::collections::HashMap;
 
 use super::client::*;
 use super::common::*;
 use super::Result;
-use crate::util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
