@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{CompactOptions, Writable, DB};
+use tikv::storage::engine::{CompactOptions, Writable, DB};
 
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
