@@ -27,7 +27,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::util::escape;
 use crate::util::rocksdb_util::CompactedEvent;
-use raft::{SnapshotStatus, StateRole};
+use raft::SnapshotStatus;
 
 use super::RegionSnapshot;
 
@@ -42,18 +42,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-#[derive(Debug)]
-pub enum SeekRegionResult {
-    Found(metapb::Region),
-    LimitExceeded { next_key: Vec<u8> },
-    Ended,
-}
-
 pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
-
-pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,

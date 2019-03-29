@@ -79,7 +79,7 @@ impl Error {
     }
 
     pub fn overflow(data: &str, expr: &str) -> Error {
-        let msg = format!("{} value is out of range in {:?}", data, expr);
+        let msg = format!("{} value is out of range in '{}'", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 

@@ -1030,6 +1030,13 @@ impl Peer {
             }
         }
 
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent the apply system.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+        }
+
         if !self
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))

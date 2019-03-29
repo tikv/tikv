@@ -140,6 +140,7 @@ impl ScalarFunc {
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
+            | ScalarFuncSig::Instr
             | ScalarFuncSig::LocateBinary2Args => (2, 2),
 
             ScalarFuncSig::CastIntAsInt
@@ -270,6 +271,8 @@ impl ScalarFunc {
             | ScalarFuncSig::RoundInt
             | ScalarFuncSig::BitNegSig
             | ScalarFuncSig::IsIPv4
+            | ScalarFuncSig::IsIPv4Compat
+            | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::IsIPv6
             | ScalarFuncSig::InetAton
             | ScalarFuncSig::InetNtoa
@@ -417,10 +420,7 @@ impl ScalarFunc {
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
-            | ScalarFuncSig::Instr
             | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::IsIPv4Compat
-            | ScalarFuncSig::IsIPv4Mapped
             | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
@@ -832,12 +832,15 @@ dispatch_call! {
         RightShift => right_shift,
         ASCII => ascii,
         IsIPv4 => is_ipv4,
+        IsIPv4Compat => is_ipv4_compat,
+        IsIPv4Mapped => is_ipv4_mapped,
         IsIPv6 => is_ipv6,
         InetAton => inet_aton,
 
         UncompressedLength => uncompressed_length,
         Strcmp => strcmp,
         InstrBinary => instr_binary,
+        Instr => instr,
     }
     REAL_CALLS {
         CastIntAsReal => cast_int_as_real,
@@ -1173,6 +1176,8 @@ mod tests {
                     ScalarFuncSig::Substring2Args,
                     ScalarFuncSig::SubstringBinary2Args,
                     ScalarFuncSig::Strcmp,
+                    ScalarFuncSig::InstrBinary,
+                    ScalarFuncSig::Instr,
                     ScalarFuncSig::AddDatetimeAndDuration,
                     ScalarFuncSig::AddDatetimeAndString,
                     ScalarFuncSig::AddDurationAndDuration,
@@ -1182,7 +1187,6 @@ mod tests {
                     ScalarFuncSig::SubDurationAndDuration,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
-                    ScalarFuncSig::InstrBinary,
                 ],
                 2,
                 2,
@@ -1317,6 +1321,8 @@ mod tests {
                     ScalarFuncSig::Lower,
                     ScalarFuncSig::Upper,
                     ScalarFuncSig::IsIPv4,
+                    ScalarFuncSig::IsIPv4Compat,
+                    ScalarFuncSig::IsIPv4Mapped,
                     ScalarFuncSig::IsIPv6,
                     ScalarFuncSig::MD5,
                     ScalarFuncSig::SHA1,
@@ -1503,10 +1509,7 @@ mod tests {
             ScalarFuncSig::GetVar,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
-            ScalarFuncSig::Instr,
             ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::IsIPv4Compat,
-            ScalarFuncSig::IsIPv4Mapped,
             ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,

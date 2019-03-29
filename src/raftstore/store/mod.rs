@@ -38,16 +38,15 @@ pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
     Callback, CasualMessage, PeerMsg, PeerTicks, RaftCommand, ReadCallback, ReadResponse,
-    SeekRegionCallback, SeekRegionFilter, SeekRegionResult, SignificantMsg, StoreMsg, StoreTick,
-    WriteCallback, WriteResponse,
+    SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
     Peer, PeerStat, ProposalContext, ReadExecutor, RequestInspector, RequestPolicy,
 };
 pub use self::peer_storage::{
-    clear_meta, do_snapshot, init_apply_state, init_raft_state, write_initial_apply_state,
-    write_initial_raft_state, write_peer_state, CacheQueryStats, PeerStorage, SnapState,
-    RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+    clear_meta, do_snapshot, init_apply_state, init_raft_state, maybe_upgrade_from_2_to_3,
+    write_initial_apply_state, write_initial_raft_state, write_peer_state, CacheQueryStats,
+    PeerStorage, SnapState, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 pub use self::region_snapshot::{RegionIterator, RegionSnapshot};
 pub use self::snap::{
@@ -56,7 +55,7 @@ pub use self::snap::{
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
 pub use self::util::Engines;
-pub use self::worker::{KeyEntry, ReadTask};
+pub use self::worker::{KeyEntry, ReadTask, RegionTask};
 
 // Only used in tests
 #[cfg(test)]
