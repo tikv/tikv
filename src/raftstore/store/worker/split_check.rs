@@ -211,7 +211,7 @@ impl<S: CasualRouter> Runner<S> {
                     .collect(),
                 Err(e) => {
                     error!(
-                        "failed to get approxiamte split key, try scan way";
+                        "failed to get approximate split key, try scan way";
                         "region_id" => region_id,
                         "err" => %e,
                     );
