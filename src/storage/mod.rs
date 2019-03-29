@@ -32,11 +32,10 @@ use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use rocksdb::DB;
-
 use crate::raftstore::store::engine::IterOption;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
+use crate::storage::engine::DB;
 use crate::util;
 use crate::util::collections::HashMap;
 use crate::util::worker::{self, Builder, ScheduleError, Worker};

@@ -19,11 +19,11 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::storage::engine::DB;
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use raft::StateRole;
-use rocksdb::rocksdb::DB;
 
 use super::engine::{
     Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,

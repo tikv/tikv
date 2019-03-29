@@ -20,13 +20,13 @@ use std::sync::Arc;
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
-use rocksdb::{DBIterator, DB};
 
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
+use crate::storage::engine::{DBIterator, DB};
 use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
 use crate::util::worker::Runnable;
 
