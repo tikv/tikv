@@ -61,6 +61,7 @@ use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::{keys, Engines};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
+use tikv::storage::engine::run_ldb_tool;
 use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::util::rocksdb_util;
 use tikv::util::security::{self, SecurityConfig, SecurityManager};
@@ -2215,7 +2216,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
             security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    rocksdb::run_ldb_tool(&args, &opts);
+    run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

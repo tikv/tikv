@@ -12,13 +12,13 @@
 // limitations under the License.
 
 use kvproto::metapb::Region;
-use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
 use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use crate::storage::engine::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -328,8 +328,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
+    use crate::storage::engine::Writable;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::Writable;
     use tempdir::TempDir;
 
     use crate::raftstore::store::engine::*;
