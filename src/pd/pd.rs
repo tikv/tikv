@@ -24,7 +24,6 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitReque
 use kvproto::raft_serverpb::RaftMessage;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
-use rocksdb::DB;
 
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
@@ -36,6 +35,7 @@ use crate::raftstore::store::util::{
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
+use crate::storage::engine::DB;
 use crate::storage::FlowStatistics;
 use crate::util::collections::HashMap;
 use crate::util::escape;
@@ -134,7 +134,7 @@ pub struct PeerStat {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
                 ref region,

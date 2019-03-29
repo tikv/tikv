@@ -14,9 +14,9 @@
 use super::super::error::Result;
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
+use crate::storage::engine::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use rocksdb::DB;
 use std::mem;
 use std::sync::Mutex;
 
@@ -52,7 +52,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         let size = entry.entry_size() as u64;
         self.current_size += size;
 
@@ -130,7 +130,7 @@ impl<C> Coprocessor for SizeCheckObserver<C> {}
 impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         mut policy: CheckPolicy,
@@ -202,11 +202,10 @@ pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
     use super::Checker;

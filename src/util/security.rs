@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate hex;
-
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
@@ -22,7 +20,7 @@ use std::sync::Arc;
 
 use super::file;
 
-use rocksdb::Env;
+use crate::storage::engine::Env;
 
 use crate::grpc::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
@@ -181,7 +179,7 @@ pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(
             }
         }
     };
-    let cipher_text = match hex::decode(cipher_hex) {
+    let cipher_text = match ::hex::decode(cipher_hex) {
         Err(e) => return Err(format!("cipher file should be hex type, error: {:?}", e)),
         Ok(text) => text,
     };

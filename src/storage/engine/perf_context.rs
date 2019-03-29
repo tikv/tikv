@@ -13,7 +13,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use rocksdb::PerfContext;
+use crate::storage::engine::PerfContext;
 
 #[derive(Default, Debug, Clone, Copy, Add, AddAssign, Sub, SubAssign, KV)]
 pub struct PerfStatisticsFields {
@@ -32,7 +32,7 @@ pub struct PerfStatisticsInstant(pub PerfStatisticsFields);
 impl slog::KV for PerfStatisticsInstant {
     fn serialize(
         &self,
-        record: &::slog::Record,
+        record: &::slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::KV::serialize(&self.0, record, serializer)
@@ -81,7 +81,7 @@ pub struct PerfStatisticsDelta(pub PerfStatisticsFields);
 impl slog::KV for PerfStatisticsDelta {
     fn serialize(
         &self,
-        record: &::slog::Record,
+        record: &::slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         slog::KV::serialize(&self.0, record, serializer)

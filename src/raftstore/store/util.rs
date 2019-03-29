@@ -24,9 +24,9 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
+use crate::storage::engine::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use crate::util::rocksdb_util::{
     self, properties::RangeProperties, stats::get_range_entries_and_versions,
@@ -800,7 +800,7 @@ impl Lease {
 }
 
 impl fmt::Debug for Lease {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut fmter = fmt.debug_struct("Lease");
         match self.bound {
             Some(Either::Left(ts)) => fmter.field("suspect", &ts).finish(),
@@ -843,7 +843,7 @@ impl RemoteLease {
 }
 
 impl fmt::Debug for RemoteLease {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RemoteLease")
             .field(
                 "expired_time",
@@ -961,7 +961,7 @@ impl Engines {
 pub struct KeysInfoFormatter<'a>(pub &'a [Vec<u8>]);
 
 impl<'a> fmt::Display for KeysInfoFormatter<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0.len() {
             0 => write!(f, "no key"),
             1 => write!(f, "key \"{}\"", escape(self.0.first().unwrap())),
@@ -980,10 +980,12 @@ impl<'a> fmt::Display for KeysInfoFormatter<'a> {
 mod tests {
     use std::{iter, process, thread};
 
+    use crate::storage::engine::{
+        ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB,
+    };
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 

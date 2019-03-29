@@ -14,16 +14,29 @@
 use super::engine::{Iterable, Mutable};
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use super::util::Engines;
+use super::util::{new_peer, Engines};
 use crate::raftstore::Result;
+use crate::storage::engine::{Writable, WriteBatch, DB};
 use crate::storage::{CF_DEFAULT, CF_RAFT};
 use crate::util::rocksdb_util;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use rocksdb::{Writable, WriteBatch, DB};
 
-const INIT_EPOCH_VER: u64 = 1;
-const INIT_EPOCH_CONF_VER: u64 = 1;
+/// The initial region epoch version.
+pub const INIT_EPOCH_VER: u64 = 1;
+/// The initial region epoch conf_version.
+pub const INIT_EPOCH_CONF_VER: u64 = 1;
+
+pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
+    let mut region = metapb::Region::new();
+    region.set_id(region_id);
+    region.set_start_key(keys::EMPTY_KEY.to_vec());
+    region.set_end_key(keys::EMPTY_KEY.to_vec());
+    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
+    region.mut_peers().push(new_peer(store_id, peer_id));
+    region
+}
 
 // check no any data in range [start_key, end_key)
 fn is_range_empty(engine: &DB, cf: &str, start_key: &[u8], end_key: &[u8]) -> Result<bool> {
@@ -58,8 +71,10 @@ pub fn bootstrap_store(engines: &Engines, cluster_id: u64, store_id: u64) -> Res
     Ok(())
 }
 
-// Write first region meta and prepare state.
-pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Result<()> {
+/// The first phase of bootstrap cluster
+///
+/// Write the first region meta and prepare state.
+pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> Result<()> {
     let mut state = RegionLocalState::new();
     state.set_region(region.clone());
 
@@ -78,8 +93,8 @@ pub fn write_prepare_bootstrap(engines: &Engines, region: &metapb::Region) -> Re
     Ok(())
 }
 
-// Clear first region meta and prepare state.
-pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> {
+// Clear first region meta and prepare key.
+pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Result<()> {
     engines.raft.delete(&keys::raft_state_key(region_id))?;
     engines.raft.sync_wal()?;
 
@@ -94,35 +109,11 @@ pub fn clear_prepare_bootstrap(engines: &Engines, region_id: u64) -> Result<()> 
     Ok(())
 }
 
-// Clear prepare state
-pub fn clear_prepare_bootstrap_state(engines: &Engines) -> Result<()> {
+// Clear prepare key
+pub fn clear_prepare_bootstrap_key(engines: &Engines) -> Result<()> {
     engines.kv.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
     engines.kv.sync_wal()?;
     Ok(())
-}
-
-// Prepare bootstrap.
-pub fn prepare_bootstrap(
-    engines: &Engines,
-    store_id: u64,
-    region_id: u64,
-    peer_id: u64,
-) -> Result<metapb::Region> {
-    let mut region = metapb::Region::new();
-    region.set_id(region_id);
-    region.set_start_key(keys::EMPTY_KEY.to_vec());
-    region.set_end_key(keys::EMPTY_KEY.to_vec());
-    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
-    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
-
-    let mut peer = metapb::Peer::new();
-    peer.set_store_id(store_id);
-    peer.set_id(peer_id);
-    region.mut_peers().push(peer);
-
-    write_prepare_bootstrap(engines, &region)?;
-
-    Ok(region)
 }
 
 #[cfg(test)]
@@ -154,11 +145,12 @@ mod tests {
                 .unwrap(),
         );
         let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
+        let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());
 
-        assert!(prepare_bootstrap(&engines, 1, 1, 1).is_ok());
+        assert!(prepare_bootstrap_cluster(&engines, &region).is_ok());
         assert!(kv_engine
             .get_value(keys::PREPARE_BOOTSTRAP_KEY)
             .unwrap()
@@ -176,8 +168,8 @@ mod tests {
             .unwrap()
             .is_some());
 
-        assert!(clear_prepare_bootstrap_state(&engines).is_ok());
-        assert!(clear_prepare_bootstrap(&engines, 1).is_ok());
+        assert!(clear_prepare_bootstrap_key(&engines).is_ok());
+        assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
         assert!(is_range_empty(
             &kv_engine,
             CF_RAFT,

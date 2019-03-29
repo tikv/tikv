@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::storage::engine::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 use raft::StateRole;
-use rocksdb::DB;
 
 pub mod config;
 pub mod dispatcher;
@@ -29,7 +29,7 @@ pub mod split_observer;
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
-pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor};
+pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::split_check::{
     HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
     TableCheckObserver,
@@ -52,7 +52,7 @@ pub struct ObserverContext<'a> {
 }
 
 impl<'a> ObserverContext<'a> {
-    pub fn new(region: &Region) -> ObserverContext {
+    pub fn new(region: &Region) -> ObserverContext<'_> {
         ObserverContext {
             region,
             bypass: false,
@@ -66,15 +66,15 @@ impl<'a> ObserverContext<'a> {
 
 pub trait AdminObserver: Coprocessor {
     /// Hook to call before proposing admin request.
-    fn pre_propose_admin(&self, _: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
+    fn pre_propose_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminRequest) -> Result<()> {
         Ok(())
     }
 
     /// Hook to call before applying admin request.
-    fn pre_apply_admin(&self, _: &mut ObserverContext, _: &AdminRequest) {}
+    fn pre_apply_admin(&self, _: &mut ObserverContext<'_>, _: &AdminRequest) {}
 
     /// Hook to call after applying admin request.
-    fn post_apply_admin(&self, _: &mut ObserverContext, _: &mut AdminResponse) {}
+    fn post_apply_admin(&self, _: &mut ObserverContext<'_>, _: &mut AdminResponse) {}
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -83,17 +83,17 @@ pub trait QueryObserver: Coprocessor {
     /// We don't propose read request, hence there is no hook for it yet.
     fn pre_propose_query(
         &self,
-        _: &mut ObserverContext,
+        _: &mut ObserverContext<'_>,
         _: &mut RepeatedField<Request>,
     ) -> Result<()> {
         Ok(())
     }
 
     /// Hook to call before applying write request.
-    fn pre_apply_query(&self, _: &mut ObserverContext, _: &[Request]) {}
+    fn pre_apply_query(&self, _: &mut ObserverContext<'_>, _: &[Request]) {}
 
     /// Hook to call after applying write request.
-    fn post_apply_query(&self, _: &mut ObserverContext, _: &mut RepeatedField<Response>) {}
+    fn post_apply_query(&self, _: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {}
 }
 
 /// SplitChecker is invoked during a split check scan, and decides to use
@@ -102,7 +102,7 @@ pub trait SplitChecker {
     /// Hook to call for every kv scanned during split.
     ///
     /// Return true to abort scan early.
-    fn on_kv(&mut self, _: &mut ObserverContext, _: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, _: &KeyEntry) -> bool {
         false
     }
 
@@ -122,7 +122,7 @@ pub trait SplitCheckObserver: Coprocessor {
     /// Add a checker for a split scan.
     fn add_checker(
         &self,
-        _: &mut ObserverContext,
+        _: &mut ObserverContext<'_>,
         _: &mut SplitCheckerHost,
         _: &DB,
         policy: CheckPolicy,
@@ -135,7 +135,7 @@ pub trait RoleObserver: Coprocessor {
     /// Please note that, this hook is not called at realtime. There maybe a
     /// situation that the hook is not called yet, however the role of some peers
     /// have changed.
-    fn on_role_change(&self, _: &mut ObserverContext, _: StateRole) {}
+    fn on_role_change(&self, _: &mut ObserverContext<'_>, _: StateRole) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,5 +147,5 @@ pub enum RegionChangeEvent {
 
 pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
-    fn on_region_changed(&self, _: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {}
+    fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
 }

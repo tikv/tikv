@@ -15,21 +15,24 @@ use std::cmp;
 use std::fmt;
 use std::i32;
 use std::io::Read;
+use std::mem::uninitialized;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::Arc;
 
+use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
-use rocksdb::{
-    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
-};
 
 use crate::config::DbConfig;
 use crate::raftstore::store::keys;
+use crate::storage::engine::{
+    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    WriteBatch as RawBatch, DB,
+};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
@@ -42,6 +45,7 @@ use crate::util::rocksdb_util::{
 
 use super::common::*;
 use super::Result;
+use crate::import::stream::SSTFile;
 use crate::util::security;
 use crate::util::security::SecurityConfig;
 
@@ -105,7 +109,7 @@ impl Engine {
     }
 
     pub fn new_sst_writer(&self) -> Result<SSTWriter> {
-        SSTWriter::new(&self.db_cfg, &self.security_cfg)
+        SSTWriter::new(&self.db_cfg, &self.security_cfg, self.db.path())
     }
 
     pub fn get_size_properties(&self) -> Result<SizeProperties> {
@@ -129,7 +133,7 @@ impl Deref for Engine {
 }
 
 impl fmt::Debug for Engine {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Engine")
             .field("uuid", &self.uuid())
             .field("path", &self.path().to_owned())
@@ -137,29 +141,85 @@ impl fmt::Debug for Engine {
     }
 }
 
-pub struct SSTInfo {
-    pub data: Vec<u8>,
-    pub range: Range,
-    pub cf_name: String,
+pub struct LazySSTInfo {
+    env: Arc<Env>,
+    file_path: PathBuf,
+    pub(crate) file_size: u64,
+    pub(crate) range: Range,
+    pub(crate) cf_name: &'static str,
 }
 
-impl SSTInfo {
-    pub fn new(env: Arc<Env>, info: ExternalSstFileInfo, cf_name: &str) -> Result<SSTInfo> {
-        let mut data = Vec::new();
-        let path = info.file_path();
-        let mut f = env.new_sequential_file(path.to_str().unwrap(), EnvOptions::new())?;
-        f.read_to_end(&mut data)?;
+impl fmt::Debug for LazySSTInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LazySSTInfo")
+            .field("file_path", &self.file_path)
+            .field("file_size", &self.file_size)
+            .field("range", &self.range)
+            .field("cf_name", &self.cf_name)
+            .finish()
+    }
+}
 
+impl LazySSTInfo {
+    fn new(env: Arc<Env>, info: ExternalSstFileInfo, cf_name: &'static str) -> Self {
         // This range doesn't contain the data prefix, like the region range.
         let mut range = Range::new();
         range.set_start(keys::origin_key(info.smallest_key()).to_owned());
         range.set_end(keys::origin_key(info.largest_key()).to_owned());
 
-        Ok(SSTInfo {
-            data,
+        Self {
+            env,
+            file_path: info.file_path(),
+            file_size: info.file_size(),
             range,
-            cf_name: cf_name.to_owned(),
-        })
+            cf_name,
+        }
+    }
+
+    pub fn open(&self) -> Result<SequentialFile> {
+        Ok(self
+            .env
+            .new_sequential_file(self.file_path.to_str().unwrap(), EnvOptions::new())?)
+    }
+
+    pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
+        let mut seq_file = self.open()?;
+        let mut buf: [u8; 65536] = unsafe { uninitialized() };
+
+        // TODO: If we can compute the CRC simultaneously with upload, we don't
+        // need to open() and read() the file twice.
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        let mut length = 0u64;
+        loop {
+            let size = seq_file.read(&mut buf)?;
+            if size == 0 {
+                break;
+            }
+            digest.write(&buf[..size]);
+            length += size as u64;
+        }
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(self.range.clone());
+        meta.set_crc32(digest.sum32());
+        meta.set_length(length);
+        meta.set_cf_name(self.cf_name.to_owned());
+
+        Ok(SSTFile { meta, info: self })
+    }
+}
+
+impl Drop for LazySSTInfo {
+    fn drop(&mut self) {
+        match self.env.delete_file(self.file_path.to_str().unwrap()) {
+            Ok(()) => {
+                info!("cleanup SST"; "file_path" => ?self.file_path);
+            }
+            Err(err) => {
+                warn!("cleanup SST failed"; "file_path" => ?self.file_path, "err" => %err);
+            }
+        }
     }
 }
 
@@ -174,29 +234,28 @@ pub struct SSTWriter {
 }
 
 impl SSTWriter {
-    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig) -> Result<SSTWriter> {
-        // Using a memory environment to generate SST in memory
-        let mut env = Arc::new(Env::new_mem());
+    pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
+        let mut env = Arc::new(Env::default());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));
             env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
+        let uuid = Uuid::new_v4().to_string();
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
-
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
-        default.open(CF_DEFAULT)?;
+        default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
-        write.open(CF_WRITE)?;
+        write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
         Ok(SSTWriter {
             env,
@@ -225,23 +284,23 @@ impl SSTWriter {
         Ok(())
     }
 
-    pub fn finish(&mut self) -> Result<Vec<SSTInfo>> {
-        let mut infos = Vec::new();
+    pub fn finish(&mut self) -> Result<Vec<LazySSTInfo>> {
+        let mut infos = Vec::with_capacity(2);
         if self.default_entries > 0 {
             let info = self.default.finish()?;
-            infos.push(SSTInfo::new(
+            infos.push(LazySSTInfo::new(
                 Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
                 info,
                 CF_DEFAULT,
-            )?);
+            ));
         }
         if self.write_entries > 0 {
             let info = self.write.finish()?;
-            infos.push(SSTInfo::new(
+            infos.push(LazySSTInfo::new(
                 Arc::clone(self.base_env.as_ref().unwrap_or_else(|| &self.env)),
                 info,
                 CF_WRITE,
-            )?);
+            ));
         }
         Ok(infos)
     }
@@ -281,7 +340,7 @@ pub fn get_approximate_ranges(
     ranges
 }
 
-fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
+fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     const DISABLED: i32 = i32::MAX;
 
     let mut db_opts = DBOptions::new();
@@ -292,9 +351,10 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
     // RocksDB preserves `max_background_jobs/4` for flush.
     db_opts.set_max_background_jobs(opts.max_background_jobs);
 
+    // Put index and filter in block cache to restrict memory usage.
     let mut block_base_opts = BlockBasedOptions::new();
-    // Use a large block size for sequential access.
-    block_base_opts.set_block_size(MB as usize);
+    block_base_opts.set_lru_cache(128 * MB as usize, -1, 0, 0.0);
+    block_base_opts.set_cache_index_and_filter_blocks(true);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
     cf_opts.compression_per_level(&opts.defaultcf.compression_per_level);
@@ -319,11 +379,11 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions) {
 mod tests {
     use super::*;
 
+    use crate::storage::engine::IngestExternalFileOptions;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::IngestExternalFileOptions;
     use std::fs::File;
-    use std::io::Write;
+    use std::io::{self, Write};
     use tempdir::TempDir;
 
     use crate::raftstore::store::RegionSnapshot;
@@ -410,7 +470,7 @@ mod tests {
 
         let n = 10;
         let commit_ts = 10;
-        let mut w = SSTWriter::new(&cfg, &security_cfg).unwrap();
+        let mut w = SSTWriter::new(&cfg, &security_cfg, temp_dir.path().to_str().unwrap()).unwrap();
 
         // Write some keys.
         let value = vec![1u8; value_size];
@@ -432,7 +492,11 @@ mod tests {
 
             // Write the data to a file and ingest it to the engine.
             let path = Path::new(db.path()).join("test.sst");
-            File::create(&path).unwrap().write_all(&info.data).unwrap();
+            {
+                let mut src = info.open().unwrap();
+                let mut dest = File::create(&path).unwrap();
+                io::copy(&mut src, &mut dest).unwrap();
+            }
             let mut opts = IngestExternalFileOptions::new();
             opts.move_files(true);
             let handle = db.cf_handle(cf_name).unwrap();

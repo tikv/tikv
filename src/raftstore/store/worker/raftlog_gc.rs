@@ -14,9 +14,9 @@
 use crate::raftstore::store::engine::Iterable;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
+use crate::storage::engine::{Writable, WriteBatch, DB};
 use crate::util::worker::Runnable;
 
-use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
@@ -34,7 +34,7 @@ pub struct TaskRes {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",

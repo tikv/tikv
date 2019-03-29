@@ -18,9 +18,7 @@ use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
-use protobuf;
 use raft::{Ready, StateRole};
-use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -35,6 +33,7 @@ use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::Result;
+use crate::storage::engine::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -656,7 +655,7 @@ pub struct RaftPollerBuilder<T, C> {
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
     local_reader: Scheduler<ReadTask>,
-    region_scheduler: Scheduler<RegionTask>,
+    pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter,
     pub router: RaftRouter,
     compact_scheduler: Scheduler<CompactTask>,
@@ -935,7 +934,7 @@ impl RaftBatchSystem {
         // TODO load coprocessors from configuration
         coprocessor_host
             .registry
-            .register_admin_observer(100, box SplitObserver);
+            .register_admin_observer(100, Box::new(SplitObserver));
 
         let workers = Workers {
             split_check_worker: Worker::new("split-check"),
@@ -989,8 +988,49 @@ impl RaftBatchSystem {
     ) -> Result<()> {
         builder.snap_mgr.init()?;
 
+        let engines = builder.engines.clone();
+        let snap_mgr = builder.snap_mgr.clone();
+        let cfg = builder.cfg.clone();
+        let store = builder.store.clone();
+        let pd_client = builder.pd_client.clone();
+        let importer = builder.importer.clone();
+
+        let apply_poller_builder = ApplyPollerBuilder::new(
+            &builder,
+            ApplyNotifier::Router(self.router.clone()),
+            self.apply_router.clone(),
+        );
+        self.apply_system
+            .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
+
+        let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
+
+        let tag = format!("raftstore-{}", store.get_id());
+        self.system.spawn(tag, builder);
+        let mut mailboxes = Vec::with_capacity(region_peers.len());
+        let mut address = Vec::with_capacity(region_peers.len());
+        for (tx, fsm) in region_peers {
+            address.push(fsm.region_id());
+            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
+        }
+        self.router.register_all(mailboxes);
+        // Make sure Msg::Start is the first message each FSM received.
+        self.router
+            .send_control(StoreMsg::Start {
+                store: store.clone(),
+            })
+            .unwrap();
+        for addr in address {
+            self.router.force_send(addr, PeerMsg::Start).unwrap();
+        }
+
+        self.apply_system
+            .spawn("apply".to_owned(), apply_poller_builder);
+        let timer = LocalReader::new_timer();
+        box_try!(workers.local_reader.start_with_timer(reader, timer));
+
         let split_check_runner = SplitCheckRunner::new(
-            Arc::clone(&builder.engines.kv),
+            Arc::clone(&engines.kv),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
         );
@@ -998,11 +1038,11 @@ impl RaftBatchSystem {
         box_try!(workers.split_check_worker.start(split_check_runner));
 
         let region_runner = RegionRunner::new(
-            builder.engines.clone(),
-            builder.snap_mgr.clone(),
-            builder.cfg.snap_apply_batch_size.0 as usize,
-            builder.cfg.use_delete_range,
-            builder.cfg.clean_stale_peer_delay.0,
+            engines.clone(),
+            snap_mgr,
+            cfg.snap_apply_batch_size.0 as usize,
+            cfg.use_delete_range,
+            cfg.clean_stale_peer_delay.0,
         );
         let timer = RegionRunner::new_timer();
         box_try!(workers.region_worker.start_with_timer(region_runner, timer));
@@ -1010,14 +1050,14 @@ impl RaftBatchSystem {
         let raftlog_gc_runner = RaftlogGcRunner::new(None);
         box_try!(workers.raftlog_gc_worker.start(raftlog_gc_runner));
 
-        let compact_runner = CompactRunner::new(Arc::clone(&builder.engines.kv));
+        let compact_runner = CompactRunner::new(Arc::clone(&engines.kv));
         box_try!(workers.compact_worker.start(compact_runner));
 
         let pd_runner = PdRunner::new(
-            builder.store.get_id(),
-            Arc::clone(&builder.pd_client),
+            store.get_id(),
+            Arc::clone(&pd_client),
             self.router.clone(),
-            Arc::clone(&builder.engines.kv),
+            Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
@@ -1028,43 +1068,15 @@ impl RaftBatchSystem {
             .start(consistency_check_runner));
 
         let cleanup_sst_runner = CleanupSSTRunner::new(
-            builder.store.get_id(),
+            store.get_id(),
             self.router.clone(),
-            Arc::clone(&builder.importer),
-            Arc::clone(&builder.pd_client),
+            Arc::clone(&importer),
+            Arc::clone(&pd_client),
         );
         box_try!(workers.cleanup_sst_worker.start(cleanup_sst_runner));
 
-        let apply_poller_builder = ApplyPollerBuilder::new(
-            &builder,
-            ApplyNotifier::Router(self.router.clone()),
-            self.apply_router.clone(),
-        );
-        self.apply_system
-            .spawn("apply".to_owned(), apply_poller_builder);
-        self.apply_system
-            .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
-
-        let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
-        let timer = LocalReader::new_timer();
-        box_try!(workers.local_reader.start_with_timer(reader, timer));
-
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
-        }
-        let tag = format!("raftstore-{}", builder.store.get_id());
-        let store = builder.store.clone();
-        self.system.spawn(tag, builder);
-        let mut mailboxes = Vec::with_capacity(region_peers.len());
-        let mut address = Vec::with_capacity(region_peers.len());
-        for (tx, fsm) in region_peers {
-            address.push(fsm.region_id());
-            mailboxes.push((fsm.region_id(), BasicMailbox::new(tx, fsm)));
-        }
-        self.router.register_all(mailboxes);
-        self.router.send_control(StoreMsg::Start { store }).unwrap();
-        for addr in address {
-            self.router.force_send(addr, PeerMsg::Start).unwrap();
         }
         self.workers = Some(workers);
         Ok(())
@@ -1898,14 +1910,14 @@ fn size_change_filter(info: &CompactionJobInfo) -> bool {
 
 pub fn new_compaction_listener(ch: RaftRouter) -> CompactionListener {
     let ch = Mutex::new(ch);
-    let compacted_handler = box move |compacted_event: CompactedEvent| {
+    let compacted_handler = Box::new(move |compacted_event: CompactedEvent| {
         let ch = ch.lock().unwrap();
         if let Err(e) = ch.send_control(StoreMsg::CompactedEvent(compacted_event)) {
             error!(
                 "send compaction finished event to raftstore failed"; "err" => ?e,
             );
         }
-    };
+    });
     CompactionListener::new(compacted_handler, Some(size_change_filter))
 }
 

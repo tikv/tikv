@@ -406,6 +406,8 @@ mod tests {
     /// Test whether it is safe to store values in `Vec` after `len()`, i.e. during
     /// reallocation these values are copied.
     #[test]
+    // FIXME(#4331) Don't ignore this test.
+    #[ignore]
     fn test_vec_reallocate() {
         // FIXME: This test, and presumably the WriteBuffer API, relies on
         // unspecified behavior of Vec::reserve (that it copies bytes

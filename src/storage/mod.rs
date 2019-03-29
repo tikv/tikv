@@ -32,11 +32,10 @@ use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use rocksdb::DB;
-
 use crate::raftstore::store::engine::IterOption;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
+use crate::storage::engine::DB;
 use crate::util;
 use crate::util::collections::HashMap;
 use crate::util::worker::{self, Builder, ScheduleError, Worker};
@@ -165,7 +164,7 @@ pub enum Command {
 }
 
 impl Display for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Command::Prewrite {
                 ref ctx,
@@ -255,7 +254,7 @@ impl Display for Command {
 }
 
 impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
@@ -960,10 +959,11 @@ impl<E: Engine> Storage<E> {
             modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
         }
 
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            modifies,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["delete_range"])
             .inc();
@@ -1108,9 +1108,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_get.start_coarse_timer();
 
         let readpool = self.read_pool.clone();
 
@@ -1125,7 +1123,8 @@ impl<E: Engine> Storage<E> {
                 // no scan_count for this kind of op.
 
                 let key_len = key.len();
-                let result = snapshot.get_cf(cf, &Key::from_encoded(key))
+                let result = snapshot
+                    .get_cf(cf, &Key::from_encoded(key))
                     // map storage::engine::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {
@@ -1158,8 +1157,9 @@ impl<E: Engine> Storage<E> {
         const CMD: &str = "raw_batch_get";
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
+
+        let timer = SCHED_HISTOGRAM_VEC_STATIC
+            .raw_batch_get
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
@@ -1224,7 +1224,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
         Ok(())
@@ -1249,10 +1249,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_put"])
             .inc();
@@ -1274,7 +1275,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete"])
@@ -1306,7 +1307,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_delete_range"])
@@ -1333,10 +1334,11 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
         KV_COMMAND_COUNTER_VEC
             .with_label_values(&["raw_batch_delete"])
             .inc();
@@ -1443,9 +1445,7 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
-            .start_coarse_timer();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_scan.start_coarse_timer();
 
         let readpool = self.read_pool.clone();
 
@@ -1544,8 +1544,8 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let timer = SCHED_HISTOGRAM_VEC
-            .with_label_values(&[CMD])
+        let timer = SCHED_HISTOGRAM_VEC_STATIC
+            .raw_batch_scan
             .start_coarse_timer();
 
         let readpool = self.read_pool.clone();
@@ -1727,7 +1727,7 @@ impl ErrorHeaderKind {
 }
 
 impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_str())
     }
 }

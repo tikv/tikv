@@ -30,8 +30,6 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{WriteBatch, DB};
 use time::Timespec;
 
 use crate::pd::{PdTask, INVALID_ID};
@@ -45,6 +43,7 @@ use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
+use crate::storage::engine::{WriteBatch, WriteOptions, DB};
 use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
@@ -1005,6 +1004,13 @@ impl Peer {
                     return;
                 }
             }
+        }
+
+        // Check whether there is a pending generate snapshot task, the task
+        // needs to be sent the apply system.
+        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }
 
         if !self

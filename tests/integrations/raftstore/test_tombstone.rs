@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use protobuf::Message;
-use rocksdb::Writable;
+use tikv::storage::engine::Writable;
 
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 
@@ -156,7 +156,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k2", b"v2");
 
     // start node again.
-    cluster.run_node(3);
+    cluster.run_node(3).unwrap();
 
     // add new peer in node 3
     pd_client.must_add_peer(1, new_peer(3, 4));
@@ -278,7 +278,7 @@ fn test_server_stale_meta() {
 
     // avoid TIMEWAIT
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
 
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&engine_3, b"k1", b"v1");

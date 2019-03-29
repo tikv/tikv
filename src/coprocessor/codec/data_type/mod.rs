@@ -29,33 +29,35 @@ pub use self::scalar::ScalarValue;
 pub use self::vector::VectorValue;
 pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
+use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::Result;
+
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
 pub trait AsMySQLBool {
     /// Evaluates into a MySQL logic value.
-    fn as_mysql_bool(&self) -> bool;
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool>;
 }
 
 impl AsMySQLBool for Int {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
-        *self != 0
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(*self != 0)
     }
 }
 
 impl AsMySQLBool for Real {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
-        self.round() != 0f64
+    fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
+        Ok(self.round() != 0f64)
     }
 }
 
 impl AsMySQLBool for Bytes {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
-        // FIXME: No unwrap?? No without_context??
-        !self.is_empty()
-            && crate::coprocessor::codec::convert::bytes_to_int_without_context(self).unwrap() != 0
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
+        Ok(!self.is_empty()
+            && crate::coprocessor::codec::convert::bytes_to_int(context, self)? != 0)
     }
 }
 
@@ -63,10 +65,10 @@ impl<T> AsMySQLBool for Option<T>
 where
     T: AsMySQLBool,
 {
-    fn as_mysql_bool(&self) -> bool {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
-            None => false,
-            Some(ref v) => v.as_mysql_bool(),
+            None => Ok(false),
+            Some(ref v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -82,8 +84,9 @@ pub trait Evaluable: Clone {
     /// Borrows a specialized reference from a `VectorLikeValueRef`. The specialized reference is
     /// also vector-like but contains the concrete type information, which doesn't need type
     /// checks (but needs vector/scalar checks) when accessing.
-    fn borrow_vector_like_specialized(v: VectorLikeValueRef)
-        -> VectorLikeValueRefSpecialized<Self>;
+    fn borrow_vector_like_specialized(
+        v: VectorLikeValueRef<'_>,
+    ) -> VectorLikeValueRefSpecialized<'_, Self>;
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
     fn into_vector_value(vec: Vec<Self>) -> VectorValue;
@@ -104,8 +107,8 @@ macro_rules! impl_evaluable_type {
 
             #[inline]
             fn borrow_vector_like_specialized(
-                v: VectorLikeValueRef,
-            ) -> VectorLikeValueRefSpecialized<Self> {
+                v: VectorLikeValueRef<'_>,
+            ) -> VectorLikeValueRefSpecialized<'_, Self> {
                 v.into()
             }
 

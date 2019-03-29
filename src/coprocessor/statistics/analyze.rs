@@ -23,7 +23,7 @@ use crate::storage::{Snapshot, SnapshotStore};
 
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::dag::executor::{
-    Executor, ExecutorMetrics, IndexScanExecutor, TableScanExecutor,
+    Executor, ExecutorMetrics, IndexScanExecutor, ScanExecutor, TableScanExecutor,
 };
 use crate::coprocessor::*;
 
@@ -115,7 +115,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
         let ret = match self.req.get_tp() {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
-                let mut scanner = IndexScanExecutor::new_with_cols_len(
+                let mut scanner = ScanExecutor::index_scan_with_cols_len(
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.snap.take().unwrap(),
@@ -188,7 +188,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner = TableScanExecutor::new(meta, ranges, snap, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,

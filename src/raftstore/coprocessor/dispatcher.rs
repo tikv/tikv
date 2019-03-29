@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DB;
-
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use crate::raftstore::store::CasualRouter;
+use crate::storage::engine::DB;
 
 use super::*;
 
@@ -289,7 +288,11 @@ mod tests {
     impl Coprocessor for TestCoprocessor {}
 
     impl AdminObserver for TestCoprocessor {
-        fn pre_propose_admin(&self, ctx: &mut ObserverContext, _: &mut AdminRequest) -> Result<()> {
+        fn pre_propose_admin(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: &mut AdminRequest,
+        ) -> Result<()> {
             self.called.fetch_add(1, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
             if self.return_err.load(Ordering::SeqCst) {
@@ -298,12 +301,12 @@ mod tests {
             Ok(())
         }
 
-        fn pre_apply_admin(&self, ctx: &mut ObserverContext, _: &AdminRequest) {
+        fn pre_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &AdminRequest) {
             self.called.fetch_add(2, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_admin(&self, ctx: &mut ObserverContext, _: &mut AdminResponse) {
+        fn post_apply_admin(&self, ctx: &mut ObserverContext<'_>, _: &mut AdminResponse) {
             self.called.fetch_add(3, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
@@ -312,7 +315,7 @@ mod tests {
     impl QueryObserver for TestCoprocessor {
         fn pre_propose_query(
             &self,
-            ctx: &mut ObserverContext,
+            ctx: &mut ObserverContext<'_>,
             _: &mut RepeatedField<Request>,
         ) -> Result<()> {
             self.called.fetch_add(4, Ordering::SeqCst);
@@ -323,26 +326,31 @@ mod tests {
             Ok(())
         }
 
-        fn pre_apply_query(&self, ctx: &mut ObserverContext, _: &[Request]) {
+        fn pre_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &[Request]) {
             self.called.fetch_add(5, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
 
-        fn post_apply_query(&self, ctx: &mut ObserverContext, _: &mut RepeatedField<Response>) {
+        fn post_apply_query(&self, ctx: &mut ObserverContext<'_>, _: &mut RepeatedField<Response>) {
             self.called.fetch_add(6, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
 
     impl RoleObserver for TestCoprocessor {
-        fn on_role_change(&self, ctx: &mut ObserverContext, _: StateRole) {
+        fn on_role_change(&self, ctx: &mut ObserverContext<'_>, _: StateRole) {
             self.called.fetch_add(7, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }
     }
 
     impl RegionChangeObserver for TestCoprocessor {
-        fn on_region_changed(&self, ctx: &mut ObserverContext, _: RegionChangeEvent, _: StateRole) {
+        fn on_region_changed(
+            &self,
+            ctx: &mut ObserverContext<'_>,
+            _: RegionChangeEvent,
+            _: StateRole,
+        ) {
             self.called.fetch_add(8, Ordering::SeqCst);
             ctx.bypass = self.bypass.load(Ordering::SeqCst);
         }

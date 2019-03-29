@@ -115,7 +115,7 @@ impl RpcClient {
 }
 
 impl fmt::Debug for RpcClient {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RpcClient")
             .field("cluster_id", &self.cluster_id)
             .field("leader", &self.get_leader())

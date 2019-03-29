@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{CompactOptions, Writable, DB};
+use tikv::storage::engine::{CompactOptions, Writable, DB};
 
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
@@ -117,7 +117,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Restart the node.
     cluster.stop_node(node_id);
-    cluster.run_node(node_id);
+    cluster.run_node(node_id).unwrap();
 
     // Keys in removed peers should not exist.
     for i in 0..n {

@@ -21,7 +21,6 @@ use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
-use rocksdb::DB;
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -32,6 +31,7 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
+use crate::storage::engine::DB;
 use crate::util::collections::HashMap;
 use crate::util::time::duration_to_sec;
 use crate::util::timer::Timer;
@@ -121,7 +121,7 @@ impl ReadDelegate {
 }
 
 impl Display for ReadDelegate {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "ReadDelegate for region {}, \
@@ -212,7 +212,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Register(ref delegate) => write!(f, "localreader Task::Register {:?}", delegate),
             Task::Read(ref cmd) => write!(f, "localreader Task::Read {:?}", cmd.request),

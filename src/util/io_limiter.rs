@@ -15,7 +15,7 @@ use std::io::{Result, Write};
 use std::option::Option;
 use std::sync::Arc;
 
-use rocksdb::RateLimiter;
+use crate::storage::engine::RateLimiter;
 
 const PRIORITY_HIGH: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;
@@ -76,7 +76,7 @@ impl IOLimiter {
     }
 }
 
-pub struct LimitWriter<'a, T: Write + 'a> {
+pub struct LimitWriter<'a, T: Write> {
     limiter: Option<Arc<IOLimiter>>,
     writer: &'a mut T,
 }
