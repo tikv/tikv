@@ -10,8 +10,8 @@ publish = false
 
 [features]
 default = ["tikv_alloc/default"]
-portable = ["rocksdb/portable"]
-sse = ["rocksdb/sse"]
+portable = ["rocksdb_do_not_use/portable"]
+sse = ["rocksdb_do_not_use/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
 
