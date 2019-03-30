@@ -45,6 +45,7 @@ macro_rules! fatal {
         } else {
             eprintln!($lvl, $($arg)+);
         }
+        slog_global::clear_global();
         process::exit(1)
     })
 }
