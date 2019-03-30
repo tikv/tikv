@@ -197,7 +197,7 @@ pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(
 mod tests {
     use super::*;
 
-    use std::fs::File;
+    use std::fs::{self, File};
     use std::io::Write;
 
     use tempdir::TempDir;
@@ -236,7 +236,7 @@ mod tests {
             .iter()
             .enumerate()
         {
-            File::create(f).unwrap().write_all(&[id as u8]).unwrap();
+            fs::write(f, &[id as u8]).unwrap();
         }
         let mut c = cfg.clone();
         c.cert_path = format!("{}", example_cert.display());
