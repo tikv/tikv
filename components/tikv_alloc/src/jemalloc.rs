@@ -1,5 +1,6 @@
 // The implementation of this crate when jemalloc is turned on
 
+use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
@@ -19,27 +20,18 @@ pub fn dump_stats() -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-pub struct JemallocStats {
-    pub allocated: usize,
-    pub active: usize,
-    pub metadata: usize,
-    pub resident: usize,
-    pub mapped: usize,
-    pub retained: usize,
-}
-
-pub fn fetch_stats() -> io::Result<JemallocStats> {
+pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
     // Stats are cached. Need to advance epoch to refresh.
     JeEpoch::new()?.advance()?;
 
-    Ok(JemallocStats {
-        allocated: stats::allocated()?,
-        active: stats::active()?,
-        metadata: stats::metadata()?,
-        resident: stats::resident()?,
-        mapped: stats::mapped()?,
-        retained: stats::retained()?,
-    })
+    Ok(Some(vec![
+        ("allocated", stats::allocated()?),
+        ("active", stats::active()?),
+        ("metadata", stats::metadata()?),
+        ("resident", stats::resident()?),
+        ("mapped", stats::mapped()?),
+        ("retained", stats::retained()?),
+    ]))
 }
 
 #[allow(clippy::cast_ptr_alignment)]

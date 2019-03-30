@@ -89,13 +89,11 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-use jemallocator;
-// use libc;
-
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
+
+pub type AllocStats = Vec<(&'static str, usize)>;
 
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
 #[path = "jemalloc.rs"]
@@ -118,8 +116,3 @@ use tcmalloc::TCMalloc;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
 #[global_allocator]
 static ALLOC: TCMalloc = tcmalloc::TCMalloc;
-
-// The System Global Allocator, without jemalloc or tcmalloc.
-#[cfg(not(all(unix, not(fuzzing), any(feature = "jemalloc", feature = "tcmalloc"))))]
-#[global_allocator]
-static ALLOC: std::alloc::System = std::alloc::System;
