@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use crate::raftstore::store::Engines;
+use crate::storage::engine::DB;
 use crate::util::rocksdb_util::engine_metrics::*;
-use rocksdb::DB;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -95,9 +95,9 @@ fn flush_metrics(db: &DB, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions};
     use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use crate::util::rocksdb_util::{self, CFOptions};
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;

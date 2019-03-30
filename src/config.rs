@@ -20,7 +20,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use rocksdb::{
+use crate::storage::engine::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
