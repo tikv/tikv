@@ -423,7 +423,8 @@ pub trait MemComparableByteDecoder: BufferReader {
         let mut buf = vec![0; self.bytes().len()];
         let (read, written) = MemComparableByteCodec::try_decode_first(self.bytes(), &mut buf)?;
         self.advance(read);
-        Ok(buf[..written].to_vec())
+        buf.truncate(written);
+        Ok(buf)
     }
 }
 
@@ -448,7 +449,7 @@ impl CompactByteEncoder for std::fs::File {
     #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         use std::io::Write;
-        let mut buf = vec![0; super::number::MAX_VARINT64_LENGTH];
+        let mut buf = [0; super::number::MAX_VARINT64_LENGTH];
         let written = NumberCodec::encode_var_i64(&mut buf, data.len() as i64);
         self.write_all(&buf[..written])?;
         self.write_all(data)?;
@@ -500,17 +501,16 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
 
 impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
     fn read_compact_bytes(&mut self) -> Result<Vec<u8>> {
-        let mut buf = vec![0; super::number::MAX_VARINT64_LENGTH];
+        let mut buf = [0; super::number::MAX_VARINT64_LENGTH];
+        let mut end = buf.len();
         for i in 0..super::number::MAX_VARINT64_LENGTH {
             self.read_exact(&mut buf[i..=i])?;
             if buf[i] < 0x80 {
-                unsafe {
-                    buf.set_len(i + 1);
-                }
+                end = i;
                 break;
             }
         }
-        let (vn, _) = NumberCodec::try_decode_var_i64(&buf)?;
+        let (vn, _) = NumberCodec::try_decode_var_i64(&buf[..=end])?;
         let mut data = vec![0; vn as usize];
         self.read_exact(&mut data)?;
         Ok(data)
@@ -526,7 +526,35 @@ mod tests {
     use rand;
 
     use super::super::number;
-    use super::MemComparableByteCodec;
+    use super::{
+        CompactByteDecoder, CompactByteEncoder, MemComparableByteCodec, MemComparableByteDecoder,
+    };
+
+    #[test]
+    fn test_read_bytes() {
+        let cases: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (vec![], vec![0, 0, 0, 0, 0, 0, 0, 0, 247]),
+            (vec![0], vec![0, 0, 0, 0, 0, 0, 0, 0, 248]),
+            (vec![1, 2, 3], vec![1, 2, 3, 0, 0, 0, 0, 0, 250]),
+            (vec![1, 2, 3, 0], vec![1, 2, 3, 0, 0, 0, 0, 0, 251]),
+            (vec![1, 2, 3, 4, 5, 6, 7], vec![1, 2, 3, 4, 5, 6, 7, 0, 254]),
+            (
+                vec![0, 0, 0, 0, 0, 0, 0, 0],
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+            ),
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9],
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 255, 9, 0, 0, 0, 0, 0, 0, 0, 248],
+            ),
+        ];
+        for (src, encoded) in cases {
+            assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+        }
+    }
 
     #[test]
     fn test_compact_codec() {
@@ -544,6 +572,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_write_compact_bytes_for_file() {
+        use std::{env, fs, fs::File};
+        let cases = vec![
+            ("", vec![0]),
+            ("hello", vec![10, 104, 101, 108, 108, 111]),
+            ("世界", vec![12, 228, 184, 150, 231, 149, 140]),
+        ];
+        for (s, exp) in cases {
+            let mut path = env::temp_dir();
+            path.push("compact-codec-file");
+            {
+                let mut f = File::create(&path).unwrap();
+                f.write_compact_bytes(s.as_bytes()).unwrap();
+            }
+            assert_eq!(fs::read(&path).unwrap(), exp);
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_read_compact_bytes_for_file() {
+        use std::{env, fs, fs::File, io::BufReader};
+        let cases = vec![
+            ("", vec![0]),
+            ("hello", vec![10, 104, 101, 108, 108, 111]),
+            ("世界", vec![12, 228, 184, 150, 231, 149, 140]),
+        ];
+        for (exp, encoded) in cases {
+            let mut path = env::temp_dir();
+            path.push("compact-codec-file");
+            fs::write(&path, &encoded).unwrap();
+            let f = File::open(&path).unwrap();
+            let mut rdr = BufReader::new(f);
+            let decoded = rdr.read_compact_bytes().unwrap();
+            assert_eq!(decoded, exp.as_bytes());
+            fs::remove_file(path).unwrap();
+        }
+    }
     #[test]
     fn test_memcmp_flip_bytes() {
         for container_len in 0..50 {

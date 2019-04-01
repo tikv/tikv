@@ -23,22 +23,12 @@ quick_error! {
         BadPadding {
             description("Data padding is wrong")
         }
-        Io(err: std::io::Error) {
-            from()
-            cause(err)
-            description(err.description())
-        }
     }
 }
 
-impl Error {
-    pub fn maybe_clone(&self) -> Option<Error> {
-        match *self {
-            Error::BufferTooSmall => Some(Error::BufferTooSmall),
-            Error::UnexpectedEOF => Some(Error::UnexpectedEOF),
-            Error::BadPadding => Some(Error::BadPadding),
-            Error::Io(_) => None,
-        }
+impl From<std::io::Error> for Error {
+    fn from(_err: std::io::Error) -> Error {
+        Error::UnexpectedEOF
     }
 }
 
