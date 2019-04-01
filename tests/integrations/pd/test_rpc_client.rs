@@ -24,7 +24,7 @@ use kvproto::pdpb;
 
 use test_util;
 use tikv::pd::{
-    compose_ts, validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient
+    compose_ts, validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient,
 };
 use tikv::util::security::{SecurityConfig, SecurityManager};
 

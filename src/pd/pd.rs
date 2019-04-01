@@ -657,29 +657,26 @@ impl<T: PdClient> Runner<T> {
         let callbacks = mem::replace(&mut self.tso_callbacks, Vec::default());
         let count = callbacks.len();
 
-        let f = self
-            .pd_client
-            .get_timestamp(count)
-            .then(move |res| {
-                match res {
-                    Ok((physical, logical)) => {
-                        for (i, cb) in callbacks.into_iter().enumerate() {
-                            cb(Ok((physical, logical + i as i64)));
-                        }
-                    }
-                    Err(e) => {
-                        for cb in callbacks {
-                            // The error can't be cloned.
-                            cb(Err(box_err!(e.description())))
-                        }
+        let f = self.pd_client.get_timestamp(count).then(move |res| {
+            match res {
+                Ok((physical, logical)) => {
+                    for (i, cb) in callbacks.into_iter().enumerate() {
+                        cb(Ok((physical, logical + i as i64)));
                     }
                 }
+                Err(e) => {
+                    for cb in callbacks {
+                        // The error can't be cloned.
+                        cb(Err(box_err!(e.description())))
+                    }
+                }
+            }
 
-                if let Err(Stopped(_)) = scheduler.schedule(Task::FinishTso) {
-                    error!("failed to notify finish tso: Stopped");
-                }
-                Ok(())
-            });
+            if let Err(Stopped(_)) = scheduler.schedule(Task::FinishTso) {
+                error!("failed to notify finish tso: Stopped");
+            }
+            Ok(())
+        });
 
         handle.spawn(f);
     }
