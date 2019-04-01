@@ -70,6 +70,7 @@ use grpcio as grpc;
 pub mod util;
 pub mod config;
 pub mod coprocessor;
+pub mod engine;
 pub mod import;
 pub mod pd;
 pub mod raftstore;

@@ -22,10 +22,11 @@ use rand::random;
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_storage::*;
+use tikv::engine::{CF_DEFAULT, CF_LOCK};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
-use tikv::storage::{Engine, Key, Mutation, CF_DEFAULT, CF_LOCK};
+use tikv::storage::{Engine, Key, Mutation};
 
 #[test]
 fn test_txn_store_get() {

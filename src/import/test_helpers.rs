@@ -23,9 +23,9 @@ use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
 use uuid::Uuid;
 
+use crate::engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
-use crate::storage::engine::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use crate::util::collections::HashMap;
 
 use super::client::*;

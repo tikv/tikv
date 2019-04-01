@@ -23,6 +23,7 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
 use time::Timespec;
 
+use crate::engine::DB;
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::util::{self, LeaseState, RemoteLease};
@@ -31,7 +32,6 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
-use crate::storage::engine::DB;
 use crate::util::collections::HashMap;
 use crate::util::time::duration_to_sec;
 use crate::util::timer::Timer;
@@ -591,10 +591,10 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration;
 
+    use crate::engine::rocks;
+    use crate::engine::ALL_CFS;
     use crate::raftstore::store::util::Lease;
     use crate::raftstore::store::Callback;
-    use crate::storage::ALL_CFS;
-    use crate::util::rocksdb_util;
     use crate::util::time::monotonic_raw_now;
 
     use super::*;
@@ -609,7 +609,7 @@ mod tests {
     ) {
         let path = TempDir::new(path).unwrap();
         let db =
-            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_id,

@@ -16,14 +16,28 @@ use std::ops::Deref;
 use std::option::Option;
 use std::sync::Arc;
 
-use crate::raftstore::Error;
-use crate::raftstore::Result;
-use crate::storage::engine::{
-    CFHandle, DBIterator, DBVector, ReadOptions, UnsafeSnap, Writable, WriteBatch, DB,
-};
-use crate::util::rocksdb_util;
 use byteorder::{BigEndian, ByteOrder};
-use protobuf;
+
+use super::{Error, Iterable, Peekable, Result};
+
+pub mod util;
+
+pub use engine_rocksdb::rocksdb_options::UnsafeSnap;
+pub use engine_rocksdb::{
+    load_latest_options, rocksdb::supported_compression, run_ldb_tool,
+    set_external_sst_file_global_seq_no, BlockBasedOptions, CColumnFamilyDescriptor, CFHandle,
+    ColumnFamilyOptions, CompactOptions, CompactionJobInfo, CompactionOptions, CompactionPriority,
+    DBBottommostLevelCompaction, DBCompactionStyle, DBCompressionType, DBEntryType, DBIterator,
+    DBOptions, DBRateLimiterMode, DBRecoveryMode, DBStatisticsHistogramType,
+    DBStatisticsTickerType, DBVector, Env, EnvOptions, EventListener, ExternalSstFileInfo,
+    FlushJobInfo, HistogramData, IngestExternalFileOptions, IngestionInfo, Kv, PerfContext, Range,
+    RateLimiter, ReadOptions, SeekKey, SequentialFile, SliceTransform, SstFileWriter,
+    TablePropertiesCollection, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    TitanBlobIndex, TitanDBOptions, UserCollectedProperties, Writable, WriteBatch, WriteOptions,
+    WriteStallCondition, WriteStallInfo, DB,
+};
+
+use super::IterOption;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -54,7 +68,7 @@ impl Snapshot {
     }
 
     pub fn cf_handle(&self, cf: &str) -> Result<&CFHandle> {
-        rocksdb_util::get_cf_handle(&self.db, cf).map_err(Error::from)
+        self::util::get_cf_handle(&self.db, cf).map_err(Error::from)
     }
 
     pub fn get_db(&self) -> Arc<DB> {
@@ -70,7 +84,7 @@ impl Snapshot {
     }
 
     pub fn db_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<Arc<DB>>> {
-        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
+        let handle = self::util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -114,219 +128,6 @@ impl SyncSnapshot {
     }
 }
 
-// TODO: refactor this trait into rocksdb trait.
-pub trait Peekable {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>>;
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>>;
-
-    fn get_msg<M: protobuf::Message>(&self, key: &[u8]) -> Result<Option<M>> {
-        let value = self.get_value(key)?;
-
-        if value.is_none() {
-            return Ok(None);
-        }
-
-        let mut m = M::new();
-        m.merge_from_bytes(&value.unwrap())?;
-        Ok(Some(m))
-    }
-
-    fn get_msg_cf<M: protobuf::Message>(&self, cf: &str, key: &[u8]) -> Result<Option<M>> {
-        let value = self.get_value_cf(cf, key)?;
-
-        if value.is_none() {
-            return Ok(None);
-        }
-
-        let mut m = M::new();
-        m.merge_from_bytes(&value.unwrap())?;
-        Ok(Some(m))
-    }
-
-    fn get_u64(&self, key: &[u8]) -> Result<Option<u64>> {
-        let value = self.get_value(key)?;
-
-        if value.is_none() {
-            return Ok(None);
-        }
-
-        let value = value.unwrap();
-        if value.len() != 8 {
-            return Err(box_err!("need 8 bytes, but only got {}", value.len()));
-        }
-
-        let n = BigEndian::read_u64(&value);
-        Ok(Some(n))
-    }
-
-    fn get_i64(&self, key: &[u8]) -> Result<Option<i64>> {
-        let r = self.get_u64(key)?;
-        match r {
-            None => Ok(None),
-            Some(n) => Ok(Some(n as i64)),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
-enum SeekMode {
-    TotalOrder,
-    Prefix,
-}
-
-pub struct IterOption {
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
-    prefix_same_as_start: bool,
-    fill_cache: bool,
-    seek_mode: SeekMode,
-}
-
-impl IterOption {
-    pub fn new(
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
-        fill_cache: bool,
-    ) -> IterOption {
-        IterOption {
-            lower_bound,
-            upper_bound,
-            prefix_same_as_start: false,
-            fill_cache,
-            seek_mode: SeekMode::TotalOrder,
-        }
-    }
-
-    #[inline]
-    pub fn use_prefix_seek(mut self) -> IterOption {
-        self.seek_mode = SeekMode::Prefix;
-        self
-    }
-
-    #[inline]
-    pub fn total_order_seek_used(&self) -> bool {
-        self.seek_mode == SeekMode::TotalOrder
-    }
-
-    #[inline]
-    pub fn lower_bound(&self) -> Option<&[u8]> {
-        self.lower_bound.as_ref().map(|v| v.as_slice())
-    }
-
-    #[inline]
-    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
-        self.lower_bound = Some(bound);
-    }
-
-    #[inline]
-    pub fn upper_bound(&self) -> Option<&[u8]> {
-        self.upper_bound.as_ref().map(|v| v.as_slice())
-    }
-
-    #[inline]
-    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(bound);
-    }
-
-    #[inline]
-    pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
-        self.prefix_same_as_start = enable;
-        self
-    }
-
-    pub fn build_read_opts(&self) -> ReadOptions {
-        let mut opts = ReadOptions::new();
-        opts.fill_cache(self.fill_cache);
-        if self.total_order_seek_used() {
-            opts.set_total_order_seek(true);
-        } else if self.prefix_same_as_start {
-            opts.set_prefix_same_as_start(true);
-        }
-        if let Some(ref key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key);
-        }
-        if let Some(ref key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key);
-        }
-        opts
-    }
-}
-
-impl Default for IterOption {
-    fn default() -> IterOption {
-        IterOption {
-            lower_bound: None,
-            upper_bound: None,
-            prefix_same_as_start: false,
-            fill_cache: true,
-            seek_mode: SeekMode::TotalOrder,
-        }
-    }
-}
-
-// TODO: refactor this trait into rocksdb trait.
-pub trait Iterable {
-    fn new_iterator(&self, iter_opt: IterOption) -> DBIterator<&DB>;
-    fn new_iterator_cf(&self, _: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>>;
-    // scan scans database using an iterator in range [start_key, end_key), calls function f for
-    // each iteration, if f returns false, terminates this scan.
-    fn scan<F>(&self, start_key: &[u8], end_key: &[u8], fill_cache: bool, f: F) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
-        scan_impl(self.new_iterator(iter_opt), start_key, f)
-    }
-
-    // like `scan`, only on a specific column family.
-    fn scan_cf<F>(
-        &self,
-        cf: &str,
-        start_key: &[u8],
-        end_key: &[u8],
-        fill_cache: bool,
-        f: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> Result<bool>,
-    {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
-        scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
-    }
-
-    // Seek the first key >= given key, if no found, return None.
-    fn seek(&self, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator(IterOption::default());
-        iter.seek(key.into());
-        Ok(iter.kv())
-    }
-
-    // Seek the first key >= given key, if no found, return None.
-    fn seek_cf(&self, cf: &str, key: &[u8]) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-        let mut iter = self.new_iterator_cf(cf, IterOption::default())?;
-        iter.seek(key.into());
-        Ok(iter.kv())
-    }
-}
-
-fn scan_impl<F>(mut it: DBIterator<&DB>, start_key: &[u8], mut f: F) -> Result<()>
-where
-    F: FnMut(&[u8], &[u8]) -> Result<bool>,
-{
-    it.seek(start_key.into());
-    while it.valid() {
-        let r = f(it.key(), it.value())?;
-
-        if !r || !it.next() {
-            break;
-        }
-    }
-
-    Ok(())
-}
-
 impl Peekable for DB {
     fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
         let v = self.get(key)?;
@@ -334,7 +135,7 @@ impl Peekable for DB {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = rocksdb_util::get_cf_handle(self, cf)?;
+        let handle = self::util::get_cf_handle(self, cf)?;
         let v = self.get_cf(handle, key)?;
         Ok(v)
     }
@@ -346,7 +147,7 @@ impl Iterable for DB {
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
-        let handle = rocksdb_util::get_cf_handle(self, cf)?;
+        let handle = self::util::get_cf_handle(self, cf)?;
         let readopts = iter_opt.build_read_opts();
         Ok(DBIterator::new_cf(self, handle, readopts))
     }
@@ -363,7 +164,7 @@ impl Peekable for Snapshot {
     }
 
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
+        let handle = self::util::get_cf_handle(&self.db, cf)?;
         let mut opt = ReadOptions::new();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -383,7 +184,7 @@ impl Iterable for Snapshot {
     }
 
     fn new_iterator_cf(&self, cf: &str, iter_opt: IterOption) -> Result<DBIterator<&DB>> {
-        let handle = rocksdb_util::get_cf_handle(&self.db, cf)?;
+        let handle = self::util::get_cf_handle(&self.db, cf)?;
         let mut opt = iter_opt.build_read_opts();
         unsafe {
             opt.set_snapshot(&self.snap);
@@ -428,7 +229,7 @@ impl Mutable for WriteBatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::engine::Writable;
+    use crate::engine::rocks::Writable;
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempdir::TempDir;
@@ -438,14 +239,14 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            self::util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         );
 
         let mut r = Region::new();
         r.set_id(10);
 
         let key = b"key";
-        let handle = rocksdb_util::get_cf_handle(&engine, cf).unwrap();
+        let handle = self::util::get_cf_handle(&engine, cf).unwrap();
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(handle, key, &r).unwrap();
 
@@ -488,7 +289,7 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine =
-            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
+            self::util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap();
 
         engine.put(b"k1", b"v1").unwrap();
         let handle = engine.cf_handle("cf").unwrap();
@@ -504,7 +305,7 @@ mod tests {
         let path = TempDir::new("var").unwrap();
         let cf = "cf";
         let engine = Arc::new(
-            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
+            self::util::new_engine(path.path().to_str().unwrap(), None, &[cf], None).unwrap(),
         );
         let handle = engine.cf_handle(cf).unwrap();
 

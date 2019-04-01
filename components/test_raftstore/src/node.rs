@@ -23,6 +23,7 @@ use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
 use tikv::config::TiKvConfig;
+use tikv::engine::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};

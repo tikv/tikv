@@ -20,12 +20,13 @@ use std::sync::{Arc, RwLock};
 
 use kvproto::kvrpcpb::Context;
 
-use crate::raftstore::store::engine::IterOption;
+use crate::engine::IterOption;
+use crate::engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::storage::engine::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
     Result as EngineResult, ScanMode, Snapshot,
 };
-use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{Key, Value};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 

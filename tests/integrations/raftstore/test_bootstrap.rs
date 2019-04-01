@@ -20,12 +20,13 @@ use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
 use test_raftstore::*;
+use tikv::engine::rocks;
+use tikv::engine::Engines;
+use tikv::engine::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, Engines, Peekable, SnapManager};
+use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
-use tikv::storage::{ALL_CFS, CF_RAFT};
-use tikv::util::rocksdb_util;
 use tikv::util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
@@ -52,11 +53,11 @@ fn test_node_bootstrap_with_prepared_data() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+        rocks::util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+        rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();

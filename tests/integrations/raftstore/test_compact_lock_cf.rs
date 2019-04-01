@@ -11,10 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::engine::DBStatisticsTickerType;
-
 use test_raftstore::*;
-use tikv::storage::CF_LOCK;
+use tikv::engine::rocks::DBStatisticsTickerType;
+use tikv::engine::CF_LOCK;
 use tikv::util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {

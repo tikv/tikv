@@ -24,10 +24,10 @@ use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use test_raftstore::*;
+use tikv::engine::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::storage::CF_RAFT;
 use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
 

@@ -301,7 +301,7 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use crate::raftstore::store::engine::IterOption;
+    use crate::engine::IterOption;
     use crate::storage::engine::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };

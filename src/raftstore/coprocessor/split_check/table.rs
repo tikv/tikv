@@ -13,14 +13,14 @@
 
 use std::cmp::Ordering;
 
+use crate::engine::rocks::{SeekKey, DB};
 use kvproto::metapb::Region;
 
 use crate::coprocessor::codec::table as table_codec;
-use crate::raftstore::store::engine::{IterOption, Iterable};
+use crate::engine::CF_WRITE;
+use crate::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
-use crate::storage::engine::{SeekKey, DB};
 use crate::storage::types::Key;
-use crate::storage::CF_WRITE;
 use crate::util::escape;
 use kvproto::pdpb::CheckPolicy;
 
@@ -229,18 +229,18 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
-    use crate::storage::engine::Writable;
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
     use tempdir::TempDir;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
+    use crate::engine::rocks::util::new_engine;
+    use crate::engine::rocks::Writable;
+    use crate::engine::ALL_CFS;
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
-    use crate::storage::ALL_CFS;
     use crate::util::codec::number::NumberEncoder;
     use crate::util::config::ReadableSize;
-    use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
 
     use super::*;

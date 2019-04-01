@@ -12,13 +12,9 @@
 // limitations under the License.
 
 pub mod engine_metrics;
-pub mod event_listener;
+mod event_listener;
 pub mod metrics_flusher;
-pub mod properties;
 pub mod stats;
-
-pub use self::event_listener::{CompactedEvent, CompactionListener, EventListener};
-pub use self::metrics_flusher::MetricsFlusher;
 
 use std::cmp;
 use std::fs::{self, File};
@@ -26,24 +22,27 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::engine::rocks::load_latest_options;
+use crate::engine::rocks::set_external_sst_file_global_seq_no;
+use crate::engine::rocks::supported_compression;
+use crate::engine::rocks::{
+    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
+    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
+};
+
 use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
-use crate::storage::engine::load_latest_options;
-use crate::storage::engine::set_external_sst_file_global_seq_no;
-use crate::storage::engine::supported_compression; // NOTE(yu): this one is weird, requires more thinking
-use crate::storage::engine::{
-    CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
-    DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
-};
-use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::engine::{ALL_CFS, CF_DEFAULT};
 use crate::util::file::{calc_crc32, copy_and_sync};
 use sys_info;
 
-pub use crate::storage::engine::CFHandle;
+pub use self::event_listener::EventListener;
+pub use self::metrics_flusher::MetricsFlusher;
+pub use crate::engine::rocks::CFHandle;
 
-use super::cfs_diff;
+use super::{Error, Result};
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [
@@ -60,9 +59,11 @@ pub fn get_fastest_supported_compression_type() -> DBCompressionType {
         .unwrap_or(&DBCompressionType::No)
 }
 
-pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle, String> {
-    db.cf_handle(cf)
-        .ok_or_else(|| format!("cf {} not found.", cf))
+pub fn get_cf_handle<'a>(db: &'a DB, cf: &str) -> Result<&'a CFHandle> {
+    let handle = db
+        .cf_handle(cf)
+        .ok_or_else(|| Error::RocksDb(format!("cf {} not found", cf)))?;
+    Ok(handle)
 }
 
 pub fn open_opt(
@@ -70,8 +71,9 @@ pub fn open_opt(
     path: &str,
     cfs: Vec<&str>,
     cfs_opts: Vec<ColumnFamilyOptions>,
-) -> Result<DB, String> {
-    DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())
+) -> Result<DB> {
+    let db = DB::open_cf(opts, path, cfs.into_iter().zip(cfs_opts).collect())?;
+    Ok(db)
 }
 
 pub struct CFOptions<'a> {
@@ -90,7 +92,7 @@ pub fn new_engine(
     db_opts: Option<DBOptions>,
     cfs: &[&str],
     opts: Option<Vec<CFOptions<'_>>>,
-) -> Result<DB, String> {
+) -> Result<DB> {
     let mut db_opts = match db_opts {
         Some(opt) => opt,
         None => DBOptions::new(),
@@ -138,11 +140,11 @@ fn adjust_dynamic_level_bytes(
     }
 }
 
-fn check_and_open(
+pub fn new_engine_opt(
     path: &str,
     mut db_opt: DBOptions,
     cfs_opts: Vec<CFOptions<'_>>,
-) -> Result<DB, String> {
+) -> Result<DB> {
     // Creates a new db if it doesn't exist.
     if !db_exist(path) {
         db_opt.create_if_missing(true);
@@ -195,7 +197,8 @@ fn check_and_open(
             cfs_opts_v.push(x.options);
         }
 
-        return DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect());
+        let db = DB::open_cf(db_opt, path, cfs_v.into_iter().zip(cfs_opts_v).collect())?;
+        return Ok(db);
     }
 
     // Opens db.
@@ -239,14 +242,6 @@ fn check_and_open(
         ))?;
     }
     Ok(db)
-}
-
-pub fn new_engine_opt(
-    path: &str,
-    opts: DBOptions,
-    cfs_opts: Vec<CFOptions<'_>>,
-) -> Result<DB, String> {
-    check_and_open(path, opts, cfs_opts)
 }
 
 pub fn db_exist(path: &str) -> bool {
@@ -394,7 +389,7 @@ impl SliceTransform for NoopSliceTransform {
 ///      any more.
 ///
 /// Ref: https://github.com/facebook/rocksdb/wiki/Delete-A-Range-Of-Keys
-pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<(), String> {
+pub fn roughly_cleanup_ranges(db: &DB, ranges: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
     let mut delete_ranges = Vec::new();
     for &(ref start, ref end) in ranges {
         if start == end {
@@ -440,7 +435,7 @@ pub fn compact_files_in_range(
     start: Option<&[u8]>,
     end: Option<&[u8]>,
     output_level: Option<i32>,
-) -> Result<(), String> {
+) -> Result<()> {
     for cf_name in db.cf_names() {
         compact_files_in_range_cf(db, cf_name, start, end, output_level)?;
     }
@@ -455,7 +450,7 @@ pub fn compact_files_in_range_cf(
     start: Option<&[u8]>,
     end: Option<&[u8]>,
     output_level: Option<i32>,
-) -> Result<(), String> {
+) -> Result<()> {
     let cf = db.cf_handle(cf_name).unwrap();
     let cf_opts = db.get_options_cf(cf);
     let output_level = output_level.unwrap_or(cf_opts.get_num_levels() as i32 - 1);
@@ -508,10 +503,7 @@ pub fn compact_files_in_range_cf(
 /// 3. If the file has been ingested to `RocksDB`, we should not modified the
 ///    global seqno directly, because that may corrupt RocksDB's data.
 #[cfg(target_os = "linux")]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-    path: P,
-    clone: Q,
-) -> Result<(), String> {
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
     use std::os::linux::fs::MetadataExt;
 
     let path = path.as_ref().to_str().unwrap();
@@ -537,10 +529,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
-    path: P,
-    clone: Q,
-) -> Result<(), String> {
+pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(path: P, clone: Q) -> Result<()> {
     let path = path.as_ref().to_str().unwrap();
     let clone = clone.as_ref().to_str().unwrap();
     if !Path::new(clone).exists() {
@@ -556,23 +545,21 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     path: P,
     expected_size: u64,
     expected_checksum: u32,
-) -> Result<(), String> {
+) -> Result<()> {
     let path = path.as_ref().to_str().unwrap();
-    let f = File::open(path).map_err(|e| format!("open {}: {:?}", path, e))?;
+    let f = File::open(path)?;
 
-    let meta = f
-        .metadata()
-        .map_err(|e| format!("read metadata from {}: {:?}", path, e))?;
+    let meta = f.metadata()?;
     if meta.len() != expected_size {
-        return Err(format!(
+        return Err(Error::RocksDb(format!(
             "invalid size {} for {}, expected {}",
             meta.len(),
             path,
             expected_size
-        ));
+        )));
     }
 
-    let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    let checksum = calc_crc32(path)?;
     if checksum == expected_checksum {
         return Ok(());
     }
@@ -583,29 +570,53 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
     f.sync_all()
         .map_err(|e| format!("sync {}: {:?}", path, e))?;
 
-    let checksum = calc_crc32(path).map_err(|e| format!("calc crc32 for {}: {:?}", path, e))?;
+    let checksum = calc_crc32(path)?;
     if checksum != expected_checksum {
-        return Err(format!(
+        return Err(Error::RocksDb(format!(
             "invalid checksum {} for {}, expected {}",
             checksum, path, expected_checksum
-        ));
+        )));
     }
 
     Ok(())
 }
 
+/// Returns a Vec of cf which is in `a' but not in `b'.
+fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
+    a.iter()
+        .filter(|x| b.iter().find(|y| y == x).is_none())
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::engine::{
+    use crate::engine::rocks::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use crate::storage::CF_DEFAULT;
+    use crate::engine::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]
-    fn test_check_and_open() {
+    fn test_cfs_diff() {
+        let a = vec!["1", "2", "3"];
+        let a_diff_a = cfs_diff(&a, &a);
+        assert!(a_diff_a.is_empty());
+        let b = vec!["4"];
+        assert_eq!(a, cfs_diff(&a, &b));
+        let c = vec!["4", "5", "3", "6"];
+        assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
+        assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
+        let d = vec!["1", "2", "3", "4"];
+        let a_diff_d = cfs_diff(&a, &d);
+        assert!(a_diff_d.is_empty());
+        assert_eq!(vec!["4"], cfs_diff(&d, &a));
+    }
+
+    #[test]
+    fn test_new_engine_opt() {
         let path = TempDir::new("_util_rocksdb_test_check_column_families").expect("");
         let path_str = path.path().to_str().unwrap();
 
@@ -615,7 +626,7 @@ mod tests {
         opts.set_level_compaction_dynamic_level_bytes(true);
         cfs_opts.push(CFOptions::new("cf_dynamic_level_bytes", opts.clone()));
         {
-            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
             column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
             check_dynamic_level_bytes(&mut db);
         }
@@ -627,7 +638,7 @@ mod tests {
             CFOptions::new("cf1", opts.clone()),
         ];
         {
-            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
             column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
             check_dynamic_level_bytes(&mut db);
         }
@@ -638,14 +649,14 @@ mod tests {
             CFOptions::new("cf_dynamic_level_bytes", ColumnFamilyOptions::new()),
         ];
         {
-            let mut db = check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+            let mut db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
             column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
             check_dynamic_level_bytes(&mut db);
         }
 
         // never drop default cf
         let cfs_opts = vec![];
-        check_and_open(path_str, DBOptions::new(), cfs_opts).unwrap();
+        new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
         column_families_must_eq(path_str, vec![CF_DEFAULT]);
     }
 
@@ -676,7 +687,7 @@ mod tests {
 
         let opts = DBOptions::new();
         let cf_opts = CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new());
-        let db = check_and_open(path_str, opts, vec![cf_opts]).unwrap();
+        let db = new_engine_opt(path_str, opts, vec![cf_opts]).unwrap();
         let cf = db.cf_handle(CF_DEFAULT).unwrap();
 
         assert!(get_engine_compression_ratio_at_level(&db, cf, 0).is_none());

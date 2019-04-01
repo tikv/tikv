@@ -32,18 +32,18 @@ use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use time::Timespec;
 
+use crate::engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
+use crate::engine::{Engines, Peekable};
 use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
-use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
-use crate::storage::engine::{WriteBatch, WriteOptions, DB};
 use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
@@ -488,8 +488,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.kv.write_opt(kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(raft_wb, &write_opts)?;
+        ctx.engines.write_kv_opt(kv_wb, &write_opts)?;
+        ctx.engines.write_raft_opt(raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

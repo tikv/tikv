@@ -20,13 +20,18 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use crate::storage::engine::{
+use crate::engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
 
+use crate::engine::rocks::util::{
+    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    NoopSliceTransform,
+};
+use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
 use crate::raftstore::coprocessor::Config as CopConfig;
@@ -35,18 +40,13 @@ use crate::raftstore::store::Config as RaftstoreConfig;
 use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
-    DEFAULT_ROCKSDB_SUB_DIR,
+use crate::storage::config::DEFAULT_DATA_DIR;
+use crate::storage::mvcc::properties::{
+    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
 };
+use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
-};
-use crate::util::rocksdb_util::{
-    db_exist,
-    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
 };
 use crate::util::security::SecurityConfig;
 use crate::util::time::duration_to_sec;

@@ -14,9 +14,10 @@
 use kvproto::kvrpcpb::Context;
 
 use test_raftstore::*;
-use tikv::raftstore::store::engine::IterOption;
+use tikv::engine::IterOption;
+use tikv::engine::{CfName, CF_DEFAULT};
 use tikv::storage::engine::*;
-use tikv::storage::{CFStatistics, CfName, Key, CF_DEFAULT};
+use tikv::storage::{CFStatistics, Key};
 use tikv::util::codec::bytes;
 use tikv::util::escape;
 use tikv::util::HandyRwLock;

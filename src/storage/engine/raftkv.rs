@@ -28,14 +28,16 @@ use super::metrics::*;
 use super::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
+use crate::engine::rocks::TablePropertiesCollection;
+use crate::engine::CfName;
+use crate::engine::IterOption;
+use crate::engine::Peekable;
+use crate::engine::CF_DEFAULT;
 use crate::raftstore::errors::Error as RaftServerError;
-use crate::raftstore::store::engine::IterOption;
-use crate::raftstore::store::engine::Peekable;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
-use crate::storage::engine::TablePropertiesCollection;
-use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+use crate::storage::{self, engine, Key, Value};
 
 quick_error! {
     #[derive(Debug)]
@@ -49,9 +51,7 @@ quick_error! {
             cause(e)
             description(e.description())
         }
-        RocksDb(reason: String) {
-            description(reason)
-        }
+
         Server(e: RaftServerError) {
             from()
             cause(e)
@@ -76,7 +76,6 @@ fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
         Error::Io(_) => RequestStatusKind::err_io,
-        Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
         Error::Server(_) => RequestStatusKind::err_server,
         Error::InvalidResponse(_) => RequestStatusKind::err_invalid_resp,
         Error::InvalidRequest(_) => RequestStatusKind::err_invalid_req,
@@ -89,7 +88,7 @@ fn get_status_kind_from_engine_error(e: &engine::Error) -> RequestStatusKind {
         engine::Error::Request(ref header) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-        engine::Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
+
         engine::Error::Timeout(_) => RequestStatusKind::err_timeout,
         engine::Error::EmptyRequest => RequestStatusKind::err_empty_request,
         engine::Error::Other(_) => RequestStatusKind::err_other,

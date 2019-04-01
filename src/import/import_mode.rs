@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::engine::DB;
+use crate::engine::rocks::DB;
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -172,7 +172,7 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use crate::util::rocksdb_util::new_engine;
+    use crate::engine::rocks::util::new_engine;
     use tempdir::TempDir;
 
     fn check_import_options(

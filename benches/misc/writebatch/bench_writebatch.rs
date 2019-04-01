@@ -13,7 +13,7 @@
 
 use tempdir::TempDir;
 use test::Bencher;
-use tikv::storage::engine::{Writable, WriteBatch, DB};
+use tikv::engine::rocks::{Writable, WriteBatch, DB};
 
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";

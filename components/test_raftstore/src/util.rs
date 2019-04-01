@@ -19,7 +19,6 @@ use std::{thread, u64};
 use protobuf;
 use rand::Rng;
 use tempdir::TempDir;
-use tikv::storage::engine::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -29,14 +28,16 @@ use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
 use tikv::config::*;
+use tikv::engine::rocks::{CompactionJobInfo, DB};
+use tikv::engine::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
+use tikv::storage::engine::CompactionListener;
+use tikv::storage::Config as StorageConfig;
 use tikv::util::config::*;
 use tikv::util::escape;
-use tikv::util::rocksdb_util::{self, CompactionListener};
 
 use super::*;
 
@@ -506,7 +507,7 @@ pub fn create_test_engine(
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(
+                rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
@@ -515,7 +516,7 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             Engines::new(engine, raft_engine)

@@ -20,10 +20,10 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
-use crate::storage::engine::{IngestExternalFileOptions, DB};
-use crate::util::rocksdb_util::{
+use crate::engine::rocks::util::{
     get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion,
 };
+use crate::engine::rocks::{IngestExternalFileOptions, DB};
 
 use super::{Error, Result};
 
@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use crate::util::rocksdb_util::new_engine;
+    use crate::engine::rocks::util::new_engine;
     use tempdir::TempDir;
 
     #[test]

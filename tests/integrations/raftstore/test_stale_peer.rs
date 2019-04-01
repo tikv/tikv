@@ -21,8 +21,8 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Peekable};
-use tikv::storage::CF_RAFT;
+use tikv::engine::*;
+use tikv::raftstore::store::keys;
 
 /// A helper function for testing the behaviour of the gc of stale peer
 /// which is out of region.

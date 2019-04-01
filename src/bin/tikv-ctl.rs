@@ -58,12 +58,13 @@ use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 
 use tikv::config::TiKvConfig;
+use tikv::engine::rocks;
+use tikv::engine::Engines;
+use tikv::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::{keys, Engines};
+use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::engine::run_ldb_tool;
-use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb_util;
+use tikv::storage::Key;
 use tikv::util::security::{self, SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
@@ -94,7 +95,7 @@ fn new_debug_executor(
                     security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
-            let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
                 .map(ToString::to_string)
@@ -108,7 +109,7 @@ fn new_debug_executor(
                 raft_db_opts.set_env(encrypted_env);
             }
             let raft_db =
-                rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
@@ -2216,7 +2217,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
             security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    run_ldb_tool(&args, &opts);
+    engine_rocksdb::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

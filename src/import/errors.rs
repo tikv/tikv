@@ -57,6 +57,11 @@ quick_error! {
             from()
             display("RocksDB {}", msg)
         }
+        Engine(err: crate::engine::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
         RaftStore(err: RaftStoreError) {
             from()
             cause(err)

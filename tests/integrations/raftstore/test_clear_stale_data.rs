@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::engine::{CompactOptions, Writable, DB};
-
 use test_raftstore::*;
+use tikv::engine::rocks::{CompactOptions, Writable, DB};
+use tikv::engine::{CF_DEFAULT, CF_LOCK};
 use tikv::raftstore::store::keys;
-use tikv::storage::{CF_DEFAULT, CF_LOCK};
 
 fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
     let mut opts = CompactOptions::new();

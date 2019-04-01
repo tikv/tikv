@@ -35,17 +35,18 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
+use crate::engine::CF_RAFT;
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
-use crate::storage::CF_RAFT;
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
 use crate::util::{escape, is_zero_duration};
 
+use crate::engine::Engines;
+use crate::engine::{Peekable, Snapshot as EngineSnapshot};
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
-use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
@@ -61,7 +62,6 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use crate::raftstore::store::Engines;
 use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,

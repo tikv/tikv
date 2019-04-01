@@ -23,10 +23,11 @@ use tempdir::TempDir;
 
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
+use tikv::engine::Engines;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, Engines, SnapManager};
+use tikv::raftstore::store::{Callback, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool::ReadPool;

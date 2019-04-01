@@ -13,6 +13,7 @@
 
 mod lock;
 mod metrics;
+pub mod properties;
 mod reader;
 mod txn;
 mod write;
@@ -170,7 +171,7 @@ pub fn default_not_found_error(key: Vec<u8>, write: Write, hint: &str) -> Error 
 pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::CF_WRITE;
+    use crate::engine::CF_WRITE;
     use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
 
     use super::*;

@@ -17,8 +17,9 @@ mod imp {
 
     use tikv_alloc;
 
-    use tikv::raftstore::store::Engines;
-    use tikv::util::{metrics, rocksdb_util::stats as rocksdb_stats};
+    use tikv::engine::rocks::util::stats as rocksdb_stats;
+    use tikv::engine::Engines;
+    use tikv::util::metrics;
 
     #[allow(dead_code)]
     pub fn handle_signal(engines: Option<Engines>) {
@@ -49,7 +50,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use tikv::raftstore::store::Engines;
+    use tikv::engine::Engines;
 
     pub fn handle_signal(_: Option<Engines>) {}
 }

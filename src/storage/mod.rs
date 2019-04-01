@@ -32,10 +32,10 @@ use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::raftstore::store::engine::IterOption;
+use crate::engine::rocks::DB;
+use crate::engine::IterOption;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::engine::DB;
 use crate::util;
 use crate::util::collections::HashMap;
 use crate::util::worker::{self, Builder, ScheduleError, Worker};
@@ -60,19 +60,11 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
-pub type CfName = &'static str;
-pub const CF_DEFAULT: CfName = "default";
-pub const CF_LOCK: CfName = "lock";
-pub const CF_WRITE: CfName = "write";
-pub const CF_RAFT: CfName = "raft";
-// Cfs that should be very large generally.
-pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+use crate::engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -1285,12 +1277,25 @@ impl<E: Engine> Storage<E> {
             return Ok(());
         }
 
+        let cf = Self::rawkv_cf(&cf)?;
+        // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
+        // operation, RocksDB will add start key to the prefix bloom, and the start key
+        // will go through function prefix_extractor. In our case the prefix_extractor
+        // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
+        // length of start key is less than 8, we will encounter index out of range error.
+        let start_key = if cf == CF_WRITE {
+            Key::from_encoded(start_key).append_ts(u64::MAX)
+        } else {
+            Key::from_encoded(start_key)
+        };
+        let end_key = Key::from_encoded(end_key);
+
         self.engine.async_write(
             &ctx,
             vec![Modify::DeleteRange(
                 Self::rawkv_cf(&cf)?,
-                Key::from_encoded(start_key),
-                Key::from_encoded(end_key),
+                start_key,
+                end_key,
             )],
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;

@@ -15,15 +15,18 @@ use std::sync::Arc;
 
 use crate::test;
 use tempdir::TempDir;
-use tikv::storage::engine::DB;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
+use tikv::engine;
+use tikv::engine::rocks;
+use tikv::engine::rocks::DB;
+use tikv::engine::{ALL_CFS, CF_DEFAULT};
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
+    cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,
 };
 use tikv::raftstore::Result;
@@ -33,8 +36,7 @@ use tikv::storage::engine::{
     Callback as EngineCallback, CbContext, Modify, Result as EngineResult,
 };
 use tikv::storage::types::Key;
-use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
-use tikv::util::rocksdb_util;
+use tikv::storage::{Engine, RaftKv};
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -95,7 +97,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb_util::new_engine(&path, None, ALL_CFS, None).unwrap();
+    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 

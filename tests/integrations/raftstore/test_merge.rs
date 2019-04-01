@@ -21,10 +21,10 @@ use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
+use tikv::engine::Peekable;
+use tikv::engine::{CF_RAFT, CF_WRITE};
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::Peekable;
-use tikv::storage::{CF_RAFT, CF_WRITE};
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
 

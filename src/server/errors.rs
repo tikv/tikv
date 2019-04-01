@@ -86,6 +86,12 @@ quick_error! {
             display("{:?}", err)
             description(err.description())
         }
+        RealEngine(err: crate::engine::Error) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
         Pd(err: PdError) {
             from()
             cause(err)

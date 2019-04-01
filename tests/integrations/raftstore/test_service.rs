@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
-use tikv::storage::engine::Writable;
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
@@ -27,9 +26,12 @@ use raft::eraftpb;
 
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::engine::rocks::Writable;
+use tikv::engine::*;
+use tikv::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tikv::raftstore::store::keys;
 use tikv::storage::mvcc::{Lock, LockType};
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
+use tikv::storage::Key;
 use tikv::util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {

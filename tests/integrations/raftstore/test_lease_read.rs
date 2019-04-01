@@ -22,7 +22,7 @@ use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use test_raftstore::*;
-use tikv::raftstore::store::engine::Peekable;
+use tikv::engine::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
