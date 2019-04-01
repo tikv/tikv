@@ -16,11 +16,11 @@ use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::util::{new_peer, Engines};
 use crate::raftstore::Result;
+use crate::storage::engine::{Writable, WriteBatch, DB};
 use crate::storage::{CF_DEFAULT, CF_RAFT};
 use crate::util::rocksdb_util;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use rocksdb::{Writable, WriteBatch, DB};
 
 /// The initial region epoch version.
 pub const INIT_EPOCH_VER: u64 = 1;

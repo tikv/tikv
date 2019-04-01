@@ -14,9 +14,9 @@
 use super::super::error::Result;
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
+use crate::storage::engine::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
-use rocksdb::DB;
 use std::mem;
 use std::sync::Mutex;
 
@@ -202,11 +202,10 @@ pub mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
     use super::Checker;

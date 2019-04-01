@@ -15,7 +15,7 @@ use std::io::Write;
 use std::string::FromUtf8Error;
 use std::sync::Arc;
 
-use rocksdb::{CFHandle, Range, DB};
+use crate::storage::engine::{CFHandle, Range, DB};
 
 use super::properties::MvccProperties;
 
@@ -77,7 +77,7 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys;

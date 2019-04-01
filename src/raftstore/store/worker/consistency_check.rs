@@ -156,13 +156,13 @@ mod tests {
     use super::*;
     use crate::raftstore::store::engine::Snapshot;
     use crate::raftstore::store::keys;
+    use crate::storage::engine::Writable;
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempdir::TempDir;
