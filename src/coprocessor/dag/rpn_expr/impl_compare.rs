@@ -22,7 +22,7 @@ impl_template_fn! { 2 arg @ RpnFnEQReal }
 
 impl RpnFnEQReal {
     #[allow(clippy::float_cmp)]
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -44,7 +44,7 @@ pub struct RpnFnEQInt;
 impl_template_fn! { 2 arg @ RpnFnEQInt }
 
 impl RpnFnEQInt {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -65,7 +65,7 @@ pub struct RpnFnGTInt;
 impl_template_fn! { 2 arg @ RpnFnGTInt }
 
 impl RpnFnGTInt {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -86,7 +86,7 @@ pub struct RpnFnLTInt;
 impl_template_fn! { 2 arg @ RpnFnLTInt }
 
 impl RpnFnLTInt {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,

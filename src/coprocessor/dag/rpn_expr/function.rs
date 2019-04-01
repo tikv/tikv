@@ -64,7 +64,7 @@ impl Helper {
     /// Evaluates a function without argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
         mut f: F,
@@ -73,7 +73,7 @@ impl Helper {
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -87,7 +87,7 @@ impl Helper {
     /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
@@ -97,7 +97,7 @@ impl Helper {
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Option<Arg0>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -120,7 +120,7 @@ impl Helper {
     /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
@@ -131,7 +131,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -178,7 +183,7 @@ impl Helper {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -191,7 +196,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -202,7 +212,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -215,7 +225,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -227,7 +242,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -240,7 +255,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -252,7 +272,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -265,7 +285,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -282,7 +307,7 @@ impl Helper {
     ///
     /// The function will be called multiple times to fill the vector. For each function call,
     /// there will be one indirection to support both scalar and vector arguments.
-    #[inline(always)]
+    #[inline]
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
         mut f: F,
@@ -294,7 +319,13 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+            &Option<Arg2>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 3);
 

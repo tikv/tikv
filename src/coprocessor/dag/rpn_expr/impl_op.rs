@@ -21,7 +21,7 @@ pub struct RpnFnLogicalAnd;
 impl_template_fn! { 2 arg @ RpnFnLogicalAnd }
 
 impl RpnFnLogicalAnd {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -50,7 +50,7 @@ pub struct RpnFnLogicalOr;
 impl_template_fn! { 2 arg @ RpnFnLogicalOr }
 
 impl RpnFnLogicalOr {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -80,7 +80,7 @@ pub struct RpnFnIntIsNull;
 impl_template_fn! { 1 arg @ RpnFnIntIsNull }
 
 impl RpnFnIntIsNull {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -96,7 +96,7 @@ pub struct RpnFnUnaryNot;
 impl_template_fn! { 1 arg @ RpnFnUnaryNot }
 
 impl RpnFnUnaryNot {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,

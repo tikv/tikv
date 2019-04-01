@@ -23,7 +23,7 @@ pub struct RpnFnDummy0ArgFunc;
 impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
-    #[inline(always)]
+    #[inline]
     fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
         Ok(Some(7))
     }
@@ -35,7 +35,7 @@ pub struct RpnFnDummy1ArgFunc;
 impl_template_fn! { 1 arg @ RpnFnDummy1ArgFunc }
 
 impl RpnFnDummy1ArgFunc {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -51,7 +51,7 @@ pub struct RpnFnDummy2ArgFunc;
 impl_template_fn! { 2 arg @ RpnFnDummy2ArgFunc }
 
 impl RpnFnDummy2ArgFunc {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -68,7 +68,7 @@ pub struct RpnFnDummy3ArgFunc;
 impl_template_fn! { 3 arg @ RpnFnDummy3ArgFunc }
 
 impl RpnFnDummy3ArgFunc {
-    #[inline(always)]
+    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -81,7 +81,7 @@ impl RpnFnDummy3ArgFunc {
 }
 
 //
-//#[inline(always)]
+//#[inline]
 //pub fn dummy_4_or_more_args_func(
 //    arg0: &Option<f64>,
 //    arg1: &Option<i64>,
@@ -105,7 +105,7 @@ impl RpnFnDummy3ArgFunc {
 //    };
 //}
 //
-//#[inline(always)]
+//#[inline]
 //pub fn dummy_variable_args_func(args: _) -> _ {
 //    // Compile time unknown number of args.
 //

@@ -26,7 +26,7 @@ pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as Date
 
 // Dynamic eval types.
 pub use self::scalar::ScalarValue;
-pub use self::vector::VectorValue;
+pub use self::vector::{VectorValue, VectorValueExt};
 pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
 use crate::coprocessor::dag::expr::EvalContext;
@@ -75,12 +75,14 @@ where
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
-pub trait Evaluable: Clone {
+pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
+    const EVAL_TYPE: EvalType;
+
     /// Borrows this concrete type from a `ScalarValue` in the same type.
-    fn borrow_scalar_value(v: &ScalarValue) -> &Self;
+    fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
-    fn borrow_vector_value(v: &VectorValue) -> &[Self];
+    fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
     /// Borrows a specialized reference from a `VectorLikeValueRef`. The specialized reference is
     /// also vector-like but contains the concrete type information, which doesn't need type
@@ -90,40 +92,34 @@ pub trait Evaluable: Clone {
     ) -> VectorLikeValueRefSpecialized<'_, Self>;
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
-    fn into_vector_value(vec: Vec<Self>) -> VectorValue;
-
-    /// Returns the corresponding eval type enum of this concrete eval type.
-    fn eval_type() -> EvalType;
+    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
 }
 
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
-        impl Evaluable for Option<$ty> {
-            #[inline(always)]
-            fn borrow_scalar_value(v: &ScalarValue) -> &Self {
+        impl Evaluable for $ty {
+            const EVAL_TYPE: EvalType = EvalType::$ty;
+
+            #[inline]
+            fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
                 v.as_ref()
             }
 
-            #[inline(always)]
-            fn borrow_vector_value(v: &VectorValue) -> &[Self] {
+            #[inline]
+            fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
                 v.as_ref()
             }
 
-            #[inline(always)]
+            #[inline]
             fn borrow_vector_like_specialized(
                 v: VectorLikeValueRef<'_>,
             ) -> VectorLikeValueRefSpecialized<'_, Self> {
                 v.into()
             }
 
-            #[inline(always)]
-            fn into_vector_value(vec: Vec<Self>) -> VectorValue {
+            #[inline]
+            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
-            }
-
-            #[inline(always)]
-            fn eval_type() -> EvalType {
-                EvalType::$ty
             }
         }
     };
