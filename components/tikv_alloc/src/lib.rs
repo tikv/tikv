@@ -96,13 +96,13 @@ extern crate log;
 pub type AllocStats = Vec<(&'static str, usize)>;
 
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-#[path = "jemalloc.rs"]
-mod imp;
+#[path = "profile_imp/jemalloc.rs"]
+mod profile_imp;
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
-#[path = "default.rs"]
-mod imp;
+#[path = "profile_imp/default.rs"]
+mod profile_imp;
 
-pub use crate::imp::*;
+pub use crate::profile_imp::*;
 
 // The Jemallocator Allocator
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
