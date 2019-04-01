@@ -25,7 +25,7 @@ use crate::storage::engine::{
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
-use sys_info;
+use systemstat::{Platform, System};
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
@@ -58,7 +58,8 @@ const RAFT_MAX_MEM: usize = 2 * GB as usize;
 pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
-    let total_mem = sys_info::mem_info().unwrap().total * KB;
+    let system = System::new();
+    let total_mem = system.memory().unwrap().total.as_usize() as u64 * KB;
     let (ratio, min, max) = match (is_raft_db, cf) {
         (true, CF_DEFAULT) => (0.02, RAFT_MIN_MEM, RAFT_MAX_MEM),
         (false, CF_DEFAULT) => (0.25, 0, usize::MAX),
@@ -1120,7 +1121,7 @@ readpool_config!(
 
 impl Default for CoprocessorReadPoolConfig {
     fn default() -> Self {
-        let cpu_num = sys_info::cpu_num().unwrap();
+        let cpu_num = num_cpus::get() as u32;
         let concurrency = if cpu_num > 8 {
             (f64::from(cpu_num) * 0.8) as usize
         } else {
