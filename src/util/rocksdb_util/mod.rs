@@ -30,18 +30,17 @@ use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
-use crate::storage::{ALL_CFS, CF_DEFAULT};
-use crate::util::file::{calc_crc32, copy_and_sync};
-use rocksdb::load_latest_options;
-use rocksdb::rocksdb::supported_compression;
-use rocksdb::set_external_sst_file_global_seq_no;
-use rocksdb::{
+use crate::storage::engine::load_latest_options;
+use crate::storage::engine::set_external_sst_file_global_seq_no;
+use crate::storage::engine::supported_compression; // NOTE(yu): this one is weird, requires more thinking
+use crate::storage::engine::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-use sys_info;
+use crate::storage::{ALL_CFS, CF_DEFAULT};
+use crate::util::file::{calc_crc32, copy_and_sync};
 
-pub use rocksdb::CFHandle;
+pub use crate::storage::engine::CFHandle;
 
 use super::cfs_diff;
 
@@ -488,7 +487,7 @@ pub fn compact_files_in_range_cf(
 
     let mut opts = CompactionOptions::new();
     opts.set_compression(output_compression);
-    let max_subcompactions = sys_info::cpu_num().unwrap();
+    let max_subcompactions = num_cpus::get();
     let max_subcompactions = cmp::min(max_subcompactions, 32);
     opts.set_max_subcompactions(max_subcompactions as i32);
     opts.set_output_file_size_limit(output_file_size_limit);
@@ -597,11 +596,11 @@ pub fn validate_sst_for_ingestion<P: AsRef<Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::CF_DEFAULT;
-    use rocksdb::{
+    use crate::storage::engine::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
+    use crate::storage::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]
