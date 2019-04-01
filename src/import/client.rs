@@ -234,7 +234,7 @@ impl ImportClient for Client {
                 // If the current operator of region is not `scatter-region`, we could assumption
                 // that `scatter-operator` has finished or timeout.
                 let scatter_region = "scatter-region";
-                if resp.kind.len() != scatter_region.len() || resp.kind != scatter_region.as_bytes()
+                if resp.desc.len() != scatter_region.len() || resp.desc != scatter_region.as_bytes()
                 {
                     Ok(true)
                 } else {
