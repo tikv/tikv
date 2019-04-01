@@ -43,7 +43,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
-    read_pool: ReadPool<storage::ReadPoolContext>,
+    read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
 ) -> Result<Storage<RaftKv<S>>>

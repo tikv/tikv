@@ -35,14 +35,15 @@ mod endpoint;
 mod error;
 pub mod local_metrics;
 mod metrics;
-mod readpool_context;
+mod read_pool_impl;
+// mod readpool_context;
 mod statistics;
 mod tracker;
 pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
-pub use self::readpool_context::Context as ReadPoolContext;
+// pub use self::readpool_context::Context as ReadPoolContext;
 
 use std::boxed::FnBox;
 
@@ -50,6 +51,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 
 use crate::util::time::{Duration, Instant};
 
+pub use self::read_pool_impl::ReadPoolImpl;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;

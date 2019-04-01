@@ -331,12 +331,7 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let pd_worker = FutureWorker::new("test-pd-worker");
-        let cop_read_pool = ReadPool::new(
-            "cop-readpool",
-            &readpool::Config::default_for_test(),
-            || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
-        );
+        let cop_read_pool = readpool::Builder::build_for_test();
         let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));

@@ -14,7 +14,7 @@
 use kvproto::kvrpcpb;
 
 use crate::storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
-use crate::util::futurepool;
+// use crate::util::futurepool;
 use crate::util::time::{self, Duration, Instant};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
@@ -65,9 +65,8 @@ pub struct Tracker {
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
-
     // Metrics collect target
-    ctxd: Option<futurepool::ContextDelegators<ReadPoolContext>>,
+    // ctxd: Option<futurepool::ContextDelegators<ReadPoolContext>>,
 }
 
 impl Tracker {
@@ -89,15 +88,14 @@ impl Tracker {
             total_perf_statistics: PerfStatisticsDelta::default(),
 
             req_ctx,
-
-            ctxd: None,
+            // ctxd: None,
         }
     }
 
     /// Attach future pool's context delegators.
-    pub fn attach_ctxd(&mut self, ctxd: futurepool::ContextDelegators<ReadPoolContext>) {
+    pub fn attach_ctxd(&mut self) {
         assert!(self.current_stage == TrackerState::NotInitialized);
-        self.ctxd = Some(ctxd);
+        // self.ctxd = Some(ctxd);
         self.current_stage = TrackerState::Initialized;
     }
 
@@ -191,6 +189,8 @@ impl Tracker {
 
         let total_exec_metrics =
             std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
+
+        /*
         let mut thread_ctx = self.ctxd.as_ref().unwrap().current_thread_context_mut();
         thread_ctx
             .basic_local_metrics
@@ -242,6 +242,8 @@ impl Tracker {
             .rocksdb_perf_stats
             .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
             .inc_by(self.total_perf_statistics.block_read_byte as i64);
+            */
+
         self.current_stage = TrackerState::Tracked;
     }
 }

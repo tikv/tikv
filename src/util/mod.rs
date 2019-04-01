@@ -31,7 +31,7 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod futurepool;
+pub mod future_pool;
 pub mod io_limiter;
 pub mod logger;
 pub mod metrics;

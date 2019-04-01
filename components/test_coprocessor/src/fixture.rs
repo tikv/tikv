@@ -16,8 +16,8 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tikv::coprocessor::codec::Datum;
-use tikv::coprocessor::{Endpoint, ReadPoolContext};
-use tikv::server::readpool::{self, ReadPool};
+use tikv::coprocessor::{self, Endpoint};
+use tikv::server::readpool;
 use tikv::server::Config;
 use tikv::storage::engine::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
@@ -100,9 +100,7 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
     let pd_worker = FutureWorker::new("test-pd-worker");
-    let pool = ReadPool::new("readpool", read_pool_cfg, || {
-        ReadPoolContext::new(pd_worker.scheduler())
-    });
+    let pool = coprocessor::ReadPoolImpl::build_read_pool(read_pool_cfg, pd_worker.scheduler());
     let cop = Endpoint::new(cfg, store.get_engine(), pool);
     (store, cop)
 }
