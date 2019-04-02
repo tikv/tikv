@@ -16,7 +16,7 @@ mod function;
 mod types;
 
 pub use self::function::RpnFunction;
-pub use self::types::RpnExpression;
+pub use self::types::{RpnExpression, RpnExpressionBuilder};
 
 use tipb::expression::ScalarFuncSig;
 
