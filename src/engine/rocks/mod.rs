@@ -16,9 +16,7 @@ use std::ops::Deref;
 use std::option::Option;
 use std::sync::Arc;
 
-use byteorder::{BigEndian, ByteOrder};
-
-use super::{Error, Iterable, Peekable, Result};
+use super::{Error, Iterable, Mutable, Peekable, Result};
 
 pub mod util;
 
@@ -190,36 +188,6 @@ impl Iterable for Snapshot {
             opt.set_snapshot(&self.snap);
         }
         Ok(DBIterator::new_cf(&self.db, handle, opt))
-    }
-}
-
-pub trait Mutable: Writable {
-    fn put_msg<M: protobuf::Message>(&self, key: &[u8], m: &M) -> Result<()> {
-        let value = m.write_to_bytes()?;
-        self.put(key, &value)?;
-        Ok(())
-    }
-
-    fn put_msg_cf<M: protobuf::Message>(&self, cf: &CFHandle, key: &[u8], m: &M) -> Result<()> {
-        let value = m.write_to_bytes()?;
-        self.put_cf(cf, key, &value)?;
-        Ok(())
-    }
-
-    fn put_u64(&self, key: &[u8], n: u64) -> Result<()> {
-        let mut value = vec![0; 8];
-        BigEndian::write_u64(&mut value, n);
-        self.put(key, &value)?;
-        Ok(())
-    }
-
-    fn put_i64(&self, key: &[u8], n: i64) -> Result<()> {
-        self.put_u64(key, n as u64)
-    }
-
-    fn del(&self, key: &[u8]) -> Result<()> {
-        self.delete(key)?;
-        Ok(())
     }
 }
 

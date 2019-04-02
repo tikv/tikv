@@ -382,6 +382,3 @@ pub trait Mutable: Writable {
         Ok(())
     }
 }
-
-impl Mutable for DB {}
-impl Mutable for WriteBatch {}
