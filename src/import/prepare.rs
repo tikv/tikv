@@ -77,9 +77,10 @@ impl<Client: ImportClient> PrepareJob<Client> {
         };
 
         IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(1.0);
-        let num_prepares = self.prepare(&props);
+        let prepares = self.prepare(&props);
         IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(0.0);
 
+        let num_prepares = prepares?;
         info!(
             "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "takes" => ?start.elapsed(),
         );
@@ -93,10 +94,11 @@ impl<Client: ImportClient> PrepareJob<Client> {
         ))
     }
 
-    fn prepare(&self, props: &SizeProperties) -> usize {
+    fn prepare(&self, props: &SizeProperties) -> Result<usize> {
         let split_size = self.cfg.region_split_size.0 as usize;
         let mut ctx = RangeContext::new(Arc::clone(&self.client), split_size);
 
+        let mut wait_scatter_regions = vec![];
         let mut num_prepares = 0;
         let mut start = Vec::new();
         for (k, v) in props.index_handles.iter() {
@@ -106,7 +108,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
             }
 
             let range = RangeInfo::new(&start, k, ctx.raw_size());
-            if let Ok(true) = self.run_prepare_job(range) {
+            if let Ok(true) = self.run_prepare_job(range, &mut wait_scatter_regions) {
                 num_prepares += 1;
             }
 
@@ -114,14 +116,43 @@ impl<Client: ImportClient> PrepareJob<Client> {
             ctx.reset(k);
         }
 
-        num_prepares
+        // We need to wait all regions for scattering finished.
+        let start = Instant::now();
+        while let Some(region_id) = wait_scatter_regions.pop() {
+            let start = Instant::now();
+            for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
+                if self.client.is_scatter_region_finished(region_id)? {
+                    if i > 0 {
+                        debug!("waited between scatter"; "retry times" => %i, "takes" => ?start.elapsed());
+                    }
+                    info!("scatter region finished"; "region id" => %region_id, "takes" => ?start.elapsed());
+                    break;
+                } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
+                    warn!("scatter region still failed after exhausting all retries");
+                } else {
+                    // Exponential back-off with max wait duration
+                    let mut interval = SCATTER_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
+                    if interval > SCATTER_MAX_WAIT_INTERVAL_MILLIS {
+                        interval = SCATTER_MAX_WAIT_INTERVAL_MILLIS
+                    }
+                    thread::sleep(Duration::from_millis(interval));
+                }
+            }
+        }
+        info!("scatter all regions finished"; "tag" => %self.tag, "takes" => ?start.elapsed());
+
+        Ok(num_prepares)
     }
 
-    fn run_prepare_job(&self, range: RangeInfo) -> Result<bool> {
+    fn run_prepare_job(
+        &self,
+        range: RangeInfo,
+        wait_scatter_regions: &mut Vec<u64>,
+    ) -> Result<bool> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         let tag = format!("[PrepareRangeJob {}:{}]", self.engine.uuid(), id);
         let job = PrepareRangeJob::new(tag, range, Arc::clone(&self.client));
-        job.run()
+        job.run(wait_scatter_regions)
     }
 }
 
@@ -138,7 +169,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         PrepareRangeJob { tag, range, client }
     }
 
-    fn run(&self) -> Result<bool> {
+    fn run(&self, wait_scatter_regions: &mut Vec<u64>) -> Result<bool> {
         let start = Instant::now();
         info!("start"; "tag" => %self.tag, "range" => ?self.range);
 
@@ -156,7 +187,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             };
 
             for _ in 0..MAX_RETRY_TIMES {
-                match self.prepare(region) {
+                match self.prepare(region, wait_scatter_regions) {
                     Ok(v) => {
                         info!("prepare"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(v);
@@ -174,7 +205,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         Err(Error::PrepareRangeJobFailed(self.tag.clone()))
     }
 
-    fn prepare(&self, mut region: RegionInfo) -> Result<bool> {
+    fn prepare(&self, mut region: RegionInfo, wait_scatter_regions: &mut Vec<u64>) -> Result<bool> {
         if !self.need_split(&region) {
             return Ok(false);
         }
@@ -203,30 +234,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                     }
                 }
                 self.scatter_region(&new_region)?;
-
-                // We need to wait for scattering region finished.
-                let start = Instant::now();
-                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
-                    if self
-                        .client
-                        .is_scatter_region_finished(new_region.region.id)?
-                    {
-                        if i > 0 {
-                            debug!("waited between scatter"; "retry times" => %i);
-                        }
-                        break;
-                    } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
-                        warn!("scatter region still failed after exhausting all retries");
-                    } else {
-                        // Exponential back-off with max wait duration
-                        let mut interval = SCATTER_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
-                        if interval > SCATTER_MAX_WAIT_INTERVAL_MILLIS {
-                            interval = SCATTER_MAX_WAIT_INTERVAL_MILLIS
-                        }
-                        thread::sleep(Duration::from_millis(interval));
-                    }
-                }
-                info!("scatter region finished"; "region id" => %new_region.region.id, "takes" => ?start.elapsed());
+                wait_scatter_regions.push(new_region.region.id);
 
                 Ok(true)
             }
