@@ -1,3 +1,4 @@
+// Copyright 2017 TiKV Project Authors.
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]
