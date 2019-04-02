@@ -24,9 +24,9 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
+use crate::storage::engine::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, LARGE_CFS};
 use crate::util::rocksdb_util::{
     self, properties::RangeProperties, stats::get_range_entries_and_versions,
@@ -980,10 +980,12 @@ impl<'a> fmt::Display for KeysInfoFormatter<'a> {
 mod tests {
     use std::{iter, process, thread};
 
+    use crate::storage::engine::{
+        ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB,
+    };
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 

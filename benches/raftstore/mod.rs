@@ -14,7 +14,7 @@
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
-use rocksdb::{Writable, WriteBatch, DB};
+use tikv::storage::engine::{Writable, WriteBatch, DB};
 
 use test_raftstore::*;
 use test_util::*;

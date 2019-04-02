@@ -19,7 +19,6 @@ use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
-use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -34,6 +33,7 @@ use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::Result;
+use crate::storage::engine::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -652,6 +652,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             .process_ready
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.store_stat.flush();
     }
 }
 

@@ -22,7 +22,6 @@ use std::u64;
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
@@ -34,6 +33,7 @@ use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use crate::storage::engine::{Writable, WriteBatch};
 use crate::storage::CF_RAFT;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
@@ -675,13 +675,13 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::storage::engine::{ColumnFamilyOptions, Writable, WriteBatch};
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use tempdir::TempDir;
 
     use super::Event;

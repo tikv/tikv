@@ -26,13 +26,13 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
-use rocksdb::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
 
 use crate::config;
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::{conf_state_from_region, Engines};
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
+use crate::storage::engine::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
 use crate::storage::CF_RAFT;
 use crate::util::worker::Scheduler;
 use crate::util::{self, rocksdb_util};
@@ -1622,6 +1622,7 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
+    use crate::storage::engine::WriteBatch;
     use crate::storage::{ALL_CFS, CF_DEFAULT};
     use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
@@ -1629,7 +1630,6 @@ mod tests {
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
     use raft::{Error as RaftError, StorageError};
-    use rocksdb::WriteBatch;
     use std::cell::RefCell;
     use std::path::Path;
     use std::sync::atomic::*;

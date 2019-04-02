@@ -13,10 +13,10 @@
 
 use std::cmp;
 
-use rocksdb::{
-    self, CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
+use crate::storage::engine::{
+    CompactionJobInfo, EventListener as RocksEventListener, FlushJobInfo, IngestionInfo,
+    WriteStallCondition, WriteStallInfo,
 };
-
 use crate::util::collections::HashSet;
 use crate::util::rocksdb_util::engine_metrics::*;
 use crate::util::rocksdb_util::properties::RangeProperties;
@@ -42,7 +42,7 @@ fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
     }
 }
 
-impl rocksdb::EventListener for EventListener {
+impl RocksEventListener for EventListener {
     fn on_flush_completed(&self, info: &FlushJobInfo) {
         STORE_ENGINE_EVENT_COUNTER_VEC
             .with_label_values(&[&self.db_name, info.cf_name(), "flush"])
@@ -150,7 +150,7 @@ impl CompactionListener {
     }
 }
 
-impl rocksdb::EventListener for CompactionListener {
+impl RocksEventListener for CompactionListener {
     fn on_compaction_completed(&self, info: &CompactionJobInfo) {
         if info.status().is_err() {
             return;

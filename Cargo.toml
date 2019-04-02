@@ -10,8 +10,8 @@ publish = false
 
 [features]
 default = []
-portable = ["rocksdb/portable"]
-sse = ["rocksdb/sse"]
+portable = ["rocksdb_do_not_use/portable"]
+sse = ["rocksdb_do_not_use/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
 no-jemalloc = ["tikv_alloc/no-jemalloc"]
@@ -124,9 +124,9 @@ log_wrappers = { path = "components/log_wrappers" }
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
-[dependencies.rocksdb]
-git = "https://github.com/zhangjinpeng1987/rust-rocksdb.git"
-branch = "improve-write-batch"
+[dependencies.rocksdb_do_not_use]
+git = "https://github.com/pingcap/rust-rocksdb.git"
+package = "rocksdb"
 
 [dependencies.prometheus]
 version = "0.4.2"
