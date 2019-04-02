@@ -626,7 +626,6 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     use std::mem;
 
     unsafe {
-        let expect = expect as libc::rlim_t;
         let mut fd_limit = mem::zeroed();
         let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
         if err != 0 {
