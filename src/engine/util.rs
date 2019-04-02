@@ -127,16 +127,13 @@ pub fn get_range_properties_cf(
 
 #[cfg(test)]
 mod tests {
-    use std::u64;
-
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
     use tempdir::TempDir;
 
     use crate::engine::rocks;
     use crate::engine::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
+    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
     use crate::engine::ALL_CFS;
     use crate::engine::DB;
-    use crate::storage::Key;
 
     use super::*;
 
@@ -165,17 +162,23 @@ mod tests {
         let db = new_engine_opt(path_str, DBOptions::new(), cfs_opts).unwrap();
 
         let wb = WriteBatch::new();
-        let ts: u64 = 12345;
-        let keys = vec![
-            Key::from_raw(b"k1").append_ts(ts),
-            Key::from_raw(b"k2").append_ts(ts),
-            Key::from_raw(b"k3").append_ts(ts),
-            Key::from_raw(b"k4").append_ts(ts),
-        ];
+        let ts: u8 = 12;
+        let keys: Vec<_> = vec![
+            b"k1".to_vec(),
+            b"k2".to_vec(),
+            b"k3".to_vec(),
+            b"k4".to_vec(),
+        ]
+        .into_iter()
+        .map(|mut k| {
+            k.append(&mut vec![ts; 8]);
+            k
+        })
+        .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
         for (_, key) in keys.iter().enumerate() {
-            kvs.push((key.as_encoded().as_slice(), b"value"));
+            kvs.push((key.as_slice(), b"value"));
         }
         let kvs_left: Vec<(&[u8], &[u8])> = vec![(kvs[0].0, kvs[0].1), (kvs[3].0, kvs[3].1)];
         for &(k, v) in kvs.as_slice() {
@@ -188,15 +191,9 @@ mod tests {
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ["k2", "k4").
-        let start = Key::from_raw(b"k2").append_ts(u64::MAX);
-        let end = Key::from_raw(b"k4");
-        delete_all_in_range(
-            &db,
-            start.as_encoded().as_slice(),
-            end.as_encoded().as_slice(),
-            use_delete_range,
-        )
-        .unwrap();
+        let start = b"k2";
+        let end = b"k4";
+        delete_all_in_range(&db, start, end, use_delete_range).unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
