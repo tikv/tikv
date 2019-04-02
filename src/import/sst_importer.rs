@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
-use rocksdb::{IngestExternalFileOptions, DB};
 use uuid::Uuid;
 
+use crate::storage::engine::{IngestExternalFileOptions, DB};
 use crate::util::rocksdb_util::{
     get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion,
 };

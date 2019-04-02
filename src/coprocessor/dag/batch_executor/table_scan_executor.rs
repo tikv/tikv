@@ -302,22 +302,22 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::datum::encode_value;
+    use super::*;
+
+    use std::sync::Arc;
+
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use kvproto::coprocessor::KeyRange;
+    use tipb::expression::FieldType;
+    use tipb::schema::ColumnInfo;
+
     use crate::coprocessor::codec::mysql::Tz;
-    use crate::coprocessor::codec::table;
-    use crate::coprocessor::codec::{datum, Datum};
+    use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
     use crate::coprocessor::dag::batch_executor::statistics::*;
-    use crate::coprocessor::dag::batch_executor::table_scan_executor::BatchTableScanExecutor;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
-    use cop_datatype::FieldTypeAccessor;
-    use cop_datatype::FieldTypeTp;
-    use kvproto::coprocessor::KeyRange;
-    use std::sync::Arc;
-    use tipb::expression::FieldType;
-    use tipb::schema::ColumnInfo;
 
     #[test]
     fn test_basic() {
@@ -399,7 +399,7 @@ mod tests {
                 let mut ci = ColumnInfo::new();
                 ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                 ci.set_column_id(4);
-                ci.set_default_val(encode_value(&[Datum::F64(4.5)]).unwrap());
+                ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
                 ci
             },
         ];
@@ -802,7 +802,7 @@ mod tests {
         // Case 10. Execution summary
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorNormal::new(1),
+                ExecSummaryCollectorEnabled::new(1),
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone()],

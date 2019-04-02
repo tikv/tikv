@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{atomic, Arc};
-
 /// Data to be flowed between parent and child executors at once during `collect_statistics()`
 /// invocation.
 ///
@@ -55,37 +53,39 @@ impl BatchExecuteStatistics {
 #[derive(Default)]
 pub struct ExecSummary {
     /// Total time cost in this executor.
-    pub time_processed_ms: Arc<atomic::AtomicUsize>,
+    pub time_processed_ms: usize,
 
     /// How many rows this executor produced totally.
     pub num_produced_rows: usize,
 
-    /// How many times executor's `next()` is called.
+    /// How many times executor's `next_batch()` is called.
     pub num_iterations: usize,
 }
 
 impl ExecSummary {
     #[inline]
     pub fn merge_into(self, target: &mut Self) {
-        target.time_processed_ms.fetch_add(
-            self.time_processed_ms.load(atomic::Ordering::Relaxed),
-            atomic::Ordering::Relaxed,
-        );
+        target.time_processed_ms += self.time_processed_ms;
         target.num_produced_rows += self.num_produced_rows;
         target.num_iterations += self.num_iterations;
     }
 }
 
+/// A trait for all execution summary collectors.
 pub trait ExecSummaryCollector: Send {
-    type TimeRecorderGuard;
+    type DurationRecorder;
 
     /// Creates a new instance with specified output slot index.
     fn new(output_index: usize) -> Self
     where
         Self: Sized;
 
-    /// Creates a guard that will collect elapsed time as the scope duration when it is dropped.
-    fn collect_scope_duration(&self) -> Self::TimeRecorderGuard;
+    /// Returns an instance that will record elapsed duration. The instance should be later
+    /// passed back to `inc_elapsed_duration` when processing is complete.
+    fn start_record_duration(&self) -> Self::DurationRecorder;
+
+    /// Increases processed time.
+    fn inc_elapsed_duration(&mut self, dr: Self::DurationRecorder);
 
     /// Increases produced rows counter.
     fn inc_produced_rows(&mut self, rows: usize);
@@ -97,44 +97,33 @@ pub trait ExecSummaryCollector: Send {
     fn collect_into(&mut self, target: &mut [Option<ExecSummary>]);
 }
 
-/// A helper to record duration for timing fields for `ExecSummary` based on `Drop`.
-pub struct ExecSummaryTimeGuard {
-    start_time: crate::util::time::Instant,
-    collect_target: Arc<atomic::AtomicUsize>,
-}
-
-impl Drop for ExecSummaryTimeGuard {
-    #[inline]
-    fn drop(&mut self) {
-        let elapsed = (self.start_time.elapsed_secs() * 1000f64) as usize;
-        self.collect_target
-            .fetch_add(elapsed, atomic::Ordering::Relaxed);
-    }
-}
-
-/// A normal `ExecSummaryCollector`. Acts like `collect = true`.
-pub struct ExecSummaryCollectorNormal {
+/// A normal `ExecSummaryCollector` that simply collects execution summaries.
+/// It acts like `collect = true`.
+pub struct ExecSummaryCollectorEnabled {
     output_index: usize,
     counts: ExecSummary,
 }
 
-impl ExecSummaryCollector for ExecSummaryCollectorNormal {
-    type TimeRecorderGuard = ExecSummaryTimeGuard;
+impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
+    type DurationRecorder = crate::util::time::Instant;
 
     #[inline]
-    fn new(output_index: usize) -> ExecSummaryCollectorNormal {
-        ExecSummaryCollectorNormal {
+    fn new(output_index: usize) -> ExecSummaryCollectorEnabled {
+        ExecSummaryCollectorEnabled {
             output_index,
             counts: Default::default(),
         }
     }
 
     #[inline]
-    fn collect_scope_duration(&self) -> Self::TimeRecorderGuard {
-        ExecSummaryTimeGuard {
-            start_time: crate::util::time::Instant::now_coarse(),
-            collect_target: self.counts.time_processed_ms.clone(),
-        }
+    fn start_record_duration(&self) -> Self::DurationRecorder {
+        crate::util::time::Instant::now_coarse()
+    }
+
+    #[inline]
+    fn inc_elapsed_duration(&mut self, dr: Self::DurationRecorder) {
+        let elapsed_time = crate::util::time::duration_to_ms(dr.elapsed()) as usize;
+        self.counts.time_processed_ms += elapsed_time;
     }
 
     #[inline]
@@ -162,7 +151,7 @@ impl ExecSummaryCollector for ExecSummaryCollectorNormal {
 pub struct ExecSummaryCollectorDisabled;
 
 impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
-    type TimeRecorderGuard = ();
+    type DurationRecorder = ();
 
     #[inline]
     fn new(_output_index: usize) -> ExecSummaryCollectorDisabled {
@@ -170,7 +159,10 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
     }
 
     #[inline]
-    fn collect_scope_duration(&self) -> Self::TimeRecorderGuard {}
+    fn start_record_duration(&self) -> Self::DurationRecorder {}
+
+    #[inline]
+    fn inc_elapsed_duration(&mut self, _dr: Self::DurationRecorder) {}
 
     #[inline]
     fn inc_produced_rows(&mut self, _rows: usize) {}
