@@ -400,16 +400,25 @@ impl ApplyContext {
                     panic!("failed to write to engine: {:?}", e);
                 });
         }
-        if self.sync_log_hint && self.raft_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(true);
-            let raft_wb = self.raft_wb.take().unwrap();
-            self.engines
-                .raft
-                .write_opt(raft_wb, &write_opts)
-                .unwrap_or_else(|e| {
-                    panic!("failed to write to engine: {:?}", e);
-                });
+        if self.raft_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
+            if self.sync_log_hint {
+                let mut write_opts = WriteOptions::new();
+                write_opts.set_sync(true);
+                let raft_wb = self.raft_wb.take().unwrap();
+                self.engines
+                    .raft
+                    .write_opt(raft_wb, &write_opts)
+                    .unwrap_or_else(|e| {
+                        panic!("failed to write to engine: {:?}", e);
+                    });
+            } else {
+                // Delegates always write apply state when they apply raft cmds,
+                // so if there is no sync cmd for a long time, this may cause a
+                // large raft write batch which causes high write duration.
+                // To keep raft write batch small we can clear it if there is no
+                // sync cmd in the current cmd batch.
+                self.raft_wb_mut().clear();
+            }
         }
         if self.sync_log_hint {
             self.sync_log_hint = false;
@@ -810,7 +819,10 @@ impl ApplyDelegate {
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
-        // when a peer become leader, it will send an empty entry.
+        // When a peer become leader, it will send an empty entry.
+        // In order to enable read index as soon as possible, we should persist
+        // this log immediately.
+        apply_ctx.sync_log_hint = true;
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
         self.apply_state = state;
