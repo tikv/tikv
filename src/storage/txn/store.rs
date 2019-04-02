@@ -302,7 +302,7 @@ mod tests {
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
     use crate::engine::IterOption;
-    use crate::storage::engine::{
+    use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
     use crate::storage::mvcc::Error as MvccError;

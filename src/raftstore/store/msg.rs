@@ -26,7 +26,7 @@ use raft::SnapshotStatus;
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
-use crate::storage::engine::CompactedEvent;
+use crate::storage::kv::CompactedEvent;
 use crate::util::escape;
 
 use super::RegionSnapshot;

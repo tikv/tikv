@@ -33,7 +33,7 @@ use std::io;
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Engine(err: crate::storage::engine::Error) {
+        Engine(err: crate::storage::kv::Error) {
             from()
             cause(err)
             description(err.description())

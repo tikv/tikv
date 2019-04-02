@@ -25,7 +25,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::{
     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
-use tikv::storage::engine::{DBOptions, Writable, DB};
+use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb_util;
 

@@ -208,7 +208,7 @@ impl<E: Engine> Endpoint<E> {
         let (callback, future) = crate::util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
+            .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error
             .map_err(Error::from)

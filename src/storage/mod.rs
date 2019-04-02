@@ -12,8 +12,8 @@
 // limitations under the License.
 
 pub mod config;
-pub mod engine;
 pub mod gc_worker;
+pub mod kv;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -46,13 +46,13 @@ use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
-    TestEngineBuilder,
-};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::kv::raftkv::RaftKv;
+pub use self::kv::{
+    self as engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
+    FlowStatistics, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
+    Statistics, StatisticsSummary, TestEngineBuilder,
+};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
@@ -663,7 +663,7 @@ impl<E: Engine> Storage<E> {
         future::result(val)
             .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
-            // map storage::engine::Error -> storage::txn::Error -> storage::Error
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -1096,7 +1096,7 @@ impl<E: Engine> Storage<E> {
                 let key_len = key.len();
                 let result = snapshot
                     .get_cf(cf, &Key::from_encoded(key))
-                    // map storage::engine::Error -> storage::Error
+                    // map storage::kv::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {
                         if let Some(ref value) = r {

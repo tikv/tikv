@@ -31,10 +31,8 @@ use tikv::raftstore::store::{
 };
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::storage::engine::raftkv::CmdRes;
-use tikv::storage::engine::{
-    Callback as EngineCallback, CbContext, Modify, Result as EngineResult,
-};
+use tikv::storage::kv::raftkv::CmdRes;
+use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::types::Key;
 use tikv::storage::{Engine, RaftKv};
 

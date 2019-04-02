@@ -13,7 +13,7 @@
 
 use crate::engine::IterOption;
 use crate::engine::{CF_LOCK, CF_WRITE};
-use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::properties::MvccProperties;
@@ -496,7 +496,7 @@ mod tests {
     use crate::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
-    use crate::storage::engine::Modify;
+    use crate::storage::kv::Modify;
     use crate::storage::mvcc::properties::{MvccProperties, MvccPropertiesCollectorFactory};
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};

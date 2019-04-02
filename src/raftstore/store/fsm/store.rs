@@ -37,7 +37,7 @@ use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::Result;
-use crate::storage::engine::{CompactedEvent, CompactionListener};
+use crate::storage::kv::{CompactedEvent, CompactionListener};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::{duration_to_sec, SlowTimer};
@@ -1998,7 +1998,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
-    use crate::storage::engine::CompactedEvent;
+    use crate::storage::kv::CompactedEvent;
     use crate::storage::mvcc::properties::{IndexHandle, IndexHandles, SizeProperties};
     use protobuf::RepeatedField;
 

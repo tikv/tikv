@@ -37,7 +37,7 @@ use crate::raftstore::errors::Error as RaftServerError;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
-use crate::storage::{self, engine, Key, Value};
+use crate::storage::{self, kv as engine, Key, Value};
 
 quick_error! {
     #[derive(Debug)]

@@ -13,7 +13,7 @@
 
 use crate::engine::CfName;
 use crate::engine::IterOption;
-use crate::storage::engine::Result;
+use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 
 /// A handy utility to build a snapshot cursor according to various configurations.

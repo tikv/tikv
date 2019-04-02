@@ -24,9 +24,7 @@ use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
 use raft::StateRole;
 
-use super::engine::{
-    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
-};
+use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
 use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
@@ -1148,7 +1146,7 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::engine::Result as EngineResult;
+    use crate::storage::kv::Result as EngineResult;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;

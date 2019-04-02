@@ -34,7 +34,7 @@ use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::engine::CompactionListener;
+use tikv::storage::kv::CompactionListener;
 use tikv::storage::Config as StorageConfig;
 use tikv::util::config::*;
 use tikv::util::escape;
