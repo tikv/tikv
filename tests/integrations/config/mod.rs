@@ -15,10 +15,10 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use rocksdb::{
+use slog::Level;
+use tikv::storage::engine::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use slog::Level;
 use toml;
 
 use tikv::config::*;
