@@ -28,8 +28,8 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use crate::engine::rocks::CompactionJobInfo;
 use crate::engine::rocks;
+use crate::engine::rocks::CompactionJobInfo;
 use crate::engine::{WriteBatch, WriteOptions, DB};
 use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::pd::{PdClient, PdRunner, PdTask};

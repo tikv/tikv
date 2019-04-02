@@ -18,8 +18,3 @@ rand = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
-
-[dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
-rev = "5f49f9ef202d8ad9515de2bb05c8395c1c66b8aa"
-package = "rocksdb"
