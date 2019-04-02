@@ -83,12 +83,12 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.put_msg_cf(handle, &keys::region_state_key(region.get_id()), &state)?;
     write_initial_apply_state(&engines.kv, &wb, region.get_id())?;
-    engines.kv.write(wb)?;
+    engines.kv.write(&wb)?;
     engines.kv.sync_wal()?;
 
     let raft_wb = WriteBatch::new();
     write_initial_raft_state(&raft_wb, region.get_id())?;
-    engines.raft.write(raft_wb)?;
+    engines.raft.write(&raft_wb)?;
     engines.raft.sync_wal()?;
     Ok(())
 }
@@ -104,7 +104,7 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
     wb.delete_cf(handle, &keys::region_state_key(region_id))?;
     wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
-    engines.kv.write(wb)?;
+    engines.kv.write(&wb)?;
     engines.kv.sync_wal()?;
     Ok(())
 }
