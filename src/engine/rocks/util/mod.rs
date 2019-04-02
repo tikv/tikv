@@ -18,6 +18,7 @@ pub mod stats;
 
 use std::cmp;
 use std::fs::{self, File};
+use std::io::{self, ErrorKind};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -35,7 +36,6 @@ use self::engine_metrics::{
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::engine::{ALL_CFS, CF_DEFAULT};
-use crate::util::file::{calc_crc32, copy_and_sync};
 use sys_info;
 
 pub use self::event_listener::EventListener;
@@ -43,6 +43,49 @@ pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::engine::rocks::CFHandle;
 
 use super::{Error, Result};
+
+/// Copies the source file to a newly created file.
+pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
+    if !from.as_ref().is_file() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "the source path is not an existing regular file",
+        ));
+    }
+
+    let mut reader = File::open(from)?;
+    let mut writer = File::create(to)?;
+
+    let res = io::copy(&mut reader, &mut writer)?;
+    writer.sync_all()?;
+    Ok(res)
+}
+
+/// Calculates the given file's CRC32 checksum.
+// This is a copy of `util::calc_crc32`.
+// TODO: remove it once util becomes a component.
+fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
+    use crc::crc32::{self, Digest, Hasher32};
+    use std::fs::OpenOptions;
+    use std::io::Read;
+    const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
+
+    let mut digest = Digest::new(crc32::IEEE);
+    let mut f = OpenOptions::new().read(true).open(path)?;
+    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
+    loop {
+        match f.read(&mut buf[..]) {
+            Ok(0) => {
+                return Ok(digest.sum32());
+            }
+            Ok(n) => {
+                digest.write(&buf[..n]);
+            }
+            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+}
 
 // Zlib and bzip2 are too slow.
 const COMPRESSION_PRIORITY: [DBCompressionType; 3] = [

@@ -64,23 +64,6 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
     }
 }
 
-/// Copies the source file to a newly created file.
-pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "the source path is not an existing regular file",
-        ));
-    }
-
-    let mut reader = File::open(from)?;
-    let mut writer = File::create(to)?;
-
-    let res = io::copy(&mut reader, &mut writer)?;
-    writer.sync_all()?;
-    Ok(res)
-}
-
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// Calculates the given file's CRC32 checksum.
