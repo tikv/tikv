@@ -159,13 +159,13 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Scanner::new(
+        Ok(Scanner::new(
             store,
             crate::coprocessor::dag::ScanOn::Table,
             desc,
             self.key_only,
             range,
-        )
+        )?)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -313,6 +313,7 @@ mod tests {
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
     use crate::coprocessor::dag::batch_executor::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
@@ -801,7 +802,7 @@ mod tests {
         // Case 10. Execution summary
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorNormal::new(1),
+                ExecSummaryCollectorEnabled::new(1),
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone()],

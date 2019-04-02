@@ -60,7 +60,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         self.summary_collector.inc_iterations();
-        let _guard = self.summary_collector.collect_scope_duration();
+        let timer = self.summary_collector.start_record_duration();
 
         let mut result = self.src.next_batch(expect_rows);
 
@@ -90,6 +90,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
             result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
             self.summary_collector.inc_produced_rows(rows_len);
         }
+
+        self.summary_collector.inc_elapsed_duration(timer);
 
         result.warnings.merge(&mut self.context.warnings);
         result

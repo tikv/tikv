@@ -49,6 +49,8 @@ pub trait ScanExecutorImpl: Send {
     ) -> Result<()>;
 }
 
+/// A shared executor implementation for both table scan and index scan. Implementation differences
+/// between table scan and index scan are further given via `ScanExecutorImpl`.
 pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
 {
     /// The execution summary collector of this executor.
@@ -216,14 +218,11 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
 
+        let timer = self.summary_collector.start_record_duration();
         self.summary_collector.inc_iterations();
-        let _guard = self.summary_collector.collect_scope_duration();
 
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
-
-        data.assert_columns_equal_length();
-        self.summary_collector.inc_produced_rows(data.rows_len());
 
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
@@ -235,6 +234,10 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Err(_) | Ok(true) => self.is_ended = true,
             Ok(false) => {}
         };
+
+        data.assert_columns_equal_length();
+        self.summary_collector.inc_produced_rows(data.rows_len());
+        self.summary_collector.inc_elapsed_duration(timer);
 
         BatchExecuteResult {
             data,
