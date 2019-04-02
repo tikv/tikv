@@ -29,29 +29,6 @@ impl MemComparableByteCodec {
         (src_len / MEMCMP_GROUP_SIZE + 1) * (MEMCMP_GROUP_SIZE + 1)
     }
 
-    /// Gets the first encoded bytes' length in memory-comparable-encoded data.
-    ///
-    /// Memory-comparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
-    /// This function gets the total bytes length of memory-comparable-encoded data, including the length prefix.
-    ///
-    /// Note:
-    ///     - This function won't check whether the bytes are encoded correctly.
-    ///     - There can be multiple memory-comparable-encoded data, placed one by one. This function only returns
-    ///       the length of the first one.
-    pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
-        let mut idx = MEMCMP_GROUP_SIZE;
-        loop {
-            if encoded.len() < idx + 1 {
-                return encoded.len();
-            }
-            let marker = encoded[idx];
-            if (desc && marker != 0) || (!desc && marker != !0u8) {
-                return idx + 1;
-            }
-            idx += MEMCMP_GROUP_SIZE + 1
-        }
-    }
-
     /// Encodes all bytes in the `src` into `dest` in ascending memory-comparable format.
     ///
     /// Returns the number of bytes encoded.
@@ -456,21 +433,54 @@ impl CompactByteEncoder for std::fs::File {
         Ok(())
     }
 }
+/// Gets the first encoded bytes' length in compactly encoded data.
+///
+/// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+/// This function gets the total bytes length of compact-encoded data, including the length prefix.
+///
+/// Note:
+///     - This function won't check whether the bytes are encoded correctly.
+///     - There can be multiple compact-encoded data, placed one by one. This function only returns
+///       the length of the first one.
+pub fn encoded_compact_len(mut data: &[u8]) -> usize {
+    let last_encoded = data.as_ptr();
+    let total_len = data.len();
+    let vn = match data.read_var_i64() {
+        Ok(vn) => vn as usize,
+        Err(e) => {
+            dbg!(format!("failed to decode bytes' length: {:?}", e));
+            return total_len;
+        }
+    };
+    unsafe { vn + data.as_ptr().offset_from(last_encoded) as usize }
+}
+
+/// Gets the first encoded bytes' length in memory-comparable-encoded data.
+///
+/// Memory-comparable-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
+/// This function gets the total bytes length of memory-comparable-encoded data, including the length prefix.
+///
+/// Note:
+///     - This function won't check whether the bytes are encoded correctly.
+///     - There can be multiple memory-comparable-encoded data, placed one by one. This function only returns
+///       the length of the first one.
+pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
+    let mut idx = MEMCMP_GROUP_SIZE;
+    loop {
+        if encoded.len() < idx + 1 {
+            return encoded.len();
+        }
+        let marker = encoded[idx];
+        if (desc && marker != 0) || (!desc && marker != !0u8) {
+            return idx + 1;
+        }
+        idx += MEMCMP_GROUP_SIZE + 1
+    }
+}
 
 pub trait CompactByteDecoder {
     /// Decodes bytes which are encoded by `write_compact_bytes` before.
     fn read_compact_bytes(&mut self) -> Result<Vec<u8>>;
-
-    /// Gets the first encoded bytes' length in compactly encoded data.
-    ///
-    /// Compact-encoding includes a VarInt encoded length prefix (1 ~ 9 bytes) and N bytes payload.
-    /// This function gets the total bytes length of compact-encoded data, including the length prefix.
-    ///
-    /// Note:
-    ///     - This function won't check whether the bytes are encoded correctly.
-    ///     - There can be multiple compact-encoded data, placed one by one. This function only returns
-    ///       the length of the first one.
-    fn encoded_compact_len(&mut self) -> usize;
 }
 
 impl<T: NumberDecoder> CompactByteDecoder for T {
@@ -483,19 +493,6 @@ impl<T: NumberDecoder> CompactByteDecoder for T {
             return Ok(bs);
         }
         Err(Error::UnexpectedEOF)
-    }
-
-    fn encoded_compact_len(&mut self) -> usize {
-        let last_encoded = self.bytes().as_ptr() as usize;
-        let total_len = self.bytes().len();
-        let vn = match self.read_var_i64() {
-            Ok(vn) => vn as usize,
-            Err(e) => {
-                dbg!(format!("failed to decode bytes' length: {:?}", e));
-                return total_len;
-            }
-        };
-        vn + (self.bytes().as_ptr() as usize - last_encoded)
     }
 }
 
@@ -515,10 +512,6 @@ impl<T: Read> CompactByteDecoder for std::io::BufReader<T> {
         self.read_exact(&mut data)?;
         Ok(data)
     }
-
-    fn encoded_compact_len(&mut self) -> usize {
-        unimplemented!()
-    }
 }
 
 #[cfg(test)]
@@ -529,6 +522,30 @@ mod tests {
     use super::{
         CompactByteDecoder, CompactByteEncoder, MemComparableByteCodec, MemComparableByteDecoder,
     };
+    use crate::byte::encoded_compact_len;
+
+    #[test]
+    fn test_encode_bytes_len() {
+        let cases = vec![
+            (
+                vec![1, 2, 3, 4, 5, 6, 7, 0, 254],
+                vec![254, 253, 252, 251, 250, 249, 248, 255, 1],
+            ),
+            (
+                vec![0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 247],
+                vec![
+                    255, 255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255,
+                    255, 8,
+                ],
+            ),
+        ];
+        for (asc, desc) in cases {
+            let len = super::encoded_bytes_len(asc.as_slice(), false);
+            assert_eq!(len, asc.len());
+            let len = super::encoded_bytes_len(desc.as_slice(), true);
+            assert_eq!(len, desc.len());
+        }
+    }
 
     #[test]
     fn test_read_bytes() {
@@ -553,6 +570,20 @@ mod tests {
         ];
         for (src, encoded) in cases {
             assert_eq!(encoded.as_slice().read_bytes().unwrap(), src);
+        }
+    }
+
+    #[test]
+    fn test_encode_compact_byte_len() {
+        let cases = vec![
+            (1, vec![0]),
+            (6, vec![10, 104, 101, 108, 108, 111]),
+            (6, vec![10, 104, 101, 108, 108, 111, 222]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140]),
+            (7, vec![12, 228, 184, 150, 231, 149, 140, 222]),
+        ];
+        for (len, case) in cases {
+            assert_eq!(len, encoded_compact_len(&case));
         }
     }
 
@@ -582,7 +613,7 @@ mod tests {
         ];
         for (s, exp) in cases {
             let mut path = env::temp_dir();
-            path.push("compact-codec-file");
+            path.push("write-compact-codec-file");
             {
                 let mut f = File::create(&path).unwrap();
                 f.write_compact_bytes(s.as_bytes()).unwrap();
@@ -602,7 +633,7 @@ mod tests {
         ];
         for (exp, encoded) in cases {
             let mut path = env::temp_dir();
-            path.push("compact-codec-file");
+            path.push("read-compact-codec-file");
             fs::write(&path, &encoded).unwrap();
             let f = File::open(&path).unwrap();
             let mut rdr = BufReader::new(f);
