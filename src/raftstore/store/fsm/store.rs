@@ -479,7 +479,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 });
             let data_size = self.poll_ctx.kv_wb.data_size();
             if data_size > KV_WB_SHRINK_SIZE {
-                self.poll_ctx.kv_wb = WriteBatch::new();
+                self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
             } else {
                 self.poll_ctx.kv_wb.clear();
             }
