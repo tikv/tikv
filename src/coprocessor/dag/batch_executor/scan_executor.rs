@@ -224,6 +224,8 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
 
+        data.assert_columns_equal_length();
+        
         // TODO
         // If `is_drained.is_err()`, it means that there is an error after *successfully* retrieving
         // these rows. After that, if we only consumes some of the rows (TopN / Limit), we should
@@ -235,7 +237,6 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Ok(false) => {}
         };
 
-        data.assert_columns_equal_length();
         self.summary_collector.inc_produced_rows(data.rows_len());
         self.summary_collector.inc_elapsed_duration(timer);
 
