@@ -28,7 +28,6 @@ features = ["nightly"]
 
 [dependencies.engine_rocksdb]
 git = "https://github.com/pingcap/rust-rocksdb.git"
-rev = "5f49f9ef202d8ad9515de2bb05c8395c1c66b8aa"
 package = "rocksdb"
 
 [dev-dependencies]

@@ -70,6 +70,7 @@ use super::super::RegionTask;
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -388,16 +389,25 @@ impl ApplyContext {
     /// Writes all the changes into RocksDB.
     pub fn write_to_db(&mut self) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let wb = self.wb.take().unwrap();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             self.engines
                 .kv
-                .write_opt(wb, &write_opts)
+                .write_opt(self.wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
             self.sync_log_hint = false;
+            let data_size = self.wb().data_size();
+            if data_size > APPLY_WB_SHRINK_SIZE {
+                // Control the memory usage for the WriteBatch.
+                self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            } else {
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                self.wb().clear();
+            }
+            self.wb_last_bytes = 0;
+            self.wb_last_keys = 0;
         }
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -918,7 +928,10 @@ impl ApplyDelegate {
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.wb_mut().set_save_point();
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
-            Ok(a) => a,
+            Ok(a) => {
+                ctx.wb_mut().pop_save_point().unwrap();
+                a
+            }
             Err(e) => {
                 // clear dirty values.
                 ctx.wb_mut().rollback_to_save_point().unwrap();

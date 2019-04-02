@@ -239,7 +239,7 @@ fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
             return Err(box_err!("{}", msg));
         }
     }
-    engine.write_kv(wb)?;
+    engine.write_kv(&wb)?;
     Ok(())
 }
 

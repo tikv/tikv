@@ -85,19 +85,19 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let mut raft_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Avoid large write batch to reduce latency.
-                raft_engine.write(raft_wb).unwrap();
-                raft_wb = WriteBatch::new();
+                raft_engine.write(&raft_wb).unwrap();
+                raft_wb.clear();
             }
         }
         // TODO: disable WAL here.
         if !raft_wb.is_empty() {
-            raft_engine.write(raft_wb).unwrap();
+            raft_engine.write(&raft_wb).unwrap();
         }
         Ok(end_idx - first_idx)
     }
@@ -164,7 +164,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(raft_wb).unwrap();
+        raft_db.write(&raft_wb).unwrap();
 
         let tbls = vec![
             (

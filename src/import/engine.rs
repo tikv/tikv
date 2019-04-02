@@ -94,7 +94,7 @@ impl Engine {
         }
 
         let size = wb.data_size();
-        self.write_without_wal(wb)?;
+        self.write_without_wal(&wb)?;
 
         Ok(size)
     }

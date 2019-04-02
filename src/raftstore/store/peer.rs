@@ -488,8 +488,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.write_kv_opt(kv_wb, &write_opts)?;
-        ctx.engines.write_raft_opt(raft_wb, &write_opts)?;
+        ctx.engines.write_kv_opt(&kv_wb, &write_opts)?;
+        ctx.engines.write_raft_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

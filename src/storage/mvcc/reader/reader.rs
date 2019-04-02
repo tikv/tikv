@@ -596,7 +596,7 @@ mod tests {
                     }
                 }
             }
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
         }
 
         fn flush(&mut self) {
