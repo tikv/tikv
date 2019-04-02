@@ -1,0 +1,12 @@
+# Configuration for casual benchmarking. Fast build + fast runtime.
+
+[profile.release]
+opt-level = 3
+debug = false
+rpath = false
+lto = "thin"
+debug-assertions = false
+codegen-units = 1
+panic = "abort"
+incremental = true
+overflow-checks = false

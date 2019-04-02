@@ -14,11 +14,11 @@
 use std::cmp::Ordering;
 
 use kvproto::metapb::Region;
-use rocksdb::{SeekKey, DB};
 
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
+use crate::storage::engine::{SeekKey, DB};
 use crate::storage::types::Key;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
@@ -229,9 +229,9 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use crate::storage::engine::Writable;
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
     use tempdir::TempDir;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};

@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DB;
-
 use crate::raftstore::store::keys;
+use crate::storage::engine::DB;
 use crate::util::config::ReadableSize;
 
 use super::super::error::Result;
@@ -118,11 +117,10 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
-    use rocksdb::{ColumnFamilyOptions, DBOptions};
     use tempdir::TempDir;
 
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};

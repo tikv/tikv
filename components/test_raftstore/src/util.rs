@@ -18,8 +18,8 @@ use std::{thread, u64};
 
 use protobuf;
 use rand::Rng;
-use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
+use tikv::storage::engine::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
