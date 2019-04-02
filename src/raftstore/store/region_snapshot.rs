@@ -455,18 +455,10 @@ mod tests {
         r.set_end_key(b"key4".to_vec());
         let store = new_peer_storage(engines.clone(), &r);
 
-        let (key1, value1) = (b"key1", 2u64);
-        engines.kv.put_u64(&data_key(key1), value1).expect("");
-        let (key2, value2) = (b"key2", 2i64);
-        engines.kv.put_i64(&data_key(key2), value2).expect("");
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::new(&store);
-        let v1 = snap.get_u64(key1).expect("");
-        assert_eq!(v1, Some(value1));
-        let v2 = snap.get_i64(key2).expect("");
-        assert_eq!(v2, Some(value2));
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
