@@ -818,14 +818,14 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     options: &ApplyOptions,
     handle: &CFHandle,
 ) -> Result<()> {
-    let mut wb = WriteBatch::new();
+    let wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
         check_abort(&options.abort)?;
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if batch_size > 0 {
-                box_try!(options.db.write(wb));
+                box_try!(options.db.write(&wb));
             }
             break;
         }
@@ -835,8 +835,8 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
         batch_size += value.len();
         box_try!(wb.put_cf(handle, &key, &value));
         if batch_size >= options.write_batch_size {
-            box_try!(options.db.write(wb));
-            wb = WriteBatch::new();
+            box_try!(options.db.write(&wb));
+            wb.clear();
             batch_size = 0;
         }
     }
@@ -2493,7 +2493,7 @@ pub mod tests {
             .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1342;
+            let snap_size = 1438;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.
