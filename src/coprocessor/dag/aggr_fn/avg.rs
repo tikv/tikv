@@ -25,7 +25,7 @@ use crate::coprocessor::Result;
 pub trait AvgDataType: Evaluable {
     fn zero() -> Self;
 
-    fn add(&self, ctx: &mut EvalContext, other: &Self) -> Result<Self>;
+    fn add_assign(&mut self, ctx: &mut EvalContext, other: &Self) -> Result<()>;
 }
 
 impl AvgDataType for Decimal {
@@ -35,9 +35,10 @@ impl AvgDataType for Decimal {
     }
 
     #[inline]
-    fn add(&self, _ctx: &mut EvalContext, other: &Self) -> Result<Self> {
-        let r: crate::coprocessor::codec::Result<Decimal> = (self + other).into();
-        Ok(r?)
+    fn add_assign(&mut self, _ctx: &mut EvalContext, other: &Self) -> Result<()> {
+        let r: crate::coprocessor::codec::Result<Decimal> = (self as &Self + other).into();
+        *self = r?;
+        Ok(())
         // TODO: If there is truncate error, should it be a warning instead?
     }
 }
@@ -49,14 +50,23 @@ impl AvgDataType for Real {
     }
 
     #[inline]
-    fn add(&self, _ctx: &mut EvalContext, other: &Self) -> Result<Self> {
-        Ok(self + other)
+    fn add_assign(&mut self, _ctx: &mut EvalContext, other: &Self) -> Result<()> {
+        *self += other;
+        Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct AggrFnAvg<T: AvgDataType> {
     _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T: AvgDataType> AggrFnAvg<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<T> super::AggrFunction for AggrFnAvg<T>
@@ -109,26 +119,24 @@ where
     type ResultTargetType = [VectorValue];
 
     #[inline]
-    fn update_concrete(
-        &mut self,
-        ctx: &mut EvalContext,
-        value: &Option<Self::ParameterType>,
-    ) -> Result<()> {
+    fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         match value {
             None => Ok(()),
             Some(value) => {
-                self.sum.add(ctx, value)?;
+                self.sum.add_assign(ctx, value)?;
                 self.count += 1;
                 Ok(())
             }
         }
     }
 
+    // Note: The result of `AVG()` is returned as `[count, sum]`.
+
     #[inline]
     fn push_result_concrete(
         &self,
         _ctx: &mut EvalContext,
-        target: &mut Self::ResultTargetType,
+        target: &mut [VectorValue],
     ) -> Result<()> {
         assert_eq!(target.len(), 2);
         target[0].push_int(Some(self.count as Int));
@@ -138,5 +146,54 @@ where
             target[1].push(Some(self.sum.clone()))
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::AggrFunction;
+    use super::*;
+
+    #[test]
+    fn test_update() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnAvg::<f64>::new();
+        let mut state = function.create_state();
+
+        let mut result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Real),
+        ];
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].as_int_slice(), &[Some(0)]);
+        assert_eq!(result[1].as_real_slice(), &[None]);
+
+        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0)]);
+        assert_eq!(result[1].as_real_slice(), &[None, None]);
+
+        state.update(&mut ctx, &Some(5.0)).unwrap();
+        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+        state.update(&mut ctx, &Some(10.0)).unwrap();
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0), Some(2)]);
+        assert_eq!(result[1].as_real_slice(), &[None, None, Some(15.0)]);
+
+        state
+            .update_vector(&mut ctx, &[Some(0.0), Some(-4.5), None])
+            .unwrap();
+
+        state.push_result(&mut ctx, &mut result[..]).unwrap();
+        assert_eq!(
+            result[0].as_int_slice(),
+            &[Some(0), Some(0), Some(2), Some(4)]
+        );
+        assert_eq!(
+            result[1].as_real_slice(),
+            &[None, None, Some(15.0), Some(10.5)]
+        );
     }
 }

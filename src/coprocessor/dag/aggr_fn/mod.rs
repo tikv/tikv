@@ -14,6 +14,7 @@
 //! This module provides aggregate functions for batch executors.
 
 mod avg;
+mod count;
 
 use cop_datatype::EvalType;
 
@@ -254,7 +255,7 @@ mod tests {
             fn update_concrete(
                 &mut self,
                 _ctx: &mut EvalContext,
-                value: &Option<Self::ParameterType>,
+                value: &Option<Int>,
             ) -> Result<()> {
                 if let Some(v) = value {
                     self.sum += *v;
@@ -265,7 +266,7 @@ mod tests {
             fn push_result_concrete(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut Vec<Option<Real>>,
             ) -> Result<()> {
                 target.push(Some(self.sum as f64));
                 Ok(())
@@ -329,6 +330,14 @@ mod tests {
             let mut target: Vec<Option<Decimal>> = Vec::new();
             let _ = (&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
                 .push_result(&mut ctx, &mut target);
+        });
+        assert!(result.is_err());
+
+        let result = panic_hook::recover_safe(|| {
+            let mut s = s.clone();
+            let mut target: Vec<VectorValue> = Vec::new();
+            let _ = (&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
+                .push_result(&mut ctx, &mut target[..]);
         });
         assert!(result.is_err());
     }
