@@ -274,9 +274,8 @@ mod tests {
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
-    /// Single column node
-    #[test]
-    fn test_eval_single_column_node() {
+    /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
+    fn new_single_column_node_fixture() -> (LazyBatchColumnVec, [FieldType; 2]) {
         let columns = LazyBatchColumnVec::from(vec![
             {
                 // this column is not referenced
@@ -298,7 +297,7 @@ mod tests {
                 col
             },
         ]);
-        let schema = &[
+        let schema = [
             {
                 let mut ft = FieldType::new();
                 ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
@@ -310,13 +309,19 @@ mod tests {
                 ft
             },
         ];
+        (columns, schema)
+    }
 
-        // Case 1. column 1
+    /// Single column node
+    #[test]
+    fn test_eval_single_column_node_normal() {
+        let (columns, schema) = new_single_column_node_fixture();
+
         let mut c = columns.clone();
         let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, schema, &mut c);
+        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -325,32 +330,11 @@ mod tests {
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
 
-        // Case 2. column 1 but rows doesn't match, which should panic
-        let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
-        let exp = RpnExpression::from(rpn_nodes);
-        let mut ctx = EvalContext::default();
-        let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 4, schema, &mut c);
-        });
-        assert!(hooked_eval.is_err());
-
-        // Case 3. column 1 but rows doesn't match, which should panic
-        let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
-        let exp = RpnExpression::from(rpn_nodes);
-        let mut ctx = EvalContext::default();
-        let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 6, schema, &mut c);
-        });
-        assert!(hooked_eval.is_err());
-
-        // Case 4. column 0
         let mut c = columns.clone();
         let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 0 }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, schema, &mut c);
+        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -358,6 +342,32 @@ mod tests {
             [Some(1.0), None, Some(7.5), None, None]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
+    }
+
+    /// Single column node but row numbers in `eval()` does not match column length, should panic.
+    #[test]
+    fn test_eval_single_column_node_mismatch_rows() {
+        let (columns, schema) = new_single_column_node_fixture();
+
+        let mut c = columns.clone();
+        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
+        let exp = RpnExpression::from(rpn_nodes);
+        let mut ctx = EvalContext::default();
+        let hooked_eval = ::panic_hook::recover_safe(|| {
+            // smaller row number
+            let _ = exp.eval(&mut ctx, 4, &schema, &mut c);
+        });
+        assert!(hooked_eval.is_err());
+
+        let mut c = columns.clone();
+        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
+        let exp = RpnExpression::from(rpn_nodes);
+        let mut ctx = EvalContext::default();
+        let hooked_eval = ::panic_hook::recover_safe(|| {
+            // larger row number
+            let _ = exp.eval(&mut ctx, 6, &schema, &mut c);
+        });
+        assert!(hooked_eval.is_err());
     }
 
     /// Single function call node (i.e. nullary function)
