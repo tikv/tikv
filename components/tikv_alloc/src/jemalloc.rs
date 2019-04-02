@@ -6,6 +6,12 @@ use jemallocator::ffi::malloc_stats_print;
 use libc::{self, c_char, c_void};
 use std::{io, ptr, slice};
 
+
+pub type Allocator = jemallocator::Jemalloc;
+pub const fn allocator() -> Allocator {
+    jemallocator::Jemalloc
+}
+
 pub use self::profiling::dump_prof;
 
 pub fn dump_stats() -> String {

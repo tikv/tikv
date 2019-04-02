@@ -92,27 +92,22 @@
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
+pub mod default;
 
 pub type AllocStats = Vec<(&'static str, usize)>;
 
+// Allocators
 #[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-#[path = "profile_imp/jemalloc.rs"]
-mod profile_imp;
-#[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
-#[path = "profile_imp/default.rs"]
-mod profile_imp;
-
-pub use crate::profile_imp::*;
-
-// The Jemallocator Allocator
-#[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
-// The TCMalloc Allocator
+#[path = "jemalloc.rs"]
+mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
-use tcmalloc::TCMalloc;
+#[path = "tc.rs"]
+mod imp;
+#[cfg(not(all(unix, not(fuzzing), any(feature = "jemalloc", feature = "tcmalloc"))))]
+#[path = "system.rs"]
+mod imp;
 
-#[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
+pub use crate::imp::*;
+
 #[global_allocator]
-static ALLOC: TCMalloc = tcmalloc::TCMalloc;
+static ALLOC: imp::Allocator = imp::allocator();
