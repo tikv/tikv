@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
 
-use crate::engine::rocks::{
-    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
+use crate::rocks::{
+    self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
+    HistogramData, DB,
 };
-use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
-use time;
-
-use crate::engine::rocks;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
@@ -1253,8 +1251,8 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use crate::engine::rocks;
-    use crate::engine::ALL_CFS;
+    use crate::rocks;
+    use crate::ALL_CFS;
 
     #[test]
     fn test_flush() {

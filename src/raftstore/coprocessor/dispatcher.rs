@@ -15,8 +15,8 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use crate::engine::rocks::DB;
 use crate::raftstore::store::CasualRouter;
+use engine::rocks::DB;
 
 use super::*;
 

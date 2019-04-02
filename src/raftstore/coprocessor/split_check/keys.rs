@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::rocks::DB;
-use crate::engine::rocks::{self, Range};
-use crate::engine::util;
-use crate::engine::CF_WRITE;
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use crate::storage::mvcc::properties::get_range_entries_and_versions;
 use crate::storage::mvcc::properties::RangeProperties;
+use engine::rocks::DB;
+use engine::rocks::{self, Range};
+use engine::util;
+use engine::CF_WRITE;
 use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
@@ -225,11 +225,6 @@ pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) ->
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::{new_engine_opt, CFOptions};
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use crate::engine::DB;
-    use crate::engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};
     use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::properties::{
@@ -238,6 +233,11 @@ mod tests {
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
     use crate::util::worker::Runnable;
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::DB;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
     use std::cmp;

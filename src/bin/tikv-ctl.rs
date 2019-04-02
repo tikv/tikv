@@ -57,10 +57,10 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 
+use engine::rocks;
+use engine::Engines;
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::config::TiKvConfig;
-use tikv::engine::rocks;
-use tikv::engine::Engines;
-use tikv::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
@@ -2217,7 +2217,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
             security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    engine_rocksdb::run_ldb_tool(&args, &opts);
+    engine::rocks::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

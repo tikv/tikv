@@ -17,7 +17,7 @@ use std::sync::Arc;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
-use crate::engine::rocks::DB;
+use engine::rocks::DB;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
@@ -27,7 +27,6 @@ use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
 use super::metrics::*;
-use crate::engine::rocks::util::*;
 use crate::pd::{Error, PdClient, RegionStat};
 use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
@@ -41,6 +40,7 @@ use crate::util::collections::HashMap;
 use crate::util::escape;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use engine::rocks::util::*;
 use prometheus::local::LocalHistogram;
 
 /// Uses an asynchronous thread to tell PD something.

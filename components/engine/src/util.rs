@@ -13,10 +13,10 @@
 
 use std::u64;
 
-use crate::engine::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
+use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 
-use crate::engine::rocks;
-use crate::engine::{CF_LOCK, CF_RAFT};
+use crate::rocks;
+use crate::{CF_LOCK, CF_RAFT};
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
@@ -129,11 +129,11 @@ pub fn get_range_properties_cf(
 mod tests {
     use tempdir::TempDir;
 
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
-    use crate::engine::ALL_CFS;
-    use crate::engine::DB;
+    use crate::rocks;
+    use crate::rocks::util::{get_cf_handle, new_engine_opt, CFOptions};
+    use crate::rocks::{ColumnFamilyOptions, DBOptions, SeekKey, Writable};
+    use crate::ALL_CFS;
+    use crate::DB;
 
     use super::*;
 

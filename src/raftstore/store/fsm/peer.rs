@@ -35,16 +35,14 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use crate::engine::CF_RAFT;
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
 use crate::util::{escape, is_zero_duration};
+use engine::CF_RAFT;
 
-use crate::engine::Engines;
-use crate::engine::{Peekable, Snapshot as EngineSnapshot};
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
@@ -66,6 +64,8 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
+use engine::Engines;
+use engine::{Peekable, Snapshot as EngineSnapshot};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,

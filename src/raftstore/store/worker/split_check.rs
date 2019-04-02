@@ -17,18 +17,18 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
-use crate::engine::rocks::DBIterator;
+use engine::rocks::DBIterator;
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::engine::{CfName, CF_WRITE, LARGE_CFS};
-use crate::engine::{IterOption, Iterable, DB};
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
 use crate::util::worker::Runnable;
+use engine::{CfName, CF_WRITE, LARGE_CFS};
+use engine::{IterOption, Iterable, DB};
 
 use super::metrics::*;
 

@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use kvproto::metapb::Region;
 use std::cmp;
 use std::sync::Arc;
 
-use crate::engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 
 /// Snapshot of a region.
 ///
@@ -194,7 +194,7 @@ fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     iter_opt.set_upper_bound(upper_bound);
 }
 
-// we use crate::engine::rocks's style iterator, doesn't need to impl std iterator.
+// we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
@@ -344,17 +344,17 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::compact_files_in_range;
-    use crate::engine::rocks::Writable;
-    use crate::engine::Engines;
-    use crate::engine::*;
-    use crate::engine::{ALL_CFS, CF_DEFAULT};
     use crate::raftstore::store::keys::*;
     use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
     use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use crate::util::{escape, worker};
+    use engine::rocks;
+    use engine::rocks::util::compact_files_in_range;
+    use engine::rocks::Writable;
+    use engine::Engines;
+    use engine::*;
+    use engine::{ALL_CFS, CF_DEFAULT};
 
     use super::*;
 

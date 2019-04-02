@@ -19,10 +19,10 @@ use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
+use engine::rocks;
+use engine::Engines;
+use engine::*;
 use test_raftstore::*;
-use tikv::engine::rocks;
-use tikv::engine::Engines;
-use tikv::engine::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};

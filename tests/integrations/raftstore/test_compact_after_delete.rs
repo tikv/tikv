@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::Range;
+use engine::CF_WRITE;
 use test_raftstore::*;
-use tikv::engine::rocks::util::get_cf_handle;
-use tikv::engine::rocks::Range;
-use tikv::engine::CF_WRITE;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;

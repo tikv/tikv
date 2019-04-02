@@ -15,7 +15,7 @@ use std::io::Write;
 use std::string::FromUtf8Error;
 use std::sync::Arc;
 
-use crate::engine::rocks::DB;
+use crate::rocks::DB;
 
 const ROCKSDB_DB_STATS_KEY: &str = "rocksdb.dbstats";
 const ROCKSDB_CF_STATS_KEY: &str = "rocksdb.cfstats";

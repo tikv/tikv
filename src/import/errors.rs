@@ -57,7 +57,7 @@ quick_error! {
             from()
             display("RocksDB {}", msg)
         }
-        Engine(err: crate::engine::Error) {
+        Engine(err: engine::Error) {
             from()
             description("Engine error")
             display("Engine {:?}", err)

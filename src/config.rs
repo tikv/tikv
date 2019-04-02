@@ -20,18 +20,13 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::usize;
 
-use crate::engine::rocks::{
+use engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
 
-use crate::engine::rocks::util::{
-    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
-    NoopSliceTransform,
-};
-use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
 use crate::raftstore::coprocessor::Config as CopConfig;
@@ -50,6 +45,11 @@ use crate::util::config::{
 };
 use crate::util::security::SecurityConfig;
 use crate::util::time::duration_to_sec;
+use engine::rocks::util::{
+    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+    NoopSliceTransform,
+};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;

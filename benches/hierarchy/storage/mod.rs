@@ -17,7 +17,7 @@ use test_storage::SyncTestStorageBuilder;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
 
-use tikv::engine::CF_DEFAULT;
+use engine::CF_DEFAULT;
 use tikv::storage::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};

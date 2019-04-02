@@ -32,8 +32,6 @@ use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
 use time::Timespec;
 
-use crate::engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use crate::engine::{Engines, Peekable};
 use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
@@ -48,6 +46,8 @@ use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
 use crate::util::{escape, MustConsumeVec};
+use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
+use engine::{Engines, Peekable};
 use raft::{
     self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
     NO_LIMIT,

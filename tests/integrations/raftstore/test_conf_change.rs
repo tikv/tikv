@@ -23,8 +23,8 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
+use engine::*;
 use test_raftstore::*;
-use tikv::engine::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;

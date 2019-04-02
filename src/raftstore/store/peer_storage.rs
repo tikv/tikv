@@ -27,24 +27,24 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
-use crate::engine::rocks;
-use crate::engine::rocks::{DBOptions, Writable};
-use crate::engine::Engines;
-use crate::engine::CF_RAFT;
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use crate::util;
 use crate::util::worker::Scheduler;
+use engine::rocks;
+use engine::rocks::{DBOptions, Writable};
+use engine::Engines;
+use engine::CF_RAFT;
 
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::config;
-use crate::engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
-use crate::engine::{Iterable, Mutable, Peekable};
+use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
+use engine::{Iterable, Mutable, Peekable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -1486,7 +1486,7 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
 ) -> Result<()> {
-    use crate::engine::{WriteOptions, CF_RAFT};
+    use engine::{WriteOptions, CF_RAFT};
 
     if !rocks::util::db_exist(kv_path) {
         debug!("no need upgrade to v3.x");
@@ -1622,15 +1622,15 @@ pub fn maybe_upgrade_from_2_to_3(
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::rocks::util::new_engine;
-    use crate::engine::rocks::WriteBatch;
-    use crate::engine::Engines;
-    use crate::engine::{ALL_CFS, CF_DEFAULT};
     use crate::raftstore::store::fsm::apply::compact_raft_log;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
     use crate::util::worker::{Scheduler, Worker};
+    use engine::rocks::util::new_engine;
+    use engine::rocks::WriteBatch;
+    use engine::Engines;
+    use engine::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};

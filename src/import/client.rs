@@ -19,7 +19,7 @@ use crate::grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, 
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
 
-use crate::engine::rocks::SequentialFile;
+use engine::rocks::SequentialFile;
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;

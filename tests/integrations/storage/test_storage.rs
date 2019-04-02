@@ -21,8 +21,8 @@ use rand::random;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
+use engine::{CF_DEFAULT, CF_LOCK};
 use test_storage::*;
-use tikv::engine::{CF_DEFAULT, CF_LOCK};
 use tikv::storage::gc_worker::GC_BATCH_SIZE;
 use tikv::storage::mvcc::MAX_TXN_WRITE_SIZE;
 use tikv::storage::txn::RESOLVE_LOCK_BATCH_SIZE;

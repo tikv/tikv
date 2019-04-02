@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::rocks::{
+use crate::rocks::{
     CompactionJobInfo, FlushJobInfo, IngestionInfo, WriteStallCondition, WriteStallInfo,
 };
 
-use crate::engine::rocks::util::engine_metrics::*;
+use crate::rocks::util::engine_metrics::*;
 
 pub struct EventListener {
     db_name: String,

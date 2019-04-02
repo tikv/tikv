@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::CfName;
-use crate::engine::IterOption;
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
+use engine::CfName;
+use engine::IterOption;
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {

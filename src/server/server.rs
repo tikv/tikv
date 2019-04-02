@@ -26,7 +26,6 @@ use tokio_threadpool::{Builder as ThreadPoolBuilder, ThreadPool};
 use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
-use crate::engine::Engines;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::SnapManager;
 use crate::storage::{Engine, Storage};
@@ -34,6 +33,7 @@ use crate::util::security::SecurityManager;
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;
 use crate::util::Either;
+use engine::Engines;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;

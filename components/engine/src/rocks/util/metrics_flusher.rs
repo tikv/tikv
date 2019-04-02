@@ -11,9 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::rocks::util::engine_metrics::*;
-use crate::engine::rocks::DB;
-use crate::engine::Engines;
+use crate::rocks::util::engine_metrics::*;
+use crate::rocks::DB;
+use crate::Engines;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -47,7 +47,7 @@ impl MetricsFlusher {
         let interval = self.interval;
         self.sender = Some(tx);
         let h = Builder::new()
-            .name(thd_name!("rocksdb-metrics"))
+            .name("rocksdb-metrics".to_owned())
             .spawn(move || {
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
@@ -95,10 +95,10 @@ fn flush_metrics(db: &DB, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::CFOptions;
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use crate::engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use crate::rocks;
+    use crate::rocks::util::CFOptions;
+    use crate::rocks::{ColumnFamilyOptions, DBOptions};
+    use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;

@@ -13,9 +13,9 @@
 
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
+use engine::rocks::DB;
+use engine::*;
 use test_raftstore::*;
-use tikv::engine::rocks::DB;
-use tikv::engine::*;
 use tikv::raftstore::store::*;
 use tikv::util::collections::HashMap;
 use tikv::util::config::*;

@@ -17,11 +17,11 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::{error, result};
 
-use crate::engine::rocks::TablePropertiesCollection;
-use crate::engine::IterOption;
-use crate::engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
+use engine::rocks::TablePropertiesCollection;
+use engine::IterOption;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
@@ -656,8 +656,8 @@ quick_error! {
     }
 }
 
-impl From<crate::engine::Error> for Error {
-    fn from(err: crate::engine::Error) -> Error {
+impl From<engine::Error> for Error {
+    fn from(err: engine::Error) -> Error {
         Error::Request(err.into())
     }
 }
@@ -679,11 +679,11 @@ pub type Result<T> = result::Result<T, Error>;
 pub mod tests {
     use super::SEEK_BOUND;
     use super::*;
-    use crate::engine::IterOption;
-    use crate::engine::CF_DEFAULT;
     use crate::storage::{CfName, Key};
     use crate::util::codec::bytes;
     use crate::util::escape;
+    use engine::IterOption;
+    use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 

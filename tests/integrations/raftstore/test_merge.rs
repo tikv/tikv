@@ -20,9 +20,9 @@ use kvproto::raft_cmdpb::CmdType;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::Peekable;
+use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
-use tikv::engine::Peekable;
-use tikv::engine::{CF_RAFT, CF_WRITE};
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;

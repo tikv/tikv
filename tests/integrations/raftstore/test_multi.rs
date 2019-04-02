@@ -22,8 +22,8 @@ use rand::Rng;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
 
+use engine::Peekable;
 use test_raftstore::*;
-use tikv::engine::Peekable;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;

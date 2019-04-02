@@ -24,11 +24,11 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use tempdir::TempDir;
 
+use engine::rocks;
+use engine::rocks::DB;
+use engine::Engines;
+use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
-use tikv::engine::rocks;
-use tikv::engine::rocks::DB;
-use tikv::engine::Engines;
-use tikv::engine::CF_DEFAULT;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;

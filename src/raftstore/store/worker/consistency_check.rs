@@ -17,10 +17,10 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
-use crate::engine::CF_RAFT;
-use crate::engine::{Iterable, Peekable, Snapshot};
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use crate::util::worker::Runnable;
+use engine::CF_RAFT;
+use engine::{Iterable, Peekable, Snapshot};
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
@@ -154,14 +154,14 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rocks::util::new_engine;
-    use crate::engine::rocks::Writable;
-    use crate::engine::Snapshot;
-    use crate::engine::{CF_DEFAULT, CF_RAFT};
     use crate::raftstore::store::keys;
     use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
+    use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::Snapshot;
+    use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;

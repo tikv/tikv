@@ -27,19 +27,19 @@ use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
 
 use crate::config::DbConfig;
-use crate::engine::rocks::util::{new_engine_opt, CFOptions};
-use crate::engine::rocks::{
-    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
-    WriteBatch as RawBatch, DB,
-};
-use crate::engine::{CF_DEFAULT, CF_WRITE};
 use crate::raftstore::store::keys;
 use crate::storage::is_short_value;
 use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::util::config::MB;
+use engine::rocks::util::{new_engine_opt, CFOptions};
+use engine::rocks::{
+    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    WriteBatch as RawBatch, DB,
+};
+use engine::{CF_DEFAULT, CF_WRITE};
 
 use super::common::*;
 use super::Result;
@@ -377,18 +377,18 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
 mod tests {
     use super::*;
 
-    use crate::engine::rocks::IngestExternalFileOptions;
+    use engine::rocks::IngestExternalFileOptions;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use std::fs::File;
     use std::io::{self, Write};
     use tempdir::TempDir;
 
-    use crate::engine::rocks::util::new_engine_opt;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
     use crate::util::file::file_exists;
     use crate::util::security::encrypted_env_from_cipher_file;
+    use engine::rocks::util::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();

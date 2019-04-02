@@ -21,10 +21,10 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
-use tikv::engine;
-use tikv::engine::rocks;
-use tikv::engine::rocks::DB;
-use tikv::engine::{ALL_CFS, CF_DEFAULT};
+use engine;
+use engine::rocks;
+use engine::rocks::DB;
+use engine::{ALL_CFS, CF_DEFAULT};
 use tikv::raftstore::store::{
     cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,

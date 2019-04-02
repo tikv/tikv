@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
@@ -27,10 +28,7 @@ use raft::StateRole;
 use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use crate::engine::rocks::util::get_cf_handle;
-use crate::engine::rocks::DB;
-use crate::engine::util::delete_all_in_range_cf;
+use super::{Callback, Error, Key, Result};
 use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
@@ -38,6 +36,9 @@ use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::DB;
+use engine::util::delete_all_in_range_cf;
 use log_wrappers::DisplayValue;
 
 // TODO: make it configurable.

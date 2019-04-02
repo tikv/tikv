@@ -23,10 +23,10 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::engine::rocks::load_latest_options;
-use crate::engine::rocks::set_external_sst_file_global_seq_no;
-use crate::engine::rocks::supported_compression;
-use crate::engine::rocks::{
+use crate::rocks::load_latest_options;
+use crate::rocks::set_external_sst_file_global_seq_no;
+use crate::rocks::supported_compression;
+use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
@@ -35,12 +35,11 @@ use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
-use crate::engine::{ALL_CFS, CF_DEFAULT};
-use sys_info;
+use crate::{ALL_CFS, CF_DEFAULT};
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
-pub use crate::engine::rocks::CFHandle;
+pub use crate::rocks::CFHandle;
 
 use super::{Error, Result};
 
@@ -635,11 +634,11 @@ fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rocks::{
+    use crate::rocks::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
         Writable, DB,
     };
-    use crate::engine::CF_DEFAULT;
+    use crate::CF_DEFAULT;
     use tempdir::TempDir;
 
     #[test]

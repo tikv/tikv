@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::engine::IterOption;
-use crate::engine::{CF_LOCK, CF_WRITE};
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
@@ -20,6 +18,8 @@ use crate::storage::mvcc::properties::MvccProperties;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
+use engine::IterOption;
+use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
@@ -490,10 +490,6 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::rocks::util::CFOptions;
-    use crate::engine::rocks::{self, ColumnFamilyOptions, DBOptions};
-    use crate::engine::rocks::{Writable, WriteBatch, DB};
-    use crate::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::kv::Modify;
@@ -501,6 +497,10 @@ mod tests {
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options};
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{Writable, WriteBatch, DB};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
     use std::sync::Arc;

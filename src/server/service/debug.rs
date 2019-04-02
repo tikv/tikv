@@ -25,12 +25,12 @@ use kvproto::raft_cmdpb::{
 };
 use protobuf::text_format::print_to_string;
 
-use crate::engine::rocks::util::stats as rocksdb_stats;
-use crate::engine::Engines;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
 use crate::util::metrics;
+use engine::rocks::util::stats as rocksdb_stats;
+use engine::Engines;
 
 use tikv_alloc;
 

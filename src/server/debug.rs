@@ -27,13 +27,6 @@ use protobuf::{self, Message, RepeatedField};
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
-use crate::engine::rocks::util::get_cf_handle;
-use crate::engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
-};
-use crate::engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
@@ -52,6 +45,13 @@ use crate::util::collections::HashSet;
 use crate::util::config::ReadableSize;
 use crate::util::escape;
 use crate::util::worker::Worker;
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
+    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
+use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -1396,17 +1396,17 @@ mod tests {
     use std::iter::FromIterator;
     use std::sync::Arc;
 
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempdir::TempDir;
 
     use super::*;
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::{new_engine_opt, CFOptions};
-    use crate::engine::Mutable;
-    use crate::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use crate::storage::mvcc::{Lock, LockType};
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::Mutable;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();

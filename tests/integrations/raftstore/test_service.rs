@@ -24,11 +24,11 @@ use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use engine::rocks::Writable;
+use engine::*;
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::engine::rocks::Writable;
-use tikv::engine::*;
-use tikv::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use tikv::raftstore::store::keys;
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::Key;

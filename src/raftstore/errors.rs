@@ -19,8 +19,8 @@ use std::result;
 use crossbeam::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
+use crate::pd;
 use crate::util::codec;
-use crate::{engine, pd};
 use kvproto::{errorpb, metapb};
 use raft;
 

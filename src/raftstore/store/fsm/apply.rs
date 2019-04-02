@@ -36,12 +36,6 @@ use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 use uuid::Uuid;
 
-use crate::engine::rocks;
-use crate::engine::rocks::Writable;
-use crate::engine::rocks::{Snapshot, WriteBatch, WriteOptions};
-use crate::engine::Engines;
-use crate::engine::{util as engine_util, Mutable, Peekable};
-use crate::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
@@ -58,6 +52,12 @@ use crate::util::worker::Scheduler;
 use crate::util::Either;
 use crate::util::{escape, MustConsumeVec};
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::Engines;
+use engine::{util as engine_util, Mutable, Peekable};
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use raft::NO_LIMIT;
 
 use super::metrics::*;
@@ -2859,12 +2859,12 @@ mod tests {
     use std::sync::*;
     use std::time::*;
 
-    use crate::engine::rocks::Writable;
-    use crate::engine::{WriteBatch, DB};
     use crate::raftstore::coprocessor::*;
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
+    use engine::rocks::Writable;
+    use engine::{WriteBatch, DB};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;

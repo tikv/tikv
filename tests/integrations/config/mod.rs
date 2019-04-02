@@ -17,10 +17,10 @@ use std::path::PathBuf;
 
 use slog::Level;
 
-use tikv::config::*;
-use tikv::engine::rocks::{
+use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
+use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
 use tikv::raftstore::coprocessor::Config as CopConfig;

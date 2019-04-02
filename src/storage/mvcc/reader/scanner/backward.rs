@@ -15,11 +15,11 @@ use std::cmp::Ordering;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::engine::CF_DEFAULT;
 use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
 use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
+use engine::CF_DEFAULT;
 
 use super::util::CheckLockResult;
 use super::ScannerConfig;

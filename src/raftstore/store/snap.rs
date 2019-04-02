@@ -31,16 +31,6 @@ use protobuf::Message;
 use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
-use crate::engine::rocks::util::{
-    get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
-};
-use crate::engine::rocks::Snapshot as DbSnapshot;
-use crate::engine::rocks::{
-    self, CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter,
-    Writable, WriteBatch, DB,
-};
-use crate::engine::Iterable;
-use crate::engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
@@ -52,6 +42,16 @@ use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_
 use crate::util::io_limiter::{IOLimiter, LimitWriter};
 use crate::util::time::duration_to_sec;
 use crate::util::HandyRwLock;
+use engine::rocks::util::{
+    get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
+};
+use engine::rocks::Snapshot as DbSnapshot;
+use engine::rocks::{
+    self, CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+    Writable, WriteBatch, DB,
+};
+use engine::Iterable;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
@@ -1520,14 +1520,14 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::CFOptions;
-    use crate::engine::rocks::{DBOptions, Env, DB};
-    use crate::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
-    use crate::engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use crate::raftstore::Result;
+    use engine::rocks;
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{DBOptions, Env, DB};
+    use engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";

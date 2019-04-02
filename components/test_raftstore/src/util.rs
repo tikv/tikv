@@ -27,9 +27,9 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::{CompactionJobInfo, DB};
+use engine::*;
 use tikv::config::*;
-use tikv::engine::rocks::{CompactionJobInfo, DB};
-use tikv::engine::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;

@@ -17,12 +17,12 @@ mod util;
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::storage::mvcc::Result;
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;

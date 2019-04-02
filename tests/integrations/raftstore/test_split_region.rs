@@ -21,9 +21,9 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
+use engine::Iterable;
+use engine::CF_WRITE;
 use test_raftstore::*;
-use tikv::engine::Iterable;
-use tikv::engine::CF_WRITE;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};

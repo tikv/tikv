@@ -47,11 +47,11 @@ use std::usize;
 use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
+use engine::rocks;
+use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
-use tikv::engine::rocks;
-use tikv::engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::engine::Engines;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};

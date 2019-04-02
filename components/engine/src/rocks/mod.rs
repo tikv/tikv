@@ -197,7 +197,7 @@ impl Mutable for WriteBatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rocks::Writable;
+    use crate::rocks::Writable;
     use kvproto::metapb::Region;
     use std::sync::Arc;
     use tempdir::TempDir;

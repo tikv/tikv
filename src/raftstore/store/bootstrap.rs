@@ -14,11 +14,11 @@
 use super::keys;
 use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use super::util::new_peer;
-use crate::engine::rocks;
-use crate::engine::rocks::Writable;
-use crate::engine::{Engines, Iterable, Mutable, WriteBatch, DB};
-use crate::engine::{CF_DEFAULT, CF_RAFT};
 use crate::raftstore::Result;
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
+use engine::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
@@ -123,11 +123,11 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use crate::engine::rocks;
-    use crate::engine::Engines;
-    use crate::engine::Peekable;
-    use crate::engine::CF_DEFAULT;
     use crate::raftstore::store::keys;
+    use engine::rocks;
+    use engine::Engines;
+    use engine::Peekable;
+    use engine::CF_DEFAULT;
 
     #[test]
     fn test_bootstrap() {

@@ -16,12 +16,12 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use crate::engine::rocks::Writable;
-use crate::engine::util::MAX_DELETE_BATCH_SIZE;
-use crate::engine::Iterable;
-use crate::engine::{WriteBatch, DB};
 use crate::raftstore::store::keys;
 use crate::util::worker::Runnable;
+use engine::rocks::Writable;
+use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine::Iterable;
+use engine::{WriteBatch, DB};
 
 pub struct Task {
     pub raft_engine: Arc<DB>,
@@ -142,8 +142,8 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::rocks::util::new_engine;
-    use crate::engine::CF_DEFAULT;
+    use engine::rocks::util::new_engine;
+    use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
     use tempdir::TempDir;

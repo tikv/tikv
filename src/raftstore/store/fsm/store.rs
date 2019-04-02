@@ -28,10 +28,6 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use crate::engine::rocks;
-use crate::engine::rocks::CompactionJobInfo;
-use crate::engine::{WriteBatch, WriteOptions, DB};
-use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
@@ -44,9 +40,11 @@ use crate::util::time::{duration_to_sec, SlowTimer};
 use crate::util::timer::SteadyTimer;
 use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use engine::rocks;
+use engine::rocks::CompactionJobInfo;
+use engine::{WriteBatch, WriteOptions, DB};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
-use crate::engine::Engines;
-use crate::engine::{Iterable, Mutable, Peekable};
 use crate::import::SSTImporter;
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::fsm::metrics::*;
@@ -72,6 +70,8 @@ use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter, StoreMsg,
     StoreTick,
 };
+use engine::Engines;
+use engine::{Iterable, Mutable, Peekable};
 
 type Key = Vec<u8>;
 

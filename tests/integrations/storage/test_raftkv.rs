@@ -13,9 +13,9 @@
 
 use kvproto::kvrpcpb::Context;
 
+use engine::IterOption;
+use engine::{CfName, CF_DEFAULT};
 use test_raftstore::*;
-use tikv::engine::IterOption;
-use tikv::engine::{CfName, CF_DEFAULT};
 use tikv::storage::kv::*;
 use tikv::storage::{CFStatistics, Key};
 use tikv::util::codec::bytes;

@@ -22,14 +22,14 @@ use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use crate::engine::rocks;
-use crate::engine::rocks::DB;
-use crate::engine::LARGE_CFS;
-use crate::engine::{util, Range};
-use crate::engine::{CF_DEFAULT, CF_WRITE};
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use crate::storage::mvcc::properties::RangeProperties;
 use crate::util::escape;
+use engine::rocks;
+use engine::rocks::DB;
+use engine::LARGE_CFS;
+use engine::{util, Range};
+use engine::{CF_DEFAULT, CF_WRITE};
 
 pub struct Checker {
     max_size: u64,
@@ -354,9 +354,6 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
-    use crate::engine::rocks::util::{new_engine_opt, CFOptions};
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use crate::engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::raftstore::store::{
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
@@ -365,6 +362,9 @@ pub mod tests {
     use crate::storage::Key;
     use crate::util::config::ReadableSize;
     use crate::util::worker::Runnable;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;

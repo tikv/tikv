@@ -299,7 +299,7 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use crate::engine::rocks::Writable;
+    use engine::rocks::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 

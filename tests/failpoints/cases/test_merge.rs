@@ -22,8 +22,8 @@ use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::*;
 use test_raftstore::*;
-use tikv::engine::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;

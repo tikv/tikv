@@ -13,9 +13,9 @@
 
 use std::cmp;
 
-use crate::engine::rocks::{CompactionJobInfo, EventListener};
 use crate::storage::mvcc::properties::RangeProperties;
 use crate::util::collections::HashSet;
+use engine::rocks::{CompactionJobInfo, EventListener};
 
 pub struct CompactedEvent {
     pub cf: String,

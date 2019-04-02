@@ -13,15 +13,15 @@
 
 use std::cmp::Ordering;
 
-use crate::engine::rocks::{SeekKey, DB};
+use engine::rocks::{SeekKey, DB};
 use kvproto::metapb::Region;
 
 use crate::coprocessor::codec::table as table_codec;
-use crate::engine::CF_WRITE;
-use crate::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
 use crate::util::escape;
+use engine::CF_WRITE;
+use engine::{IterOption, Iterable};
 use kvproto::pdpb::CheckPolicy;
 
 use super::super::{
@@ -234,14 +234,14 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
-    use crate::engine::rocks::util::new_engine;
-    use crate::engine::rocks::Writable;
-    use crate::engine::ALL_CFS;
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
     use crate::util::codec::number::NumberEncoder;
     use crate::util::config::ReadableSize;
     use crate::util::worker::Runnable;
+    use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::ALL_CFS;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};

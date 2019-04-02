@@ -18,11 +18,11 @@ use std::time::Duration;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::Writable;
+use engine::CF_RAFT;
+use engine::{Iterable, Mutable, Peekable};
 use test_raftstore::*;
-use tikv::engine::rocks::util::get_cf_handle;
-use tikv::engine::rocks::Writable;
-use tikv::engine::CF_RAFT;
-use tikv::engine::{Iterable, Mutable, Peekable};
 use tikv::raftstore::store::keys;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {

@@ -20,14 +20,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
-use crate::engine::rocks::Writable;
+use engine::rocks::Writable;
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
-use crate::engine::rocks;
-use crate::engine::WriteBatch;
-use crate::engine::CF_RAFT;
-use crate::engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
@@ -41,6 +37,10 @@ use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
 use crate::util::timer::Timer;
 use crate::util::worker::{Runnable, RunnableWithTimer};
+use engine::rocks;
+use engine::WriteBatch;
+use engine::CF_RAFT;
+use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 
 use super::metrics::*;
 
@@ -675,11 +675,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::engine::rocks;
-    use crate::engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
-    use crate::engine::Engines;
-    use crate::engine::{Mutable, Peekable};
-    use crate::engine::{CF_DEFAULT, CF_RAFT};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
@@ -687,6 +682,11 @@ mod tests {
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
+    use engine::rocks;
+    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::Engines;
+    use engine::{Mutable, Peekable};
+    use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempdir::TempDir;
 

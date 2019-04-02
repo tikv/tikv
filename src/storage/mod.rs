@@ -32,13 +32,13 @@ use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::engine::rocks::DB;
-use crate::engine::IterOption;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use crate::util;
 use crate::util::collections::HashMap;
 use crate::util::worker::{self, Builder, ScheduleError, Worker};
+use engine::rocks::DB;
+use engine::IterOption;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -49,9 +49,9 @@ pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{
-    self as engine, CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError,
-    FlowStatistics, Iterator, Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot,
-    Statistics, StatisticsSummary, TestEngineBuilder,
+    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
+    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
@@ -64,7 +64,7 @@ pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
-use crate::engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -943,7 +943,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             modifies,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -1195,7 +1195,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -1223,7 +1223,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -1244,7 +1244,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -1278,7 +1278,7 @@ impl<E: Engine> Storage<E> {
                 start_key,
                 end_key,
             )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -1306,7 +1306,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())

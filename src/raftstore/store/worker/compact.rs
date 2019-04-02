@@ -17,13 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::engine::rocks;
-use crate::engine::rocks::util::compact_range;
-use crate::engine::CF_WRITE;
-use crate::engine::DB;
 use crate::storage::mvcc::properties::get_range_entries_and_versions;
 use crate::util::escape;
 use crate::util::worker::Runnable;
+use engine::rocks;
+use engine::rocks::util::compact_range;
+use engine::CF_WRITE;
+use engine::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -255,18 +255,18 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
-    use crate::engine::rocks::Writable;
+    use engine::rocks::Writable;
     use tempdir::TempDir;
 
-    use crate::engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use crate::engine::{WriteBatch, DB};
-    use crate::engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use crate::raftstore::store::keys::data_key;
     use crate::storage::mvcc::properties::get_range_entries_and_versions;
     use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
+    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{WriteBatch, DB};
+    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     use super::*;
 

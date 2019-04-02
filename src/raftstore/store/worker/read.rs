@@ -23,7 +23,6 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
 use time::Timespec;
 
-use crate::engine::DB;
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use crate::raftstore::store::util::{self, LeaseState, RemoteLease};
@@ -36,6 +35,7 @@ use crate::util::collections::HashMap;
 use crate::util::time::duration_to_sec;
 use crate::util::timer::Timer;
 use crate::util::worker::{Runnable, RunnableWithTimer};
+use engine::DB;
 
 use super::metrics::*;
 
@@ -591,11 +591,11 @@ mod tests {
     use tempdir::TempDir;
     use time::Duration;
 
-    use crate::engine::rocks;
-    use crate::engine::ALL_CFS;
     use crate::raftstore::store::util::Lease;
     use crate::raftstore::store::Callback;
     use crate::util::time::monotonic_raw_now;
+    use engine::rocks;
+    use engine::ALL_CFS;
 
     use super::*;
 

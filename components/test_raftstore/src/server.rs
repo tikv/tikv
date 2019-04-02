@@ -21,9 +21,9 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
 
+use engine::Engines;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
-use tikv::engine::Engines;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};

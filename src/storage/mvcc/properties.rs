@@ -18,15 +18,15 @@ use std::io::Read;
 use std::ops::{Deref, DerefMut};
 use std::u64;
 
-use crate::engine::rocks::{
-    CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
-    TitanBlobIndex, UserCollectedProperties, DB,
-};
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::util::codec::number::{self, NumberEncoder};
 use crate::util::codec::{Error, Result};
+use engine::rocks::{
+    CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    TitanBlobIndex, UserCollectedProperties, DB,
+};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -697,19 +697,19 @@ pub fn get_range_entries_and_versions(
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
-    use crate::engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{DBEntryType, TablePropertiesCollector};
     use rand::Rng;
     use tempdir::TempDir;
     use test::Bencher;
 
-    use crate::engine::rocks;
-    use crate::engine::rocks::util::CFOptions;
-    use crate::engine::{CF_WRITE, LARGE_CFS};
     use crate::raftstore::store::keys;
     use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
+    use engine::rocks;
+    use engine::rocks::util::CFOptions;
+    use engine::{CF_WRITE, LARGE_CFS};
 
     use super::*;
 
