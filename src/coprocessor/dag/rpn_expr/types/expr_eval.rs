@@ -1477,8 +1477,9 @@ mod tests {
         node_fn_d.mut_children().push(node_fn_a);
 
         // Build RPN expression from this expression tree.
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper)
-            .unwrap();
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper, 2)
+                .unwrap();
 
         let mut columns = LazyBatchColumnVec::from(vec![
             {
