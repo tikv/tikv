@@ -35,19 +35,15 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
 impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        // we needn't check whether expect_rows is 0 since src will check it.
-        let mut result = if expect_rows > self.expect_rows {
-            self.src.next_batch(self.expect_rows)
-        } else {
-            self.src.next_batch(expect_rows)
-        };
-        if result.is_drained.is_err() {
+        let mut result = self.src.next_batch(expect_rows);
+        if result.data.rows_len() <= self.expect_rows {
+            self.expect_rows -= result.data.rows_len();
             return result;
         }
-        self.expect_rows -= result.data.rows_len();
-        if self.expect_rows == 0 {
-            result.is_drained = Ok(true);
-        }
+
+        result.data.truncate(self.expect_rows);
+        self.expect_rows = 0;
+        result.is_drained = Ok(true);
         result
     }
 
@@ -175,20 +171,20 @@ mod tests {
         assert!(BatchLimitExecutor::new(src, 0).is_err());
     }
 
-    struct MockErrExecutor(Vec<FieldType>);
+    /// MockErrExecutor is based on MockExecutor, the only difference is
+    /// that when call the function next_batch, it always returns is_drained error.
+    struct MockErrExecutor(MockExecutor);
     impl Default for MockErrExecutor {
         fn default() -> Self {
-            MockErrExecutor(vec![])
+            MockErrExecutor(MockExecutor::new())
         }
     }
     impl BatchExecutor for MockErrExecutor {
         #[inline]
-        fn next_batch(&mut self, _: usize) -> BatchExecuteResult {
-            BatchExecuteResult {
-                data: LazyBatchColumnVec::from(vec![]),
-                warnings: EvalConfig::default().new_eval_warnings(),
-                is_drained: Err(box_err!("next batch error")),
-            }
+        fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+            let mut result = self.0.next_batch(expect_rows);
+            result.is_drained = Err(box_err!("next batch mock error"));
+            result
         }
 
         #[inline]
@@ -196,14 +192,24 @@ mod tests {
 
         #[inline]
         fn schema(&self) -> &[FieldType] {
-            self.0.as_ref()
+            self.0.schema()
         }
     }
 
     #[test]
-    fn test_next_batch_err() {
+    fn test_next_batch_err_after_last_row() {
         let src = MockErrExecutor::default();
         let mut limit = BatchLimitExecutor::new(src, 1).unwrap();
+        let res = limit.next_batch(10);
+        assert!(res.is_drained.is_ok());
+        assert!(res.is_drained.as_ref().unwrap());
+        assert_eq!(res.data.rows_len(), 1);
+    }
+
+    #[test]
+    fn test_next_batch_err_before_last_row() {
+        let src = MockErrExecutor::default();
+        let mut limit = BatchLimitExecutor::new(src, 3).unwrap();
         let res = limit.next_batch(1);
         assert!(res.is_drained.is_err());
     }
