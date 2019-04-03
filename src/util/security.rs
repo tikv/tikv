@@ -12,13 +12,11 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
-
-use super::file;
 
 use crate::storage::engine::Env;
 
@@ -164,20 +162,9 @@ pub fn encrypted_env_from_cipher_file<P: AsRef<Path>>(
     path: P,
     base_env: Option<Arc<Env>>,
 ) -> Result<Arc<Env>, String> {
-    let cipher_hex = match file::read_all(path) {
+    let cipher_hex = match fs::read_to_string(path) {
         Err(e) => return Err(format!("failed to load cipher file: {:?}", e)),
-        Ok(content) => {
-            // Trim head and tail space
-            match String::from_utf8(content) {
-                Err(e) => {
-                    return Err(format!(
-                        "failed to convert file content to string, error: {:?}",
-                        e
-                    ));
-                }
-                Ok(s) => s.trim().as_bytes().to_vec(),
-            }
-        }
+        Ok(s) => s.trim().as_bytes().to_vec(),
     };
     let cipher_text = match ::hex::decode(cipher_hex) {
         Err(e) => return Err(format!("cipher file should be hex type, error: {:?}", e)),
