@@ -127,9 +127,16 @@ impl DAGRequestHandler {
             eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
         }
 
-        let is_batch = enable_batch_if_possible
-            && !is_streaming
-            && super::builder::DAGBuilder::can_build_batch(req.get_executors());
+        let mut is_batch = false;
+        if enable_batch_if_possible && !is_streaming {
+            let build_batch_result =
+                super::builder::DAGBuilder::check_build_batch(req.get_executors());
+            if let Err(e) = build_batch_result {
+                debug!("Coprocessor request cannot be batched"; "reason" => ?e);
+            } else {
+                is_batch = true;
+            }
+        }
 
         if is_batch {
             Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())

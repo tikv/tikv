@@ -28,7 +28,7 @@ use crate::coprocessor::Error;
 
 // TODO: We should not expose this function as `pub` in future once all executors are batch
 // executors.
-pub fn map_pb_sig_to_rpn_func(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>, Error> {
+fn map_pb_sig_to_rpn_func(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>, Error> {
     match value {
         ScalarFuncSig::EQReal => Ok(Box::new(impl_compare::RpnFnEQReal)),
         ScalarFuncSig::EQInt => Ok(Box::new(impl_compare::RpnFnEQInt)),

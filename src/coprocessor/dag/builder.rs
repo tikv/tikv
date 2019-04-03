@@ -13,10 +13,8 @@
 
 use std::sync::Arc;
 
-use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::{self, ExecType};
-use tipb::expression::{Expr, ExprType};
 
 use crate::storage::Store;
 
@@ -27,7 +25,6 @@ use super::executor::{
     TopNExecutor,
 };
 use crate::coprocessor::dag::expr::EvalConfig;
-use crate::coprocessor::dag::rpn_expr::map_pb_sig_to_rpn_func;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
@@ -40,102 +37,31 @@ use crate::coprocessor::*;
 /// executor (i.e. calling `next()`) will drive the whole pipeline.
 pub struct DAGBuilder;
 
-fn check_condition(c: &Expr) -> bool {
-    use cop_datatype::FieldTypeAccessor;
-    use std::convert::TryFrom;
-
-    let eval_type = EvalType::try_from(c.get_field_type().tp());
-    if eval_type.is_err() {
-        return false;
-    }
-    match c.get_tp() {
-        ExprType::ScalarFunc => {
-            let sig = c.get_sig();
-            let func = map_pb_sig_to_rpn_func(sig);
-            if func.is_err() {
-                return false;
-            }
-            for n in c.get_children() {
-                if !check_condition(n) {
-                    return false;
-                }
-            }
-        }
-        ExprType::Null => {}
-        ExprType::Int64 => {}
-        ExprType::Uint64 => {}
-        ExprType::String | ExprType::Bytes => {}
-        ExprType::Float32 | ExprType::Float64 => {}
-        ExprType::MysqlTime => {}
-        ExprType::MysqlDuration => {}
-        ExprType::MysqlDecimal => {}
-        ExprType::MysqlJson => {}
-        ExprType::ColumnRef => {}
-        _ => return false,
-    }
-
-    true
-}
-
 impl DAGBuilder {
-    /// Given a list of executor descriptors and returns whether all executor descriptors can
+    /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
-        use cop_datatype::EvalType;
-        use cop_datatype::FieldTypeAccessor;
-        use std::convert::TryFrom;
-
+    pub fn check_build_batch(exec_descriptors: &[executor::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchTableScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchIndexScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    let conditions = descriptor.get_conditions();
-                    for c in conditions {
-                        if !check_condition(c) {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_condition" => ?c,
-                            );
-                            return false;
-                        }
-                    }
+                    BatchSelectionExecutor::check_supported(&descriptor)?;
                 }
                 _ => {
-                    debug!(
-                        "Coprocessor request cannot be batched";
-                        "unsupported_executor_tp" => ?ed.get_tp(),
-                    );
-                    return false;
+                    return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
                 }
             }
         }
-        true
+
+        Ok(())
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.

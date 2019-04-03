@@ -13,8 +13,6 @@
 
 #![allow(dead_code)]
 
-use cop_datatype::EvalType;
-
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -41,16 +39,6 @@ impl<T: Evaluable> super::AggrFunction for AggrFnCount<T> {
     #[inline]
     fn create_state(&self) -> Box<dyn super::AggrFunctionState> {
         Box::new(AggrFnStateCount::<T>::new())
-    }
-
-    #[inline]
-    fn update_type(&self) -> EvalType {
-        T::EVAL_TYPE
-    }
-
-    #[inline]
-    fn result_type(&self) -> &'static [EvalType] {
-        &[EvalType::Int]
     }
 }
 

@@ -30,6 +30,37 @@ use crate::util::codec::number;
 pub struct RpnExpressionBuilder;
 
 impl RpnExpressionBuilder {
+    /// Checks whether the given expression definition tree is supported.
+    pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
+        use cop_datatype::FieldTypeAccessor;
+        use std::convert::TryFrom;
+
+        EvalType::try_from(c.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))?;
+
+        match c.get_tp() {
+            ExprType::ScalarFunc => {
+                let sig = c.get_sig();
+                super::super::map_pb_sig_to_rpn_func(sig)?;
+                for n in c.get_children() {
+                    RpnExpressionBuilder::check_expr_tree_supported(n)?;
+                }
+            }
+            ExprType::Null => {}
+            ExprType::Int64 => {}
+            ExprType::Uint64 => {}
+            ExprType::String | ExprType::Bytes => {}
+            ExprType::Float32 | ExprType::Float64 => {}
+            ExprType::MysqlTime => {}
+            ExprType::MysqlDuration => {}
+            ExprType::MysqlDecimal => {}
+            ExprType::MysqlJson => {}
+            ExprType::ColumnRef => {}
+            _ => return Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
+
+        Ok(())
+    }
+
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,

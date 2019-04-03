@@ -13,13 +13,16 @@
 
 //! This module provides aggregate functions for batch executors.
 
-mod avg;
-mod count;
+mod impl_avg;
+mod impl_count;
+mod summable;
 
-use cop_datatype::EvalType;
+use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
 
 /// A trait for all single parameter aggregate functions.
@@ -40,23 +43,6 @@ pub trait AggrFunction: std::fmt::Debug + Send + 'static {
 
     /// Creates a new state instance. Different states aggregate independently.
     fn create_state(&self) -> Box<dyn AggrFunctionState>;
-
-    /// Returns the input data type that associated state accepts.
-    ///
-    /// The data type of the passed in parameter of the state's `update()` interface
-    /// must match the data type returns by this function. Otherwise there will be panics.
-    fn update_type(&self) -> EvalType;
-
-    /// Returns the output data type that associated state generates.
-    ///
-    /// The data type of the passed in data container of the state's `push_result()` interface
-    /// must match the data type returns by this function. Otherwise there will be panics.
-    ///
-    /// More specifically, when this function returns an array with one element (i.e. the output
-    /// result is unary), the data container must be in type `Vec<Option<T>>`. In other cases,
-    /// the data container must be in type `[VectorValue]`. This function will never return empty
-    /// array.
-    fn result_type(&self) -> &'static [EvalType];
 }
 
 /// A trait for all single parameter aggregate function states.
@@ -228,6 +214,19 @@ where
 {
     // All `ConcreteAggrFunctionState` can implement `AggrFunctionState` now, since they meet
     // all trait bound of `AggrFunctionState`.
+}
+
+pub trait AggrDefinitionParser {
+    fn check_supported(&self, aggr_def: &Expr) -> Result<()>;
+
+    fn parse(
+        &self,
+        aggr_def: Expr,
+        time_zone: &Tz,
+        max_columns: usize,
+        output_schema: &mut Vec<FieldType>,
+        output_exp: &mut Vec<RpnExpression>,
+    ) -> Result<Box<dyn AggrFunction>>;
 }
 
 #[cfg(test)]
