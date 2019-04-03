@@ -44,7 +44,7 @@ if [[ -n "$X_CARGO_CONFIG_FILE" ]]; then
     args="$args -Zunstable-options -Zconfig-profile"
     mkdir .cargo 2> /dev/null || true
     set -x
-    cp -b "$X_CARGO_CONFIG_FILE" .cargo/config
+    cp "$X_CARGO_CONFIG_FILE" .cargo/config
     set +x
 fi
 
