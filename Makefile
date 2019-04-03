@@ -3,6 +3,8 @@ ENABLE_FEATURES ?= default
 
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES = tcmalloc
+else
+ENABLE_FEATURES = jemalloc
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9

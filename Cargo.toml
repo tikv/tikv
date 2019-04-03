@@ -11,6 +11,7 @@ publish = false
 [features]
 default = ["tikv_alloc/default"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
+jemalloc = ["tikv_alloc/jemalloc"]
 portable = ["rocksdb_do_not_use/portable"]
 sse = ["rocksdb_do_not_use/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]

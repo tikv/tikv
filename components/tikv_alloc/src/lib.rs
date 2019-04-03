@@ -92,7 +92,8 @@
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
-pub mod default;
+#[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
+mod default;
 
 pub type AllocStats = Vec<(&'static str, usize)>;
 
