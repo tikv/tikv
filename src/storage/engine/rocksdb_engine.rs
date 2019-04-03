@@ -389,6 +389,10 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
         DBIterator::valid(self)
     }
 
+    fn status(&self) -> Result<()> {
+        DBIterator::status(self).map_err(From::from)
+    }
+
     fn key(&self) -> &[u8] {
         DBIterator::key(self)
     }

@@ -307,6 +307,11 @@ impl RegionIterator {
     }
 
     #[inline]
+    pub fn status(&self) -> Result<()> {
+        self.iter.status().map_err(From::from)
+    }
+
+    #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
             CRITICAL_ERROR

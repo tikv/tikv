@@ -99,12 +99,12 @@ impl<S: Snapshot> BackwardScanner<S> {
 
         loop {
             let (current_user_key, has_write, has_lock) = {
-                let w_key = if self.write_cursor.valid() {
+                let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid() {
+                let l_key = if self.lock_cursor.valid()? {
                     Some(self.lock_cursor.key(&mut self.statistics.lock))
                 } else {
                     None
@@ -185,7 +185,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         ts: u64,
         met_prev_user_key: &mut bool,
     ) -> Result<Option<Value>> {
-        assert!(self.write_cursor.valid());
+        assert!(self.write_cursor.valid()?);
 
         // At first, we try to use several `prev()` to get the desired version.
 
@@ -200,7 +200,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 // for the first iteration. So we will totally call `prev()` function
                 // `REVERSE_SEEK_BOUND - 1` times.
                 self.write_cursor.prev(&mut self.statistics.write);
-                if !self.write_cursor.valid() {
+                if !self.write_cursor.valid()? {
                     // Key space ended. We use `last_version` as the return.
                     return Ok(self.handle_last_version(last_version, user_key)?);
                 }
@@ -249,7 +249,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // TODO: Replace by cast + seek().
         self.write_cursor
             .internal_seek(&seek_key, &mut self.statistics.write)?;
-        assert!(self.write_cursor.valid());
+        assert!(self.write_cursor.valid()?);
 
         loop {
             // After seek, or after some `next()`, we may reach `last_checked_commit_ts` again. It
@@ -280,7 +280,7 @@ impl<S: Snapshot> BackwardScanner<S> {
                 WriteType::Lock | WriteType::Rollback => {
                     // Continue iterate next `write`.
                     self.write_cursor.next(&mut self.statistics.write);
-                    assert!(self.write_cursor.valid());
+                    assert!(self.write_cursor.valid()?);
                 }
             }
         }
@@ -345,7 +345,7 @@ impl<S: Snapshot> BackwardScanner<S> {
             if i > 0 {
                 self.write_cursor.prev(&mut self.statistics.write);
             }
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended. We are done here.
                 return Ok(());
             }
