@@ -25,14 +25,14 @@ use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
-use rocksdb::{
+
+use crate::config::DbConfig;
+use crate::raftstore::store::keys;
+use crate::storage::engine::{
     BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
     ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
     WriteBatch as RawBatch, DB,
 };
-
-use crate::config::DbConfig;
-use crate::raftstore::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::{is_short_value, CF_DEFAULT, CF_WRITE};
@@ -96,7 +96,7 @@ impl Engine {
         }
 
         let size = wb.data_size();
-        self.write_without_wal(wb)?;
+        self.write_without_wal(&wb)?;
 
         Ok(size)
     }
@@ -379,9 +379,9 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
 mod tests {
     use super::*;
 
+    use crate::storage::engine::IngestExternalFileOptions;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::IngestExternalFileOptions;
     use std::fs::File;
     use std::io::{self, Write};
     use tempdir::TempDir;

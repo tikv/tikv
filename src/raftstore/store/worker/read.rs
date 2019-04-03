@@ -21,7 +21,6 @@ use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
-use rocksdb::DB;
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -32,6 +31,7 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
+use crate::storage::engine::DB;
 use crate::util::collections::HashMap;
 use crate::util::time::duration_to_sec;
 use crate::util::timer::Timer;
