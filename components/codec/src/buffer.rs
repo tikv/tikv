@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 /// A trait to provide sequential read over a memory buffer.
 ///
 /// The memory buffer can be `&[u8]` or `std::io::Cursor<AsRef<[u8]>>`.

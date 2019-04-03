@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::fs;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Mutex;

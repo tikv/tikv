@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 #![recursion_limit = "100"]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 

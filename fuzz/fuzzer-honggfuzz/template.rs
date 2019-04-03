@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 //! __FUZZ_GENERATE_COMMENT__
 
 #[macro_use]

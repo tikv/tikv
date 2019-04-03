@@ -5,7 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 //! Command line utility to run fuzz tests.
 //!
 //! Adopted from https://github.com/rust-fuzz/targets

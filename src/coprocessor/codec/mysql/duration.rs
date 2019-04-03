@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::util::codec::number::{self, NumberEncoder};
 use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;

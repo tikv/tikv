@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::mvcc::{Lock, LockType, Write};

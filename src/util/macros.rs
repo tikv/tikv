@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 //! The macros crate contains all useful needed macros.
 
 /// Gets the count of macro's arguments.

@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

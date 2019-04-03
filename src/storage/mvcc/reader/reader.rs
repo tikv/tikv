@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::raftstore::store::engine::IterOption;
 use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;

@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 bitflags! {
     pub struct WeekMode: u32 {
         const BEHAVIOR_MONDAY_FIRST  = 0b00000001;

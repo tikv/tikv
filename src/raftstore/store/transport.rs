@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter, StoreMsg};
 use crate::raftstore::{DiscardReason, Error, Result};
 use crossbeam::TrySendError;

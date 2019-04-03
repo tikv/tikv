@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use crossbeam::{SendError, TrySendError};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;

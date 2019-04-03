@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use byteorder::{BigEndian, ByteOrder};
 
 use crate::raftstore::Result;

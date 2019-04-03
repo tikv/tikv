@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::raftstore::store::engine::IterOption;
 use crate::storage::engine::Result;
 use crate::storage::{CfName, Cursor, Key, ScanMode, Snapshot};

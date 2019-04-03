@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::util;
 use regex::Error as RegexpError;

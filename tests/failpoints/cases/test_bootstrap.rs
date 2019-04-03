@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::sync::{Arc, RwLock};
 
 use kvproto::{metapb, raft_serverpb};

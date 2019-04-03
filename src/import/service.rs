@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, UnarySink};
 use futures::Future;
 

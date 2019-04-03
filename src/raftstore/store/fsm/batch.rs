@@ -1,4 +1,4 @@
-// Copyright 2018 TiKV Project Authors.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 //! This is the core implementation of a batch system. Generally there will be two
 //! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
 //! represents a peer, the other is control FSM, which usually represents something

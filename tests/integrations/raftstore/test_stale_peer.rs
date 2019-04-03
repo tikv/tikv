@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 //! A module contains test cases of stale peers gc.
 
 use std::sync::Arc;

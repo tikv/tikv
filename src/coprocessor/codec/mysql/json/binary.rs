@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::{f64, str};

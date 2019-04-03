@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 /// Data to be flowed between parent and child executors at once during `collect_statistics()`
 /// invocation.
 ///

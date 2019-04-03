@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 // FIXME: Move to cop_datatype. Currently it refers some types in `crate::coprocessor::codec::mysql`
 // so that it is not possible to move.
 

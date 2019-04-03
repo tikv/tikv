@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use prometheus::{exponential_buckets, Gauge, Histogram, HistogramVec, IntCounterVec};
 
 lazy_static! {

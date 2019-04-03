@@ -1,4 +1,4 @@
-// Copyright 2019 TiKV Project Authors.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 // TODO: Maybe we can find a better place to put these interfaces, e.g. naming it as prelude?
 
 //! Batch executor common structures.

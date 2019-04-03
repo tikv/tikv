@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::coprocessor::codec::table;
 use crate::util::codec::bytes::{self, encode_bytes};

@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use super::{Error, EvalContext, Expression, Result, ScalarFunc};
 use crate::coprocessor::codec::mysql::json::{parse_json_path_expr, ModifyType, PathExpression};
 use crate::coprocessor::codec::mysql::Json;

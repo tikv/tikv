@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::raftstore::store::Engines;
 use crate::storage::engine::DB;
 use crate::util::rocksdb_util::engine_metrics::*;

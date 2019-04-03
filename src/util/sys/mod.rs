@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 pub const HIGH_PRI: i32 = -1;
 
 #[cfg(target_os = "linux")]

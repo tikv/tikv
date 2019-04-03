@@ -1,4 +1,4 @@
-// Copyright 2017 TiKV Project Authors.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 use std::ffi::CString;
 use std::i64;
 use std::sync::atomic::{AtomicI32, Ordering};
