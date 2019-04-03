@@ -15,11 +15,13 @@ pub mod interface;
 pub mod statistics;
 
 mod index_scan_executor;
+mod limit;
 mod ranges_iter;
 mod scan_executor;
 mod table_scan_executor;
 
 pub mod executors {
     pub use super::index_scan_executor::BatchIndexScanExecutor;
+    pub use super::limit::BatchLimitExecutor;
     pub use super::table_scan_executor::BatchTableScanExecutor;
 }
