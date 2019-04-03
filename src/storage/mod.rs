@@ -16,7 +16,6 @@ pub mod engine;
 pub mod gc_worker;
 mod metrics;
 pub mod mvcc;
-// mod readpool_context;
 mod read_pool_impl;
 pub mod txn;
 pub mod types;
@@ -56,7 +55,6 @@ pub use self::engine::{
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::read_pool_impl::ReadPoolImpl;
-// pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -479,8 +477,6 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use crate::util::worker::FutureWorker;
-
         let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
         Storage::from_engine(
             self.engine,

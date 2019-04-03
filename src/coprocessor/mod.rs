@@ -36,14 +36,12 @@ mod error;
 pub mod local_metrics;
 mod metrics;
 mod read_pool_impl;
-// mod readpool_context;
 mod statistics;
 mod tracker;
 pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
-// pub use self::readpool_context::Context as ReadPoolContext;
 
 use std::boxed::FnBox;
 

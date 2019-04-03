@@ -29,7 +29,7 @@ use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
 use crate::storage::engine::DB;
-use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::storage::{Config as StorageConfig, RaftKv, Storage};
 use crate::util::worker::{FutureWorker, Worker};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;

@@ -139,6 +139,7 @@ impl Simulator for ServerCluster {
         let storage_read_pool = storage::ReadPoolImpl::build_read_pool(
             &cfg.readpool.storage.build_config(),
             pd_worker.scheduler(),
+            "storage-read-test",
         );
         let store = create_raft_storage(
             sim_router.clone(),
@@ -169,6 +170,7 @@ impl Simulator for ServerCluster {
         let cop_read_pool = coprocessor::ReadPoolImpl::build_read_pool(
             &&cfg.readpool.coprocessor.build_config(),
             pd_worker.scheduler(),
+            "cop-test",
         );
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;

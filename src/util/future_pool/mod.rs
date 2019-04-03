@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! This mod implemented a wrapped future pool that supports `on_tick()` which
+//! is invoked no less than the specific interval.
+
 mod builder;
 mod metrics;
 
@@ -181,7 +184,6 @@ mod tests {
 
         // Tick is emitted because long enough time has elapsed since pool is created
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);
-        // assert_eq!(rx.try_recv().unwrap(), 0);
         assert!(rx.try_recv().is_err());
 
         spawn_future_and_wait(&pool, TICK_INTERVAL / 20);

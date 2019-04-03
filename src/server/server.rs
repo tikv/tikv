@@ -250,10 +250,9 @@ mod tests {
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
-    use crate::server::readpool::{self, ReadPool};
+    use crate::server::readpool;
     use crate::storage::TestStorageBuilder;
     use crate::util::security::SecurityConfig;
-    use crate::util::worker::FutureWorker;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
 

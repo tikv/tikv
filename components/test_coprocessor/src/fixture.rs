@@ -100,7 +100,8 @@ pub fn init_data_with_details<E: Engine>(
         store.commit_with_ctx(ctx);
     }
     let pd_worker = FutureWorker::new("test-pd-worker");
-    let pool = coprocessor::ReadPoolImpl::build_read_pool(read_pool_cfg, pd_worker.scheduler());
+    let pool =
+        coprocessor::ReadPoolImpl::build_read_pool(read_pool_cfg, pd_worker.scheduler(), "cop-fix");
     let cop = Endpoint::new(cfg, store.get_engine(), pool);
     (store, cop)
 }

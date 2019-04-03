@@ -287,7 +287,7 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn_handle(priority, move || {
-                tracker.attach_ctxd();
+                tracker.init_current_stage();
                 Self::handle_unary_request_impl(engine, tracker, handler_builder)
             })
             .map_err(|_| Error::Full)
@@ -424,8 +424,7 @@ impl<E: Engine> Endpoint<E> {
 
         self.read_pool
             .spawn(priority, move || {
-                tracker.attach_ctxd();
-
+                tracker.init_current_stage();
                 Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
@@ -522,6 +521,7 @@ mod tests {
     use tipb::expression::Expr;
 
     use crate::storage::TestEngineBuilder;
+    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -746,20 +746,22 @@ mod tests {
         assert!(!resp.get_other_error().is_empty());
     }
 
-    /*
     #[test]
     fn test_full() {
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new(
-            "readpool",
+
+        let read_pool = ReadPoolImpl::build_read_pool(
             &readpool::Config {
                 normal_concurrency: 1,
                 max_tasks_per_worker_normal: 2,
                 ..readpool::Config::default_for_test()
             },
-            || ReadPoolContext::new(pd_worker.scheduler()),
+            pd_worker.scheduler(),
+            "cop-test-full",
         );
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let (tx, rx) = mpsc::channel();
@@ -801,7 +803,6 @@ mod tests {
             assert!(!resp.has_region_error());
         }
     }
-    */
 
     #[test]
     fn test_error_unary_response() {
@@ -1003,7 +1004,7 @@ mod tests {
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
 
-    /*)
+    //
     #[test]
     fn test_handle_time() {
         use crate::util::config::ReadableDuration;
@@ -1024,12 +1025,15 @@ mod tests {
         const PAYLOAD_LARGE: i64 = 6000;
 
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new(
-            "readpool",
+
+        let read_pool = ReadPoolImpl::build_read_pool(
             &readpool::Config::default_with_concurrency(1),
-            || ReadPoolContext::new(pd_worker.scheduler()),
+            pd_worker.scheduler(),
+            "cop-test-handle-time",
         );
+
+        let engine = TestEngineBuilder::new().build().unwrap();
+
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
@@ -1235,6 +1239,4 @@ mod tests {
             );
         }
     }
-
-    */
 }
