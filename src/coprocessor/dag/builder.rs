@@ -73,6 +73,7 @@ impl DAGBuilder {
                         }
                     }
                 }
+                ExecType::TypeLimit => {}
                 _ => {
                     debug!(
                         "Coprocessor request cannot be batched";
@@ -136,13 +137,22 @@ impl DAGBuilder {
             }
         }
 
-        // Currently we only support table scan executor. So if there are more
-        // executors, it is unexpected.
-        if executor_descriptors.next().is_some() {
-            return Err(Error::Other(box_err!(
-                "Unexpected non-first executor {:?}",
-                first_ed.get_tp()
-            )));
+        for mut ex in executor_descriptors {
+            match ex.get_tp() {
+                ExecType::TypeLimit => {
+                    let limit = ex.take_limit();
+                    executor = Box::new(BatchLimitExecutor::new(
+                        executor,
+                        limit.get_limit() as usize,
+                    )?);
+                }
+                _ => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        first_ed.get_tp()
+                    )));
+                }
+            }
         }
 
         Ok(executor)
