@@ -55,7 +55,7 @@ impl Helper {
     /// Evaluates a function without argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
         mut f: F,
@@ -78,7 +78,7 @@ impl Helper {
     /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
@@ -111,7 +111,7 @@ impl Helper {
     /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
@@ -169,7 +169,7 @@ impl Helper {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -193,7 +193,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -218,7 +218,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -243,7 +243,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -273,7 +273,7 @@ impl Helper {
     ///
     /// The function will be called multiple times to fill the vector. For each function call,
     /// there will be one indirection to support both scalar and vector arguments.
-    #[inline(always)]
+    #[inline]
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
         mut f: F,

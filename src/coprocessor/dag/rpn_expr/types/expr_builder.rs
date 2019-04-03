@@ -294,7 +294,6 @@ mod tests {
     impl_template_fn! { 1 arg @ FnA }
 
     impl FnA {
-        #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
@@ -311,7 +310,6 @@ mod tests {
     impl_template_fn! { 2 arg @ FnB }
 
     impl FnB {
-        #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
@@ -329,7 +327,6 @@ mod tests {
     impl_template_fn! { 3 arg @ FnC }
 
     impl FnC {
-        #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
@@ -348,7 +345,6 @@ mod tests {
     impl_template_fn! { 3 arg @ FnD }
 
     impl FnD {
-        #[inline(always)]
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,

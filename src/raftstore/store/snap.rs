@@ -515,10 +515,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let size = get_file_size(&self.meta_file.path)?;
-        let mut file = File::open(&self.meta_file.path)?;
-        let mut buf = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut buf)?;
+        let buf = fs::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::new();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
