@@ -236,7 +236,7 @@ impl MemComparableByteCodec {
     /// descending decoding, which performs better than inlining a flag.
     ///
     /// Please refer to `try_decode_first` for the meaning of return values, panics and errors.
-    #[inline(always)]
+    #[inline]
     fn try_decode_first_internal<T: MemComparableCodecHelper>(
         mut src_ptr: *const u8,
         src_len: usize,
