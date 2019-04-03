@@ -158,22 +158,27 @@ expression: format clippy
 #
 # They can be invoked as:
 #
-#     $ make x-build-dev-nopt      # An unoptimized build
-#                                  #   (fast build / slow run)
-#     $ make x-build-dev-opt       # A mostly-optimized dev profile
-#                                  #   (slower build / faster run)
-#     $ make x-build-prod          # A release build
-#                                  #   (slowest build / fastest run)
-#     $ make x-bench               # Run benches mostly-optimized
-#                                  #   (slower build / faster run)
-#     $ make x-test                # Run tests unoptimized
-#                                  #   (fast build / slow run)
+#     $ make x-build-dev-nopt-quick # An unoptimized build
+#                                   #   (fastest build / slow run)
+#                                   #   (no debug assertions or overflow checks)
+#     $ make x-build-dev-nopt       # An unoptimized build
+#                                   #   (fast build / slow run)
+#     $ make x-build-dev-opt        # A mostly-optimized dev profile
+#                                   #   (slower build / faster run)
+#     $ make x-build-prod           # A release build
+#                                   #   (slowest build / fastest run)
+#     $ make x-bench                # Run benches mostly-optimized
+#                                   #   (slower build / faster run)
+#     $ make x-test                 # Run tests unoptimized
+#                                   #   (fast build / slow run)
 #
-# The first three have aliases:
+# Use cases:
 #
-#     $ make x-build
-#     $ make x-build-opt
-#     $ make x-release
+#   testing with fastest turnaround       - dev-nopt-quick
+#   testing                               - dev-nopt-quick
+#   casual benchmarking                   - dev-opt
+#   benchmarking with full release config - prod
+#   building the release for publish      - prod
 #
 # The below rules all rely on using a .cargo/config file to override various
 # profiles. Within those config files we'll experiment with compile-time
@@ -194,6 +199,7 @@ expression: format clippy
 
 DEV_OPT_CONFIG=etc/cargo.config.dev-opt
 DEV_NOPT_CONFIG=etc/cargo.config.dev-nopt
+DEV_NOPT_QUICK_CONFIG=etc/cargo.config.dev-nopt-quick
 PROD_CONFIG=etc/cargo.config.prod
 TEST_CONFIG=etc/cargo.config.test
 BENCH_CONFIG=etc/cargo.config.bench
@@ -204,11 +210,11 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
-x-build-dev-opt: export X_CARGO_CMD=build
-x-build-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
-x-build-dev-opt: export X_CARGO_RELEASE=1
-x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
-x-build-dev-opt:
+x-build-dev-nopt-quick: export X_CARGO_CMD=build
+x-build-dev-nopt-quick: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-nopt-quick: export X_CARGO_RELEASE=0
+x-build-dev-nopt-quick: export X_CARGO_CONFIG_FILE=${DEV_NOPT_QUICK_CONFIG}
+x-build-dev-nopt-quick:
 	bash scripts/run-cargo.sh
 
 x-build-dev-nopt: export X_CARGO_CMD=build
@@ -218,14 +224,53 @@ x-build-dev-nopt: export X_CARGO_CONFIG_FILE=${DEV_NOPT_CONFIG}
 x-build-dev-nopt:
 	bash scripts/run-cargo.sh
 
-# This is a profile for _actual releases_. Devs should almost never be using
-# this. It is a very slow build, and only a bit faster.
+x-build-dev-opt: export X_CARGO_CMD=build
+x-build-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-opt: export X_CARGO_RELEASE=1
+x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
+x-build-dev-opt:
+	bash scripts/run-cargo.sh
+
 x-build-prod: export X_CARGO_CMD=build
 x-build-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-prod: export X_CARGO_RELEASE=1
 x-build-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
 x-build-prod:
 	bash scripts/run-cargo.sh
+
+# "run" commands for the above
+#
+# these need to be run with CARGO_ARGS="--bin tikv-server" etc
+
+x-run-dev-nopt-quick: export X_CARGO_CMD=run
+x-run-dev-nopt-quick: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-nopt-quick: export X_CARGO_RELEASE=0
+x-run-dev-nopt-quick: export X_CARGO_CONFIG_FILE=${DEV_NOPT_QUICK_CONFIG}
+x-run-dev-nopt-quick:
+	bash scripts/run-cargo.sh
+
+x-run-dev-nopt: export X_CARGO_CMD=run
+x-run-dev-nopt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-nopt: export X_CARGO_RELEASE=0
+x-run-dev-nopt: export X_CARGO_CONFIG_FILE=${DEV_NOPT_CONFIG}
+x-run-dev-nopt:
+	bash scripts/run-cargo.sh
+
+x-run-dev-opt: export X_CARGO_CMD=run
+x-run-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-opt: export X_CARGO_RELEASE=1
+x-run-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
+x-run-dev-opt:
+	bash scripts/run-cargo.sh
+
+x-run-prod: export X_CARGO_CMD=run
+x-run-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-prod: export X_CARGO_RELEASE=1
+x-run-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
+x-run-prod:
+	bash scripts/run-cargo.sh
+
+# bench and test targets
 
 x-test: export X_CARGO_CMD=test
 x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
@@ -240,12 +285,6 @@ x-bench: export X_CARGO_RELEASE=0
 x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
 x-bench:
 	bash etc/run-cargo.sh
-
-x-build: x-build-dev-nopt
-
-x-build-opt: x-build-dev-opt
-
-x-release: x-build-prod
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.
