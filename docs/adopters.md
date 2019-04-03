@@ -14,7 +14,6 @@ This is a list of TiKV adopters in various industries.
 |[Yiguo.com](https://www.crunchbase.com/organization/shanghai-yiguo-electron-business)|E-commerce|[English](https://www.datanami.com/2018/02/22/hybrid-database-capturing-perishable-insights-yiguo/); [Chinese](https://www.pingcap.com/cases-cn/user-case-yiguo)|
 |[Shopee](https://en.wikipedia.org/wiki/Shopee)|E-commerce|[English](https://www.pingcap.com/success-stories/tidb-in-shopee/); [Chinese](https://www.pingcap.com/cases-cn/user-case-shopee/)|
 |[Yuanfudao.com](https://www.crunchbase.com/organization/yuanfudao)|EdTech|[English](https://www.pingcap.com/blog/2017-08-08-tidbforyuanfudao/); [Chinese](https://www.pingcap.com/cases-cn/user-case-yuanfudao/)|
-|[Ele.me](https://en.wikipedia.org/wiki/Ele.me)|Food Delivery|[English](https://www.pingcap.com/blog/use-case-tidb-in-eleme/); [Chinese-1](https://www.pingcap.com/cases-cn/user-case-eleme-1/); [Chinese-2](https://pingcap.com/cases-cn/user-case-eleme-2/)|
 |[Xiaomi](https://en.wikipedia.org/wiki/Xiaomi)|Consumer Electronics|[Chinese](https://pingcap.com/cases-cn/user-case-xiaomi/)|
 |[LY.com](https://www.crunchbase.com/organization/ly-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-tongcheng/)|
 |[Qunar.com](https://www.crunchbase.com/organization/qunar-com)|Travel|[Chinese](https://www.pingcap.com/cases-cn/user-case-qunar/)|
