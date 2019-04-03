@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
 use super::{Executor, ExecutorMetrics, Row, ScanOn, Scanner};

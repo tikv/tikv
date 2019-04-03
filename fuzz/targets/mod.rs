@@ -1,4 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! DO NOT MOVE THIS FILE. IT WILL BE PARSED BY `fuzz/cli.rs`. SEE `discover_fuzz_targets()`.
 
 extern crate byteorder;

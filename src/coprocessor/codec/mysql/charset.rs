@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 /// `CHARSET_BIN` is used for marking binary charset.
 pub const CHARSET_BIN: &str = "binary";
 /// `CHARSET_UTF8` is the default charset for string types.

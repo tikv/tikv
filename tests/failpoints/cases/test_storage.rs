@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::sync::{mpsc::channel, Arc};
 use std::thread;
 use std::time::Duration;

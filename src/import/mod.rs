@@ -1,4 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! This mod contains components to support rapid data import with the project
 //! `tidb-lightning`.
 //!

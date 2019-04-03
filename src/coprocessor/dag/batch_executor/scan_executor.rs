@@ -1,4 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;

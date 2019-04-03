@@ -1,4 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 use crate::coprocessor::codec::{Error, Result};
 
 /// `div_i64` divides i64 a with b and returns:

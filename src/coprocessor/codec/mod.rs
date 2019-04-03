@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 // TODO: Replace by failure crate.
 /// A shortcut to box an error.
 macro_rules! invalid_type {

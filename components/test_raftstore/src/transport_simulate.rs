@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::marker::PhantomData;
 use std::sync::atomic::*;
 use std::sync::mpsc::Sender;

@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! Core data types.
 
 use std::fmt::{self, Display, Formatter};

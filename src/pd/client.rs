@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::thread;

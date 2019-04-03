@@ -1,4 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 use test::Bencher;
 
 use kvproto::kvrpcpb::Context;

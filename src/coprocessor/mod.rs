@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
 //! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
 //! computing and the amount of data to transfer can be reduced (i.e. filtered at TiKV side).

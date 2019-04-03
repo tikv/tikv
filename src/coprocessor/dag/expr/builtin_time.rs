@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::{EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::error::Error;
 use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;

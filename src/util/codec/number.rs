@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian, WriteBytesExt};
 use std::io::{self, ErrorKind, Write};
 use std::mem;

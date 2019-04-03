@@ -1,4 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
+
 use kvproto::metapb::Region;
 use raft::StateRole;
 use std::sync::mpsc::channel;

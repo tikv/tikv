@@ -1,4 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use super::Json;
 
 const JSON_TYPE_BOOLEAN: &[u8] = b"BOOLEAN";

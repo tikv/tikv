@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+
 //! A module contains test cases for lease read on Raft leader.
 
 use std::sync::atomic::*;
