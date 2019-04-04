@@ -969,7 +969,7 @@ impl Peer {
                 .range((Unbounded::<Vec<u8>>, Included(enc_end_key(&region))))
                 .rev()
                 .filter(|(_, &region_id)| region_id != region.get_id())
-                .take_while(|(enc_end_key, _)| &enc_start_key(&region) < *enc_end_key)
+                .take_while(|(enc_end_key, _)| enc_start_key(&region) < **enc_end_key)
                 .next()
             {
                 info!(
