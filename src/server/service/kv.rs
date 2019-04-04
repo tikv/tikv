@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use std::iter::{self, FromIterator};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
@@ -34,8 +34,8 @@ use crate::util::future::{paired_future_callback, AndThenWith};
 use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Scheduler;
-use futures::executor::{self, Notify, NotifyHandle, Spawn, UnsafeNotify};
-use futures::{future, Async, Future, Sink, Stream};
+use futures::executor::{self, Notify, Spawn};
+use futures::{future, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -949,44 +949,27 @@ fn response_batch_commands_request<F>(
 }
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
-struct BatchCommandsNotify<F>(*mut Spawn<F>);
-unsafe impl<F: Future<Item = (), Error = ()> + Send + 'static> Sync for BatchCommandsNotify<F> {}
-unsafe impl<F: Future<Item = (), Error = ()> + Send + 'static> Send for BatchCommandsNotify<F> {}
-
+struct BatchCommandsNotify<F>(Arc<Mutex<Spawn<F>>>);
+impl<F> Clone for BatchCommandsNotify<F> {
+    fn clone(&self) -> BatchCommandsNotify<F> {
+        BatchCommandsNotify(Arc::clone(&self.0))
+    }
+}
 impl<F> Notify for BatchCommandsNotify<F>
 where
     F: Future<Item = (), Error = ()> + Send + 'static,
 {
     fn notify(&self, _id: usize) {
-        let mut s = unsafe { Box::from_raw(self.0) };
-        if let Ok(Async::NotReady) = s.get_mut().poll() {
-            // The future must be resolved when we get the notify.
-            unreachable!();
-        }
+        let n = Arc::new(self.clone());
+        let mut s = self.0.lock().unwrap();
+        drop(s.poll_future_notify(&n, 0));
     }
-}
-
-unsafe impl<F> UnsafeNotify for BatchCommandsNotify<F>
-where
-    F: Future<Item = (), Error = ()> + Send + 'static,
-{
-    unsafe fn clone_raw(&self) -> NotifyHandle {
-        let x = Box::new(BatchCommandsNotify(self.0)) as Box<UnsafeNotify>;
-        NotifyHandle::new(Box::into_raw(x))
-    }
-    // Do nothing because the internal future will be droped after resolved.
-    unsafe fn drop_raw(&self) {}
 }
 
 fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
-    let raw_spawn = Box::into_raw(Box::new(executor::spawn(f)));
-    let notify = BatchCommandsNotify(raw_spawn);
-    let notify_handle = unsafe { UnsafeNotify::clone_raw(&notify) };
-    let mut spawn = unsafe { Box::from_raw(raw_spawn) };
-    if let Ok(Async::NotReady) = spawn.poll_future_notify(&notify_handle, 0) {
-        // The future is not resolved, don't drop it.
-        let _ = Box::into_raw(spawn);
-    }
+    let spawn = Arc::new(Mutex::new(executor::spawn(f)));
+    let notify = Arc::new(BatchCommandsNotify(Arc::clone(&spawn)));
+    drop(spawn.lock().unwrap().poll_future_notify(&notify, 0));
 }
 
 fn handle_batch_commands_request<E: Engine>(
