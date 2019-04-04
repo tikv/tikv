@@ -170,7 +170,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
         if region_size >= self.region_max_size {
             info!(
                 "approximate size over threshold, need to do split check";
-                "region_id" => region.get_id(),
+                "region_id" => region_id,
                 "size" => region_size,
                 "threshold" => self.region_max_size,
             );
@@ -189,7 +189,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for SizeCheckObserver<C> {
             // Does not need to check size.
             debug!(
                 "approximate size less than threshold, does not need to do split check";
-                "region_id" => region.get_id(),
+                "region_id" => region_id,
                 "size" => region_size,
                 "threshold" => self.region_max_size,
             );

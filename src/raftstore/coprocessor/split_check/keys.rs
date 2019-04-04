@@ -154,7 +154,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
         if region_keys >= self.region_max_keys {
             info!(
                 "approximate keys over threshold, need to do split check";
-                "region_id" => region.get_id(),
+                "region_id" => region_id,
                 "keys" => region_keys,
                 "threshold" => self.region_max_keys,
             );
@@ -169,7 +169,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
             // Does not need to check keys.
             debug!(
                 "approximate keys less than threshold, does not need to do split check";
-                "region_id" => region.get_id(),
+                "region_id" => region_id,
                 "keys" => region_keys,
                 "threshold" => self.region_max_keys,
             );
