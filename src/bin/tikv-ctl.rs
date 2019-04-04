@@ -33,8 +33,8 @@ mod util;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
 use std::string::ToString;
 use std::sync::Arc;
@@ -1687,14 +1687,8 @@ fn main() {
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
     let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
-        File::open(&path)
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s).unwrap();
-                let c = toml::from_str(&s).unwrap();
-                Ok(c)
-            })
-            .unwrap()
+        let s = fs::read_to_string(&path).unwrap();
+        toml::from_str(&s).unwrap()
     });
     let mgr = new_security_mgr(&matches);
 
@@ -2073,11 +2067,8 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
 }
 
 fn dump_snap_meta_file(path: &str) {
-    let mut f =
-        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
-    let mut content = Vec::new();
-    f.read_to_end(&mut content)
-        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+    let content =
+        fs::read(path).unwrap_or_else(|e| panic!("read meta file {} failed, error {:?}", path, e));
 
     let mut meta = SnapshotMeta::new();
     meta.merge_from_bytes(&content)
