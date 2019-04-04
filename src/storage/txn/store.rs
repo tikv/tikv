@@ -421,7 +421,7 @@ mod tests {
         fn valid(&self) -> bool {
             true
         }
-        fn status(&self) -> Result<()> {
+        fn status(&self) -> EngineResult<()> {
             Ok(())
         }
         fn validate_key(&self, _: &Key) -> EngineResult<()> {
