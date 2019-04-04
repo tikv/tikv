@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,8 +60,7 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u
 }
 
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
-    let mut data = Vec::new();
-    File::open(path).unwrap().read_to_end(&mut data).unwrap();
+    let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SSTMeta::new();
