@@ -45,7 +45,7 @@ use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, Reg
 use crate::raftstore::{Error, Result};
 use crate::storage::engine::{WriteBatch, WriteOptions, DB};
 use crate::util::collections::HashMap;
-use crate::util::time::{duration_to_sec, monotonic_raw_now};
+use crate::util::time::{duration_to_sec, monotonic_coarse_now, monotonic_raw_now};
 use crate::util::worker::Scheduler;
 use crate::util::{escape, MustConsumeVec};
 use raft::{
@@ -1154,7 +1154,7 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        raft_metrics
+                        ctx.raft_metrics
                             .commit_log
                             .observe(duration_to_sec((now - propose_time).to_std().unwrap()));
                         self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
