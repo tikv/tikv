@@ -1321,7 +1321,7 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
 }
 
 fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
-    // Empty start and end key caver all range.
+    // Empty start and end key cover all range.
     let mut region = Region::new();
     region.mut_peers().push(Peer::new());
     let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
