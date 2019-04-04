@@ -162,6 +162,14 @@ impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
             ));
         }
 
+        assert_eq!(
+            columns.len(),
+            columns_len,
+            "schema = {:?}, columns_len_without_handle = {}, decode_handle = {}",
+            self.schema(),
+            self.columns_len_without_handle,
+            self.decode_handle
+        );
         LazyBatchColumnVec::from(columns)
     }
 

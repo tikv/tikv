@@ -199,6 +199,13 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             }
         }
 
+        assert_eq!(
+            columns.len(),
+            columns_len,
+            "schema = {:?}, handle_index = {:?}",
+            self.schema(),
+            self.handle_index
+        );
         LazyBatchColumnVec::from(columns)
     }
 
