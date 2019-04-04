@@ -351,7 +351,10 @@ impl SnapContext {
             let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
             if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
+                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+                // Leave enough buffer to tolerate heavy write workload,
+                // which may flush some memtables in a short time.
+                if n > u64::from(slowdown_trigger) / 2 {
                     return true;
                 }
             }
