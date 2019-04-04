@@ -234,7 +234,7 @@ impl<E: Engine> GCRunner<E> {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC found plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.found_versions,
@@ -244,7 +244,7 @@ impl<E: Engine> GCRunner<E> {
             // TODO: we may delete only part of the versions in a batch, which may not beyond
             // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC deleted plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.deleted_versions,
@@ -305,7 +305,7 @@ impl<E: Engine> GCRunner<E> {
     }
 
     fn unsafe_destroy_range(&self, _: &Context, start_key: &Key, end_key: &Key) -> Result<()> {
-        info!(
+        debug!(
             "unsafe destroy range started";
             "start_key" => %start_key, "end_key" => %end_key
         );
@@ -341,7 +341,7 @@ impl<E: Engine> GCRunner<E> {
                 })?;
         }
 
-        info!(
+        debug!(
             "unsafe destroy range finished deleting files in range";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?delete_files_start_time.elapsed()
         );
@@ -379,7 +379,7 @@ impl<E: Engine> GCRunner<E> {
             warn!("unsafe destroy range: can't clear region size information: raft_store_router not set");
         }
 
-        info!(
+        debug!(
             "unsafe destroy range finished cleaning up all";
             "start_key" => %start_key, "end_key" => %end_key, "cost_time" => ?cleanup_all_time_cost,
         );
@@ -729,10 +729,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
     /// `GCManagerHandle::stop`.
     fn run(&mut self) {
-        info!("gc-manager is started");
+        debug!("gc-manager is started");
         self.run_impl().unwrap_err();
         set_status_metrics(GCManagerState::None);
-        info!("gc-manager is stopped");
+        debug!("gc-manager is stopped");
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
@@ -757,10 +757,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// of `safe_point`. TiKV won't do any GC automatically until the first time `safe_point` was
     /// updated to a greater value than initial value.
     fn initialize(&mut self) -> GCManagerResult<()> {
-        info!("gc-manager is initializing");
+        debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.wait_for_next_safe_point()?;
-        info!("gc-manager started"; "safe_point" => self.safe_point);
+        debug!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
 
@@ -876,7 +876,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     // We have worked to the end and we need to rewind. Restart from beginning.
                     progress = Some(Key::from_encoded(BEGIN_KEY.to_vec()));
                     need_rewind = false;
-                    info!(
+                    debug!(
                         "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
                     );
                     processed_regions = 0;
@@ -932,13 +932,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             // continue GC to the end.
             *need_rewind = false;
             *end = None;
-            info!(
+            debug!(
                 "gc_worker: auto gc will go to the end"; "safe_point" => self.safe_point
             );
         } else {
             *need_rewind = true;
             *end = progress.clone();
-            info!(
+            debug!(
                 "gc_worker: auto gc will go to rewind"; "safe_point" => self.safe_point,
                 "next_rewind_key" => %(end.as_ref().unwrap())
             );
