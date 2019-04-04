@@ -49,7 +49,13 @@ pub trait ScanExecutorImpl: Send {
     ) -> Result<()>;
 }
 
-pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
+/// A shared executor implementation for both table scan and index scan. Implementation differences
+/// between table scan and index scan are further given via `ScanExecutorImpl`.
+pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
+{
+    /// The execution summary collector of this executor.
+    summary_collector: C,
+
     /// The internal scanning implementation.
     imp: I,
 
@@ -75,8 +81,11 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
     is_ended: bool,
 }
 
-impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
+impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy>
+    ScanExecutor<C, S, I, P>
+{
     pub fn new(
+        summary_collector: C,
         imp: I,
         store: S,
         desc: bool,
@@ -88,6 +97,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
             key_ranges.reverse();
         }
         Ok(Self {
+            summary_collector,
             imp,
             store,
             desc,
@@ -195,7 +205,9 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type
 }
 
-impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
+impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
+    for ScanExecutor<C, S, I, P>
+{
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
@@ -205,6 +217,9 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
+
+        let timer = self.summary_collector.start_record_duration();
+        self.summary_collector.inc_iterations();
 
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
@@ -222,6 +237,9 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
             Ok(false) => {}
         };
 
+        self.summary_collector.inc_produced_rows(data.rows_len());
+        self.summary_collector.inc_elapsed_duration(timer);
+
         BatchExecuteResult {
             data,
             is_drained,
@@ -237,5 +255,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanE
         if let Some(scanner) = &mut self.scanner {
             scanner.collect_statistics_into(&mut destination.cf_stats);
         }
+        self.summary_collector
+            .collect_into(&mut destination.summary_per_executor);
     }
 }

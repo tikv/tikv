@@ -69,13 +69,14 @@ impl BatchDAGHandler {
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
         ranges_len: usize,
+        executors_len: usize,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(ranges_len),
+            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
             metrics: ExecutorMetrics::default(),
         }
     }
