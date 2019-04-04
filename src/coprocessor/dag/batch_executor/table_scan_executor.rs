@@ -664,66 +664,35 @@ mod tests {
         executor.next_batch(1);
         executor.next_batch(2);
 
-        let mut statistics = BatchExecuteStatistics::new(2, 1);
-        executor.collect_statistics(&mut statistics);
+        let mut s = BatchExecuteStatistics::new(2, 1);
+        executor.collect_statistics(&mut s);
 
-        assert_eq!(statistics.scanned_rows_per_range[0], 3);
+        assert_eq!(s.scanned_rows_per_range[0], 3);
         // 0 is none because our output index is 1
-        assert!(statistics.summary_per_executor[0].is_none());
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_produced_rows,
-            3
-        );
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_iterations,
-            2
-        );
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(3, exec_summary.num_produced_rows);
+        assert_eq!(2, exec_summary.num_iterations);
 
-        executor.collect_statistics(&mut statistics);
+        executor.collect_statistics(&mut s);
 
-        assert_eq!(statistics.scanned_rows_per_range[0], 3);
-        assert!(statistics.summary_per_executor[0].is_none());
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_produced_rows,
-            3
-        );
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_iterations,
-            2
-        );
+        // Collected statistics remain unchanged because of no newly generated delta statistics.
+        assert_eq!(s.scanned_rows_per_range[0], 3);
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(3, exec_summary.num_produced_rows);
+        assert_eq!(2, exec_summary.num_iterations);
 
-        statistics.clear();
+        // Reset collected statistics so that now we will only collect statistics in this round.
+        s.clear();
         executor.next_batch(10);
-        executor.collect_statistics(&mut statistics);
+        executor.collect_statistics(&mut s);
 
-        assert_eq!(statistics.scanned_rows_per_range[0], 2);
-        assert!(statistics.summary_per_executor[0].is_none());
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_produced_rows,
-            2
-        );
-        assert_eq!(
-            statistics.summary_per_executor[1]
-                .as_ref()
-                .unwrap()
-                .num_iterations,
-            1
-        );
+        assert_eq!(s.scanned_rows_per_range[0], 2);
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(2, exec_summary.num_produced_rows);
+        assert_eq!(1, exec_summary.num_iterations);
     }
 
     #[test]
