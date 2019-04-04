@@ -13,24 +13,22 @@
 
 #![allow(dead_code)]
 
+use cop_datatype::EvalType;
+
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 #[derive(Debug)]
-pub struct AggrFnCount<T: Evaluable> {
-    _phantom: std::marker::PhantomData<T>,
-}
+pub struct AggrFnCount;
 
-impl<T: Evaluable> AggrFnCount<T> {
+impl AggrFnCount {
     pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
+        Self
     }
 }
 
-impl<T: Evaluable> super::AggrFunction for AggrFnCount<T> {
+impl super::AggrFunction for AggrFnCount {
     #[inline]
     fn name(&self) -> &'static str {
         "AggrFnCount"
@@ -38,31 +36,27 @@ impl<T: Evaluable> super::AggrFunction for AggrFnCount<T> {
 
     #[inline]
     fn create_state(&self) -> Box<dyn super::AggrFunctionState> {
-        Box::new(AggrFnStateCount::<T>::new())
+        Box::new(AggrFnStateCount::new())
     }
 }
 
 #[derive(Debug)]
-pub struct AggrFnStateCount<T: Evaluable> {
+pub struct AggrFnStateCount {
     count: usize,
-    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: Evaluable> AggrFnStateCount<T> {
+impl AggrFnStateCount {
     pub fn new() -> Self {
-        Self {
-            count: 0,
-            _phantom: std::marker::PhantomData,
-        }
+        Self { count: 0 }
     }
 }
 
-impl<T: Evaluable> super::ConcreteAggrFunctionState for AggrFnStateCount<T> {
-    type ParameterType = T;
-    type ResultTargetType = Vec<Option<Int>>;
+// Manually implement `AggrFunctionStateUpdatePartial` to achieve best performance for
+// `update_repeat` and `update_vector`.
 
+impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
     #[inline]
-    fn update_concrete(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
+    fn update(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         if value.is_some() {
             self.count += 1;
         }
@@ -70,12 +64,45 @@ impl<T: Evaluable> super::ConcreteAggrFunctionState for AggrFnStateCount<T> {
     }
 
     #[inline]
-    fn push_result_concrete(
-        &self,
+    fn update_repeat(
+        &mut self,
         _ctx: &mut EvalContext,
-        target: &mut Vec<Option<Int>>,
+        value: &Option<T>,
+        repeat_times: usize,
     ) -> Result<()> {
+        if value.is_some() {
+            self.count += repeat_times;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn update_vector(&mut self, _ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
+        for value in values {
+            if value.is_some() {
+                self.count += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T> super::AggrFunctionStateResultPartial<T> for AggrFnStateCount
+where
+    T: super::AggrResultAppendable + ?Sized,
+{
+    #[inline]
+    default fn push_result(&self, _ctx: &mut EvalContext, _target: &mut T) -> Result<()> {
+        panic!("Unmatched result append target type")
+    }
+}
+
+impl super::AggrFunctionStateResultPartial<Vec<Option<Int>>> for AggrFnStateCount {
+    #[inline]
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut Vec<Option<Int>>) -> Result<()> {
         target.push(Some(self.count as Int));
         Ok(())
     }
 }
+
+impl super::AggrFunctionState for AggrFnStateCount {}

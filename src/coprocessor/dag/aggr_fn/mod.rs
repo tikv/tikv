@@ -15,15 +15,15 @@
 
 mod impl_avg;
 mod impl_count;
+mod parser;
 mod summable;
 
-use tipb::expression::{Expr, FieldType};
+pub use self::parser::AggrDefinitionParser;
 
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
+use cop_datatype::EvalType;
 
 /// A trait for all single parameter aggregate functions.
 ///
@@ -111,6 +111,19 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     /// parameter.
     fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()>;
 
+    /// Repeatedly updates the internal state giving one row data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the aggregate function does not support the supplied concrete data type as its
+    /// parameter.
+    fn update_repeat(
+        &mut self,
+        ctx: &mut EvalContext,
+        value: &Option<T>,
+        repeat_times: usize,
+    ) -> Result<()>;
+
     /// Updates the internal state giving multiple rows data.
     ///
     /// # Panics
@@ -158,6 +171,16 @@ where
     }
 
     #[inline]
+    default fn update_repeat(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _value: &Option<T>,
+        _repeat_times: usize,
+    ) -> Result<()> {
+        panic!("Unmatched parameter type")
+    }
+
+    #[inline]
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
@@ -174,6 +197,19 @@ where
     #[inline]
     fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         self.update_concrete(ctx, value)
+    }
+
+    #[inline]
+    fn update_repeat(
+        &mut self,
+        ctx: &mut EvalContext,
+        value: &Option<T>,
+        repeat_times: usize,
+    ) -> Result<()> {
+        for _ in 0..repeat_times {
+            self.update_concrete(ctx, value)?;
+        }
+        Ok(())
     }
 
     #[inline]
@@ -214,19 +250,6 @@ where
 {
     // All `ConcreteAggrFunctionState` can implement `AggrFunctionState` now, since they meet
     // all trait bound of `AggrFunctionState`.
-}
-
-pub trait AggrDefinitionParser {
-    fn check_supported(&self, aggr_def: &Expr) -> Result<()>;
-
-    fn parse(
-        &self,
-        aggr_def: Expr,
-        time_zone: &Tz,
-        max_columns: usize,
-        output_schema: &mut Vec<FieldType>,
-        output_exp: &mut Vec<RpnExpression>,
-    ) -> Result<Box<dyn AggrFunction>>;
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@
 
 #[macro_use]
 mod function;
-mod types;
+pub mod types;
 
 mod impl_compare;
 mod impl_dummy;

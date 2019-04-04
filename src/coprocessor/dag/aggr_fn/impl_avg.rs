@@ -26,9 +26,9 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::{Error, Result};
 
-pub struct AggrSigAvgHandler;
+pub struct AggrFnDefinitionParserAvg;
 
-impl super::AggrDefinitionParser for AggrSigAvgHandler {
+impl super::parser::Parser for AggrFnDefinitionParserAvg {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         use cop_datatype::FieldTypeAccessor;
         use std::convert::TryFrom;
@@ -62,8 +62,8 @@ impl super::AggrDefinitionParser for AggrSigAvgHandler {
         mut aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,
-        output_schema: &mut Vec<FieldType>,
-        output_exp: &mut Vec<RpnExpression>,
+        out_schema: &mut Vec<FieldType>,
+        out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
         use cop_datatype::FieldTypeAccessor;
         use std::convert::TryFrom;
@@ -72,18 +72,18 @@ impl super::AggrDefinitionParser for AggrSigAvgHandler {
         let child = aggr_def.take_children().into_iter().next().unwrap();
         let eval_type = EvalType::try_from(child.get_field_type().tp()).unwrap();
 
-        // AVG outputs two columns
-        output_schema.push({
+        // AVG outputs two columns.
+        out_schema.push({
             let mut ft = FieldType::new();
             ft.as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong)
                 .set_flag(FieldTypeFlag::UNSIGNED);
             ft
         });
-        output_schema.push(aggr_def.take_field_type());
+        out_schema.push(aggr_def.take_field_type());
 
         // Currently we don't insert CAST, so the built expression will be directly used.
-        output_exp.push(RpnExpressionBuilder::build_from_expr_tree(
+        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
             max_columns,

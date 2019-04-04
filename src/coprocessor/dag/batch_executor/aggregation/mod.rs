@@ -11,15 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod interface;
-pub mod statistics;
+mod simple_aggr_executor;
 
-mod aggregation;
-mod scan;
-mod selection_executor;
-
-pub mod executors {
-    pub use super::aggregation::BatchSimpleAggregationExecutor;
-    pub use super::scan::{BatchIndexScanExecutor, BatchTableScanExecutor};
-    pub use super::selection_executor::BatchSelectionExecutor;
-}
+pub use self::simple_aggr_executor::BatchSimpleAggregationExecutor;

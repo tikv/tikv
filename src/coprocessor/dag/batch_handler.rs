@@ -29,7 +29,7 @@ use crate::coprocessor::*;
 const BATCH_INITIAL_SIZE: usize = 32;
 
 // TODO: This value is chosen based on MonetDB/X100's research without our own benchmarks.
-const BATCH_MAX_SIZE: usize = 1024;
+pub const BATCH_MAX_SIZE: usize = 1024;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;

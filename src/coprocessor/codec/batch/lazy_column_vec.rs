@@ -35,7 +35,29 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
     }
 }
 
+impl From<Vec<VectorValue>> for LazyBatchColumnVec {
+    #[inline]
+    fn from(columns: Vec<VectorValue>) -> Self {
+        LazyBatchColumnVec {
+            columns: columns
+                .into_iter()
+                .map(|v| LazyBatchColumn::from(v))
+                .collect(),
+        }
+    }
+}
+
 impl LazyBatchColumnVec {
+    /// Creates a new empty `LazyBatchColumnVec`, which does not have columns and rows.
+    ///
+    /// Because column numbers won't change, it means constructed instance will be always empty.
+    #[inline]
+    pub fn new_empty() -> Self {
+        Self {
+            columns: Vec::new(),
+        }
+    }
+
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
     #[inline]

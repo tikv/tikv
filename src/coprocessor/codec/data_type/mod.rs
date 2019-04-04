@@ -76,8 +76,6 @@ where
 
 /// A trait of all types that can be used during evaluation (eval type).
 pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
-    const EVAL_TYPE: EvalType;
-
     /// Borrows this concrete type from a `ScalarValue` in the same type.
     fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
@@ -98,8 +96,6 @@ pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
 macro_rules! impl_evaluable_type {
     ($ty:tt) => {
         impl Evaluable for $ty {
-            const EVAL_TYPE: EvalType = EvalType::$ty;
-
             #[inline]
             fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
                 v.as_ref()

@@ -104,6 +104,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
                 if let Err(e) = r {
                     // TODO: We should not return error when it comes from unused rows.
                     result.is_drained = result.is_drained.and(Err(e));
+                    // TODO: timer is not collected.
                     return result;
                 }
                 for i in 0..rows_len {
