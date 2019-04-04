@@ -16,12 +16,74 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(feature = "no-fail"))]
+use kvproto::errorpb::Error as ErrorHeader;
+pub use rocksdb_do_not_use::{
+    load_latest_options,
+    rocksdb::supported_compression,
+    // NOTE(yu): maybe this should be an explicit import
+    //
+    // Like crate::storage::engine::options::UnsafeSnap?
+    rocksdb_options::UnsafeSnap,
+
+    run_ldb_tool,
+    set_external_sst_file_global_seq_no,
+
+    BlockBasedOptions,
+    CColumnFamilyDescriptor,
+    CFHandle,
+    ColumnFamilyOptions,
+    CompactOptions,
+    CompactionJobInfo,
+    CompactionOptions,
+    CompactionPriority,
+    DBBottommostLevelCompaction,
+    DBCompactionStyle,
+    DBCompressionType,
+    DBEntryType,
+    DBIterator,
+    DBOptions,
+    DBRateLimiterMode,
+    DBRecoveryMode,
+    DBStatisticsHistogramType,
+    DBStatisticsTickerType,
+    DBVector,
+    Env,
+    EnvOptions,
+    EventListener,
+    ExternalSstFileInfo,
+    FlushJobInfo,
+    HistogramData,
+    IngestExternalFileOptions,
+    IngestionInfo,
+    Kv,
+    PerfContext,
+    Range,
+    RateLimiter,
+    ReadOptions,
+    SeekKey,
+    SequentialFile,
+    SliceTransform,
+    SstFileWriter,
+    TablePropertiesCollection,
+    TablePropertiesCollector,
+    TablePropertiesCollectorFactory,
+    TitanBlobIndex,
+    TitanDBOptions,
+    UserCollectedProperties,
+    Writable,
+    WriteBatch,
+    WriteOptions,
+    WriteStallCondition,
+    WriteStallInfo,
+    DB,
+};
+
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
 use crate::raftstore::store::engine::{IterOption, Peekable};
 use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use rocksdb::{DBIterator, SeekKey, Writable, WriteBatch, DB};
 
 use crate::util::escape;
 use crate::util::rocksdb_util::{self, CFOptions};
@@ -42,7 +104,7 @@ enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Write(..) => write!(f, "write task"),
             Task::Snapshot(_) => write!(f, "snapshot task"),
@@ -89,7 +151,7 @@ impl RocksEngine {
     pub fn new(
         path: &str,
         cfs: &[CfName],
-        cfs_opts: Option<Vec<CFOptions>>,
+        cfs_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -122,13 +184,13 @@ impl RocksEngine {
 }
 
 impl Display for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RocksDB")
     }
 }
 
 impl Debug for RocksEngine {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "RocksDB [is_temp: {}]",
@@ -185,7 +247,7 @@ impl TestEngineBuilder {
                 CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
                 CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
                 CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
-                _ => CFOptions::new(*cf, rocksdb::ColumnFamilyOptions::new()),
+                _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
         RocksEngine::new(&path, &cfs, Some(cfs_opts))
@@ -231,7 +293,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
             return Err(Error::RocksDb(msg));
         }
     }
-    if let Err(msg) = db.write(wb) {
+    if let Err(msg) = db.write(&wb) {
         return Err(Error::RocksDb(msg));
     }
     Ok(())
@@ -249,6 +311,14 @@ impl Engine for RocksEngine {
     }
 
     fn async_snapshot(&self, _: &Context, cb: Callback<Self::Snap>) -> Result<()> {
+        fail_point!("rockskv_async_snapshot", |_| Err(box_err!(
+            "snapshot failed"
+        )));
+        fail_point!("rockskv_async_snapshot_not_leader", |_| {
+            let mut header = ErrorHeader::new();
+            header.mut_not_leader().set_region_id(100);
+            Err(Error::Request(header))
+        });
         box_try!(self.sched.schedule(Task::Snapshot(cb)));
         Ok(())
     }

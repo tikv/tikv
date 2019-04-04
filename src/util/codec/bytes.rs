@@ -167,7 +167,7 @@ pub fn encoded_bytes_len(encoded: &[u8], desc: bool) -> usize {
 }
 
 /// Decodes bytes which are encoded by `encode_compact_bytes` before.
-pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
+pub fn decode_compact_bytes(data: &mut BytesSlice<'_>) -> Result<Vec<u8>> {
     let vn = number::decode_var_i64(data)? as usize;
     if data.len() >= vn {
         let bs = data[0..vn].to_vec();
@@ -181,7 +181,7 @@ pub fn decode_compact_bytes(data: &mut BytesSlice) -> Result<Vec<u8>> {
 ///
 /// Please note that, data is a mut reference to slice. After calling this the
 /// slice that data point to would change.
-pub fn decode_bytes(data: &mut BytesSlice, desc: bool) -> Result<Vec<u8>> {
+pub fn decode_bytes(data: &mut BytesSlice<'_>, desc: bool) -> Result<Vec<u8>> {
     let mut key = Vec::with_capacity(data.len() / (ENC_GROUP_SIZE + 1) * ENC_GROUP_SIZE);
     let mut offset = 0;
     let chunk_len = ENC_GROUP_SIZE + 1;

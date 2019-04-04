@@ -115,7 +115,7 @@ impl RpcClient {
 }
 
 impl fmt::Debug for RpcClient {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RpcClient")
             .field("cluster_id", &self.cluster_id)
             .field("leader", &self.get_leader())
@@ -308,7 +308,7 @@ impl PdClient for RpcClient {
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
         req.set_bytes_read(region_stat.read_bytes);
-        req.set_keys_read(region_stat.read_bytes);
+        req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         let mut interval = pdpb::TimeInterval::new();

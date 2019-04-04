@@ -88,9 +88,6 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
-#[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
-extern crate jemallocator;
-extern crate libc;
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
@@ -109,12 +106,16 @@ static ALLOC: std::alloc::System = std::alloc::System;
 
 pub use self::imp::*;
 
+pub type AllocStats = Vec<(&'static str, usize)>;
+
 // The implementation of this crate when jemalloc is turned on
 #[cfg(all(unix, not(fuzzing), not(feature = "no-jemalloc")))]
 mod imp {
+    use super::AllocStats;
+    use jemalloc_ctl::{stats, Epoch as JeEpoch};
     use jemallocator::ffi::malloc_stats_print;
     use libc::{self, c_char, c_void};
-    use std::{ptr, slice};
+    use std::{io, ptr, slice};
 
     pub use self::profiling::dump_prof;
 
@@ -128,6 +129,20 @@ mod imp {
             )
         }
         String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
+        // Stats are cached. Need to advance epoch to refresh.
+        JeEpoch::new()?.advance()?;
+
+        Ok(Some(vec![
+            ("allocated", stats::allocated()?),
+            ("active", stats::active()?),
+            ("metadata", stats::metadata()?),
+            ("resident", stats::resident()?),
+            ("mapped", stats::mapped()?),
+            ("retained", stats::retained()?),
+        ]))
     }
 
     #[allow(clippy::cast_ptr_alignment)]
@@ -283,8 +298,16 @@ mod imp {
 
 #[cfg(not(all(unix, not(fuzzing), not(feature = "no-jemalloc"))))]
 mod imp {
+
+    use super::AllocStats;
+    use std::io;
+
     pub fn dump_stats() -> String {
         String::new()
     }
     pub fn dump_prof(_path: Option<&str>) {}
+
+    pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
+        Ok(None)
+    }
 }

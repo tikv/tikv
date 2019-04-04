@@ -22,8 +22,7 @@ use super::{
     Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
     RoleObserver,
 };
-use crate::raftstore::store::keys::{data_end_key, data_key, origin_key, DATA_MAX_KEY};
-use crate::raftstore::store::msg::{SeekRegionCallback, SeekRegionFilter, SeekRegionResult};
+use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::engine::{RegionInfoProvider, Result as EngineResult};
 use crate::util::collections::HashMap;
 use crate::util::escape;
@@ -84,28 +83,28 @@ impl RegionInfo {
 type RegionsMap = HashMap<u64, RegionInfo>;
 type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
 
+pub type SeekRegionCallback = Box<dyn Fn(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
+
 /// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
 /// thread.
-enum RegionCollectorMsg {
+enum RegionInfoQuery {
     RaftStoreEvent(RaftStoreEvent),
     SeekRegion {
         from: Vec<u8>,
-        filter: SeekRegionFilter,
-        limit: u32,
         callback: SeekRegionCallback,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
 
-impl Display for RegionCollectorMsg {
-    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+impl Display for RegionInfoQuery {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
-            RegionCollectorMsg::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
-            RegionCollectorMsg::SeekRegion { from, limit, .. } => {
-                write!(f, "SeekRegion(from: {}, limit: {})", escape(from), limit)
+            RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
+            RegionInfoQuery::SeekRegion { from, .. } => {
+                write!(f, "SeekRegion(from: {})", escape(from))
             }
-            RegionCollectorMsg::DebugDump(_) => write!(f, "DebugDump"),
+            RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
     }
 }
@@ -114,7 +113,7 @@ impl Display for RegionCollectorMsg {
 /// through the `scheduler`.
 #[derive(Clone)]
 struct RegionEventListener {
-    scheduler: Scheduler<RegionCollectorMsg>,
+    scheduler: Scheduler<RegionInfoQuery>,
 }
 
 impl Coprocessor for RegionEventListener {}
@@ -122,7 +121,7 @@ impl Coprocessor for RegionEventListener {}
 impl RegionChangeObserver for RegionEventListener {
     fn on_region_changed(
         &self,
-        context: &mut ObserverContext,
+        context: &mut ObserverContext<'_>,
         event: RegionChangeEvent,
         role: StateRole,
     ) {
@@ -133,17 +132,17 @@ impl RegionChangeObserver for RegionEventListener {
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
         };
         self.scheduler
-            .schedule(RegionCollectorMsg::RaftStoreEvent(event))
+            .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
     }
 }
 
 impl RoleObserver for RegionEventListener {
-    fn on_role_change(&self, context: &mut ObserverContext, role: StateRole) {
+    fn on_role_change(&self, context: &mut ObserverContext<'_>, role: StateRole) {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
-            .schedule(RegionCollectorMsg::RaftStoreEvent(event))
+            .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
     }
 }
@@ -151,14 +150,14 @@ impl RoleObserver for RegionEventListener {
 /// Creates an `RegionEventListener` and register it to given coprocessor host.
 fn register_region_event_listener(
     host: &mut CoprocessorHost,
-    scheduler: Scheduler<RegionCollectorMsg>,
+    scheduler: Scheduler<RegionInfoQuery>,
 ) {
     let listener = RegionEventListener { scheduler };
 
     host.registry
-        .register_role_observer(1, box listener.clone());
+        .register_role_observer(1, Box::new(listener.clone()));
     host.registry
-        .register_region_change_observer(1, box listener);
+        .register_region_change_observer(1, Box::new(listener));
 }
 
 /// `RegionCollector` is the place where we hold all region information we collected, and the
@@ -355,38 +354,13 @@ impl RegionCollector {
         true
     }
 
-    fn handle_seek_region(
-        &self,
-        from_key: Vec<u8>,
-        filter: SeekRegionFilter,
-        mut limit: u32,
-        callback: SeekRegionCallback,
-    ) {
-        assert!(limit > 0);
-
+    fn handle_seek_region(&self, from_key: Vec<u8>, callback: SeekRegionCallback) {
         let from_key = data_key(&from_key);
-        for (end_key, region_id) in self.region_ranges.range((Excluded(from_key), Unbounded)) {
-            let RegionInfo { region, role } = &self.regions[region_id];
-            if filter(region, *role) {
-                callback(SeekRegionResult::Found(region.clone()));
-                return;
-            }
-
-            limit -= 1;
-            if limit == 0 {
-                // `origin_key` does not handle `DATA_MAX_KEY`, but we can return `Ended` rather
-                // than `LimitExceeded`.
-                if end_key.as_slice() >= DATA_MAX_KEY {
-                    break;
-                }
-
-                callback(SeekRegionResult::LimitExceeded {
-                    next_key: origin_key(end_key).to_vec(),
-                });
-                return;
-            }
-        }
-        callback(SeekRegionResult::Ended);
+        let mut iter = self
+            .region_ranges
+            .range((Excluded(from_key), Unbounded))
+            .map(|(_, region_id)| &self.regions[region_id]);
+        callback(&mut iter)
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
@@ -430,21 +404,16 @@ impl RegionCollector {
     }
 }
 
-impl Runnable<RegionCollectorMsg> for RegionCollector {
-    fn run(&mut self, task: RegionCollectorMsg) {
+impl Runnable<RegionInfoQuery> for RegionCollector {
+    fn run(&mut self, task: RegionInfoQuery) {
         match task {
-            RegionCollectorMsg::RaftStoreEvent(event) => {
+            RegionInfoQuery::RaftStoreEvent(event) => {
                 self.handle_raftstore_event(event);
             }
-            RegionCollectorMsg::SeekRegion {
-                from,
-                filter,
-                limit,
-                callback,
-            } => {
-                self.handle_seek_region(from, filter, limit, callback);
+            RegionInfoQuery::SeekRegion { from, callback } => {
+                self.handle_seek_region(from, callback);
             }
-            RegionCollectorMsg::DebugDump(tx) => {
+            RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
                     .unwrap();
             }
@@ -454,7 +423,7 @@ impl Runnable<RegionCollectorMsg> for RegionCollector {
 
 const METRICS_FLUSH_INTERVAL: u64 = 10_000; // 10s
 
-impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
+impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
     fn on_timeout(&mut self, timer: &mut Timer<()>, _: ()) {
         let mut count = 0;
         let mut leader = 0;
@@ -477,8 +446,8 @@ impl RunnableWithTimer<RegionCollectorMsg, ()> for RegionCollector {
 /// `RegionInfoAccessor` keeps all region information separately from raftstore itself.
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
-    worker: Arc<Mutex<Worker<RegionCollectorMsg>>>,
-    scheduler: Scheduler<RegionCollectorMsg>,
+    worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
+    scheduler: Scheduler<RegionInfoQuery>,
 }
 
 impl RegionInfoAccessor {
@@ -517,41 +486,21 @@ impl RegionInfoAccessor {
     pub fn debug_dump(&self) -> (RegionsMap, RegionRangesMap) {
         let (tx, rx) = mpsc::channel();
         self.scheduler
-            .schedule(RegionCollectorMsg::DebugDump(tx))
+            .schedule(RegionInfoQuery::DebugDump(tx))
             .unwrap();
         rx.recv().unwrap()
     }
 }
 
 impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(
-        &self,
-        from: &[u8],
-        filter: SeekRegionFilter,
-        limit: u32,
-    ) -> EngineResult<SeekRegionResult> {
-        let (tx, rx) = mpsc::channel();
-        let msg = RegionCollectorMsg::SeekRegion {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
+        let msg = RegionInfoQuery::SeekRegion {
             from: from.to_vec(),
-            filter,
-            limit,
-            callback: box move |res| {
-                tx.send(res).unwrap_or_else(|e| {
-                    panic!("failed to send seek_region result back to caller: {:?}", e)
-                })
-            },
+            callback,
         };
         self.scheduler
             .schedule(msg)
             .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
-            .and_then(|_| {
-                rx.recv().map_err(|e| {
-                    box_err!(
-                        "failed to receive seek region result from region collector: {:?}",
-                        e
-                    )
-                })
-            })
     }
 }
 

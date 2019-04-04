@@ -20,10 +20,10 @@ use futures_cpupool::{Builder, CpuPool};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
-use rocksdb::DB;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
+use crate::storage::engine::DB;
 use crate::util::future::paired_future_callback;
 use crate::util::rocksdb_util::compact_files_in_range;
 use crate::util::time::Instant;
@@ -72,7 +72,7 @@ impl<Router: RaftStoreRouter> ImportSSTService<Router> {
 impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     fn switch_mode(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
@@ -101,7 +101,7 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     /// Receive SST from client and save the file for later ingesting.
     fn upload(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<UploadRequest>,
         sink: ClientStreamingSink<UploadResponse>,
     ) {
@@ -154,7 +154,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
     /// If the ingestion fails because the region is not found or the epoch does
     /// not match, the remaining files will eventually be cleaned up by
     /// CleanupSSTWorker.
-    fn ingest(&mut self, ctx: RpcContext, mut req: IngestRequest, sink: UnarySink<IngestResponse>) {
+    fn ingest(
+        &mut self,
+        ctx: RpcContext<'_>,
+        mut req: IngestRequest,
+        sink: UnarySink<IngestResponse>,
+    ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
 
@@ -194,7 +199,12 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
         )
     }
 
-    fn compact(&mut self, ctx: RpcContext, req: CompactRequest, sink: UnarySink<CompactResponse>) {
+    fn compact(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: CompactRequest,
+        sink: UnarySink<CompactResponse>,
+    ) {
         let label = "compact";
         let timer = Instant::now_coarse();
         let engine = Arc::clone(&self.engine);

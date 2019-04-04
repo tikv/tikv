@@ -12,8 +12,8 @@
 // limitations under the License.
 
 use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
+use crate::storage::engine::DB;
 use kvproto::pdpb::CheckPolicy;
-use rocksdb::DB;
 use std::mem;
 use std::sync::Mutex;
 
@@ -49,7 +49,7 @@ impl Checker {
 }
 
 impl SplitChecker for Checker {
-    fn on_kv(&mut self, _: &mut ObserverContext, key: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, key: &KeyEntry) -> bool {
         if !key.is_commit_version() {
             return false;
         }
@@ -115,7 +115,7 @@ impl<C> Coprocessor for KeysCheckObserver<C> {}
 impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         policy: CheckPolicy,
@@ -182,9 +182,9 @@ mod tests {
     use std::cmp;
     use std::sync::{mpsc, Arc};
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable, DB};
     use tempdir::TempDir;
 
     use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};

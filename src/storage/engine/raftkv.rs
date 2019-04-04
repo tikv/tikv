@@ -34,8 +34,8 @@ use crate::raftstore::store::engine::Peekable;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
+use crate::storage::engine::TablePropertiesCollection;
 use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
-use rocksdb::TablePropertiesCollection;
 
 quick_error! {
     #[derive(Debug)]
@@ -201,10 +201,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         self.router
             .send_command(
                 cmd,
-                StoreCallback::Read(box move |resp| {
+                StoreCallback::Read(Box::new(move |resp| {
                     let (cb_ctx, res) = on_read_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
-                }),
+                })),
             )
             .map_err(From::from)
     }
@@ -227,10 +227,10 @@ impl<S: RaftStoreRouter> RaftKv<S> {
         self.router
             .send_command(
                 cmd,
-                StoreCallback::Write(box move |resp| {
+                StoreCallback::Write(Box::new(move |resp| {
                     let (cb_ctx, res) = on_write_result(resp, len);
                     cb((cb_ctx, res.map_err(Error::into)));
-                }),
+                })),
             )
             .map_err(From::from)
     }
@@ -244,13 +244,13 @@ fn invalid_resp_type(exp: CmdType, act: CmdType) -> Error {
 }
 
 impl<S: RaftStoreRouter> Display for RaftKv<S> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
 
 impl<S: RaftStoreRouter> Debug for RaftKv<S> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "RaftKv")
     }
 }
@@ -307,23 +307,27 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.write.start_coarse_timer();
 
-        self.exec_write_requests(ctx, reqs, box move |(cb_ctx, res)| match res {
-            Ok(CmdRes::Resp(_)) => {
-                req_timer.observe_duration();
-                ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                fail_point!("raftkv_async_write_finish");
-                cb((cb_ctx, Ok(())))
-            }
-            Ok(CmdRes::Snap(_)) => cb((
-                cb_ctx,
-                Err(box_err!("unexpect snapshot, should mutate instead.")),
-            )),
-            Err(e) => {
-                let status_kind = get_status_kind_from_engine_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                cb((cb_ctx, Err(e)))
-            }
-        })
+        self.exec_write_requests(
+            ctx,
+            reqs,
+            Box::new(move |(cb_ctx, res)| match res {
+                Ok(CmdRes::Resp(_)) => {
+                    req_timer.observe_duration();
+                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                    fail_point!("raftkv_async_write_finish");
+                    cb((cb_ctx, Ok(())))
+                }
+                Ok(CmdRes::Snap(_)) => cb((
+                    cb_ctx,
+                    Err(box_err!("unexpect snapshot, should mutate instead.")),
+                )),
+                Err(e) => {
+                    let status_kind = get_status_kind_from_engine_error(&e);
+                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
+                    cb((cb_ctx, Err(e)))
+                }
+            }),
+        )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
@@ -339,22 +343,26 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
         let req_timer = ASYNC_REQUESTS_DURATIONS_VEC.snapshot.start_coarse_timer();
 
-        self.exec_read_requests(ctx, vec![req], box move |(cb_ctx, res)| match res {
-            Ok(CmdRes::Resp(r)) => cb((
-                cb_ctx,
-                Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
-            )),
-            Ok(CmdRes::Snap(s)) => {
-                req_timer.observe_duration();
-                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                cb((cb_ctx, Ok(s)))
-            }
-            Err(e) => {
-                let status_kind = get_status_kind_from_engine_error(&e);
-                ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
-                cb((cb_ctx, Err(e)))
-            }
-        })
+        self.exec_read_requests(
+            ctx,
+            vec![req],
+            Box::new(move |(cb_ctx, res)| match res {
+                Ok(CmdRes::Resp(r)) => cb((
+                    cb_ctx,
+                    Err(invalid_resp_type(CmdType::Snap, r[0].get_cmd_type()).into()),
+                )),
+                Ok(CmdRes::Snap(s)) => {
+                    req_timer.observe_duration();
+                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+                    cb((cb_ctx, Ok(s)))
+                }
+                Err(e) => {
+                    let status_kind = get_status_kind_from_engine_error(&e);
+                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
+                    cb((cb_ctx, Err(e)))
+                }
+            }),
+        )
         .map_err(|e| {
             let status_kind = get_status_kind_from_error(&e);
             ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();

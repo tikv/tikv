@@ -27,7 +27,7 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::util::escape;
 use crate::util::rocksdb_util::CompactedEvent;
-use raft::{SnapshotStatus, StateRole};
+use raft::SnapshotStatus;
 
 use super::RegionSnapshot;
 
@@ -42,18 +42,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-#[derive(Debug)]
-pub enum SeekRegionResult {
-    Found(metapb::Region),
-    LimitExceeded { next_key: Vec<u8> },
-    Ended,
-}
-
 pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
-
-pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -96,7 +86,7 @@ impl Callback {
 }
 
 impl fmt::Debug for Callback {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
@@ -217,7 +207,7 @@ pub enum CasualMessage {
 }
 
 impl fmt::Debug for CasualMessage {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
                 fmt,
@@ -303,7 +293,7 @@ pub enum PeerMsg {
 }
 
 impl fmt::Debug for PeerMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
@@ -346,7 +336,7 @@ pub enum StoreMsg {
 }
 
 impl fmt::Debug for StoreMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),

@@ -14,11 +14,11 @@
 use std::cmp::Ordering;
 
 use kvproto::metapb::Region;
-use rocksdb::{SeekKey, DB};
 
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::keys;
+use crate::storage::engine::{SeekKey, DB};
 use crate::storage::types::Key;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
@@ -40,7 +40,7 @@ impl SplitChecker for Checker {
     /// Feed keys in order to find the split key.
     /// If `current_data_key` does not belong to `status.first_encoded_table_prefix`.
     /// it returns the encoded table prefix of `current_data_key`.
-    fn on_kv(&mut self, _: &mut ObserverContext, entry: &KeyEntry) -> bool {
+    fn on_kv(&mut self, _: &mut ObserverContext<'_>, entry: &KeyEntry) -> bool {
         if self.split_key.is_some() {
             return true;
         }
@@ -87,7 +87,7 @@ impl Coprocessor for TableCheckObserver {}
 impl SplitCheckObserver for TableCheckObserver {
     fn add_checker(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         host: &mut Host,
         engine: &DB,
         policy: CheckPolicy,
@@ -229,9 +229,9 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use crate::storage::engine::Writable;
     use kvproto::metapb::Peer;
     use kvproto::pdpb::CheckPolicy;
-    use rocksdb::Writable;
     use tempdir::TempDir;
 
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};

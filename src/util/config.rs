@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use crate::storage::engine::DBCompressionType;
 use crate::util;
-use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
@@ -88,7 +88,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use rocksdb::DBCompressionType;
+    use crate::storage::engine::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -120,7 +120,7 @@ pub mod compression_type_level_serde {
         impl<'de> Visitor<'de> for SeqVisitor {
             type Value = [DBCompressionType; 7];
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(formatter, "a compression type vector")
             }
 
@@ -174,7 +174,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
+            use crate::storage::engine::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -190,7 +190,7 @@ macro_rules! numeric_enum_mod {
                 impl<'de> Visitor<'de> for EnumVisitor {
                     type Value = $enum;
 
-                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                         write!(formatter, concat!("valid ", stringify!($enum)))
                     }
 
@@ -210,7 +210,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use rocksdb::$enum;
+                use crate::storage::engine::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -242,6 +242,12 @@ numeric_enum_mod! {compaction_pri_serde CompactionPriority {
     OldestLargestSeqFirst = 1,
     OldestSmallestSeqFirst = 2,
     MinOverlappingRatio = 3,
+}}
+
+numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
+    ReadOnly = 1,
+    WriteOnly = 2,
+    AllIo = 3,
 }}
 
 numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
@@ -404,7 +410,7 @@ impl<'de> Deserialize<'de> for ReadableSize {
         impl<'de> Visitor<'de> for SizeVisitor {
             type Value = ReadableSize;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("valid size")
             }
 
@@ -478,7 +484,7 @@ impl ReadableDuration {
 
 impl fmt::Display for ReadableDuration {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut dur = util::time::duration_to_ms(self.0);
         let mut written = false;
         if dur >= DAY {
@@ -533,7 +539,7 @@ impl<'de> Deserialize<'de> for ReadableDuration {
         impl<'de> Visitor<'de> for DurVisitor {
             type Value = ReadableDuration;
 
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("valid duration")
             }
 
@@ -655,7 +661,6 @@ pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
 #[cfg(target_os = "linux")]
 mod check_kernel {
     use std::fs;
-    use std::io::Read;
 
     use super::ConfigError;
 
@@ -668,9 +673,7 @@ mod check_kernel {
         expect: i64,
         checker: Box<Checker>,
     ) -> Result<(), ConfigError> {
-        let mut buffer = String::new();
-        fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
+        let buffer = fs::read_to_string(param_path)
             .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let got = buffer
@@ -706,17 +709,23 @@ mod check_kernel {
     pub fn check_kernel() -> Vec<ConfigError> {
         let params: Vec<(&str, i64, Box<Checker>)> = vec![
             // Check net.core.somaxconn.
-            ("/proc/sys/net/core/somaxconn", 32768, box |got, expect| {
-                got >= expect
-            }),
+            (
+                "/proc/sys/net/core/somaxconn",
+                32768,
+                Box::new(|got, expect| got >= expect),
+            ),
             // Check net.ipv4.tcp_syncookies.
-            ("/proc/sys/net/ipv4/tcp_syncookies", 0, box |got, expect| {
-                got == expect
-            }),
+            (
+                "/proc/sys/net/ipv4/tcp_syncookies",
+                0,
+                Box::new(|got, expect| got == expect),
+            ),
             // Check vm.swappiness.
-            ("/proc/sys/vm/swappiness", 0, box |got, expect| {
-                got == expect
-            }),
+            (
+                "/proc/sys/vm/swappiness",
+                0,
+                Box::new(|got, expect| got == expect),
+            ),
         ];
 
         let mut errors = Vec::with_capacity(params.len());
@@ -742,8 +751,7 @@ pub fn check_kernel() -> Vec<ConfigError> {
 mod check_data_dir {
     use libc;
     use std::ffi::{CStr, CString};
-    use std::fs::{self, File};
-    use std::io::Read;
+    use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -807,7 +815,7 @@ mod check_data_dir {
             Ok(path) => format!("{}", path.display()),
             Err(_) => String::from(fsname),
         };
-        let dev = device.trim_left_matches("/dev/");
+        let dev = device.trim_start_matches("/dev/");
         let block_dir = "/sys/block";
         let mut device_dir = format!("{}/{}", block_dir, dev);
         if !Path::new(&device_dir).exists() {
@@ -847,12 +855,9 @@ mod check_data_dir {
             )));
         }
 
-        let mut buffer = String::new();
-        File::open(&rota_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| {
-                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
-            })?;
+        let buffer = fs::read_to_string(&rota_path).map_err(|e| {
+            ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
+        })?;
         Ok(buffer.trim_matches('\n').to_owned())
     }
 
@@ -987,9 +992,10 @@ pub fn check_addr(addr: &str) -> Result<(), ConfigError> {
         return Ok(());
     }
 
-    let parts: Vec<&str> = addr.split(':')
-            .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
-            .collect();
+    let parts: Vec<&str> = addr
+        .split(':')
+        .filter(|s| !s.is_empty()) // "Host:" or ":Port" are invalid.
+        .collect();
 
     // ["Host", "Port"]
     if parts.len() != 2 {
@@ -1023,7 +1029,7 @@ mod tests {
 
     use super::*;
 
-    use rocksdb::DBCompressionType;
+    use crate::storage::engine::DBCompressionType;
     use tempdir::TempDir;
     use toml;
 

@@ -16,16 +16,14 @@ use std::ops::Deref;
 use std::option::Option;
 use std::sync::Arc;
 
+use crate::raftstore::Error;
+use crate::raftstore::Result;
+use crate::storage::engine::{
+    CFHandle, DBIterator, DBVector, ReadOptions, UnsafeSnap, Writable, WriteBatch, DB,
+};
 use crate::util::rocksdb_util;
 use byteorder::{BigEndian, ByteOrder};
 use protobuf;
-use rocksdb::{
-    rocksdb_options::UnsafeSnap, CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch,
-    DB,
-};
-
-use crate::raftstore::Error;
-use crate::raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -36,27 +34,6 @@ pub struct Snapshot {
 /// it around.
 unsafe impl Send for Snapshot {}
 unsafe impl Sync for Snapshot {}
-
-#[derive(Debug, Clone)]
-pub struct SyncSnapshot(Arc<Snapshot>);
-
-impl Deref for SyncSnapshot {
-    type Target = Snapshot;
-
-    fn deref(&self) -> &Snapshot {
-        &self.0
-    }
-}
-
-impl SyncSnapshot {
-    pub fn new(db: Arc<DB>) -> SyncSnapshot {
-        SyncSnapshot(Arc::new(Snapshot::new(db)))
-    }
-
-    pub fn clone(&self) -> SyncSnapshot {
-        SyncSnapshot(Arc::clone(&self.0))
-    }
-}
 
 impl Snapshot {
     pub fn new(db: Arc<DB>) -> Snapshot {
@@ -103,7 +80,7 @@ impl Snapshot {
 }
 
 impl Debug for Snapshot {
-    fn fmt(&self, fmt: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Engine Snapshot Impl")
     }
 }
@@ -113,6 +90,27 @@ impl Drop for Snapshot {
         unsafe {
             self.db.release_snap(&self.snap);
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncSnapshot(Arc<Snapshot>);
+
+impl Deref for SyncSnapshot {
+    type Target = Snapshot;
+
+    fn deref(&self) -> &Snapshot {
+        &self.0
+    }
+}
+
+impl SyncSnapshot {
+    pub fn new(db: Arc<DB>) -> SyncSnapshot {
+        SyncSnapshot(Arc::new(Snapshot::new(db)))
+    }
+
+    pub fn clone(&self) -> SyncSnapshot {
+        SyncSnapshot(Arc::clone(&self.0))
     }
 }
 
@@ -430,8 +428,8 @@ impl Mutable for WriteBatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::engine::Writable;
     use kvproto::metapb::Region;
-    use rocksdb::Writable;
     use std::sync::Arc;
     use tempdir::TempDir;
 

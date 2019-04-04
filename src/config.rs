@@ -11,21 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate prometheus;
-extern crate toml;
-
 use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::i32;
 use std::io::Error as IoError;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::usize;
 
-use rocksdb::{
+use crate::storage::engine::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRecoveryMode, TitanDBOptions,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
@@ -39,7 +35,8 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
+    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_DATA_DIR,
+    DEFAULT_ROCKSDB_SUB_DIR,
 };
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
@@ -604,6 +601,9 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[serde(with = "config::rate_limiter_mode_serde")]
+    pub rate_limiter_mode: DBRateLimiterMode,
+    pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
@@ -637,6 +637,8 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_mode: DBRateLimiterMode::WriteOnly,
+            auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
@@ -681,9 +683,15 @@ impl DbConfig {
                     );
                 })
         }
+
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
+            opts.set_ratelimiter_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                self.rate_limiter_mode,
+                self.auto_tuned,
+            );
         }
+
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -700,7 +708,17 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            // TODO: rmeove CF_RAFT.
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+        ]
+    }
+
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -889,7 +907,7 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
     }
 }
@@ -983,9 +1001,11 @@ macro_rules! readpool_config {
                     .into());
                 }
                 if self.low_concurrency == 0 {
-                    return Err(
-                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
-                    );
+                    return Err(format!(
+                        "readpool.{}.low-concurrency should be > 0",
+                        $display_name
+                    )
+                    .into());
                 }
                 if self.stack_size.0 < ReadableSize::mb(2).0 {
                     return Err(
@@ -1141,7 +1161,7 @@ pub struct TiKvConfig {
     pub log_level: slog::Level,
     pub log_file: String,
     pub log_rotation_timespan: ReadableDuration,
-    pub panic_when_key_exceed_bound: bool,
+    pub panic_when_unexpected_key_or_data: bool,
     pub readpool: ReadPoolConfig,
     pub server: ServerConfig,
     pub storage: StorageConfig,
@@ -1162,7 +1182,7 @@ impl Default for TiKvConfig {
             log_level: slog::Level::Info,
             log_file: "".to_owned(),
             log_rotation_timespan: ReadableDuration::hours(24),
-            panic_when_key_exceed_bound: false,
+            panic_when_unexpected_key_or_data: false,
             readpool: ReadPoolConfig::default(),
             server: ServerConfig::default(),
             metric: MetricConfig::default(),
@@ -1320,11 +1340,18 @@ impl TiKvConfig {
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            return Err(format!(
-                "storage data dir have been changed, former data dir is {}, \
-                 current data dir is {}, please check if it is expected.",
-                last_cfg.storage.data_dir, self.storage.data_dir
-            ));
+            // In tikv 3.0 the default value of storage.data-dir changed
+            // from "" to "./"
+            let using_default_after_upgrade =
+                last_cfg.storage.data_dir.is_empty() && self.storage.data_dir == DEFAULT_DATA_DIR;
+
+            if !using_default_after_upgrade {
+                return Err(format!(
+                    "storage data dir have been changed, former data dir is {}, \
+                     current data dir is {}, please check if it is expected.",
+                    last_cfg.storage.data_dir, self.storage.data_dir
+                ));
+            }
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
@@ -1338,28 +1365,22 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
-    where
-        P: fmt::Debug,
-    {
-        fs::File::open(&path)
-            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {:?}, err {}",
-                    path, e
-                );
-            })
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        (|| -> Result<Self, Box<dyn Error>> {
+            let s = fs::read_to_string(&path)?;
+            Ok(::toml::from_str(&s)?)
+        })()
+        .unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                path.as_ref().display(),
+                e
+            );
+        })
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = ::toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;

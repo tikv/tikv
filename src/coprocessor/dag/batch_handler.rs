@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use protobuf::{Message, RepeatedField};
 
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{
-    BatchExecuteStatistics, BatchExecutor, BatchExecutorContext,
-};
+use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
-use crate::coprocessor::dag::expr::EvalWarnings;
+use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
@@ -48,7 +48,7 @@ pub struct BatchDAGHandler {
     /// returned back.
     output_offsets: Vec<u32>,
 
-    executor_context: BatchExecutorContext,
+    config: Arc<EvalConfig>,
 
     /// Accumulated statistics.
     // TODO: Currently we return statistics only once, so these statistics are accumulated only
@@ -67,14 +67,14 @@ impl BatchDAGHandler {
         deadline: Deadline,
         out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
-        executor_context: BatchExecutorContext,
+        config: Arc<EvalConfig>,
         ranges_len: usize,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
-            executor_context,
+            config,
             statistics: BatchExecuteStatistics::new(ranges_len),
             metrics: ExecutorMetrics::default(),
         }
@@ -85,7 +85,7 @@ impl RequestHandler for BatchDAGHandler {
     fn handle_request(&mut self) -> Result<Response> {
         let mut chunks = vec![];
         let mut batch_size = BATCH_INITIAL_SIZE;
-        let mut warnings = EvalWarnings::new(self.executor_context.config.max_warning_cnt);
+        let mut warnings = self.config.new_eval_warnings();
 
         loop {
             self.deadline.check_if_exceeded()?;
@@ -108,6 +108,9 @@ impl RequestHandler for BatchDAGHandler {
                 Ok(f) => is_drained = f,
             }
 
+            // We will only get warnings limited by max_warning_count. Note that in future we
+            // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
+            // field.
             warnings.merge(&mut result.warnings);
 
             // Notice that rows_len == 0 doesn't mean that it is drained.
@@ -116,11 +119,11 @@ impl RequestHandler for BatchDAGHandler {
                 {
                     let data = chunk.mut_rows_data();
                     data.reserve(result.data.maximum_encoded_size(&self.output_offsets)?);
-                    // TODO: We should encode using the out-most executor's own schema. Let's
-                    // change it when we have aggregation executor.
+                    // Although `schema()` can be deeply nested, it is ok since we process data in
+                    // batch.
                     result.data.encode(
                         &self.output_offsets,
-                        &self.executor_context.columns_info,
+                        self.out_most_executor.schema(),
                         data,
                     )?;
                 }

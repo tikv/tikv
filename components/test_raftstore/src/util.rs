@@ -18,8 +18,8 @@ use std::{thread, u64};
 
 use protobuf;
 use rand::Rng;
-use rocksdb::{CompactionJobInfo, DB};
 use tempdir::TempDir;
+use tikv::storage::engine::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -493,13 +493,13 @@ pub fn create_test_engine(
             path = Some(TempDir::new("test_cluster").unwrap());
             let mut kv_db_opt = cfg.rocksdb.build_opt();
             let router = Mutex::new(router);
-            let cmpacted_handler = box move |event| {
+            let cmpacted_handler = Box::new(move |event| {
                 router
                     .lock()
                     .unwrap()
                     .send_control(StoreMsg::CompactedEvent(event))
                     .unwrap();
-            };
+            });
             kv_db_opt.add_event_listener(CompactionListener::new(
                 cmpacted_handler,
                 Some(dummpy_filter),

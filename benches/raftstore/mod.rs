@@ -11,19 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// This suite contains benchmarks for several different configurations generated
-/// dynamically. Thus it has `harness = false`.
-extern crate criterion;
-
-extern crate rocksdb;
-extern crate test_raftstore;
-extern crate test_util;
-extern crate tikv;
-
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
-use rocksdb::{Writable, WriteBatch, DB};
+use tikv::storage::engine::{Writable, WriteBatch, DB};
 
 use test_raftstore::*;
 use test_util::*;
@@ -36,7 +27,7 @@ fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
-    db.write(wb).unwrap();
+    db.write(&wb).unwrap();
 }
 
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
@@ -171,7 +162,7 @@ impl ClusterFactory<NodeCluster> for NodeClusterFactory {
 }
 
 impl fmt::Debug for NodeClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Node")
     }
 }
@@ -186,13 +177,13 @@ impl ClusterFactory<ServerCluster> for ServerClusterFactory {
 }
 
 impl fmt::Debug for ServerClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Server")
     }
 }
 
 fn main() {
-    tikv::util::config::check_max_open_fds(4096).unwrap();
+    ::tikv::util::config::check_max_open_fds(4096).unwrap();
 
     let mut criterion = Criterion::default().configure_from_args().sample_size(10);
     bench_raft_cluster(&mut criterion, NodeClusterFactory {});
