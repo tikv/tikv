@@ -72,7 +72,7 @@ impl
         for def in aggr_definitions {
             AggrDefinitionParser::check_supported(def).map_err(|e| {
                 Error::Other(box_err!(
-                    "Unable to use BatchSimpleAggregateExecutor: {:?}",
+                    "Unable to use BatchSimpleAggregateExecutor: {}",
                     e
                 ))
             })?;

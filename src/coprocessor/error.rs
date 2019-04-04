@@ -41,13 +41,13 @@ quick_error! {
         Eval(err: tipb::select::Error) {
             from()
             description("eval failed")
-            display("eval error {:?}", err)
+            display("Eval error {:?}", err)
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
-            display("unknown error {:?}", err)
+            display("{}", err)
         }
     }
 }

@@ -41,7 +41,7 @@ impl AggrDefinitionParser {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp())?;
         parser.check_supported(aggr_def).map_err(|e| {
             Error::Other(box_err!(
-                "Aggregation function for expr type {:?} is not supported: {:?}",
+                "Aggregation function for expr type {:?} is not supported: {}",
                 aggr_def.get_tp(),
                 e
             ))

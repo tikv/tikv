@@ -47,7 +47,7 @@ impl
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         super::scan_executor::check_columns_info_supported(descriptor.get_columns())
-            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {:?}", e))
+            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
     }
 }
 
