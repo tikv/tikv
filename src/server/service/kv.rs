@@ -34,7 +34,8 @@ use crate::util::future::{paired_future_callback, AndThenWith};
 use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Scheduler;
-use futures::{future, Future, Sink, Stream};
+use futures::executor::{self, Notify, NotifyHandle, Spawn, UnsafeNotify};
+use futures::{future, Async, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -923,7 +924,7 @@ fn response_batch_commands_request<F>(
 ) where
     F: Future<Item = BatchCommandsResponse_Response, Error = ()> + Send + 'static,
 {
-    let executor1 = executor.clone();
+    let executor = executor.clone();
     let f = resp.and_then(move |resp| {
         if tx.send((id, resp)).is_err() {
             error!("KvService response batch commands fail");
@@ -932,7 +933,7 @@ fn response_batch_commands_request<F>(
         timer.observe_duration();
         if let Some(notifier) = tx.get_notifier() {
             if thread_load.in_heavy_load() {
-                let _ = executor1.spawn(
+                let _ = executor.spawn(
                     GLOBAL_TIMER_HANDLE
                         .delay(Instant::now() + DELAY_DURATION)
                         .map_err(|e| error!("batch commands delay error"; "err" => ?e))
@@ -944,7 +945,48 @@ fn response_batch_commands_request<F>(
         }
         Ok(())
     });
-    let _ = executor.spawn(f);
+    poll_future_notify(f);
+}
+
+// BatchCommandsNotify is used to make business pool notifiy completion queues directly.
+struct BatchCommandsNotify<F>(*mut Spawn<F>);
+unsafe impl<F: Future<Item = (), Error = ()> + Send + 'static> Sync for BatchCommandsNotify<F> {}
+unsafe impl<F: Future<Item = (), Error = ()> + Send + 'static> Send for BatchCommandsNotify<F> {}
+
+impl<F> Notify for BatchCommandsNotify<F>
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    fn notify(&self, _id: usize) {
+        let mut s = unsafe { Box::from_raw(self.0) };
+        if let Ok(Async::NotReady) = s.get_mut().poll() {
+            // The future must be resolved when we get the notify.
+            unreachable!();
+        }
+    }
+}
+
+unsafe impl<F> UnsafeNotify for BatchCommandsNotify<F>
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    unsafe fn clone_raw(&self) -> NotifyHandle {
+        let x = Box::new(BatchCommandsNotify(self.0)) as Box<UnsafeNotify>;
+        NotifyHandle::new(Box::into_raw(x))
+    }
+    // Do nothing because the internal future will be droped after resolved.
+    unsafe fn drop_raw(&self) {}
+}
+
+fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
+    let raw_spawn = Box::into_raw(Box::new(executor::spawn(f)));
+    let notify = BatchCommandsNotify(raw_spawn);
+    let notify_handle = unsafe { UnsafeNotify::clone_raw(&notify) };
+    let mut spawn = unsafe { Box::from_raw(raw_spawn) };
+    if let Ok(Async::NotReady) = spawn.poll_future_notify(&notify_handle, 0) {
+        // The future is not resolved, don't drop it.
+        let _ = Box::into_raw(spawn);
+    }
 }
 
 fn handle_batch_commands_request<E: Engine>(
@@ -1825,6 +1867,10 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
 
 #[cfg(test)]
 mod tests {
+    use std::{thread, time};
+
+    use futures::sync::oneshot;
+
     use super::*;
     use crate::storage;
     use crate::storage::mvcc::Error as MvccError;
@@ -1855,5 +1901,49 @@ mod tests {
 
         let got = extract_key_error(&case);
         assert_eq!(got, expect);
+    }
+
+    #[test]
+    fn test_poll_future_notify_with_slow_source() {
+        let (tx, rx) = oneshot::channel::<usize>();
+        thread::Builder::new()
+            .name("source".to_owned())
+            .spawn(move || {
+                thread::sleep(time::Duration::from_secs(3));
+                tx.send(100).unwrap();
+            })
+            .unwrap();
+
+        let (tx1, rx1) = oneshot::channel::<usize>();
+        poll_future_notify(
+            rx.map(move |i| {
+                assert_eq!(thread::current().name(), Some("source"));
+                tx1.send(i + 100).unwrap();
+            })
+            .map_err(|_| ()),
+        );
+        assert_eq!(rx1.wait().unwrap(), 200);
+    }
+
+    #[test]
+    fn test_poll_future_notify_with_slow_poller() {
+        let (tx, rx) = oneshot::channel::<usize>();
+        thread::Builder::new()
+            .name("source".to_owned())
+            .spawn(move || {
+                tx.send(100).unwrap();
+            })
+            .unwrap();
+
+        let (tx1, rx1) = oneshot::channel::<usize>();
+        thread::sleep(time::Duration::from_secs(3));
+        poll_future_notify(
+            rx.map(move |i| {
+                assert_ne!(thread::current().name(), Some("source"));
+                tx1.send(i + 100).unwrap();
+            })
+            .map_err(|_| ()),
+        );
+        assert_eq!(rx1.wait().unwrap(), 200);
     }
 }
