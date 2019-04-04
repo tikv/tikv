@@ -626,7 +626,6 @@ pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
     use std::mem;
 
     unsafe {
-        let expect = expect as libc::rlim_t;
         let mut fd_limit = mem::zeroed();
         let mut err = libc::getrlimit(libc::RLIMIT_NOFILE, &mut fd_limit);
         if err != 0 {
@@ -662,7 +661,6 @@ pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
 #[cfg(target_os = "linux")]
 mod check_kernel {
     use std::fs;
-    use std::io::Read;
 
     use super::ConfigError;
 
@@ -675,9 +673,7 @@ mod check_kernel {
         expect: i64,
         checker: Box<Checker>,
     ) -> Result<(), ConfigError> {
-        let mut buffer = String::new();
-        fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
+        let buffer = fs::read_to_string(param_path)
             .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let got = buffer
@@ -755,8 +751,7 @@ pub fn check_kernel() -> Vec<ConfigError> {
 mod check_data_dir {
     use libc;
     use std::ffi::{CStr, CString};
-    use std::fs::{self, File};
-    use std::io::Read;
+    use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -860,12 +855,9 @@ mod check_data_dir {
             )));
         }
 
-        let mut buffer = String::new();
-        File::open(&rota_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| {
-                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
-            })?;
+        let buffer = fs::read_to_string(&rota_path).map_err(|e| {
+            ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
+        })?;
         Ok(buffer.trim_matches('\n').to_owned())
     }
 
