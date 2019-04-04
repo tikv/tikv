@@ -13,8 +13,6 @@
 
 #![allow(dead_code)]
 
-use cop_datatype::EvalType;
-
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;

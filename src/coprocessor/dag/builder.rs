@@ -55,6 +55,12 @@ impl DAGBuilder {
                     let descriptor = ed.get_selection();
                     BatchSelectionExecutor::check_supported(&descriptor)?;
                 }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    let descriptor = ed.get_aggregation();
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
+                }
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
                 }
@@ -137,6 +143,20 @@ impl DAGBuilder {
                         config.clone(),
                         executor,
                         ed.take_selection().take_conditions().into_vec(),
+                    )?)
+                }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["simple_aggregation"])
+                        .inc();
+
+                    Box::new(BatchSimpleAggregationExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.mut_aggregation().take_agg_func().into_vec(),
                     )?)
                 }
                 _ => {

@@ -67,6 +67,7 @@ impl
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
+        assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
         for def in aggr_definitions {
             AggrDefinitionParser::check_supported(def).map_err(|e| {
@@ -341,7 +342,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
+        self.summary_collector.inc_iterations();
+        let timer = self.summary_collector.start_record_duration();
+
         let result = self.handle_next_batch();
+
+        self.summary_collector.inc_elapsed_duration(timer);
 
         match result {
             Err(e) => {
@@ -363,6 +369,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
             }
             Ok(Some(data)) => {
                 // When there is no error and aggregate finished, we return it as data.
+                self.summary_collector.inc_produced_rows(data.rows_len());
                 self.is_ended = true;
                 BatchExecuteResult {
                     data,

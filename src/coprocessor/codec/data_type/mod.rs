@@ -31,7 +31,6 @@ pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
-use cop_datatype::EvalType;
 
 /// A trait of evaluating current concrete eval type into a MySQL logic value, represented by
 /// Rust's `bool` type.
