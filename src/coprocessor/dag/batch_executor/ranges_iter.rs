@@ -52,20 +52,21 @@ pub struct PointRangeEnable;
 pub struct PointRangeConditional(bool);
 
 impl PointRangeConditional {
+    #[inline(never)]
     pub fn new(enable: bool) -> Self {
         PointRangeConditional(enable)
     }
 }
 
 impl PointRangePolicy for PointRangeConditional {
-    #[inline]
+    #[inline(never)]
     fn is_point_range(&self, range: &KeyRange) -> bool {
         crate::coprocessor::util::is_point(range) && self.0
     }
 }
 
 impl PointRangePolicy for PointRangeEnable {
-    #[inline]
+    #[inline(never)]
     fn is_point_range(&self, range: &KeyRange) -> bool {
         crate::coprocessor::util::is_point(range)
     }
@@ -95,7 +96,7 @@ pub struct RangesIterator<T: PointRangePolicy> {
 }
 
 impl<T: PointRangePolicy> RangesIterator<T> {
-    #[inline]
+    #[inline(never)]
     pub fn new(user_key_ranges: Vec<KeyRange>, policy: T) -> Self {
         Self {
             in_range: false,
@@ -105,7 +106,7 @@ impl<T: PointRangePolicy> RangesIterator<T> {
     }
 
     /// Continues iterating.
-    #[inline]
+    #[inline(never)]
     pub fn next(&mut self) -> IterStatus {
         if self.in_range {
             return IterStatus::Continue;
@@ -125,7 +126,7 @@ impl<T: PointRangePolicy> RangesIterator<T> {
     }
 
     /// Notifies that current range is drained.
-    #[inline]
+    #[inline(never)]
     pub fn notify_drained(&mut self) {
         self.in_range = false;
     }

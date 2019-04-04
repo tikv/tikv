@@ -35,6 +35,7 @@ pub struct BatchIndexScanExecutor<S: Store>(
 );
 
 impl<S: Store> BatchIndexScanExecutor<S> {
+    #[inline(never)]
     pub fn new(
         store: S,
         config: Arc<EvalConfig>,
@@ -83,17 +84,17 @@ impl<S: Store> BatchIndexScanExecutor<S> {
 }
 
 impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
-    #[inline]
+    #[inline(never)]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
     }
 
-    #[inline]
+    #[inline(never)]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(expect_rows)
     }
 
-    #[inline]
+    #[inline(never)]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.0.collect_statistics(destination);
     }
@@ -114,17 +115,17 @@ struct IndexScanExecutorImpl {
 }
 
 impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
-    #[inline]
+    #[inline(never)]
     fn schema(&self) -> &[FieldType] {
         &self.schema
     }
 
-    #[inline]
+    #[inline(never)]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
     }
 
-    #[inline]
+    #[inline(never)]
     fn build_scanner<S: Store>(
         &self,
         store: &S,

@@ -24,6 +24,7 @@ pub struct BatchExecuteStatistics {
 }
 
 impl BatchExecuteStatistics {
+    #[inline(never)]
     pub fn new(ranges: usize) -> Self {
         Self {
             scanned_rows_per_range: vec![0; ranges],
@@ -31,6 +32,7 @@ impl BatchExecuteStatistics {
         }
     }
 
+    #[inline(never)]
     pub fn clear(&mut self) {
         for item in self.scanned_rows_per_range.iter_mut() {
             *item = 0;

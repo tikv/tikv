@@ -40,7 +40,7 @@ pub enum ScalarValue {
 }
 
 impl ScalarValue {
-    #[inline]
+    #[inline(never)]
     pub fn eval_type(&self) -> EvalType {
         match self {
             ScalarValue::Int(_) => EvalType::Int,
@@ -53,14 +53,14 @@ impl ScalarValue {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Scalar(self)
     }
 }
 
 impl AsMySQLBool for ScalarValue {
-    #[inline]
+    #[inline(never)]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
             ScalarValue::Int(ref v) => v.as_mysql_bool(context),
@@ -77,7 +77,7 @@ impl AsMySQLBool for ScalarValue {
 macro_rules! impl_as_ref {
     ($ty:tt, $name:ident) => {
         impl ScalarValue {
-            #[inline]
+            #[inline(never)]
             pub fn $name(&self) -> &Option<$ty> {
                 match self {
                     ScalarValue::$ty(ref v) => v,
@@ -91,7 +91,7 @@ macro_rules! impl_as_ref {
         }
 
         impl AsRef<Option<$ty>> for ScalarValue {
-            #[inline]
+            #[inline(never)]
             fn as_ref(&self) -> &Option<$ty> {
                 self.$name()
             }

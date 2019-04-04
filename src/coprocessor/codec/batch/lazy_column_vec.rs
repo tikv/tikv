@@ -29,7 +29,7 @@ pub struct LazyBatchColumnVec {
 }
 
 impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
-    #[inline]
+    #[inline(never)]
     fn from(columns: Vec<LazyBatchColumn>) -> Self {
         LazyBatchColumnVec { columns }
     }
@@ -38,7 +38,7 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
 impl LazyBatchColumnVec {
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
-    #[inline]
+    #[inline(never)]
     pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
@@ -53,7 +53,7 @@ impl LazyBatchColumnVec {
     /// # Panics
     ///
     /// Panics when `other` and `Self` does not have same column schemas.
-    #[inline]
+    #[inline(never)]
     pub fn append(&mut self, other: &mut Self) {
         let len = self.columns_len();
         assert_eq!(len, other.columns_len());
@@ -68,7 +68,7 @@ impl LazyBatchColumnVec {
     /// to the decoded column.
     ///
     /// If the column is already decoded, this function does nothing.
-    #[inline]
+    #[inline(never)]
     pub fn ensure_column_decoded(
         &mut self,
         column_index: usize,
@@ -83,7 +83,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Returns whether column at specified `column_index` is decoded.
-    #[inline]
+    #[inline(never)]
     pub fn is_column_decoded(&self, column_index: usize) -> bool {
         self.columns[column_index].is_decoded()
     }
@@ -91,13 +91,13 @@ impl LazyBatchColumnVec {
     /// Returns the number of columns.
     ///
     /// It might be possible that there is no row but multiple columns.
-    #[inline]
+    #[inline(never)]
     pub fn columns_len(&self) -> usize {
         self.columns.len()
     }
 
     /// Returns the number of rows.
-    #[inline]
+    #[inline(never)]
     pub fn rows_len(&self) -> usize {
         if self.columns.is_empty() {
             return 0;
@@ -106,7 +106,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Asserts that all columns have equal length.
-    #[inline]
+    #[inline(never)]
     pub fn assert_columns_equal_length(&self) {
         let len = self.rows_len();
         for column in &self.columns {
@@ -115,7 +115,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Returns the number of rows this container can hold without reallocating.
-    #[inline]
+    #[inline(never)]
     pub fn rows_capacity(&self) -> usize {
         if self.columns.is_empty() {
             return 0;
@@ -126,7 +126,7 @@ impl LazyBatchColumnVec {
     /// Retains only the rows specified by the predicate, which accepts index only.
     ///
     /// In other words, remove all rows such that `f(row_index)` returns `false`.
-    #[inline]
+    #[inline(never)]
     pub fn retain_rows_by_index<F>(&mut self, mut f: F)
     where
         F: FnMut(usize) -> bool,
@@ -147,6 +147,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Returns maximum encoded size.
+    #[inline(never)]
     pub fn maximum_encoded_size(&self, output_offsets: impl AsRef<[u32]>) -> Result<usize> {
         let mut size = 0;
         for offset in output_offsets.as_ref() {
@@ -156,6 +157,7 @@ impl LazyBatchColumnVec {
     }
 
     /// Encodes into binary format.
+    #[inline(never)]
     pub fn encode(
         &self,
         output_offsets: impl AsRef<[u32]>,
@@ -176,6 +178,7 @@ impl LazyBatchColumnVec {
 
     /// Truncates columns into equal length. The new length of all columns would be the length of
     /// the shortest column before calling this function.
+    #[inline(never)]
     pub fn truncate_into_equal_length(&mut self) {
         let mut min_len = self.rows_len();
         for col in &self.columns {
@@ -191,14 +194,14 @@ impl LazyBatchColumnVec {
 impl std::ops::Deref for LazyBatchColumnVec {
     type Target = [LazyBatchColumn];
 
-    #[inline]
+    #[inline(never)]
     fn deref(&self) -> &[LazyBatchColumn] {
         self.columns.deref()
     }
 }
 
 impl std::ops::DerefMut for LazyBatchColumnVec {
-    #[inline]
+    #[inline(never)]
     fn deref_mut(&mut self) -> &mut [LazyBatchColumn] {
         self.columns.deref_mut()
     }

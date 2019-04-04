@@ -76,6 +76,7 @@ pub struct ScanExecutor<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> {
 }
 
 impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
+    #[inline(never)]
     pub fn new(
         imp: I,
         store: S,
@@ -99,14 +100,14 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     }
 
     /// Creates or resets the range of inner scanner.
-    #[inline]
+    #[inline(never)]
     fn reset_range(&mut self, range: KeyRange) -> Result<()> {
         self.scanner = Some(self.imp.build_scanner(&self.store, self.desc, range)?);
         Ok(())
     }
 
     /// Scans next row from the scanner.
-    #[inline]
+    #[inline(never)]
     fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         // TODO: Key and value doesn't have to be owned
         if let Some(scanner) = self.scanner.as_mut() {
@@ -118,7 +119,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
     }
 
     /// Get one row from the store.
-    #[inline]
+    #[inline(never)]
     fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut statistics = crate::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
@@ -184,6 +185,7 @@ impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> ScanExecutor<S, I, P> {
 
 /// Extracts `FieldType` from `ColumnInfo`.
 // TODO: Embed FieldType in ColumnInfo directly in Cop DAG v2 to remove this function.
+#[inline(never)]
 pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     let mut field_type = FieldType::new();
     field_type.set_tp(ci.get_tp());
@@ -196,12 +198,12 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
 }
 
 impl<S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor for ScanExecutor<S, I, P> {
-    #[inline]
+    #[inline(never)]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
     }
 
-    #[inline]
+    #[inline(never)]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
