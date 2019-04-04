@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
-use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use std::sync::{atomic, Arc};
@@ -920,7 +920,6 @@ impl Peer {
         ctx: &mut ReadyContext<T>,
         worker: &FutureWorker<PdTask>,
         region_ranges: &BTreeMap<Vec<u8>, u64>,
-        region_peers: &HashMap<u64, Peer>,
     ) {
         self.marked_to_be_checked = false;
         if self.pending_remove {
@@ -966,15 +965,15 @@ impl Peer {
             let region = snap_data.take_region();
             // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
             // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
-            if let Some(r) = region_ranges
-                .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
+            if let Some((_, r)) = region_ranges
+                .range((Unbounded::<Vec<u8>>, Included(enc_end_key(&region))))
+                .rev()
                 .filter(|(_, &region_id)| region_id != region.get_id())
-                .map(|(_, &region_id)| region_peers[&region_id].region())
-                .take_while(|r| enc_start_key(r) < enc_end_key(&region))
+                .take_while(|(enc_end_key, _)| &enc_start_key(&region) < *enc_end_key)
                 .next()
             {
                 info!(
-                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
+                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps with region {}, wait source destroy finish",
                     self.tag,
                     self.get_store().applied_index(),
                     self.last_applying_idx,
