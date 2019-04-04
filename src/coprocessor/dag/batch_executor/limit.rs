@@ -17,7 +17,7 @@ use tipb::expression::FieldType;
 
 pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
-    expect_rows: usize,
+    remaining_rows: usize,
 }
 
 impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
@@ -27,7 +27,7 @@ impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
         }
         Ok(Self {
             src,
-            expect_rows: limit,
+            remaining_rows: limit,
         })
     }
 }
@@ -36,13 +36,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(expect_rows);
-        if result.data.rows_len() <= self.expect_rows {
-            self.expect_rows -= result.data.rows_len();
+        if result.data.rows_len() < self.remaining_rows {
+            self.remaining_rows -= result.data.rows_len();
             return result;
         }
 
-        result.data.truncate(self.expect_rows);
-        self.expect_rows = 0;
+        result.data.truncate(self.remaining_rows);
+        self.remaining_rows = 0;
         result.is_drained = Ok(true);
         result
     }
@@ -149,20 +149,26 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_limit_normal() {
-        let src = MockExecutor::new();
-        // we have 5 rows in table and the limit is 4
-        let limit_num = 4;
-        let mut limit = BatchLimitExecutor::new(src, limit_num).unwrap();
-        let expect_rows = 3;
-        // first we get 3 rows, and 2 rows left in the executor.
-        let res = limit.next_batch(expect_rows);
-        assert!(!res.is_drained.as_ref().unwrap());
-        assert_eq!(res.data.rows_len(), expect_rows);
-        // then we get the left rows, we will get 1 since limit is 4.
-        let res = limit.next_batch(expect_rows);
-        assert!(res.is_drained.as_ref().unwrap());
-        assert_eq!(res.data.rows_len(), limit_num - expect_rows);
+    fn test_limit_normal() {
+        let data = vec![
+            //limit, expect_rows(real get rows)
+            (4, 3), // get less than limit
+            (3, 4), // get more than limit
+            (3, 3), // get equals to limit
+        ];
+        for (limit, get_rows) in data {
+            let src = MockExecutor::new();
+            let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
+            let res = executor.next_batch(get_rows);
+            if limit <= get_rows {
+                // is drained
+                assert!(res.is_drained.as_ref().unwrap());
+                assert_eq!(res.data.rows_len(), limit);
+            } else {
+                assert!(!res.is_drained.as_ref().unwrap());
+                assert_eq!(res.data.rows_len(), get_rows);
+            }
+        }
     }
 
     #[test]
@@ -174,8 +180,8 @@ mod tests {
     /// MockErrExecutor is based on MockExecutor, the only difference is
     /// that when call the function next_batch, it always returns is_drained error.
     struct MockErrExecutor(MockExecutor);
-    impl Default for MockErrExecutor {
-        fn default() -> Self {
+    impl MockErrExecutor {
+        fn new() -> Self {
             MockErrExecutor(MockExecutor::new())
         }
     }
@@ -197,20 +203,26 @@ mod tests {
     }
 
     #[test]
-    fn test_next_batch_err_after_last_row() {
-        let src = MockErrExecutor::default();
-        let mut limit = BatchLimitExecutor::new(src, 1).unwrap();
-        let res = limit.next_batch(10);
-        assert!(res.is_drained.is_ok());
-        assert!(res.is_drained.as_ref().unwrap());
-        assert_eq!(res.data.rows_len(), 1);
-    }
-
-    #[test]
-    fn test_next_batch_err_before_last_row() {
-        let src = MockErrExecutor::default();
-        let mut limit = BatchLimitExecutor::new(src, 3).unwrap();
-        let res = limit.next_batch(1);
-        assert!(res.is_drained.is_err());
+    fn test_src_next_batch_err() {
+        let data = vec![
+            //limit, expect_rows(real get rows)
+            (4, 3), // error happens before limit rows
+            (3, 4), // error happens after limit rows
+            (3, 3), // error happens when get the limit + 1 row.
+        ];
+        for (limit, get_rows) in data {
+            let src = MockErrExecutor::new();
+            let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
+            let res = executor.next_batch(get_rows);
+            if limit <= get_rows {
+                // error happens after limit rows
+                assert!(res.is_drained.as_ref().unwrap());
+                assert_eq!(res.data.rows_len(), limit);
+            } else {
+                // error happens before limit rows
+                assert!(res.is_drained.as_ref().is_err());
+                assert_eq!(res.data.rows_len(), get_rows);
+            }
+        }
     }
 }

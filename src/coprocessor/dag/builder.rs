@@ -137,13 +137,12 @@ impl DAGBuilder {
             }
         }
 
-        for mut ex in executor_descriptors {
+        for ex in executor_descriptors {
             match ex.get_tp() {
                 ExecType::TypeLimit => {
-                    let limit = ex.take_limit();
                     executor = Box::new(BatchLimitExecutor::new(
                         executor,
-                        limit.get_limit() as usize,
+                        ex.get_limit().get_limit() as usize,
                     )?);
                 }
                 _ => {
