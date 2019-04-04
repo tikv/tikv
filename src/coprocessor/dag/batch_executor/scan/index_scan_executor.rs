@@ -20,7 +20,7 @@ use tipb::schema::ColumnInfo;
 
 use crate::storage::Store;
 
-use super::interface::*;
+use super::super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
