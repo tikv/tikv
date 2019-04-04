@@ -15,16 +15,16 @@ use std::sync::Arc;
 
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
-
-use crate::storage::Store;
 
 use super::super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
+use crate::storage::{FixtureStore, Store};
 
 pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
     super::scan_executor::ScanExecutor<
@@ -34,6 +34,20 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
         super::ranges_iter::PointRangeConditional,
     >,
 );
+
+impl
+    BatchIndexScanExecutor<
+        crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
+        super::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+    }
+}
 
 impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(

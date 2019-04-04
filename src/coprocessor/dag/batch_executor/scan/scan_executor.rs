@@ -22,7 +22,7 @@ use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::Result;
+use crate::coprocessor::{Error, Result};
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -203,6 +203,18 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type.set_collate(ci.get_collation());
     // Note: Charset is not provided in column info.
     field_type
+}
+
+/// Checks whether the given columns info are supported.
+pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
+    use cop_datatype::EvalType;
+    use cop_datatype::FieldTypeAccessor;
+    use std::convert::TryFrom;
+
+    for column in columns_info {
+        EvalType::try_from(column.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+    }
+    Ok(())
 }
 
 impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
