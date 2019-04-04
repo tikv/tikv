@@ -60,6 +60,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         for ci in &columns_info {
             schema.push(super::scan_executor::field_type_from_column_info(&ci));
             if ci.get_pk_handle() {
+                assert!(!decode_handle, "columns_info = {:?}", columns_info);
                 decode_handle = true;
             } else {
                 columns_len_without_handle += 1;
