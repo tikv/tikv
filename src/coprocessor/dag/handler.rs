@@ -72,10 +72,24 @@ impl DAGRequestHandler {
             ranges,
             config.clone(),
         )?;
+
+        // Check output offsets
+        let output_offsets = req.take_output_offsets();
+        let schema_len = out_most_executor.schema().len();
+        for offset in &output_offsets {
+            if (*offset as usize) >= schema_len {
+                return Err(box_err!(
+                    "Invalid output offset (schema has {} columns, access index {})",
+                    schema_len,
+                    offset
+                ));
+            }
+        }
+
         Ok(super::batch_handler::BatchDAGHandler::new(
             deadline,
             out_most_executor,
-            req.take_output_offsets(),
+            output_offsets,
             config,
             ranges_len,
             executors_len,
