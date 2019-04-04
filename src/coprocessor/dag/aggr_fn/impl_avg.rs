@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO
-#![allow(dead_code)]
-
 //! There are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) -> (Int, Double)`.
 
 use cop_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};

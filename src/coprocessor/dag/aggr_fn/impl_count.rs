@@ -11,20 +11,69 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(dead_code)]
+use cop_datatype::{FieldTypeFlag, FieldTypeTp};
+use tipb::expression::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
+
+pub struct AggrFnDefinitionParserCount;
+
+impl super::parser::Parser for AggrFnDefinitionParserCount {
+    fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
+        assert_eq!(aggr_def.get_tp(), ExprType::Count);
+        if aggr_def.get_children().len() != 1 {
+            return Err(box_err!(
+                "Expect 1 parameter, but got {}",
+                aggr_def.get_children().len()
+            ));
+        }
+
+        // Check whether or not the children expr is supported
+        let child = &aggr_def.get_children()[0];
+        RpnExpressionBuilder::check_expr_tree_supported(child)?;
+
+        Ok(())
+    }
+
+    fn parse(
+        &self,
+        mut aggr_def: Expr,
+        time_zone: &Tz,
+        max_columns: usize,
+        out_schema: &mut Vec<FieldType>,
+        out_exp: &mut Vec<RpnExpression>,
+    ) -> Result<Box<dyn super::AggrFunction>> {
+        use cop_datatype::FieldTypeAccessor;
+
+        assert_eq!(aggr_def.get_tp(), ExprType::Count);
+        let child = aggr_def.take_children().into_iter().next().unwrap();
+
+        // COUNT outputs one column.
+        out_schema.push({
+            let mut ft = FieldType::new();
+            ft.as_mut_accessor()
+                .set_tp(FieldTypeTp::LongLong)
+                .set_flag(FieldTypeFlag::UNSIGNED);
+            ft
+        });
+
+        // COUNT doesn't need to cast, directly use expression.
+        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
+            child,
+            time_zone,
+            max_columns,
+        )?);
+
+        Ok(Box::new(AggrFnCount))
+    }
+}
 
 #[derive(Debug)]
 pub struct AggrFnCount;
-
-impl AggrFnCount {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 impl super::AggrFunction for AggrFnCount {
     #[inline]
@@ -50,7 +99,8 @@ impl AggrFnStateCount {
 }
 
 // Manually implement `AggrFunctionStateUpdatePartial` to achieve best performance for
-// `update_repeat` and `update_vector`.
+// `update_repeat` and `update_vector`. Also note that we support all
+// `AggrFunctionStateUpdatePartial` in COUNT.
 
 impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
     #[inline]
