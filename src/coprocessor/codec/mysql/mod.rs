@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Result;
 use crate::util::escape;
+
+use super::Result;
+use super::TEN_POW;
 
 /// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
 pub const UNSPECIFIED_FSP: i8 = -1;
@@ -36,18 +38,23 @@ fn check_fsp(fsp: i8) -> Result<u8> {
 
 /// Parse string as if it's a fraction part of a number and keep
 /// only `fsp` precision.
-fn parse_frac(frac: &str, fsp: u8) -> Result<u32> {
+fn parse_frac(frac: &str, fsp: u8) -> Result<u64> {
     if frac.is_empty() {
         return Ok(0);
     }
 
     let fsp = fsp as usize;
-    let mapping = |_| invalid_type!("{} contains invalid char", escape(frac.as_bytes()));
+    let mapping = |_| {
+        invalid_type!(
+            "fail to parse fractional part from: {}",
+            escape(frac.as_bytes())
+        )
+    };
 
     Ok(if frac.len() <= fsp {
-        frac.parse::<u32>().map_err(mapping)? * 10u32.pow((fsp - frac.len()) as u32)
+        frac.parse::<u64>().map_err(mapping)? * u64::from(TEN_POW[fsp - frac.len()])
     } else {
-        let result = frac[..=fsp].parse::<u32>().map_err(mapping)?;
+        let result = frac[..=fsp].parse::<u64>().map_err(mapping)?;
         if result % 10 > 4 {
             result / 10 + 1
         } else {

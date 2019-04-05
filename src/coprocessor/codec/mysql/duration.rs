@@ -20,8 +20,9 @@ use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 
-use super::super::Result;
-use super::{check_fsp, parse_frac, Decimal};
+use super::super::{Result, TEN_POW};
+use super::{check_fsp, Decimal};
+use crate::util::escape;
 
 pub const NANOS_PER_SEC: u64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
@@ -32,6 +33,7 @@ const NANOS_PER_MICRO: u64 = 1_000;
 const MAX_HOURS: u64 = 838;
 const MAX_MINUTES: u64 = 59;
 const MAX_SECONDS: u64 = 59;
+const MAX_BLOCK: u64 = 8385959;
 
 #[inline]
 fn check_hour(hour: u64) -> Result<u64> {
@@ -70,6 +72,19 @@ fn check_second(second: u64) -> Result<u64> {
     }
 }
 
+#[inline]
+fn check_block(block: u64) -> Result<u64> {
+    if block > MAX_BLOCK {
+        Err(invalid_type!(
+            "invalid block: {}, larger than {}",
+            block,
+            MAX_BLOCK
+        ))
+    } else {
+        Ok(block)
+    }
+}
+
 /// `Duration` is the type for MySQL `time` type.
 /// It only occupies 8 bytes in memory.
 bitfield! {
@@ -102,6 +117,27 @@ bitfield! {
     #[inline]
     bool, unused, set_unused: 0;                 // 1 bit
 
+}
+
+#[derive(Clone, Copy)]
+struct DurationBuilder {
+    neg: bool,
+    hour: u64,
+    minute: u64,
+    second: u64,
+    nano: u64,
+    fsp: u8,
+    round_with_fsp: bool,
+}
+
+impl DurationBuilder {
+    pub fn check(self) -> Result<Self> {
+        check_hour(self.hour)?;
+        check_minute(self.minute)?;
+        check_second(self.second)?;
+        check_fsp(self.fsp as i8)?;
+        Ok(self)
+    }
 }
 
 impl Duration {
@@ -184,34 +220,42 @@ impl Duration {
         Duration::new(StdDuration::from_nanos(nanos as u64), neg, fsp)
     }
 
-    /// Try to build a `Duration` via private field,
+    /// Try to build a `Duration` via `DurationBuilder`
     /// NOTE:
-    /// It will automatically round the `nano` field according to `fsp`
-    /// and add the carry to the nonfractional part
+    /// 1. It will automatically round the `nano` field according to `fsp`
+    /// 2. `DurationBuilder.nano` can be greater than `NANOS_PER_SEC`.
+    /// 3. Return an `Err` only if the result's `hour` is invalid(> 838).
     #[inline]
-    fn with_detail(
-        neg: bool,
-        mut hour: u64,
-        mut minute: u64,
-        mut second: u64,
-        mut nano: u64,
-        fsp: u8,
-    ) -> Result<Duration> {
-        // round the `nano` part
-        let round = 10u64.pow(NANO_WIDTH - u32::from(fsp) - 1);
-        if nano / round % 10 > 4 {
-            let padding = round * 10;
-            nano = (nano / padding + 1) * padding;
+    fn build(builder: DurationBuilder) -> Result<Duration> {
+        let DurationBuilder {
+            neg,
+            mut hour,
+            mut minute,
+            mut second,
+            mut nano,
+            fsp,
+            round_with_fsp,
+        } = builder.check()?;
+
+        if round_with_fsp {
+            let round = u64::from(TEN_POW[NANO_WIDTH as usize - fsp as usize - 1]);
+            nano /= round;
+            if nano % 10 > 4 {
+                let padding = round * 10;
+                nano = (nano / 10 + 1) * padding;
+            }
         }
 
-        second += nano / NANOS_PER_SEC;
-        minute += second / SECS_PER_MINUTE;
-        hour += minute / MINUTES_PER_HOUR;
-        check_hour(hour)?;
+        if nano >= NANOS_PER_SEC {
+            second += nano / NANOS_PER_SEC;
+            minute += second / SECS_PER_MINUTE;
+            hour += minute / MINUTES_PER_HOUR;
+            hour = check_hour(hour)?;
 
-        nano %= NANOS_PER_SEC;
-        second %= SECS_PER_MINUTE;
-        minute %= MINUTES_PER_HOUR;
+            nano %= NANOS_PER_SEC;
+            second %= SECS_PER_MINUTE;
+            minute %= MINUTES_PER_HOUR;
+        }
 
         let mut duration = Duration(0);
         duration.set_neg(neg);
@@ -242,87 +286,218 @@ impl Duration {
         let minute = seconds % SECS_PER_HOUR / SECS_PER_MINUTE;
         let second = seconds % SECS_PER_MINUTE;
         let nano = u64::from(duration.subsec_nanos());
-        Duration::with_detail(neg, hour, minute, second, nano, fsp)
+        Duration::build(DurationBuilder {
+            neg,
+            hour,
+            minute,
+            second,
+            nano,
+            fsp,
+            round_with_fsp: true,
+        })
     }
 
     /// Parses the time form a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(s: &[u8], fsp: i8) -> Result<Duration> {
+        use State::*;
+        #[derive(PartialEq, Debug)]
+        enum State {
+            Start,
+            Block,
+            PostBlock,
+            Hour,
+            MinuteColon,
+            Minute,
+            SecondColon,
+            Second,
+            Dot,
+            Fraction,
+            Consume,
+            End,
+        }
+
         let fsp = check_fsp(fsp)?;
+        let to_dec = |d| u64::from(d - b'0');
 
-        if s.is_empty() {
-            return Ok(Duration::zero());
-        }
+        let mut neg = false;
+        let (mut block, mut day, mut hour, mut minute, mut second, mut fract) = (0, 0, 0, 0, 0, 0);
+        let mut eaten = 1;
+        let info = || invalid_type!("Invalid time format: {}", escape(s));
 
-        let mut s = str::from_utf8(s)?;
-        let origin = s;
-
-        // neg
-        let neg = if s.as_bytes()[0] == b'-' {
-            s = &s[1..];
-            true
-        } else {
-            false
-        };
-
-        // day
-        let mut day = None;
-        let mut parts = s.splitn(2, ' ');
-        s = parts.next().unwrap();
-        if let Some(part) = parts.next() {
-            day = Some(
-                s.parse::<u64>()
-                    .map_err(|_| invalid_type!("fail to parse day from: {}", s))?,
-            );
-            s = part;
-        }
-
-        // fractional part
-        let mut nano = 0;
-        let mut parts = s.splitn(2, '.');
-        s = parts.next().unwrap();
-        if let Some(frac) = parts.next() {
-            nano = u64::from(parse_frac(frac, fsp)?) * 10u64.pow(NANO_WIDTH - u32::from(fsp));
-        }
-        let mut parts = s.splitn(3, ':');
-        let first = parts
-            .next()
-            .ok_or(invalid_type!("invalid time format: {}", origin))?;
-
-        let first_try = first.parse::<u64>();
-        let mut hour;
-        let (mut minute, mut second) = (0, 0);
-        match parts.next() {
-            Some(part) => {
-                hour =
-                    first_try.map_err(|_| invalid_type!("fail to parse hour from: {}", first))?;
-                minute = part
-                    .parse::<u64>()
-                    .map_err(|_| invalid_type!("fail to parse minute from: {}", part))
-                    .and_then(check_minute)?;
-
-                if let Some(part) = parts.next() {
-                    second = part
-                        .parse::<u64>()
-                        .map_err(|_| invalid_type!("fail to parse second from: {}", part))
-                        .and_then(check_second)?;
+        let mut state = Start;
+        for &c in s {
+            if c == b'.'
+                && (state == Start
+                    || state == Block
+                    || state == PostBlock
+                    || state == Hour
+                    || state == Minute
+                    || state == Second)
+            {
+                state = Dot;
+                continue;
+            }
+            state = match state {
+                Start => {
+                    if c.is_ascii_digit() {
+                        block = to_dec(c);
+                        Block
+                    } else if c.is_ascii_whitespace() {
+                        Start
+                    } else if c == b'-' {
+                        if neg {
+                            return Err(invalid_type!("Duplicated '-'"));
+                        } else {
+                            neg = true;
+                            Start
+                        }
+                    } else {
+                        return Err(info());
+                    }
                 }
-            }
-            None if day.is_some() => {
-                hour =
-                    first_try.map_err(|_| invalid_type!("fail to parse hour from: {}", first))?;
-            }
-            None => {
-                let time =
-                    first_try.map_err(|_| invalid_type!("invalid time format: {}", first))?;
-                second = check_second(time % 100)?;
-                minute = check_minute(time / 100 % 100)?;
-                hour = time / 1_00_00;
-            }
+                Block => {
+                    if c.is_ascii_digit() {
+                        block = check_block(block * 10 + to_dec(c))?;
+                        Block
+                    } else if c.is_ascii_whitespace() {
+                        PostBlock
+                    } else if c == b':' {
+                        hour = block;
+                        block = 0;
+                        MinuteColon
+                    } else {
+                        return Err(info());
+                    }
+                }
+                PostBlock => {
+                    if c.is_ascii_digit() {
+                        hour = to_dec(c);
+                        day = block;
+                        block = 0;
+                        Hour
+                    } else if c.is_ascii_whitespace() {
+                        PostBlock
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Hour => {
+                    if c.is_ascii_digit() {
+                        hour = check_hour(hour * 10 + to_dec(c))?;
+                        Hour
+                    } else if c.is_ascii_whitespace() {
+                        End
+                    } else if c == b':' {
+                        MinuteColon
+                    } else {
+                        return Err(info());
+                    }
+                }
+                MinuteColon => {
+                    if c.is_ascii_digit() {
+                        minute = to_dec(c);
+                        Minute
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Minute => {
+                    if c.is_ascii_digit() {
+                        minute = check_minute(minute * 10 + to_dec(c))?;
+                        Minute
+                    } else if c.is_ascii_whitespace() {
+                        End
+                    } else if c == b':' {
+                        SecondColon
+                    } else {
+                        return Err(info());
+                    }
+                }
+                SecondColon => {
+                    if c.is_ascii_digit() {
+                        second = to_dec(c);
+                        Second
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Second => {
+                    if c.is_ascii_digit() {
+                        second = check_second(second * 10 + to_dec(c))?;
+                        Second
+                    } else if c.is_ascii_whitespace() {
+                        End
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Dot => {
+                    if c.is_ascii_digit() {
+                        fract = to_dec(c);
+                        Fraction
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Fraction => {
+                    if c.is_ascii_digit() {
+                        if eaten < fsp {
+                            fract = fract * 10 + to_dec(c);
+                            eaten += 1;
+                            Fraction
+                        } else {
+                            if to_dec(c) > 4 {
+                                fract += 1;
+                            }
+                            Consume
+                        }
+                    } else if c.is_ascii_whitespace() {
+                        End
+                    } else {
+                        return Err(info());
+                    }
+                }
+                Consume => {
+                    if c.is_ascii_digit() {
+                        Consume
+                    } else if c.is_ascii_whitespace() {
+                        End
+                    } else {
+                        return Err(info());
+                    }
+                }
+                End => {
+                    if c.is_ascii_whitespace() {
+                        End
+                    } else {
+                        return Err(info());
+                    }
+                }
+            };
         }
-        hour += day.unwrap_or(0) * 24;
-        Duration::with_detail(neg, hour, minute, second, nano, fsp)
+        if state == MinuteColon || state == SecondColon {
+            return Err(info());
+        }
+
+        if block != 0 {
+            second = block % 100;
+            minute = block / 100 % 100;
+            hour = block / 10000;
+        }
+
+        hour += day * 24;
+        fract *= u64::from(TEN_POW[NANO_WIDTH as usize - eaten as usize]);
+        Duration::build(DurationBuilder {
+            neg,
+            hour,
+            minute,
+            second,
+            nano: fract,
+            fsp,
+            round_with_fsp: false,
+        })
     }
 
     /// Try to parse `self` to a `Decimal`
@@ -339,10 +514,11 @@ impl Duration {
             self.second()
         )?;
 
-        if self.fsp() > 0 {
+        let fsp = self.fsp() as usize;
+        if fsp > 0 {
             write!(buf, ".")?;
-            let nanos = self.nano() as u32 / (10u32.pow(NANO_WIDTH - u32::from(self.fsp())));
-            write!(buf, "{:01$}", nanos, self.fsp() as usize)?;
+            let nanos = self.nano() / u64::from(TEN_POW[NANO_WIDTH as usize - fsp]);
+            write!(buf, "{:01$}", nanos, fsp)?;
         }
         let d = unsafe { str::from_utf8_unchecked(&buf).parse()? };
         Ok(d)
@@ -355,18 +531,19 @@ impl Duration {
     pub fn round_frac(mut self, fsp: i8) -> Result<Self> {
         let fsp = check_fsp(fsp)?;
         if fsp >= self.fsp() {
-            self.set_fsp(fsp as u8);
+            self.set_fsp(fsp);
             return Ok(self);
         }
 
-        Duration::with_detail(
-            self.neg(),
-            self.hour(),
-            self.minute(),
-            self.second(),
-            self.nano(),
+        Duration::build(DurationBuilder {
+            neg: self.neg(),
+            hour: self.hour(),
+            minute: self.minute(),
+            second: self.second(),
+            nano: self.nano(),
             fsp,
-        )
+            round_with_fsp: true,
+        })
     }
 
     /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
@@ -409,10 +586,12 @@ impl Display for Duration {
             self.minute(),
             self.second()
         )?;
-        if self.fsp() > 0 {
+
+        let fsp = self.fsp() as usize;
+        if fsp > 0 {
             write!(formatter, ".")?;
-            let nanos = self.nano() as u32 / (10u32.pow(NANO_WIDTH - u32::from(self.fsp())));
-            write!(formatter, "{:01$}", nanos, self.fsp() as usize)?;
+            let nanos = self.nano() / u64::from(TEN_POW[NANO_WIDTH as usize - fsp]);
+            write!(formatter, "{:01$}", nanos, fsp)?;
         }
         Ok(())
     }
@@ -611,6 +790,15 @@ mod tests {
             (b"1:2", 0, Some("01:02:00")),
             (b"12345", 0, Some("01:23:45")),
             (b"10305", 0, Some("01:03:05")),
+            (b"\xe2\x82\xa1", 0, None),
+            (b"10:10:0\xff", 0, None),
+            (b"1\xff:10:01", 0, None),
+            (b"  -1 1:2:3.12345  ", 4, Some("-25:02:03.1235")),
+            (b"  -1 1:2:3 .12345  ", 4, None),
+            (b"  1.12345  ", 5, Some("00:00:01.12345")),
+            (b"  -.12345  ", 5, Some("-00:00:00.12345")),
+            (b"  -1 .12345  ", 5, Some("-00:00:01.12345")),
+            (b"  -   1 .12345  ", 5, Some("-00:00:01.12345")),
         ];
 
         for (input, fsp, expect) in cases {
@@ -744,7 +932,7 @@ mod benches {
         let cases = vec![
             ("12:34:56.1234", 0),
             ("12:34:56.789", 1),
-            ("1:2:3.189", 2),
+            ("10:20:30.189", 2),
             ("2 27:54:32.828", 3),
             ("2 33:44:55.666777", 4),
             ("112233.445566", 5),
@@ -753,86 +941,36 @@ mod benches {
         ];
         b.iter(|| {
             let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for &(s, fsp) in cases {
-                    let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
-                }
+            for &(s, fsp) in cases {
+                let _ = test::black_box(Duration::parse(s.as_bytes(), fsp).unwrap());
             }
         })
     }
 
     #[bench]
     fn bench_hours(b: &mut test::Bencher) {
-        let cases: Vec<_> = vec![
-            ("12:34:56.1234", 0i8),
-            ("12:34:56.789", 1),
-            ("1:2:3.189", 2),
-            ("2 27:54:32.828", 3),
-            ("2 33:44:55.666777", 4),
-            ("112233.445566", 5),
-            ("1 23", 5),
-            ("1 23:12.1234567", 6),
-        ]
-        .into_iter()
-        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
-        .collect();
+        let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
         b.iter(|| {
-            let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for duration in cases {
-                    let _ = test::black_box(duration.hours());
-                }
-            }
+            let duration = test::black_box(duration);
+            let _ = test::black_box(duration.hours());
         })
     }
 
     #[bench]
     fn bench_to_decimal(b: &mut test::Bencher) {
-        let cases: Vec<_> = vec![
-            ("12:34:56.1234", 0),
-            ("12:34:56.789", 1),
-            ("1:2:3.189", 2),
-            ("2 27:54:32.828", 3),
-            ("2 33:44:55.666777", 4),
-            ("112233.445566", 5),
-            ("1 23", 5),
-            ("1 23:12.1234567", 6),
-        ]
-        .into_iter()
-        .map(|(s, fsp)| Duration::parse(s.as_bytes(), fsp).unwrap())
-        .collect();
+        let duration = Duration::parse(b"-12:34:56.123456", 6).unwrap();
         b.iter(|| {
-            let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for duration in cases {
-                    let _ = test::black_box(duration.to_decimal().unwrap());
-                }
-            }
+            let duration = test::black_box(duration);
+            let _ = test::black_box(duration.to_decimal().unwrap());
         })
     }
 
     #[bench]
     fn bench_round_frac(b: &mut test::Bencher) {
-        let cases: Vec<_> = vec![
-            ("12:34:56.1234", 0),
-            ("12:34:56.789", 1),
-            ("1:2:3.189", 2),
-            ("2 27:54:32.828", 3),
-            ("2 33:44:55.666777", 4),
-            ("112233.445566", 5),
-            ("1 23", 5),
-            ("1 23:12.1234567", 6),
-        ]
-        .into_iter()
-        .map(|(s, fsp)| (Duration::parse(s.as_bytes(), fsp).unwrap(), fsp))
-        .collect();
+        let (duration, fsp) = (Duration::parse(b"12:34:56.789", 3).unwrap(), 2);
         b.iter(|| {
-            let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for &(duration, fsp) in cases {
-                    let _ = test::black_box(duration.round_frac(fsp).unwrap());
-                }
-            }
+            let (duration, fsp) = (test::black_box(duration), test::black_box(fsp));
+            let _ = test::black_box(duration.round_frac(fsp).unwrap());
         })
     }
     #[bench]
@@ -840,7 +978,7 @@ mod benches {
         let cases: Vec<_> = vec![
             ("12:34:56.1234", 0),
             ("12:34:56.789", 1),
-            ("1:2:3.189", 2),
+            ("10:20:30.189", 2),
             ("2 27:54:32.828", 3),
             ("2 33:44:55.666777", 4),
             ("112233.445566", 5),
@@ -852,14 +990,12 @@ mod benches {
         .collect();
         b.iter(|| {
             let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for &duration in cases {
-                    let t = test::black_box(duration);
-                    let mut buf = vec![];
-                    buf.encode_duration(t).unwrap();
-                    let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
-                    assert_eq!(t, got);
-                }
+            for &duration in cases {
+                let t = test::black_box(duration);
+                let mut buf = vec![];
+                buf.encode_duration(t).unwrap();
+                let got = test::black_box(Duration::decode(&mut buf.as_slice()).unwrap());
+                assert_eq!(t, got);
             }
         })
     }
@@ -881,11 +1017,9 @@ mod benches {
         .collect();
         b.iter(|| {
             let cases = test::black_box(&cases);
-            for _ in 0..1000 {
-                for &(lhs, rhs) in cases {
-                    let _ = test::black_box(lhs.checked_add(rhs).unwrap());
-                    let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
-                }
+            for &(lhs, rhs) in cases {
+                let _ = test::black_box(lhs.checked_add(rhs).unwrap());
+                let _ = test::black_box(lhs.checked_sub(rhs).unwrap());
             }
         })
     }

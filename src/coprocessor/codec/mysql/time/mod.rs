@@ -423,7 +423,7 @@ impl Time {
         }
 
         let frac = if has_hhmmss {
-            mysql::parse_frac(frac_str, fsp)?
+            mysql::parse_frac(frac_str, fsp)? as u32
         } else {
             0
         };
