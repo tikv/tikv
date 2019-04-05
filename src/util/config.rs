@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
+use crate::storage::engine::DBCompressionType;
 use crate::util;
-use rocksdb::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
@@ -88,7 +88,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use rocksdb::DBCompressionType;
+    use crate::storage::engine::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -174,7 +174,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use rocksdb::$enum;
+            use crate::storage::engine::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -210,7 +210,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use rocksdb::$enum;
+                use crate::storage::engine::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -661,7 +661,6 @@ pub fn check_max_open_fds(_: u64) -> Result<(), ConfigError> {
 #[cfg(target_os = "linux")]
 mod check_kernel {
     use std::fs;
-    use std::io::Read;
 
     use super::ConfigError;
 
@@ -674,9 +673,7 @@ mod check_kernel {
         expect: i64,
         checker: Box<Checker>,
     ) -> Result<(), ConfigError> {
-        let mut buffer = String::new();
-        fs::File::open(param_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
+        let buffer = fs::read_to_string(param_path)
             .map_err(|e| ConfigError::Limit(format!("check_kernel_params failed {}", e)))?;
 
         let got = buffer
@@ -754,8 +751,7 @@ pub fn check_kernel() -> Vec<ConfigError> {
 mod check_data_dir {
     use libc;
     use std::ffi::{CStr, CString};
-    use std::fs::{self, File};
-    use std::io::Read;
+    use std::fs;
     use std::path::Path;
     use std::sync::Mutex;
 
@@ -859,12 +855,9 @@ mod check_data_dir {
             )));
         }
 
-        let mut buffer = String::new();
-        File::open(&rota_path)
-            .and_then(|mut f| f.read_to_string(&mut buffer))
-            .map_err(|e| {
-                ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
-            })?;
+        let buffer = fs::read_to_string(&rota_path).map_err(|e| {
+            ConfigError::FileSystem(format!("{}: {:?} failed: {:?}", op, rota_path, e))
+        })?;
         Ok(buffer.trim_matches('\n').to_owned())
     }
 
@@ -1036,7 +1029,7 @@ mod tests {
 
     use super::*;
 
-    use rocksdb::DBCompressionType;
+    use crate::storage::engine::DBCompressionType;
     use tempdir::TempDir;
     use toml;
 

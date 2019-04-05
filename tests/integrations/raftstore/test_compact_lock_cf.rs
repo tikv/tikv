@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::DBStatisticsTickerType;
+use tikv::storage::engine::DBStatisticsTickerType;
 
 use test_raftstore::*;
 use tikv::storage::CF_LOCK;

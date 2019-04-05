@@ -22,7 +22,6 @@ use std::u64;
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
@@ -34,6 +33,7 @@ use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use crate::storage::engine::{Writable, WriteBatch};
 use crate::storage::CF_RAFT;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
@@ -346,7 +346,7 @@ impl SnapContext {
         let handle = box_try!(rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -513,7 +513,10 @@ impl SnapContext {
             let handle = rocksdb_util::get_cf_handle(&self.engines.kv, cf).unwrap();
             if let Some(n) = rocksdb_util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
+                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+                // Leave enough buffer to tolerate heavy write workload,
+                // which may flush some memtables in a short time.
+                if n > u64::from(slowdown_trigger) / 2 {
                     return true;
                 }
             }
@@ -675,13 +678,13 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::storage::engine::{ColumnFamilyOptions, Writable, WriteBatch};
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use tempdir::TempDir;
 
     use super::Event;
@@ -831,7 +834,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));

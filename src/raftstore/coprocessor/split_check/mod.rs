@@ -16,7 +16,7 @@ mod keys;
 mod size;
 mod table;
 
-use rocksdb::DB;
+use crate::storage::engine::DB;
 
 use super::error::Result;
 use super::{KeyEntry, ObserverContext, SplitChecker};
