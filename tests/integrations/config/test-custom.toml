@@ -39,6 +39,7 @@ end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
 end-point-stream-batch-row-limit = 4096
+end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
