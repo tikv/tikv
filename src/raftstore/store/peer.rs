@@ -965,6 +965,16 @@ impl Peer {
             let region = snap_data.take_region();
             // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
             // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
+            // Note that: below logic can not find the overlap region with range (a, b] that a < snap_region.end_key < b,
+            // but it is okay cause this case would never happen.
+            // The most possible case is like this, but is abandoned in propose stage.
+            //     | region 1 |       region 2      |  store 1
+            //                   || split 2 into 3
+            //                   \/
+            //     | region 1 | region 2 | region 3 |
+            //                   || merge 2 into 1 (never happen, cause source region's log gap should not contain AdminRequest(split 2 into 3))
+            //                   \/
+            //     |        region 1     | region 3 |  store 2,3
             if let Some((_, r)) = region_ranges
                 .range((Unbounded::<Vec<u8>>, Included(enc_end_key(&region))))
                 .rev()
