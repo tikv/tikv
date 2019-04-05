@@ -240,10 +240,8 @@ impl Duration {
         if round_with_fsp {
             let round = u64::from(TEN_POW[NANO_WIDTH as usize - fsp as usize - 1]);
             nano /= round;
-            if nano % 10 > 4 {
-                let padding = round * 10;
-                nano = (nano / 10 + 1) * padding;
-            }
+            nano = nano / 10 + if nano % 10 > 4 { 1 } else { 0 };
+            nano *= round * 10;
         }
 
         if nano >= NANOS_PER_SEC {
@@ -323,7 +321,7 @@ impl Duration {
 
         let mut neg = false;
         let (mut block, mut day, mut hour, mut minute, mut second, mut fract) = (0, 0, 0, 0, 0, 0);
-        let mut eaten = 1;
+        let mut eaten = 0;
         let info = || invalid_type!("Invalid time format: {}", escape(s));
 
         let mut state = Start;
@@ -435,8 +433,16 @@ impl Duration {
                 }
                 Dot => {
                     if c.is_ascii_digit() {
-                        fract = to_dec(c);
-                        Fraction
+                        if fsp == 0 {
+                            if to_dec(c) > 4 {
+                                fract = 1;
+                            }
+                            Consume
+                        } else {
+                            fract = to_dec(c);
+                            eaten = 1;
+                            Fraction
+                        }
                     } else {
                         return Err(info());
                     }
