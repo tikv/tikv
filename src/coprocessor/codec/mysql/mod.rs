@@ -55,11 +55,7 @@ fn parse_frac(frac: &str, fsp: u8) -> Result<u64> {
         frac.parse::<u64>().map_err(mapping)? * u64::from(TEN_POW[fsp - frac.len()])
     } else {
         let result = frac[..=fsp].parse::<u64>().map_err(mapping)?;
-        if result % 10 > 4 {
-            result / 10 + 1
-        } else {
-            result / 10
-        }
+        (result + 5) / 10
     })
 }
 

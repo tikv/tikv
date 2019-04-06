@@ -240,7 +240,7 @@ impl Duration {
         if round_with_fsp {
             let round = u64::from(TEN_POW[NANO_WIDTH as usize - fsp as usize - 1]);
             nano /= round;
-            nano = nano / 10 + if nano % 10 > 4 { 1 } else { 0 };
+            nano = (nano + 5) / 10;
             nano *= round * 10;
         }
 
