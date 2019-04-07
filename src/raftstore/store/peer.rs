@@ -915,37 +915,11 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport>(
-        &mut self,
-        ctx: &mut ReadyContext<T>,
-        worker: &FutureWorker<PdTask>,
+    pub fn check_pending_snapshot(
+        &self,
         region_ranges: &BTreeMap<Vec<u8>, u64>,
         region_peers: &HashMap<u64, Peer>,
-    ) {
-        self.marked_to_be_checked = false;
-        if self.pending_remove {
-            return;
-        }
-        if self.mut_store().check_applying_snap() {
-            // If we continue to handle all the messages, it may cause too many messages because
-            // leader will send all the remaining messages to this follower, which can lead
-            // to full message queue under high load.
-            debug!(
-                "{} still applying snapshot, skip further handling.",
-                self.tag
-            );
-            return;
-        }
-
-        if !self.pending_messages.is_empty() {
-            fail_point!("raft_before_follower_send");
-            let messages = mem::replace(&mut self.pending_messages, vec![]);
-            self.send(ctx.trans, messages, &mut ctx.metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
-                });
-        }
-
+    ) -> bool {
         if let Some(snap) = self.get_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
                 debug!(
@@ -954,7 +928,7 @@ impl Peer {
                     self.get_store().applied_index(),
                     self.last_applying_idx,
                 );
-                return;
+                return false;
             }
 
             let mut snap_data = RaftSnapshotData::new();
@@ -980,8 +954,44 @@ impl Peer {
                     self.last_applying_idx,
                     r,
                 );
-                return;
+                return false;
             }
+        }
+        true
+    }
+
+    pub fn handle_raft_ready_append<T: Transport>(
+        &mut self,
+        ctx: &mut ReadyContext<T>,
+        worker: &FutureWorker<PdTask>,
+        check_pending_snapshot: bool,
+    ) {
+        self.marked_to_be_checked = false;
+        if self.pending_remove {
+            return;
+        }
+        if self.mut_store().check_applying_snap() {
+            // If we continue to handle all the messages, it may cause too many messages because
+            // leader will send all the remaining messages to this follower, which can lead
+            // to full message queue under high load.
+            debug!(
+                "{} still applying snapshot, skip further handling.",
+                self.tag
+            );
+            return;
+        }
+
+        if !self.pending_messages.is_empty() {
+            fail_point!("raft_before_follower_send");
+            let messages = mem::replace(&mut self.pending_messages, vec![]);
+            self.send(ctx.trans, messages, &mut ctx.metrics.message)
+                .unwrap_or_else(|e| {
+                    warn!("{} clear snapshot pending messages err {:?}", self.tag, e);
+                });
+        }
+
+        if !check_pending_snapshot {
+            return;
         }
 
         if !self
