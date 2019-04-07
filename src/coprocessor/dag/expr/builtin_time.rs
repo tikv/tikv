@@ -58,25 +58,25 @@ impl ScalarFunc {
 
     #[inline]
     pub fn hour(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.hours() as i64))
     }
 
     #[inline]
     pub fn minute(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.minutes() as i64))
     }
 
     #[inline]
     pub fn second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.secs() as i64))
     }
 
     #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.micro_secs() as i64))
     }
 
@@ -284,9 +284,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_add(*arg1) {
+        let mut res = match arg0.into_owned().checked_add(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -354,15 +354,15 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-        let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+    ) -> Result<Option<MyDuration>> {
+        let arg0 = try_opt!(self.children[0].eval_duration(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(*arg1) {
+        let res = match arg0.checked_add(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
-        Ok(Some(Cow::Owned(res)))
+        Ok(Some(res))
     }
 
     #[inline]
@@ -370,25 +370,25 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+    ) -> Result<Option<MyDuration>> {
+        let arg0 = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
         let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_add(arg1) {
+        let res = match arg0.checked_add(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
-        Ok(Some(Cow::Owned(res)))
+        Ok(Some(res))
     }
 
     #[inline]
-    pub fn add_time_duration_null<'a>(
+    pub fn add_time_duration_null(
         &self,
         _ctx: &mut EvalContext,
         _row: &[Datum],
-    ) -> Result<Option<Cow<'a, MyDuration>>> {
+    ) -> Result<Option<MyDuration>> {
         Ok(None)
     }
 
@@ -399,9 +399,9 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
-        let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+        let arg1 = try_opt!(self.children[1].eval_duration(ctx, row));
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
-        let mut res = match arg0.into_owned().checked_sub(*arg1) {
+        let mut res = match arg0.into_owned().checked_sub(arg1) {
             Some(res) => res,
             None => return Err(overflow),
         };
@@ -442,15 +442,15 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let d0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-        let d1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+    ) -> Result<Option<MyDuration>> {
+        let d0 = try_opt!(self.children[0].eval_duration(ctx, row));
+        let d1 = try_opt!(self.children[1].eval_duration(ctx, row));
         let diff = match d0.to_nanos().checked_sub(d1.to_nanos()) {
             Some(result) => result,
             None => return Err(Error::overflow("DURATION", &format!("({} - {})", &d0, &d1))),
         };
         let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
-        Ok(Some(Cow::Owned(res)))
+        Ok(Some(res))
     }
 }
 

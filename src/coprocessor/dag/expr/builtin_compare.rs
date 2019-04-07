@@ -140,7 +140,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         do_coalesce(self, |v| v.eval_duration(ctx, row))
     }
 

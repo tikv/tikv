@@ -65,10 +65,10 @@ impl Datum {
     }
 
     #[inline]
-    pub fn as_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
+    pub fn as_duration(&self) -> Result<Option<Duration>> {
         match *self {
             Datum::Null => Ok(None),
-            Datum::Dur(ref d) => Ok(Some(Cow::Borrowed(d))),
+            Datum::Dur(d) => Ok(Some(d)),
             _ => Err(box_err!("Can't eval_duration from Datum")),
         }
     }
@@ -114,7 +114,7 @@ impl Constant {
     }
 
     #[inline]
-    pub fn eval_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
+    pub fn eval_duration(&self) -> Result<Option<Duration>> {
         self.val.as_duration()
     }
 
@@ -187,10 +187,7 @@ mod tests {
                 .eval_time(&mut ctx, &[])
                 .unwrap_or(None)
                 .map(|t| t.into_owned());
-            let dur = e
-                .eval_duration(&mut ctx, &[])
-                .unwrap_or(None)
-                .map(|t| t.into_owned());
+            let dur = e.eval_duration(&mut ctx, &[]).unwrap_or(None);
             let j = e
                 .eval_json(&mut ctx, &[])
                 .unwrap_or(None)

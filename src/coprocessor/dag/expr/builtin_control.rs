@@ -106,7 +106,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         if_null(|i| self.children[i].eval_duration(ctx, row))
     }
 
@@ -162,7 +162,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         if_condition(self, ctx, row, |i, ctx| {
             self.children[i].eval_duration(ctx, row)
         })
@@ -214,7 +214,7 @@ impl ScalarFunc {
         &'b self,
         ctx: &mut EvalContext,
         row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, Duration>>> {
+    ) -> Result<Option<Duration>> {
         case_when(self, ctx, row, |v, ctx| v.eval_duration(ctx, row))
     }
 

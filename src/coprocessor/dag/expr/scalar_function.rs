@@ -606,7 +606,7 @@ macro_rules! dispatch_call {
                 &'b self,
                 ctx: &mut EvalContext,
                 row: &'a [Datum]
-            ) -> Result<Option<Cow<'a, Duration>>> {
+            ) -> Result<Option<Duration>> {
                 match self.sig {
                     $(ScalarFuncSig::$u_sig => self.$u_func(ctx, row, $($u_arg),*),)*
                     _ => Err(Error::UnknownSignature(self.sig))
