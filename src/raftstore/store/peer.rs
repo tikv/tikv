@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
-use std::collections::Bound::{Included, Unbounded};
+use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 use std::sync::{atomic, Arc};
@@ -915,11 +915,56 @@ impl Peer {
         Some(region_proposal)
     }
 
+    pub fn check_pending_snapshot(
+        &self,
+        region_ranges: &BTreeMap<Vec<u8>, u64>,
+        region_peers: &HashMap<u64, Peer>,
+    ) -> bool {
+        if let Some(snap) = self.get_pending_snapshot() {
+            if !self.ready_to_handle_pending_snap() {
+                debug!(
+                    "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
+                    self.tag,
+                    self.get_store().applied_index(),
+                    self.last_applying_idx,
+                );
+                return false;
+            }
+
+            let mut snap_data = RaftSnapshotData::new();
+            snap_data
+                .merge_from_bytes(snap.get_data())
+                .unwrap_or_else(|e| {
+                    warn!("{} snap data err {:?}", self.tag, e);
+                });
+            let region = snap_data.take_region();
+            // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
+            // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
+            if let Some(r) = region_ranges
+                .range((Excluded(enc_start_key(&region)), Unbounded::<Vec<u8>>))
+                .filter(|(_, &region_id)| region_id != region.get_id())
+                .map(|(_, &region_id)| region_peers[&region_id].region())
+                .take_while(|r| enc_start_key(r) < enc_end_key(&region))
+                .next()
+            {
+                info!(
+                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps {:?}, wait source destroy finish",
+                    self.tag,
+                    self.get_store().applied_index(),
+                    self.last_applying_idx,
+                    r,
+                );
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut ReadyContext<T>,
         worker: &FutureWorker<PdTask>,
-        region_ranges: &BTreeMap<Vec<u8>, u64>,
+        check_pending_snapshot: bool,
     ) {
         self.marked_to_be_checked = false;
         if self.pending_remove {
@@ -945,52 +990,8 @@ impl Peer {
                 });
         }
 
-        if let Some(snap) = self.get_pending_snapshot() {
-            if !self.ready_to_handle_pending_snap() {
-                debug!(
-                    "{} [apply_idx: {}, last_applying_idx: {}] is not ready to apply snapshot.",
-                    self.tag,
-                    self.get_store().applied_index(),
-                    self.last_applying_idx,
-                );
-                return;
-            }
-
-            let mut snap_data = RaftSnapshotData::new();
-            snap_data
-                .merge_from_bytes(snap.get_data())
-                .unwrap_or_else(|e| {
-                    warn!("{} snap data err {:?}", self.tag, e);
-                });
-            let region = snap_data.take_region();
-            // For merge process, when applying snapshot or create new peer the stale source peer is destroyed asynchronously.
-            // So here checks whether there is any overlap, if so, wait and do not handle raft ready.
-            // Note that: below logic can not find the overlap region with range (a, b] that a < snap_region.end_key < b,
-            // but it is okay cause this case would never happen.
-            // The most possible case is like this, but is abandoned in propose stage.
-            //     | region 1 |       region 2      |  store 1
-            //                   || split 2 into 3
-            //                   \/
-            //     | region 1 | region 2 | region 3 |
-            //                   || merge 2 into 1 (never happen, cause source region's log gap should not contain AdminRequest(split 2 into 3))
-            //                   \/
-            //     |        region 1     | region 3 |  store 2,3
-            if let Some((_, r)) = region_ranges
-                .range((Unbounded::<Vec<u8>>, Included(enc_end_key(&region))))
-                .rev()
-                .filter(|(_, &region_id)| region_id != region.get_id())
-                .take_while(|(enc_end_key, _)| enc_start_key(&region) < **enc_end_key)
-                .next()
-            {
-                info!(
-                    "{} [apply_idx: {}, last_applying_idx: {}] snapshot range overlaps with region {}, wait source destroy finish",
-                    self.tag,
-                    self.get_store().applied_index(),
-                    self.last_applying_idx,
-                    r,
-                );
-                return;
-            }
+        if !check_pending_snapshot {
+            return;
         }
 
         if !self

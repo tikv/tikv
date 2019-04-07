@@ -736,11 +736,21 @@ impl<T: Transport, C: PdClient> Store<T, C> {
         let (kv_wb, raft_wb, append_res, sync_log) = {
             let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
+                let check_pending_snapshot = if let Some(peer) = self.region_peers.get(&region_id) {
+                    peer.check_pending_snapshot(&self.region_ranges, &self.region_peers)
+                } else {
+                    continue;
+                };
+
                 if let Some(mut peer) = self.region_peers.get_mut(&region_id) {
                     if let Some(region_proposal) = peer.take_apply_proposals() {
                         region_proposals.push(region_proposal);
                     }
-                    peer.handle_raft_ready_append(&mut ctx, &self.pd_worker, &self.region_ranges);
+                    peer.handle_raft_ready_append(
+                        &mut ctx,
+                        &self.pd_worker,
+                        check_pending_snapshot,
+                    );
                 }
             }
             (ctx.kv_wb, ctx.raft_wb, ctx.ready_res, ctx.sync_log)
