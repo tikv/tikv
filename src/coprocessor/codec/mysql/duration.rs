@@ -119,6 +119,10 @@ bitfield! {
 
 }
 
+/// NOTE:
+/// 1. It will automatically round the `nano` field according to `fsp` if round_with_fsp is true.
+/// 2. `nano` field can be greater than `NANOS_PER_SEC`.
+/// 3. Return an `Err` if the result's fields is invalid.
 #[derive(Clone, Copy)]
 struct DurationBuilder {
     neg: bool,
@@ -221,10 +225,6 @@ impl Duration {
     }
 
     /// Try to build a `Duration` via `DurationBuilder`
-    /// NOTE:
-    /// 1. It will automatically round the `nano` field according to `fsp`
-    /// 2. `DurationBuilder.nano` can be greater than `NANOS_PER_SEC`.
-    /// 3. Return an `Err` only if the result's `hour` is invalid(> 838).
     #[inline]
     fn build(builder: DurationBuilder) -> Result<Duration> {
         let DurationBuilder {
