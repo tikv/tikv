@@ -131,7 +131,7 @@ impl<Tz: TimeZone> DateTimeExtension for DateTime<Tz> {
     }
 
     /// returns the week of year.
-    /// implementes TiDB Week().
+    /// implements TiDB Week().
     fn week(&self, mode: WeekMode) -> i32 {
         if self.month() == 0 || self.day() == 0 {
             return 0;
