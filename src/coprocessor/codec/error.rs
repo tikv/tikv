@@ -61,7 +61,7 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
-            display("unknown error {:?}", err)
+            display("{}", err)
         }
     }
 }
@@ -79,7 +79,7 @@ impl Error {
     }
 
     pub fn overflow(data: &str, expr: &str) -> Error {
-        let msg = format!("{} value is out of range in {:?}", data, expr);
+        let msg = format!("{} value is out of range in '{}'", data, expr);
         Error::Eval(msg, ERR_DATA_OUT_OF_RANGE)
     }
 

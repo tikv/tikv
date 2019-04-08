@@ -69,13 +69,14 @@ impl BatchDAGHandler {
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
         ranges_len: usize,
+        executors_len: usize,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(ranges_len),
+            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
             metrics: ExecutorMetrics::default(),
         }
     }
@@ -108,6 +109,9 @@ impl RequestHandler for BatchDAGHandler {
                 Ok(f) => is_drained = f,
             }
 
+            // We will only get warnings limited by max_warning_count. Note that in future we
+            // further want to ignore warnings from unused rows. See TODOs in the `result.warnings`
+            // field.
             warnings.merge(&mut result.warnings);
 
             // Notice that rows_len == 0 doesn't mean that it is drained.

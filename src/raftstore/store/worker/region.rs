@@ -22,7 +22,6 @@ use std::u64;
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
@@ -34,6 +33,7 @@ use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use crate::storage::engine::{Writable, WriteBatch};
 use crate::storage::CF_RAFT;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
@@ -59,6 +59,8 @@ const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 pub enum Task {
     Gen {
         region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -224,15 +226,18 @@ struct SnapContext {
 
 impl SnapContext {
     /// Generates the snapshot of the Region.
-    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
+    fn generate_snap(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) -> Result<()> {
         // do we need to check leader here?
-        let raft_engine = Arc::clone(&self.engines.raft);
-        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
-
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raft_engine,
-            &raw_snap,
+            raft_snap,
+            kv_snap,
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -249,14 +254,20 @@ impl SnapContext {
     }
 
     /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
-    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
+    fn handle_gen(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
             .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, notifier) {
+        if let Err(e) = self.generate_snap(region_id, raft_snap, kv_snap, notifier) {
             error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
@@ -335,7 +346,7 @@ impl SnapContext {
         let handle = box_try!(rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -502,7 +513,10 @@ impl SnapContext {
             let handle = rocksdb_util::get_cf_handle(&self.engines.kv, cf).unwrap();
             if let Some(n) = rocksdb_util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
-                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
+                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+                // Leave enough buffer to tolerate heavy write workload,
+                // which may flush some memtables in a short time.
+                if n > u64::from(slowdown_trigger) / 2 {
                     return true;
                 }
             }
@@ -577,13 +591,15 @@ impl Runnable<Task> for Runner {
         match task {
             Task::Gen {
                 region_id,
+                raft_snap,
+                kv_snap,
                 notifier,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.
@@ -657,18 +673,18 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::raftstore::store::engine::{Mutable, Peekable};
+    use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
+    use crate::storage::engine::{ColumnFamilyOptions, Writable, WriteBatch};
     use crate::storage::{CF_DEFAULT, CF_RAFT};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use tempdir::TempDir;
 
     use super::Event;
@@ -778,17 +794,12 @@ mod tests {
             }
         }
 
+        let engines = Engines::new(Arc::clone(&db), Arc::clone(&db));
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(
-            Engines::new(Arc::clone(&db), Arc::clone(&db)),
-            mgr,
-            0,
-            true,
-            Duration::from_secs(0),
-        );
+        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -799,6 +810,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
+                    raft_snap: Snapshot::new(engines.raft.clone()),
+                    kv_snap: Snapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();
@@ -821,7 +834,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));

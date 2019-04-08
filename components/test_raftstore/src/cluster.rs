@@ -17,8 +17,8 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use rocksdb::DB;
 use tempdir::TempDir;
+use tikv::storage::engine::DB;
 
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
@@ -103,7 +103,7 @@ pub struct Cluster<T: Simulator> {
     leaders: HashMap<u64, metapb::Peer>,
     count: usize,
 
-    paths: Vec<TempDir>,
+    pub paths: Vec<TempDir>,
     pub dbs: Vec<Engines>,
     pub engines: HashMap<u64, Engines>,
 
@@ -136,23 +136,24 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self) {
+    pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let path = TempDir::new("test_cluster").unwrap();
+            let dir = TempDir::new("test_cluster").unwrap();
+            let kv_path = dir.path().join("kv");
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocksdb_util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = path.path().join(Path::new("raft"));
+            let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
                 rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
-            self.paths.push(path);
+            self.paths.push(dir);
         }
     }
 

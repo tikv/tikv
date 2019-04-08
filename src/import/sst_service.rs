@@ -20,10 +20,10 @@ use futures_cpupool::{Builder, CpuPool};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
-use rocksdb::DB;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
+use crate::storage::engine::DB;
 use crate::util::future::paired_future_callback;
 use crate::util::rocksdb_util::compact_files_in_range;
 use crate::util::time::Instant;

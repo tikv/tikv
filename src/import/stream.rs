@@ -14,12 +14,12 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::*;
 use kvproto::metapb::*;
-use rocksdb::{DBIterator, SeekKey, DB};
+
+use crate::storage::engine::{DBIterator, SeekKey, DB};
 
 use super::client::*;
 use super::common::*;
@@ -28,7 +28,7 @@ use super::{Config, Result};
 
 pub struct SSTFile {
     pub meta: SSTMeta,
-    pub data: Vec<u8>,
+    pub(crate) info: LazySSTInfo,
 }
 
 impl SSTFile {
@@ -51,7 +51,7 @@ impl fmt::Debug for SSTFile {
     }
 }
 
-pub type SSTRange = (Range, Vec<SSTFile>);
+pub type LazySSTRange = (Range, Vec<LazySSTInfo>);
 
 pub struct SSTFileStream<Client> {
     ctx: RangeContext<Client>,
@@ -80,7 +80,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<SSTRange>> {
+    pub fn next(&mut self) -> Result<Option<LazySSTRange>> {
         if !self.iter.valid() {
             return Ok(None);
         }
@@ -109,31 +109,7 @@ impl<Client: ImportClient> SSTFileStream<Client> {
         let range = new_range(&start, end);
 
         let infos = w.finish()?;
-        let mut ssts = Vec::new();
-        for info in infos {
-            ssts.push(self.new_sst_file(info));
-        }
-
-        Ok(Some((range, ssts)))
-    }
-
-    fn new_sst_file(&self, info: SSTInfo) -> SSTFile {
-        let mut digest = crc32::Digest::new(crc32::IEEE);
-        digest.write(&info.data);
-        let crc32 = digest.sum32();
-        let length = info.data.len() as u64;
-
-        let mut meta = SSTMeta::new();
-        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
-        meta.set_range(info.range.clone());
-        meta.set_crc32(crc32);
-        meta.set_length(length);
-        meta.set_cf_name(info.cf_name.clone());
-
-        SSTFile {
-            meta,
-            data: info.data,
-        }
+        Ok(Some((range, infos)))
     }
 }
 
@@ -232,7 +208,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use rocksdb::{DBIterator, DBOptions, ReadOptions, Writable, DB};
+    use crate::storage::engine::{DBIterator, DBOptions, ReadOptions, Writable, DB};
     use tempdir::TempDir;
 
     use crate::config::DbConfig;
@@ -492,8 +468,8 @@ mod tests {
             assert_eq!(range.get_start(), start.as_slice());
             assert_eq!(range.get_end(), range_end.as_slice());
             for sst in ssts {
-                assert_eq!(sst.meta.get_range().get_start(), start.as_slice());
-                assert_eq!(sst.meta.get_range().get_end(), end.as_slice());
+                assert_eq!(sst.range.get_start(), start.as_slice());
+                assert_eq!(sst.range.get_end(), end.as_slice());
             }
         }
         assert!(stream.next().unwrap().is_none());

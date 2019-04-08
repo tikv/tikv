@@ -97,18 +97,12 @@ mod tests {
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
-    use kvproto::kvrpcpb::IsolationLevel;
-    use protobuf::RepeatedField;
-    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use crate::coprocessor::codec::datum::Datum;
-    use crate::storage::SnapshotStore;
     use crate::util::codec::number::NumberEncoder;
 
-    use super::super::scanner::tests::{get_range, new_col_info, TestStore};
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::tests::gen_table_data;
+    use super::super::tests::{gen_table_scan_executor, new_col_info};
     use super::*;
 
     fn new_const_expr() -> Expr {
@@ -149,7 +143,6 @@ mod tests {
 
     #[test]
     fn test_selection_executor_simple() {
-        let tid = 1;
         let cis = vec![
             new_col_info(1, FieldTypeTp::LongLong),
             new_col_info(2, FieldTypeTp::VarChar),
@@ -193,32 +186,16 @@ mod tests {
             ],
         ];
 
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
-        // prepare range
-        let key_ranges = vec![get_range(tid, 0, i64::MAX)];
-
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-
-        let inner_table_scan =
-            TableScanExecutor::new(table_scan, key_ranges, store, false).unwrap();
+        let inner_table_scan = gen_table_scan_executor(1, cis, &raw_data, None);
 
         // selection executor
         let mut selection = Selection::new();
         let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(
-            selection,
-            Arc::new(EvalConfig::default()),
-            Box::new(inner_table_scan),
-        )
-        .unwrap();
+        let mut selection_executor =
+            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
+                .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -233,7 +210,6 @@ mod tests {
 
     #[test]
     fn test_selection_executor_condition() {
-        let tid = 1;
         let cis = vec![
             new_col_info(1, FieldTypeTp::LongLong),
             new_col_info(2, FieldTypeTp::VarChar),
@@ -249,30 +225,16 @@ mod tests {
             vec![Datum::I64(7), Datum::Bytes(b"f".to_vec()), Datum::I64(6)],
         ];
 
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
-        // prepare range
-        let key_ranges = vec![get_range(tid, 0, i64::MAX)];
-
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let inner_table_scan = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
+        let inner_table_scan = gen_table_scan_executor(1, cis, &raw_data, None);
 
         // selection executor
         let mut selection = Selection::new();
         let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(
-            selection,
-            Arc::new(EvalConfig::default()),
-            Box::new(inner_table_scan),
-        )
-        .unwrap();
+        let mut selection_executor =
+            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
+                .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {

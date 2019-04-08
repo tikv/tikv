@@ -32,6 +32,7 @@ macro_rules! fatal {
         } else {
             eprintln!($lvl, $($arg)+);
         }
+        slog_global::clear_global();
         process::exit(1)
     })
 }
@@ -68,6 +69,8 @@ pub fn initial_logger(config: &TiKvConfig) {
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
+    util::metrics::monitor_allocator_stats("tikv")
+        .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
         return;

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "3.0.0-beta"
+version = "3.0.0-beta.1"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -10,8 +10,8 @@ publish = false
 
 [features]
 default = []
-portable = ["rocksdb/portable"]
-sse = ["rocksdb/sse"]
+portable = ["rocksdb_do_not_use/portable"]
+sse = ["rocksdb_do_not_use/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
 no-jemalloc = ["tikv_alloc/no-jemalloc"]
@@ -114,6 +114,7 @@ more-asserts = "0.1"
 hyper = "0.12"
 tokio-threadpool = "0.1"
 vlog = "0.1.4"
+twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
@@ -123,8 +124,9 @@ log_wrappers = { path = "components/log_wrappers" }
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
 
-[dependencies.rocksdb]
+[dependencies.rocksdb_do_not_use]
 git = "https://github.com/pingcap/rust-rocksdb.git"
+package = "rocksdb"
 
 [dependencies.prometheus]
 version = "0.4.2"

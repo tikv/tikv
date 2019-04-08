@@ -19,12 +19,11 @@ use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
 use protobuf::RepeatedField;
-use rocksdb::rocksdb_options::WriteOptions;
-use rocksdb::{Writable, WriteBatch};
 use uuid::Uuid;
 
 use kvproto::import_sstpb::SSTMeta;
@@ -36,7 +35,7 @@ use kvproto::raft_cmdpb::{
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
 };
-use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType};
+use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
 
 use crate::import::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
@@ -47,11 +46,14 @@ use crate::raftstore::store::msg::{Callback, PeerMsg};
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
 use crate::raftstore::store::util::check_region_epoch;
+use crate::raftstore::store::RegionTask;
 use crate::raftstore::store::{cmd_resp, keys, util, Config, Engines};
 use crate::raftstore::{Error, Result};
+use crate::storage::engine::{Writable, WriteBatch, WriteOptions};
 use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use crate::util::time::{duration_to_sec, Instant, SlowTimer};
+use crate::util::worker::Scheduler;
 use crate::util::Either;
 use crate::util::{escape, rocksdb_util, MustConsumeVec};
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -65,6 +67,7 @@ use super::{
 
 const WRITE_BATCH_MAX_KEYS: usize = 128;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
+const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -285,6 +288,7 @@ struct ApplyContext {
     timer: Option<SlowTimer>,
     host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask>,
     router: ApplyRouter,
     notifier: Notifier,
     engines: Engines,
@@ -312,6 +316,7 @@ impl ApplyContext {
         tag: String,
         host: Arc<CoprocessorHost>,
         importer: Arc<SSTImporter>,
+        region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
@@ -322,6 +327,7 @@ impl ApplyContext {
             timer: None,
             host,
             importer,
+            region_scheduler,
             engines,
             router,
             notifier,
@@ -380,16 +386,25 @@ impl ApplyContext {
     /// Writes all the changes into RocksDB.
     pub fn write_to_db(&mut self) {
         if self.wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
-            let wb = self.wb.take().unwrap();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
             self.engines
                 .kv
-                .write_opt(wb, &write_opts)
+                .write_opt(self.wb(), &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
             self.sync_log_hint = false;
+            let data_size = self.wb().data_size();
+            if data_size > APPLY_WB_SHRINK_SIZE {
+                // Control the memory usage for the WriteBatch.
+                self.wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            } else {
+                // Clear data, reuse the WriteBatch, this can reduce memory allocations and deallocations.
+                self.wb().clear();
+            }
+            self.wb_last_bytes = 0;
+            self.wb_last_keys = 0;
         }
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -910,7 +925,10 @@ impl ApplyDelegate {
         ctx.exec_ctx = Some(self.new_ctx(index, term));
         ctx.wb_mut().set_save_point();
         let (resp, exec_result) = match self.exec_raft_cmd(ctx, req) {
-            Ok(a) => a,
+            Ok(a) => {
+                ctx.wb_mut().pop_save_point().unwrap();
+                a
+            }
             Err(e) => {
                 // clear dirty values.
                 ctx.wb_mut().rollback_to_save_point().unwrap();
@@ -2197,6 +2215,38 @@ pub struct CatchUpLogs {
 
 type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
 
+pub struct GenSnapTask {
+    region_id: u64,
+    snap_notifier: SyncSender<RaftSnapshot>,
+}
+
+impl GenSnapTask {
+    pub fn new(region_id: u64, snap_notifier: SyncSender<RaftSnapshot>) -> GenSnapTask {
+        GenSnapTask {
+            region_id,
+            snap_notifier,
+        }
+    }
+
+    pub fn generate_and_schedule_snapshot(
+        self,
+        engines: &Engines,
+        region_sched: &Scheduler<RegionTask>,
+    ) -> Result<()> {
+        let snapshot = RegionTask::Gen {
+            region_id: self.region_id,
+            notifier: self.snap_notifier,
+            // This snapshot may be held for a long time, which may cause too many
+            // open files in rocksdb.
+            // TODO: figure out another way to do raft snapshot with short life rocksdb snapshots.
+            raft_snap: Snapshot::new(engines.raft.clone()),
+            kv_snap: Snapshot::new(engines.kv.clone()),
+        };
+        box_try!(region_sched.schedule(snapshot));
+        Ok(())
+    }
+}
+
 pub enum Msg {
     Apply {
         start: Instant,
@@ -2207,6 +2257,7 @@ pub enum Msg {
     CatchUpLogs(CatchUpLogs),
     LogsUpToDate(u64),
     Destroy(Destroy),
+    Snapshot(GenSnapTask),
     #[cfg(test)]
     Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
 }
@@ -2239,6 +2290,9 @@ impl Debug for Msg {
             Msg::CatchUpLogs(cul) => write!(f, "{:?}", cul.merge),
             Msg::LogsUpToDate(region_id) => write!(f, "[region {}] logs are updated", region_id),
             Msg::Destroy(ref d) => write!(f, "[region {}] destroy", d.region_id),
+            Msg::Snapshot(GenSnapTask { region_id, .. }) => {
+                write!(f, "[region {}] requests a snapshot", region_id)
+            }
             #[cfg(test)]
             Msg::Validate(region_id, _) => write!(f, "[region {}] validate", region_id),
         }
@@ -2514,6 +2568,32 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
+        if self.delegate.pending_remove || self.delegate.stopped {
+            return;
+        }
+
+        // Persists any pending changes of this region.
+        let region_id = self.delegate.id();
+        if apply_ctx
+            .apply_res
+            .iter()
+            .any(|res| res.region_id == region_id)
+        {
+            apply_ctx.flush();
+        }
+        if let Err(e) = snap_task
+            .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
+        {
+            error!(
+                "schedule snapshot failed";
+                "error" => ?e,
+                "region_id" => region_id,
+                "peer_id" => self.delegate.id()
+            );
+        }
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
         let mut channel_timer = None;
         let mut drainer = msgs.drain(..);
@@ -2534,6 +2614,7 @@ impl ApplyFsm {
                 Some(Msg::Destroy(d)) => self.handle_destroy(apply_ctx, d),
                 Some(Msg::CatchUpLogs(cul)) => self.catch_up_logs_for_merge(apply_ctx, cul),
                 Some(Msg::LogsUpToDate(_)) => {}
+                Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
                 Some(Msg::Validate(_, f)) => f.call_box((&self.delegate,)),
                 None => break,
@@ -2652,6 +2733,7 @@ pub struct Builder {
     cfg: Arc<Config>,
     coprocessor_host: Arc<CoprocessorHost>,
     importer: Arc<SSTImporter>,
+    region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
     sender: Notifier,
     router: ApplyRouter,
@@ -2668,6 +2750,7 @@ impl Builder {
             cfg: builder.cfg.clone(),
             coprocessor_host: builder.coprocessor_host.clone(),
             importer: builder.importer.clone(),
+            region_scheduler: builder.region_scheduler.clone(),
             engines: builder.engines.clone(),
             sender,
             router,
@@ -2685,6 +2768,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.tag.clone(),
                 self.coprocessor_host.clone(),
                 self.importer.clone(),
+                self.region_scheduler.clone(),
                 self.engines.clone(),
                 self.router.clone(),
                 self.sender.clone(),
@@ -2717,6 +2801,13 @@ impl ApplyRouter {
                 Msg::Apply { .. } | Msg::Destroy(_) | Msg::LogsUpToDate(_) => {
                     info!(
                         "target region is not found, drop messages";
+                        "region_id" => region_id
+                    );
+                    return;
+                }
+                Msg::Snapshot(_) => {
+                    warn!(
+                        "region is removed before taking snapshot, are we shutting down?";
                         "region_id" => region_id
                     );
                     return;
@@ -2776,15 +2867,17 @@ mod tests {
     use crate::raftstore::store::msg::WriteResponse;
     use crate::raftstore::store::peer_storage::RAFT_INIT_LOG_INDEX;
     use crate::raftstore::store::util::{new_learner_peer, new_peer};
-    use crate::raftstore::store::Config;
+    use crate::storage::engine::{Writable, WriteBatch, DB};
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::*;
     use protobuf::Message;
-    use rocksdb::{Writable, WriteBatch, DB};
     use tempdir::TempDir;
 
-    use super::*;
     use crate::import::test_helpers::*;
+    use crate::raftstore::store::{Config, RegionTask};
+    use crate::util::worker::dummy_scheduler;
+
+    use super::*;
 
     pub fn create_tmp_engine(path: &str) -> (TempDir, Engines) {
         let path = TempDir::new(path).unwrap();
@@ -2892,6 +2985,7 @@ mod tests {
         let (_tmp, engines) = create_tmp_engine("apply-basic");
         let host = Arc::new(CoprocessorHost::default());
         let (_dir, importer) = create_tmp_importer("apply-basic");
+        let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
@@ -2899,6 +2993,7 @@ mod tests {
             cfg,
             coprocessor_host: host,
             importer,
+            region_scheduler,
             sender,
             engines: engines.clone(),
             router: router.clone(),
@@ -3009,11 +3104,16 @@ mod tests {
             e => panic!("unexpected apply result: {:?}", e),
         };
         assert_eq!(apply_res.region_id, 2);
-        let apply_state: RaftApplyState = engines
-            .kv
-            .get_msg_cf(CF_RAFT, &apply_state_key)
-            .unwrap()
-            .unwrap();
+
+        let (tx, _) = mpsc::sync_channel(0);
+        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
+        let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
+                .get_msg_cf(CF_RAFT, &apply_state_key)
+                .unwrap()
+                .unwrap(),
+            e => panic!("unexpected apply result: {:?}", e),
+        };
         assert_eq!(apply_res.apply_state, apply_state);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
@@ -3222,6 +3322,7 @@ mod tests {
             .register_query_observer(1, Box::new(obs.clone()));
 
         let (tx, rx) = mpsc::channel();
+        let (region_scheduler, _) = dummy_scheduler();
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
@@ -3229,6 +3330,7 @@ mod tests {
             tag: "test-store".to_owned(),
             cfg,
             sender,
+            region_scheduler,
             coprocessor_host: Arc::new(host),
             importer: importer.clone(),
             engines: engines.clone(),
@@ -3562,6 +3664,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let sender = Notifier::Sender(tx);
         let host = Arc::new(CoprocessorHost::default());
+        let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
         let builder = super::Builder {
@@ -3569,6 +3672,7 @@ mod tests {
             cfg,
             sender,
             importer,
+            region_scheduler,
             coprocessor_host: host,
             engines: engines.clone(),
             router: router.clone(),

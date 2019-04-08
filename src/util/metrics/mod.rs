@@ -26,6 +26,10 @@ mod threads_dummy;
 #[cfg(not(target_os = "linux"))]
 pub use self::threads_dummy::monitor_threads;
 
+pub use self::allocator_metrics::monitor_allocator_stats;
+
+pub mod allocator_metrics;
+
 /// Runs a background Prometheus client.
 pub fn run_prometheus(
     interval: Duration,

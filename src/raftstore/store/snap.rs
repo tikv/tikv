@@ -30,10 +30,6 @@ use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::Message;
 use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{
-    CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter, Writable,
-    WriteBatch, DB,
-};
 
 use crate::raftstore::errors::Error as RaftStoreError;
 use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
@@ -41,6 +37,10 @@ use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
+use crate::storage::engine::{
+    CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter, Writable,
+    WriteBatch, DB,
+};
 use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use crate::util::collections::{HashMap, HashMapEntry as Entry};
@@ -527,10 +527,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let size = get_file_size(&self.meta_file.path)?;
-        let mut file = File::open(&self.meta_file.path)?;
-        let mut buf = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut buf)?;
+        let buf = fs::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::new();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
@@ -818,14 +815,14 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     options: &ApplyOptions,
     handle: &CFHandle,
 ) -> Result<()> {
-    let mut wb = WriteBatch::new();
+    let wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
         check_abort(&options.abort)?;
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if batch_size > 0 {
-                box_try!(options.db.write(wb));
+                box_try!(options.db.write(&wb));
             }
             break;
         }
@@ -835,8 +832,8 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
         batch_size += value.len();
         box_try!(wb.put_cf(handle, &key, &value));
         if batch_size >= options.write_batch_size {
-            box_try!(options.db.write(wb));
-            wb = WriteBatch::new();
+            box_try!(options.db.write(&wb));
+            wb.clear();
             batch_size = 0;
         }
     }
@@ -1507,12 +1504,12 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    use crate::storage::engine::{DBOptions, Env, DB};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
     use protobuf::Message;
-    use rocksdb::{DBOptions, Env, DB};
     use std::path::PathBuf;
     use tempdir::TempDir;
 
@@ -2493,7 +2490,7 @@ pub mod tests {
             .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1342;
+            let snap_size = 1438;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.

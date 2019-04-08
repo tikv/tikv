@@ -18,12 +18,15 @@ use tipb::executor::{self, ExecType};
 
 use crate::storage::Store;
 
+use super::batch_executor::executors::*;
 use super::batch_executor::interface::*;
 use super::executor::{
-    Executor, HashAggExecutor, IndexScanExecutor, LimitExecutor, SelectionExecutor,
-    StreamAggExecutor, TableScanExecutor, TopNExecutor,
+    Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
+    TopNExecutor,
 };
+use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
 /// Utilities to build an executor DAG.
@@ -38,20 +41,114 @@ pub struct DAGBuilder;
 impl DAGBuilder {
     /// Given a list of executor descriptors and returns whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn can_build_batch(_exec_descriptors: &[executor::Executor]) -> bool {
-        // Currently no batch executors, so always returns false.
-        false
+    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
+        use cop_datatype::EvalType;
+        use cop_datatype::FieldTypeAccessor;
+        use std::convert::TryFrom;
+
+        for ed in exec_descriptors {
+            match ed.get_tp() {
+                ExecType::TypeTableScan => {
+                    let descriptor = ed.get_tbl_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
+                            return false;
+                        }
+                    }
+                }
+                ExecType::TypeIndexScan => {
+                    let descriptor = ed.get_idx_scan();
+                    for column in descriptor.get_columns() {
+                        let eval_type = EvalType::try_from(column.tp());
+                        if eval_type.is_err() {
+                            debug!(
+                                "Coprocessor request cannot be batched";
+                                "unsupported_column_tp" => ?column.tp(),
+                            );
+                            return false;
+                        }
+                    }
+                }
+                _ => {
+                    debug!(
+                        "Coprocessor request cannot be batched";
+                        "unsupported_executor_tp" => ?ed.get_tp(),
+                    );
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
     pub fn build_batch<S: Store + 'static>(
-        _executor_descriptors: Vec<executor::Executor>,
-        _store: S,
-        _ranges: Vec<KeyRange>,
-        _config: Arc<EvalConfig>,
+        executor_descriptors: Vec<executor::Executor>,
+        store: S,
+        ranges: Vec<KeyRange>,
+        config: Arc<EvalConfig>,
     ) -> Result<Box<dyn BatchExecutor>> {
-        // Currently no batch executors and this function should never be called, so unreachable.
-        unreachable!()
+        let mut executor_descriptors = executor_descriptors.into_iter();
+        let mut first_ed = executor_descriptors
+            .next()
+            .ok_or_else(|| Error::Other(box_err!("No executors")))?;
+
+        let mut executor: Box<dyn BatchExecutor>;
+
+        match first_ed.get_tp() {
+            ExecType::TypeTableScan => {
+                // TODO: Use static metrics.
+                COPR_EXECUTOR_COUNT.with_label_values(&["tblscan"]).inc();
+
+                let mut descriptor = first_ed.take_tbl_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchTableScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                )?);
+            }
+            ExecType::TypeIndexScan => {
+                COPR_EXECUTOR_COUNT.with_label_values(&["idxscan"]).inc();
+
+                let mut descriptor = first_ed.take_idx_scan();
+                let columns_info = descriptor.take_columns().into_vec();
+                executor = Box::new(BatchIndexScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
+                    store,
+                    config.clone(),
+                    columns_info,
+                    ranges,
+                    descriptor.get_desc(),
+                    descriptor.get_unique(),
+                )?);
+            }
+            _ => {
+                return Err(Error::Other(box_err!(
+                    "Unexpected first executor {:?}",
+                    first_ed.get_tp()
+                )));
+            }
+        }
+
+        // Currently we only support table scan executor. So if there are more
+        // executors, it is unexpected.
+        if executor_descriptors.next().is_some() {
+            return Err(Error::Other(box_err!(
+                "Unexpected non-first executor {:?}",
+                first_ed.get_tp()
+            )));
+        }
+
+        Ok(executor)
     }
 
     /// Builds a normal executor pipeline.
@@ -111,7 +208,7 @@ impl DAGBuilder {
     ) -> Result<Box<dyn Executor + Send>> {
         match first.get_tp() {
             ExecType::TypeTableScan => {
-                let ex = Box::new(TableScanExecutor::new(
+                let ex = Box::new(ScanExecutor::table_scan(
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -121,7 +218,7 @@ impl DAGBuilder {
             }
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
-                let ex = Box::new(IndexScanExecutor::new(
+                let ex = Box::new(ScanExecutor::index_scan(
                     first.take_idx_scan(),
                     ranges,
                     store,
