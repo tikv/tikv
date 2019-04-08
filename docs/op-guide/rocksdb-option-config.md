@@ -16,7 +16,7 @@ TiKV creates two RocksDB instances called `rocksdb` and `raftdb` separately.
     
     - `rocksdb.defaultcf` is used to store actual KV pairs of TiKV
     - `rocksdb.writecf` is used to store the commit information in the MVCC model
-    - `rocksdb.lockcf` is used to store the lock infomation in the MVCC model
+    - `rocksdb.lockcf` is used to store the lock information in the MVCC model
 
 - `raftdb` has only one column family called `raftdb.defaultcf`, which is used to store the Raft logs.
 
@@ -157,7 +157,7 @@ See [wal-size-limit](#wal-size-limit)
     - lz4hc: kLZ4HCCompression
     - zstd: kZSTD
 
-- For details, see [Compresssion of RocksDB](https://github.com/facebook/rocksdb/wiki/Compression)
+- For details, see [Compression of RocksDB](https://github.com/facebook/rocksdb/wiki/Compression)
 
 #### block-size
 
