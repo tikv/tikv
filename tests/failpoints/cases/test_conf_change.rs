@@ -21,7 +21,7 @@ use tikv::pd::PdClient;
 use tikv::util::HandyRwLock;
 
 #[test]
-fn test_destroy_local_reader() {
+fn test_destory_local_reader() {
     let _guard = crate::setup();
 
     // 3 nodes cluster.
