@@ -74,12 +74,20 @@ fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(v, Some(value.to_vec()));
     }
 
+    // delete_range request with notify_only set should not actually delete data.
+    cluster.must_notify_delete_range_cf(cf, b"key1", b"key9999");
+
+    for i in 1..1000 {
+        let key = format!("key{}", i).into_bytes();
+        let value = format!("value{}", i).into_bytes();
+        assert_eq!(cluster.get_cf(cf, &key).unwrap(), value);
+    }
+
     cluster.must_delete_range_cf(cf, b"key1", b"key9999");
 
     for i in 1..1000 {
-        let k = format!("key{}", i);
-        let key = k.as_bytes();
-        assert!(cluster.get_cf(cf, key).is_none());
+        let key = format!("key{}", i).into_bytes();
+        assert!(cluster.get_cf(cf, &key).is_none());
     }
 }
 

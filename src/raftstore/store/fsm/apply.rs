@@ -1229,7 +1229,7 @@ impl ApplyDelegate {
     ) -> Result<Response> {
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
-        let is_unsafe = req.get_delete_range().get_is_unsafe();
+        let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
                 "invalid delete range command, start_key: {:?}, end_key: {:?}",
@@ -1258,7 +1258,7 @@ impl ApplyDelegate {
         let start_key = keys::data_key(s_key);
         // Use delete_files_in_range to drop as many sst files as possible, this
         // is a way to reclaim disk space quickly after drop a table/index.
-        if !is_unsafe {
+        if !notify_only {
             ctx.engines
                 .kv
                 .delete_files_in_range_cf(
@@ -1294,7 +1294,7 @@ impl ApplyDelegate {
             });
         }
 
-        // TODO: Should this be executed when `is_unsafe` is set?
+        // TODO: Should this be executed when `notify_only` is set?
         ranges.push(Range::new(cf.to_owned(), start_key, end_key));
 
         Ok(resp)
