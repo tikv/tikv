@@ -38,7 +38,7 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
-use tikv::storage::{self, RaftKv};
+use tikv::storage::RaftKv;
 use tikv::util::collections::{HashMap, HashSet};
 use tikv::util::security::SecurityManager;
 use tikv::util::worker::{FutureWorker, Worker};
