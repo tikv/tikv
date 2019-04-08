@@ -237,6 +237,12 @@ mod tests {
         fn get_gc_safe_point(&self) -> PdFuture<u64> {
             unimplemented!();
         }
+        fn get_store_stats(&self, _: u64) -> Result<pdpb::StoreStats> {
+            unimplemented!()
+        }
+        fn get_operator(&self, _: u64) -> Result<pdpb::GetOperatorResponse> {
+            unimplemented!()
+        }
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {

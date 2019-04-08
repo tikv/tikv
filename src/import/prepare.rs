@@ -37,6 +37,27 @@ const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 128;
 const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 50;
 const SCATTER_MAX_WAIT_INTERVAL_MILLIS: u64 = 5000;
 
+macro_rules! exec_with_retry {
+    ($tag:expr, $func:expr, $times:expr, $interval:expr, $max_duration:expr) => {
+        let start = Instant::now();
+        let mut interval = $interval;
+        for i in 0..$times {
+            if $func {
+                if i > 0 {
+                    debug!(concat!("waited between ", $tag); "retry times" => %i, "takes" => ?start.elapsed());
+                }
+                break;
+            } else if i == $times - 1 {
+                warn!(concat!($tag, " still failed after exhausting all retries"));
+            } else {
+                // Exponential back-off with max wait duration
+                interval = (2 * interval).min($max_duration);
+                thread::sleep(Duration::from_millis(interval));
+            }
+        }
+    };
+}
+
 /// PrepareJob is responsible for improving cluster data balance
 ///
 /// The main job is:
@@ -108,7 +129,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
             }
 
             let range = RangeInfo::new(&start, k, ctx.raw_size());
-            if let Ok(true) = self.run_prepare_job(range, &mut wait_scatter_regions) {
+            if let Ok(true) = self.run_prepare_range_job(range, &mut wait_scatter_regions) {
                 num_prepares += 1;
             }
 
@@ -119,32 +140,20 @@ impl<Client: ImportClient> PrepareJob<Client> {
         // We need to wait all regions for scattering finished.
         let start = Instant::now();
         while let Some(region_id) = wait_scatter_regions.pop() {
-            let start = Instant::now();
-            for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
-                if self.client.is_scatter_region_finished(region_id)? {
-                    if i > 0 {
-                        debug!("waited between scatter"; "retry times" => %i, "takes" => ?start.elapsed());
-                    }
-                    info!("scatter region finished"; "region id" => %region_id, "takes" => ?start.elapsed());
-                    break;
-                } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
-                    warn!("scatter region still failed after exhausting all retries");
-                } else {
-                    // Exponential back-off with max wait duration
-                    let mut interval = SCATTER_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
-                    if interval > SCATTER_MAX_WAIT_INTERVAL_MILLIS {
-                        interval = SCATTER_MAX_WAIT_INTERVAL_MILLIS
-                    }
-                    thread::sleep(Duration::from_millis(interval));
-                }
-            }
+            exec_with_retry!(
+                "scatter",
+                self.client.is_scatter_region_finished(region_id)?,
+                SCATTER_WAIT_MAX_RETRY_TIMES,
+                SCATTER_WAIT_INTERVAL_MILLIS,
+                SCATTER_MAX_WAIT_INTERVAL_MILLIS
+            );
         }
         info!("scatter all regions finished"; "tag" => %self.tag, "takes" => ?start.elapsed());
 
         Ok(num_prepares)
     }
 
-    fn run_prepare_job(
+    fn run_prepare_range_job(
         &self,
         range: RangeInfo,
         wait_scatter_regions: &mut Vec<u64>,
@@ -216,23 +225,13 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 // that PD cannot create scatter operator for the new split
                 // region because it doesn't have the meta data of the new split
                 // region.
-                for i in 0..SPLIT_WAIT_MAX_RETRY_TIMES {
-                    if self.client.has_region_id(new_region.region.id)? {
-                        if i > 0 {
-                            debug!("waited between split"; "retry times" => %i);
-                        }
-                        break;
-                    } else if i == SPLIT_WAIT_MAX_RETRY_TIMES - 1 {
-                        warn!("split region still failed after exhausting all retries");
-                    } else {
-                        // Exponential back-off with max wait duration
-                        let mut interval = SPLIT_WAIT_INTERVAL_MILLIS * (1 << (i as u64));
-                        if interval > SPLIT_MAX_WAIT_INTERVAL_MILLIS {
-                            interval = SPLIT_MAX_WAIT_INTERVAL_MILLIS
-                        }
-                        thread::sleep(Duration::from_millis(interval));
-                    }
-                }
+                exec_with_retry!(
+                    "split",
+                    self.client.has_region_id(new_region.region.id)?,
+                    SPLIT_WAIT_MAX_RETRY_TIMES,
+                    SPLIT_WAIT_INTERVAL_MILLIS,
+                    SPLIT_MAX_WAIT_INTERVAL_MILLIS
+                );
                 self.scatter_region(&new_region)?;
                 wait_scatter_regions.push(new_region.region.id);
 
