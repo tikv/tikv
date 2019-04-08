@@ -159,13 +159,13 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Ok(Scanner::new(
+        Scanner::new(
             store,
             crate::coprocessor::dag::ScanOn::Table,
             desc,
             self.key_only,
             range,
-        )?)
+        )
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
