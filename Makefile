@@ -26,8 +26,6 @@ ifneq ($(FAIL_POINT),1)
 ENABLE_FEATURES += no-fail
 endif
 
-
-
 PROJECT_DIR:=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 DEPS_PATH = $(CURDIR)/tmp
