@@ -73,6 +73,9 @@ mod tests {
         field_types: Vec<FieldType>,
         offset: usize,
         cfg: EvalConfig,
+        // when is true, will return 0 rows for next batch, while it
+        // will scan next batch after current call of next_batch
+        pub zero_rows_for_next_batch: bool,
     }
 
     fn field_type(ft: FieldTypeTp) -> FieldType {
@@ -103,6 +106,7 @@ mod tests {
                 field_types,
                 offset: 0,
                 cfg: EvalConfig::default(),
+                zero_rows_for_next_batch: false,
             }
         }
     }
@@ -110,14 +114,15 @@ mod tests {
     impl BatchExecutor for MockExecutor {
         #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-            let upper = if expect_rows + self.offset > self.data.len() {
+            let upper = if self.zero_rows_for_next_batch {
+                self.zero_rows_for_next_batch = false;
+                // return zero rows
+                self.offset
+            } else if expect_rows + self.offset > self.data.len() {
                 self.data.len()
             } else {
                 expect_rows + self.offset
             };
-            if upper == self.offset {
-                // return error;//no data
-            }
             let mut pks = VectorValue::with_capacity(self.data.len(), EvalType::Int);
             let mut foos = VectorValue::with_capacity(self.data.len(), EvalType::Int);
             let mut bars = VectorValue::with_capacity(self.data.len(), EvalType::Real);
@@ -159,6 +164,34 @@ mod tests {
         for (limit, get_rows) in data {
             let src = MockExecutor::new();
             let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
+            let res = executor.next_batch(get_rows);
+            if limit <= get_rows {
+                // is drained
+                assert!(res.is_drained.as_ref().unwrap());
+                assert_eq!(res.data.rows_len(), limit);
+            } else {
+                assert!(!res.is_drained.as_ref().unwrap());
+                assert_eq!(res.data.rows_len(), get_rows);
+            }
+        }
+    }
+
+    #[test]
+    fn test_limit_normal_zero_rows() {
+        let data = vec![
+            //limit, expect_rows(real get rows)
+            (4, 3), // get less than limit
+            (3, 4), // get more than limit
+            (3, 3), // get equals to limit
+        ];
+        for (limit, get_rows) in data {
+            let mut src = MockExecutor::new();
+            src.zero_rows_for_next_batch = true;
+            let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
+            // it will return 0 row since src returns 0 row.
+            let res = executor.next_batch(get_rows);
+            assert!(!res.is_drained.as_ref().unwrap());
+            assert_eq!(res.data.rows_len(), 0);
             let res = executor.next_batch(get_rows);
             if limit <= get_rows {
                 // is drained
