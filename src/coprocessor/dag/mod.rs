@@ -40,6 +40,8 @@ pub mod executor;
 pub mod expr;
 pub mod handler;
 pub mod rpn_expr;
+mod scanner;
 
-pub use self::executor::{ScanOn, Scanner};
+pub use self::batch_handler::BatchDAGHandler;
 pub use self::handler::DAGRequestHandler;
+pub use self::scanner::{ScanOn, Scanner};
