@@ -244,7 +244,7 @@ impl<S: Snapshot> BackwardScanner<S> {
         // After several `prev()`, we still not get the latest version for the specified ts,
         // use seek to locate the latest version.
         // `user_key` must have reserved space here, so its clone has reserved space too. So no
-        // reallocation happends in `append_ts`.
+        // reallocation happens in `append_ts`.
         let seek_key = user_key.clone().append_ts(ts);
 
         // TODO: Replace by cast + seek().

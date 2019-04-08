@@ -134,7 +134,7 @@ pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<
     get_region_approximate_middle_cf(db, middle_by_cf, region)
 }
 
-/// Get the approxmiate middle key of the region. If we suppose the region
+/// Get the approximate middle key of the region. If we suppose the region
 /// is stored on disk as a plain file, "middle key" means the key whose
 /// position is in the middle of the file.
 ///

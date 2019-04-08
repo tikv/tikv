@@ -704,19 +704,19 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: Vec<Region>) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_all(&self, _: usize, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
@@ -921,7 +921,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only avaliable for online mode");
+        unimplemented!("only available for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {

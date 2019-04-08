@@ -1137,7 +1137,7 @@ impl Peer {
             self.last_applying_idx = self.get_store().truncated_index();
         } else {
             let committed_entries = ready.committed_entries.take().unwrap();
-            // leader needs to update lease and last commited split index.
+            // leader needs to update lease and last committed split index.
             let mut lease_to_be_updated = self.is_leader();
             let mut split_to_be_updated = self.is_leader();
             let mut merge_to_be_update = self.is_leader();
