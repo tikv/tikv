@@ -33,7 +33,7 @@ use crate::util::future::{paired_future_callback, AndThenWith};
 use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use crate::util::worker::Scheduler;
 use futures::executor::{self, Notify, Spawn};
-use futures::{future, Future, Sink, Stream};
+use futures::{future, Async, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
@@ -919,7 +919,7 @@ fn response_batch_commands_request<F>(
 }
 
 // BatchCommandsNotify is used to make business pool notifiy completion queues directly.
-struct BatchCommandsNotify<F>(Arc<Mutex<Spawn<F>>>);
+struct BatchCommandsNotify<F>(Arc<Mutex<Option<Spawn<F>>>>);
 impl<F> Clone for BatchCommandsNotify<F> {
     fn clone(&self) -> BatchCommandsNotify<F> {
         BatchCommandsNotify(Arc::clone(&self.0))
@@ -929,17 +929,24 @@ impl<F> Notify for BatchCommandsNotify<F>
 where
     F: Future<Item = (), Error = ()> + Send + 'static,
 {
-    fn notify(&self, _id: usize) {
+    fn notify(&self, id: usize) {
         let n = Arc::new(self.clone());
         let mut s = self.0.lock().unwrap();
-        let _ = s.poll_future_notify(&n, 0);
+        if let Some(spawn) = s.as_mut() {
+            if let Ok(Async::NotReady) = spawn.poll_future_notify(&n, id) {
+                return;
+            }
+        } else {
+            return;
+        }
+        *s = None;
     }
 }
 
 fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
-    let spawn = Arc::new(Mutex::new(executor::spawn(f)));
-    let notify = Arc::new(BatchCommandsNotify(Arc::clone(&spawn)));
-    let _ = spawn.lock().unwrap().poll_future_notify(&notify, 0);
+    let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
+    let notify = BatchCommandsNotify(Arc::clone(&spawn));
+    notify.notify(0);
 }
 
 fn handle_batch_commands_request<E: Engine>(
