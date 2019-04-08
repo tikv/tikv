@@ -27,16 +27,18 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<S: Store>(
+pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
     super::scan_executor::ScanExecutor<
+        C,
         S,
         TableScanExecutorImpl,
         super::ranges_iter::PointRangeEnable,
     >,
 );
 
-impl<S: Store> BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     pub fn new(
+        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -81,6 +83,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
             is_column_filled,
         };
         let wrapper = super::scan_executor::ScanExecutor::new(
+            summary_collector,
             imp,
             store,
             desc,
@@ -91,7 +94,7 @@ impl<S: Store> BatchTableScanExecutor<S> {
     }
 }
 
-impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor<C, S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -300,19 +303,23 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+    use kvproto::coprocessor::KeyRange;
+    use tipb::expression::FieldType;
+    use tipb::schema::ColumnInfo;
+
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
     use crate::coprocessor::codec::data_type::VectorValue;
-    use crate::coprocessor::codec::datum::encode_value;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
+    use crate::coprocessor::dag::batch_executor::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
-    use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
-    use kvproto::coprocessor::KeyRange;
-    use std::sync::Arc;
-    use tipb::expression::FieldType;
-    use tipb::schema::ColumnInfo;
 
     fn field_type(ft: FieldTypeTp) -> FieldType {
         let mut f = FieldType::new();
@@ -328,7 +335,7 @@ mod tests {
     ///              (3,            Some(-5),   None),
     ///              (4,             None,      default(4.5)),
     ///              (5,             None,      Some(0.1)),
-    ///              (6,             None,      default(4.5)),     
+    ///              (6,             None,      default(4.5)),
     struct TableScanTestHelper {
         // ID(INT,PK), Foo(INT), Bar(Float,Default 4.5)
         pub data: Vec<(i64, Option<i64>, Option<f64>)>,
@@ -411,7 +418,7 @@ mod tests {
                     let mut ci = ColumnInfo::new();
                     ci.as_mut_accessor().set_tp(FieldTypeTp::Double);
                     ci.set_column_id(4);
-                    ci.set_default_val(encode_value(&[Datum::F64(4.5)]).unwrap());
+                    ci.set_default_val(datum::encode_value(&[Datum::F64(4.5)]).unwrap());
                     ci
                 },
             ];
@@ -556,14 +563,15 @@ mod tests {
     /// `col_idxs`: idxs of columns used in scan.
     /// `batch_expect_rows`: `expect_rows` used in `next_batch`.
     fn test_basic_scan(
-        store: &TableScanTestHelper,
+        helper: &TableScanTestHelper,
         ranges: Vec<KeyRange>,
         col_idxs: &[usize],
         batch_expect_rows: &[usize],
     ) {
-        let columns_info = store.columns_info_by_idx(col_idxs);
+        let columns_info = helper.columns_info_by_idx(col_idxs);
         let mut executor = BatchTableScanExecutor::new(
-            store.store(),
+            ExecSummaryCollectorDisabled,
+            helper.store(),
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
             ranges,
@@ -571,7 +579,7 @@ mod tests {
         )
         .unwrap();
 
-        let total_rows = store.data.len();
+        let total_rows = helper.data.len();
         let mut start_row = 0;
         for expect_rows in batch_expect_rows {
             let expect_rows = *expect_rows;
@@ -580,23 +588,28 @@ mod tests {
             assert_eq!(*result.is_drained.as_ref().unwrap(), expect_drained);
             if expect_drained {
                 // all remaining rows are fetched
-                store.expect_table_values(col_idxs, start_row, total_rows - start_row, result.data);
+                helper.expect_table_values(
+                    col_idxs,
+                    start_row,
+                    total_rows - start_row,
+                    result.data,
+                );
                 return;
             }
             // we should get expect_rows in this case.
-            store.expect_table_values(col_idxs, start_row, expect_rows, result.data);
+            helper.expect_table_values(col_idxs, start_row, expect_rows, result.data);
             start_row += expect_rows;
         }
     }
 
     #[test]
     fn test_basic() {
-        let store = TableScanTestHelper::new();
+        let helper = TableScanTestHelper::new();
         // ranges to scan in each test case
         let test_ranges = vec![
-            store.point_ranges(),                 // point scan
-            vec![store.whole_table_range()],      // range scan
-            store.mixed_ranges_for_whole_table(), // mixed range scan and point scan
+            helper.point_ranges(),                 // point scan
+            vec![helper.whole_table_range()],      // range scan
+            helper.mixed_ranges_for_whole_table(), // mixed range scan and point scan
         ];
         // cols to scan in each test case.
         let test_cols = vec![
@@ -628,10 +641,58 @@ mod tests {
         for ranges in test_ranges {
             for cols in &test_cols {
                 for batch_expect_rows in &test_batch_rows {
-                    test_basic_scan(&store, ranges.clone(), cols, batch_expect_rows);
+                    test_basic_scan(&helper, ranges.clone(), cols, batch_expect_rows);
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_execution_summary() {
+        let helper = TableScanTestHelper::new();
+
+        let mut executor = BatchTableScanExecutor::new(
+            ExecSummaryCollectorEnabled::new(1),
+            helper.store(),
+            Arc::new(EvalConfig::default()),
+            helper.columns_info_by_idx(&[0]),
+            vec![helper.whole_table_range()],
+            false,
+        )
+        .unwrap();
+
+        executor.next_batch(1);
+        executor.next_batch(2);
+
+        let mut s = BatchExecuteStatistics::new(2, 1);
+        executor.collect_statistics(&mut s);
+
+        assert_eq!(s.scanned_rows_per_range[0], 3);
+        // 0 is none because our output index is 1
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(3, exec_summary.num_produced_rows);
+        assert_eq!(2, exec_summary.num_iterations);
+
+        executor.collect_statistics(&mut s);
+
+        // Collected statistics remain unchanged because of no newly generated delta statistics.
+        assert_eq!(s.scanned_rows_per_range[0], 3);
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(3, exec_summary.num_produced_rows);
+        assert_eq!(2, exec_summary.num_iterations);
+
+        // Reset collected statistics so that now we will only collect statistics in this round.
+        s.clear();
+        executor.next_batch(10);
+        executor.collect_statistics(&mut s);
+
+        assert_eq!(s.scanned_rows_per_range[0], 2);
+        assert!(s.summary_per_executor[0].is_none());
+        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(2, exec_summary.num_produced_rows);
+        assert_eq!(1, exec_summary.num_iterations);
     }
 
     #[test]
@@ -730,6 +791,7 @@ mod tests {
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
         for corrupted_row_index in 2..=4 {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -836,6 +898,7 @@ mod tests {
         // an error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -862,6 +925,7 @@ mod tests {
         // Let's also repeat case 1 for smaller batch size
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -894,6 +958,7 @@ mod tests {
         // We should get error and no row, for the same reason as above.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -912,6 +977,7 @@ mod tests {
         // We should get row 2 and row 0. There is no error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -935,6 +1001,7 @@ mod tests {
         // We should get error.
         {
             let mut executor = BatchTableScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
