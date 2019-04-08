@@ -18,7 +18,7 @@ use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor};
+use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
