@@ -395,7 +395,7 @@ pub mod tests {
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        let ts_etc = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -406,8 +406,8 @@ pub mod tests {
         let limit = 4;
         topn.set_limit(limit);
         // init topn executor
-        let mut topn_etc =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_etc).unwrap();
+        let mut topn_ect =
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
             topn_rows.push(row.take_origin());
@@ -441,7 +441,7 @@ pub mod tests {
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        let ts_etc = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init TopN meta
         let mut ob_vec = Vec::with_capacity(2);
@@ -451,8 +451,8 @@ pub mod tests {
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
         // test with limit=0
         topn.set_limit(0);
-        let mut topn_etc =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_etc).unwrap();
+        let mut topn_ect =
+            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }
 }

@@ -509,7 +509,7 @@ mod tests {
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
         // init the stream aggregation executor
-        let mut agg_etc = StreamAggExecutor::new(
+        let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -541,7 +541,7 @@ mod tests {
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
         // init the stream aggregation executor
-        let mut agg_etc = StreamAggExecutor::new(
+        let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -591,7 +591,7 @@ mod tests {
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
         // init the stream aggregation executor
-        let mut agg_etc = StreamAggExecutor::new(
+        let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
@@ -716,7 +716,7 @@ mod tests {
         ];
 
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
-        let ts_etc = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -732,8 +732,8 @@ mod tests {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init the hash aggregation executor
-        let mut aggr_etc =
-            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_etc).unwrap();
+        let mut aggr_ect =
+            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {
