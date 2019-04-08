@@ -116,19 +116,19 @@ impl FuturePool {
     }
 }
 
-/// Tried to trigger a tick in current thread.
+/// Tries to trigger a tick in current thread.
 ///
 /// This function is effective only when it is called in thread pool worker
 /// thread.
 #[inline]
 fn try_tick_thread(env: &Env) {
-    THREAD_LAST_TICK_TIME.with(|thread_local_last_tick| {
+    THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
         let now = Instant::now_coarse();
-        let last_tick = thread_local_last_tick.get();
+        let last_tick = tls_last_tick.get();
         if now.duration_since(last_tick) < TICK_INTERVAL {
             return;
         }
-        thread_local_last_tick.set(now);
+        tls_last_tick.set(now);
         if let Some(f) = &env.on_tick {
             f();
         }

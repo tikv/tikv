@@ -42,9 +42,6 @@ thread_local! {
     static LOCAL_KV_COMMAND_SCAN_DETAILS: RefCell<LocalIntCounterVec> =
         RefCell::new(KV_COMMAND_SCAN_DETAILS.local());
 
-    static LOCAL_PD_SENDER: RefCell<Option<FutureScheduler<PdTask>>> =
-        RefCell::new(None);
-
     static LOCAL_READ_FLOW_STATS: RefCell<HashMap<u64, crate::storage::FlowStatistics>> =
         RefCell::new(HashMap::default());
 }
@@ -62,13 +59,13 @@ impl ReadPoolImpl {
 
         Builder::from_config(config)
             .name_prefix(name_prefix)
-            .on_tick(move || ReadPoolImpl::thread_local_flush(&pd_sender))
-            .before_stop(move || ReadPoolImpl::thread_local_flush(&pd_sender2))
+            .on_tick(move || ReadPoolImpl::tls_flush(&pd_sender))
+            .before_stop(move || ReadPoolImpl::tls_flush(&pd_sender2))
             .build()
     }
 
     #[inline]
-    fn thread_local_flush(pd_sender: &FutureScheduler<PdTask>) {
+    fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
         // Flush Prometheus metrics
         LOCAL_SCHED_HISTOGRAM_VEC.with(|m| m.borrow_mut().flush());
         LOCAL_SCHED_PROCESSING_READ_HISTOGRAM_VEC.with(|m| m.borrow_mut().flush());
@@ -93,14 +90,14 @@ impl ReadPoolImpl {
     }
 
     #[inline]
-    pub fn thread_local_collect_command_count(cmd: &str, priority: readpool::Priority) {
+    pub fn tls_collect_command_count(cmd: &str, priority: readpool::Priority) {
         LOCAL_KV_COMMAND_COUNTER_VEC.with(|m| m.borrow_mut().with_label_values(&[cmd]).inc());
         LOCAL_SCHED_COMMANDS_PRI_COUNTER_VEC
             .with(|m| m.borrow_mut().with_label_values(&[priority.as_str()]).inc());
     }
 
     #[inline]
-    pub fn thread_local_collect_command_duration(cmd: &str, duration: Duration) {
+    pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
         LOCAL_SCHED_HISTOGRAM_VEC.with(|m| {
             m.borrow_mut()
                 .with_label_values(&[cmd])
@@ -109,7 +106,7 @@ impl ReadPoolImpl {
     }
 
     #[inline]
-    pub fn thread_local_collect_key_reads(cmd: &str, count: usize) {
+    pub fn tls_collect_key_reads(cmd: &str, count: usize) {
         LOCAL_KV_COMMAND_KEYREAD_HISTOGRAM_VEC.with(|m| {
             m.borrow_mut()
                 .with_label_values(&[cmd])
@@ -118,7 +115,7 @@ impl ReadPoolImpl {
     }
 
     #[inline]
-    pub fn thread_local_processing_read_observe_duration<F, R>(cmd: &str, f: F) -> R
+    pub fn tls_processing_read_observe_duration<F, R>(cmd: &str, f: F) -> R
     where
         F: FnOnce() -> R,
     {
@@ -133,7 +130,7 @@ impl ReadPoolImpl {
     }
 
     #[inline]
-    pub fn thread_local_collect_scan_count(cmd: &str, statistics: &crate::storage::Statistics) {
+    pub fn tls_collect_scan_count(cmd: &str, statistics: &crate::storage::Statistics) {
         LOCAL_KV_COMMAND_SCAN_DETAILS.with(|m| {
             let mut histogram = m.borrow_mut();
             for (cf, details) in statistics.details() {
@@ -147,7 +144,7 @@ impl ReadPoolImpl {
     }
 
     #[inline]
-    pub fn thread_local_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
+    pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
         LOCAL_READ_FLOW_STATS.with(|m| {
             let mut map = m.borrow_mut();
             let flow_stats = map

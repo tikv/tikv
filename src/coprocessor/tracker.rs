@@ -17,7 +17,7 @@ use crate::storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
 use crate::util::time::{self, Duration, Instant};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
-use crate::coprocessor::read_pool_impl::*;
+use crate::coprocessor::readpool_impl::*;
 use crate::coprocessor::*;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
@@ -25,10 +25,7 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
-    /// The tracker is just created and not initialized. Initialize means `ctxd` is attached.
-    NotInitialized,
-
-    /// The tracker is initialized with a `ctxd` instance.
+    /// The tracker is initialized.
     Initialized,
 
     /// The tracker is notified that all items just began.
@@ -77,7 +74,7 @@ impl Tracker {
             item_begin_at: Instant::now_coarse(),
             perf_statistics_start: None,
 
-            current_stage: TrackerState::NotInitialized,
+            current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
             req_time: Duration::default(),
             item_process_time: Duration::default(),
@@ -87,12 +84,6 @@ impl Tracker {
 
             req_ctx,
         }
-    }
-
-    /// Init current stage
-    pub fn init_current_stage(&mut self) {
-        assert_eq!(self.current_stage, TrackerState::NotInitialized);
-        self.current_stage = TrackerState::Initialized;
     }
 
     pub fn on_begin_all_items(&mut self) {
@@ -237,7 +228,7 @@ impl Tracker {
                 .inc_by(self.total_perf_statistics.block_read_byte as i64);
         });
 
-        ReadPoolImpl::collect(
+        ReadPoolImpl::tls_collect_executor_metrics(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
             total_exec_metrics,

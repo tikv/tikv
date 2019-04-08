@@ -35,7 +35,7 @@ mod endpoint;
 mod error;
 pub mod local_metrics;
 mod metrics;
-mod read_pool_impl;
+mod readpool_impl;
 mod statistics;
 mod tracker;
 pub mod util;
@@ -49,7 +49,7 @@ use kvproto::{coprocessor as coppb, kvrpcpb};
 
 use crate::util::time::{Duration, Instant};
 
-pub use self::read_pool_impl::ReadPoolImpl;
+pub use self::readpool_impl::ReadPoolImpl;
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;

@@ -25,7 +25,6 @@ use tipb::select::Chunk;
 use test_coprocessor::*;
 use test_storage::*;
 use tikv::coprocessor::codec::{datum, Datum};
-use tikv::server::readpool;
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv::util::codec::number::*;
@@ -80,15 +79,7 @@ fn test_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     // for dag selection
@@ -121,15 +112,7 @@ fn test_stream_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     let req = DAGSelect::from(&product).build();
@@ -214,15 +197,7 @@ fn test_scan_detail() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     let reqs = vec![

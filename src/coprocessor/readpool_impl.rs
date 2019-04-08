@@ -46,9 +46,6 @@ thread_local! {
     static LOCAL_COPR_GET_OR_SCAN_COUNT: RefCell<LocalIntCounterVec> =
         RefCell::new(COPR_GET_OR_SCAN_COUNT.local());
 
-    static LOCAL_PD_SENDER: RefCell<Option<FutureScheduler<PdTask>>> =
-        RefCell::new(None);
-
     static LOCAL_COP_FLOW_STATS: RefCell<HashMap<u64, crate::storage::FlowStatistics>> =
         RefCell::new(HashMap::default());
 }
@@ -71,13 +68,13 @@ impl ReadPoolImpl {
 
         Builder::from_config(config)
             .name_prefix(name_prefix)
-            .on_tick(move || ReadPoolImpl::thread_local_flush(&pd_sender))
-            .before_stop(move || ReadPoolImpl::thread_local_flush(&pd_sender2))
+            .on_tick(move || ReadPoolImpl::tls_flush(&pd_sender))
+            .before_stop(move || ReadPoolImpl::tls_flush(&pd_sender2))
             .build()
     }
 
     #[inline]
-    fn thread_local_flush(pd_sender: &FutureScheduler<PdTask>) {
+    fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
         // Flush Prometheus metrics
         LOCAL_COPR_REQ_HISTOGRAM_VEC.with(|m| m.borrow_mut().flush());
         LOCAL_OUTDATED_REQ_WAIT_TIME.with(|m| m.borrow_mut().flush());
@@ -86,6 +83,9 @@ impl ReadPoolImpl {
         LOCAL_COPR_REQ_ERROR.with(|m| m.borrow_mut().flush());
         LOCAL_COPR_SCAN_KEYS.with(|m| m.borrow_mut().flush());
         LOCAL_COPR_ROCKSDB_PERF_COUNTER.with(|m| m.borrow_mut().flush());
+        LOCAL_COPR_SCAN_DETAILS.with(|m| m.borrow_mut().flush());
+        LOCAL_COPR_GET_OR_SCAN_COUNT.with(|m| m.borrow_mut().flush());
+        LOCAL_COPR_EXECUTOR_COUNT.with(|m| m.borrow_mut().flush());
 
         // Report PD metrics
         LOCAL_COP_FLOW_STATS.with(|local_cop_flow_stats| {
@@ -100,13 +100,9 @@ impl ReadPoolImpl {
                 error!("Failed to send cop pool read flow statistics"; "err" => ?e);
             }
         });
-
-        LOCAL_COPR_SCAN_DETAILS.with(|m| m.borrow_mut().flush());
-        LOCAL_COPR_GET_OR_SCAN_COUNT.with(|m| m.borrow_mut().flush());
-        LOCAL_COPR_EXECUTOR_COUNT.with(|m| m.borrow_mut().flush());
     }
 
-    pub fn collect(region_id: u64, type_str: &str, metrics: ExecutorMetrics) {
+    pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: ExecutorMetrics) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
         for (cf, details) in stats.details() {
@@ -119,19 +115,18 @@ impl ReadPoolImpl {
             }
         }
         // flow statistics group by region
-        ReadPoolImpl::thread_local_collect_read_flow(region_id, stats);
+        ReadPoolImpl::tls_collect_read_flow(region_id, stats);
 
         // scan count
-        //metrics.scan_counter.consume(&mut LOCAL_COPR_GET_OR_SCAN_COUNT);
-        let metrics2 = metrics.clone();
-        LOCAL_COPR_GET_OR_SCAN_COUNT.with(|m| metrics.scan_counter.consume(&mut m.borrow_mut()));
+        let scan_counter = metrics.scan_counter;
+        let executor_count = metrics.executor_count;
+        LOCAL_COPR_GET_OR_SCAN_COUNT.with(|m| scan_counter.consume(&mut m.borrow_mut()));
         // exec count
-        //metrics.executor_count.consume(&mut LOCAL_COPR_EXECUTOR_COUNT);
-        LOCAL_COPR_EXECUTOR_COUNT.with(|m| metrics2.executor_count.consume(&mut m.borrow_mut()));
+        LOCAL_COPR_EXECUTOR_COUNT.with(|m| executor_count.consume(&mut m.borrow_mut()));
     }
 
     #[inline]
-    pub fn thread_local_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
+    pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
         LOCAL_COP_FLOW_STATS.with(|m| {
             let mut map = m.borrow_mut();
             let flow_stats = map

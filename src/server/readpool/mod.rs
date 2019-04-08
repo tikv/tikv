@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_future_execute() {
+    fn test_spawn_handle() {
         let read_pool = Builder::build_for_test();
 
         expect_val(
@@ -267,18 +267,5 @@ mod tests {
 
         // full
         assert!(spawn_long_time_future(&read_pool, 8, 100).is_err());
-
-        // the recv order maybe: "Ok(2)Ok(4)Ok(7)Ok(3)" or “Ok(2)Ok(3)Ok(4)Ok(7)” or “Ok(2)Ok(4)Ok(3)Ok(7)”
-        print!("{:?}", rx.recv().unwrap());
-        print!("{:?}", rx.recv().unwrap());
-        print!("{:?}", rx.recv().unwrap());
-        println!("{:?}", rx.recv().unwrap());
-        //assert_eq!(rx.recv().unwrap(), Ok(2));
-        //assert_eq!(rx.recv().unwrap(), Ok(3));
-        //assert_eq!(rx.recv().unwrap(), Ok(7));
-        //assert_eq!(rx.recv().unwrap(), Ok(4));
-
-        // no more results
-        assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
     }
 }

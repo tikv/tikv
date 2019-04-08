@@ -283,11 +283,10 @@ impl<E: Engine> Endpoint<E> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
-        let mut tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn_handle(priority, move || {
-                tracker.init_current_stage();
                 Self::handle_unary_request_impl(engine, tracker, handler_builder)
             })
             .map_err(|_| Error::Full)
@@ -419,12 +418,10 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn(priority, move || {
-                tracker.init_current_stage();
                 Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
@@ -521,7 +518,6 @@ mod tests {
     use tipb::expression::Expr;
 
     use crate::storage::TestEngineBuilder;
-    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -748,17 +744,13 @@ mod tests {
 
     #[test]
     fn test_full() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
-
-        let read_pool = ReadPoolImpl::build_read_pool(
-            &readpool::Config {
-                normal_concurrency: 1,
-                max_tasks_per_worker_normal: 2,
-                ..readpool::Config::default_for_test()
-            },
-            pd_worker.scheduler(),
-            "cop-test-full",
-        );
+        let read_pool = readpool::Builder::from_config(&readpool::Config {
+            normal_concurrency: 1,
+            max_tasks_per_worker_normal: 2,
+            ..readpool::Config::default_for_test()
+        })
+        .name_prefix("cop-test-full")
+        .build();
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
@@ -1024,13 +1016,8 @@ mod tests {
         const PAYLOAD_SMALL: i64 = 3000;
         const PAYLOAD_LARGE: i64 = 6000;
 
-        let pd_worker = FutureWorker::new("test-pd-worker");
-
-        let read_pool = ReadPoolImpl::build_read_pool(
-            &readpool::Config::default_with_concurrency(1),
-            pd_worker.scheduler(),
-            "cop-test-handle-time",
-        );
+        let read_pool =
+            readpool::Builder::from_config(&readpool::Config::default_with_concurrency(1)).build();
 
         let engine = TestEngineBuilder::new().build().unwrap();
 
