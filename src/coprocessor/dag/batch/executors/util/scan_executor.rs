@@ -17,9 +17,9 @@ use tipb::schema::ColumnInfo;
 
 use crate::storage::{Key, Store};
 
-use super::super::interface::*;
 use super::ranges_iter::{PointRangePolicy, RangesIterator};
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;

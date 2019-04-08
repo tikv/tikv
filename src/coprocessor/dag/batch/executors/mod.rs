@@ -11,11 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod interface;
-pub mod statistics;
+mod index_scan_executor;
+mod table_scan_executor;
+mod util;
 
-mod scan;
-
-pub mod executors {
-    pub use super::scan::{BatchIndexScanExecutor, BatchTableScanExecutor};
-}
+pub use self::index_scan_executor::BatchIndexScanExecutor;
+pub use self::table_scan_executor::BatchTableScanExecutor;
