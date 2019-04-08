@@ -178,7 +178,9 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     }
 
     fn broadcast_unreachable(&self, store_id: u64) {
-        self.router.broadcast_unreachable(store_id)
+        let _ = self
+            .router
+            .send_control(StoreMsg::StoreUnreachable { store_id });
     }
 }
 

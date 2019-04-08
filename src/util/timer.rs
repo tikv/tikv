@@ -176,6 +176,10 @@ impl SteadyTimer {
     pub fn delay(&self, dur: Duration) -> Delay {
         self.handle.delay(self.clock.now() + dur)
     }
+
+    pub fn now(&self) -> std::time::Instant {
+        self.clock.now()
+    }
 }
 
 lazy_static! {
