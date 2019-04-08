@@ -486,5 +486,6 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
         ErrorType::OK => Ok(()),
+        ErrorType::REGION_NOT_FOUND => Err(Error::RegionNotFound(vec![])),
     }
 }

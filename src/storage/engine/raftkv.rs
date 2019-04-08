@@ -292,11 +292,12 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
                     req.set_cmd_type(CmdType::Put);
                     req.set_put(put);
                 }
-                Modify::DeleteRange(cf, start_key, end_key) => {
+                Modify::DeleteRange(cf, start_key, end_key, is_unsafe) => {
                     let mut delete_range = DeleteRangeRequest::new();
                     delete_range.set_cf(cf.to_string());
                     delete_range.set_start_key(start_key.into_encoded());
                     delete_range.set_end_key(end_key.into_encoded());
+                    delete_range.set_is_unsafe(is_unsafe);
                     req.set_cmd_type(CmdType::DeleteRange);
                     req.set_delete_range(delete_range);
                 }

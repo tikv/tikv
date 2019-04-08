@@ -273,7 +273,7 @@ fn write_modifies(engine: &BTreeEngine, modifies: Vec<Modify>) -> EngineResult<(
                 cf_tree.write().unwrap().insert(k, v);
             }
 
-            Modify::DeleteRange(_cf, _start_key, _end_key) => unimplemented!(),
+            Modify::DeleteRange(_cf, _start_key, _end_key, _is_unsafe) => unimplemented!(),
         };
     }
     Ok(())

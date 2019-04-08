@@ -79,7 +79,8 @@ impl CbContext {
 pub enum Modify {
     Delete(CfName, Key),
     Put(CfName, Key, Value),
-    DeleteRange(CfName, Key, Key),
+    // cf_name, start_key, end_key, is_unsafe
+    DeleteRange(CfName, Key, Key, bool),
 }
 
 pub trait Engine: Send + Clone + 'static {

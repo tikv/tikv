@@ -278,15 +278,20 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
-            Modify::DeleteRange(cf, start_key, end_key) => {
+            Modify::DeleteRange(cf, start_key, end_key, is_unsafe) => {
                 trace!(
                     "RocksEngine: delete_range_cf";
                     "cf" => cf,
                     "start_key" => %start_key,
-                    "end_key" => %end_key
+                    "end_key" => %end_key,
+                    "is_unsafe" => is_unsafe,
                 );
-                let handle = rocksdb_util::get_cf_handle(db, cf)?;
-                wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                if !is_unsafe {
+                    let handle = rocksdb_util::get_cf_handle(db, cf)?;
+                    wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
+                } else {
+                    Ok(())
+                }
             }
         };
         if let Err(msg) = res {

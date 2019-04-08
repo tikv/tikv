@@ -387,4 +387,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn get_operator(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: GetOperatorRequest,
+        _sink: UnarySink<GetOperatorResponse>,
+    ) {
+        unimplemented!()
+    }
 }

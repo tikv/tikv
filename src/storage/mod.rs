@@ -941,6 +941,7 @@ impl<E: Engine> Storage<E> {
         ctx: Context,
         start_key: Key,
         end_key: Key,
+        is_unsafe: bool,
         callback: Callback<()>,
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
@@ -955,7 +956,7 @@ impl<E: Engine> Storage<E> {
             } else {
                 start_key.clone()
             };
-            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
+            modifies.push(Modify::DeleteRange(cf, s, end_key.clone(), is_unsafe));
         }
 
         self.engine.async_write(
@@ -1291,6 +1292,7 @@ impl<E: Engine> Storage<E> {
                 Self::rawkv_cf(&cf)?,
                 Key::from_encoded(start_key),
                 Key::from_encoded(end_key),
+                false,
             )],
             Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
         )?;
@@ -2514,6 +2516,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b"x"),
                 Key::from_raw(b"z"),
+                false,
                 expect_ok_callback(tx.clone(), 5),
             )
             .unwrap();
@@ -2540,6 +2543,7 @@ mod tests {
                 Context::new(),
                 Key::from_raw(b""),
                 Key::from_raw(&[255]),
+                false,
                 expect_ok_callback(tx.clone(), 9),
             )
             .unwrap();
