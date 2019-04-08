@@ -100,14 +100,14 @@ mod tests {
         let range1 = get_range(tid, 0, 4);
         let range2 = get_range(tid, 5, 10);
         let key_ranges = vec![range1, range2];
-        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
+        let ts_etc = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init Limit meta
         let mut limit_meta = Limit::default();
         let limit = 5;
         limit_meta.set_limit(limit);
         // init topn executor
-        let mut limit_ect = LimitExecutor::new(limit_meta, ts_ect);
+        let mut limit_etc = LimitExecutor::new(limit_meta, ts_etc);
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
             limit_rows.push(row.take_origin());
