@@ -1134,7 +1134,7 @@ mod tests {
     #[test]
     #[allow(clippy::zero_prefixed_literal)]
     fn test_parse_datetime_system_timezone() {
-        // Basically, we check whether the parse result is the same when construcing using local.
+        // Basically, we check whether the parse result is the same when constructing using local.
         let tables = vec![
             (1988, 04, 09, 23, 59, 59),
             (1988, 04, 10, 01, 00, 00),

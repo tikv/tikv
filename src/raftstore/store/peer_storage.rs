@@ -193,7 +193,7 @@ impl EntryCache {
         }
         let cache_last_idx = self.cache.back().unwrap().get_index();
         // Use `cache_last_idx + 1` to make sure cache can be cleared completely
-        // if neccessary.
+        // if necessary.
         self.cache
             .drain(..(cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize);
         if self.cache.len() < SHRINK_CACHE_CAPACITY && self.cache.capacity() > SHRINK_CACHE_CAPACITY
@@ -1473,7 +1473,7 @@ impl Storage for PeerStorage {
 
 /// Upgreade from v2.x to v3.x
 ///
-/// For backward compatiblity, it needs to check whether there are any
+/// For backward compatibility, it needs to check whether there are any
 /// meta data in the raft cf of the kv engine, if there are, it moves them
 /// into raft engine.
 pub fn maybe_upgrade_from_2_to_3(
