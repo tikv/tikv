@@ -124,7 +124,11 @@ impl KVImporter {
     /// Import the engine to TiKV stores.
     /// Engine can not be imported before it is closed.
     pub fn import_engine(&self, uuid: Uuid, pd_addr: &str) -> Result<()> {
-        let client = Client::new(pd_addr, self.cfg.num_import_jobs)?;
+        let client = Client::new(
+            pd_addr,
+            self.cfg.num_import_jobs,
+            self.cfg.min_available_ratio,
+        )?;
         let job = {
             let mut inner = self.inner.lock().unwrap();
             // One engine only related to one ImportJob

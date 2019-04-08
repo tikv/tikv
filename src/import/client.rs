@@ -72,10 +72,11 @@ pub struct Client {
     pd: Arc<RpcClient>,
     env: Arc<Environment>,
     channels: Mutex<HashMap<u64, Channel>>,
+    min_available_ratio: f64,
 }
 
 impl Client {
-    pub fn new(pd_addr: &str, cq_count: usize) -> Result<Client> {
+    pub fn new(pd_addr: &str, cq_count: usize, min_available_ratio: f64) -> Result<Client> {
         let cfg = PdConfig {
             endpoints: vec![pd_addr.to_owned()],
         };
@@ -89,6 +90,7 @@ impl Client {
             pd: Arc::new(rpc_client),
             env: Arc::new(env),
             channels: Mutex::new(HashMap::default()),
+            min_available_ratio,
         })
     }
 
@@ -182,6 +184,7 @@ impl Clone for Client {
             pd: Arc::clone(&self.pd),
             env: Arc::clone(&self.env),
             channels: Mutex::new(HashMap::default()),
+            min_available_ratio: self.min_available_ratio,
         }
     }
 }
@@ -251,7 +254,7 @@ impl ImportClient for Client {
         let stats = self.pd.get_store_stats(store_id)?;
         let available_ratio = (stats.available - size) as f64 / stats.capacity as f64;
         // Keep 5% available disk space
-        Ok(available_ratio > 0.05)
+        Ok(available_ratio > self.min_available_ratio)
     }
 }
 
