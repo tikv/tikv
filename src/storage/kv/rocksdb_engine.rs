@@ -16,6 +16,12 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use engine::rocks;
+use engine::rocks::util::CFOptions;
+use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
+use engine::Engines;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
@@ -24,12 +30,6 @@ use tempdir::TempDir;
 use crate::storage::{Key, Value};
 use crate::util::escape;
 use crate::util::worker::{Runnable, Scheduler, Worker};
-use engine::rocks;
-use engine::rocks::util::CFOptions;
-use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
-use engine::Engines;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use engine::{IterOption, Peekable};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,

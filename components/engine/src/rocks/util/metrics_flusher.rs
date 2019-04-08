@@ -11,14 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rocks::util::engine_metrics::*;
-use crate::rocks::DB;
-use crate::Engines;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
+
+use crate::rocks::util::engine_metrics::*;
+use crate::rocks::DB;
+use crate::Engines;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;

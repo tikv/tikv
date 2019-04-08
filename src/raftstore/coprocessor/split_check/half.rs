@@ -13,15 +13,15 @@
 
 use std::ops::Bound::Excluded;
 
+use engine::rocks::DB;
+use engine::util;
+use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::properties::RangeProperties;
 use crate::util::config::ReadableSize;
-use engine::rocks::DB;
-use engine::util;
-use engine::{CF_DEFAULT, CF_WRITE};
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -177,8 +177,11 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::Writable;
     use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
@@ -192,9 +195,6 @@ mod tests {
     use crate::util::config::ReadableSize;
     use crate::util::escape;
     use crate::util::worker::Runnable;
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
 
     use super::super::size::tests::must_split_at;
     use super::*;

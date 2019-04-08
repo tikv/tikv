@@ -16,6 +16,11 @@ use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
 
+use engine::rocks::TablePropertiesCollection;
+use engine::CfName;
+use engine::IterOption;
+use engine::Peekable;
+use engine::CF_DEFAULT;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -33,11 +38,6 @@ use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResp
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
 use crate::storage::{self, kv, Key, Value};
-use engine::rocks::TablePropertiesCollection;
-use engine::CfName;
-use engine::IterOption;
-use engine::Peekable;
-use engine::CF_DEFAULT;
 
 quick_error! {
     #[derive(Debug)]

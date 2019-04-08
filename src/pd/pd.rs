@@ -17,12 +17,14 @@ use std::sync::Arc;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use engine::rocks::util::*;
 use engine::rocks::DB;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
@@ -40,8 +42,6 @@ use crate::util::collections::HashMap;
 use crate::util::escape;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
-use engine::rocks::util::*;
-use prometheus::local::LocalHistogram;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {

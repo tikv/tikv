@@ -18,6 +18,8 @@ use std::mem;
 use std::sync::Arc;
 
 use engine::rocks::DBIterator;
+use engine::{CfName, CF_WRITE, LARGE_CFS};
+use engine::{IterOption, Iterable, DB};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -27,8 +29,6 @@ use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
 use crate::util::worker::Runnable;
-use engine::{CfName, CF_WRITE, LARGE_CFS};
-use engine::{IterOption, Iterable, DB};
 
 use super::metrics::*;
 

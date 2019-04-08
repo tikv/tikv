@@ -12,6 +12,10 @@
 // limitations under the License.
 
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine::rocks;
+use engine::rocks::CompactionJobInfo;
+use engine::{WriteBatch, WriteOptions, DB};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -28,24 +32,10 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
+use crate::import::SSTImporter;
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::raftstore::store::util::is_initial_msg;
-use crate::raftstore::Result;
-use crate::storage::kv::{CompactedEvent, CompactionListener};
-use crate::util::collections::{HashMap, HashSet};
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::time::{duration_to_sec, SlowTimer};
-use crate::util::timer::SteadyTimer;
-use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
-use engine::rocks;
-use engine::rocks::CompactionJobInfo;
-use engine::{WriteBatch, WriteOptions, DB};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-
-use crate::import::SSTImporter;
 use crate::raftstore::store::config::Config;
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
@@ -61,6 +51,7 @@ use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
@@ -70,6 +61,14 @@ use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter, StoreMsg,
     StoreTick,
 };
+use crate::raftstore::Result;
+use crate::storage::kv::{CompactedEvent, CompactionListener};
+use crate::util::collections::{HashMap, HashSet};
+use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
+use crate::util::time::{duration_to_sec, SlowTimer};
+use crate::util::timer::SteadyTimer;
+use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 

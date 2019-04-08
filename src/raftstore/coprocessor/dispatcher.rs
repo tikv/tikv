@@ -11,12 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
 use crate::raftstore::store::CasualRouter;
-use engine::rocks::DB;
 
 use super::*;
 

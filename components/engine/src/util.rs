@@ -13,9 +13,8 @@
 
 use std::u64;
 
-use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-
 use crate::rocks;
+use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::{CF_LOCK, CF_RAFT};
 
 use super::{Error, Result};

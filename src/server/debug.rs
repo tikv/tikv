@@ -19,6 +19,13 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
+    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
+use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
@@ -45,13 +52,6 @@ use crate::util::collections::HashSet;
 use crate::util::config::ReadableSize;
 use crate::util::escape;
 use crate::util::worker::Worker;
-use engine::rocks::util::get_cf_handle;
-use engine::rocks::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
-    SeekKey, Writable, WriteBatch, WriteOptions, DB,
-};
-use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
-use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;

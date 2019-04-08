@@ -20,7 +20,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use engine::rocks;
 use engine::rocks::Writable;
+use engine::WriteBatch;
+use engine::CF_RAFT;
+use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
@@ -37,10 +41,6 @@ use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
 use crate::util::timer::Timer;
 use crate::util::worker::{Runnable, RunnableWithTimer};
-use engine::rocks;
-use engine::WriteBatch;
-use engine::CF_RAFT;
-use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 
 use super::metrics::*;
 

@@ -19,6 +19,8 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
 
+use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
+use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -30,6 +32,10 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use time::Timespec;
 
 use crate::pd::{PdTask, INVALID_ID};
@@ -46,12 +52,6 @@ use crate::util::collections::HashMap;
 use crate::util::time::{duration_to_sec, monotonic_raw_now};
 use crate::util::worker::Scheduler;
 use crate::util::{escape, MustConsumeVec};
-use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
-use engine::{Engines, Peekable};
-use raft::{
-    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
-};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};

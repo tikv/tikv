@@ -255,7 +255,11 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
+    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
     use engine::rocks::Writable;
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{WriteBatch, DB};
+    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::data_key;
@@ -263,10 +267,6 @@ mod tests {
     use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
-    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
-    use engine::{WriteBatch, DB};
-    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     use super::*;
 

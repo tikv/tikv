@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use engine::Engines;
 use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
@@ -33,7 +34,6 @@ use crate::util::security::SecurityManager;
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Worker;
 use crate::util::Either;
-use engine::Engines;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;

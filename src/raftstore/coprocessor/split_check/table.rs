@@ -14,15 +14,15 @@
 use std::cmp::Ordering;
 
 use engine::rocks::{SeekKey, DB};
+use engine::CF_WRITE;
+use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
 use crate::util::escape;
-use engine::CF_WRITE;
-use engine::{IterOption, Iterable};
-use kvproto::pdpb::CheckPolicy;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,

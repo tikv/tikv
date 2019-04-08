@@ -28,6 +28,8 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
+use engine::rocks::DB;
+use engine::IterOption;
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
@@ -37,8 +39,6 @@ use crate::server::ServerRaftStoreRouter;
 use crate::util;
 use crate::util::collections::HashMap;
 use crate::util::worker::{self, Builder, ScheduleError, Worker};
-use engine::rocks::DB;
-use engine::IterOption;
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -1273,11 +1273,7 @@ impl<E: Engine> Storage<E> {
 
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(
-                Self::rawkv_cf(&cf)?,
-                start_key,
-                end_key,
-            )],
+            vec![Modify::DeleteRange(cf, start_key, end_key)],
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();

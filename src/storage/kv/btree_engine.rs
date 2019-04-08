@@ -18,6 +18,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
+use engine::IterOption;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 
 use crate::storage::kv::{
@@ -25,8 +27,6 @@ use crate::storage::kv::{
     Result as EngineResult, ScanMode, Snapshot,
 };
 use crate::storage::{Key, Value};
-use engine::IterOption;
-use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 

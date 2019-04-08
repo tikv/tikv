@@ -19,6 +19,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use engine::rocks;
+use engine::rocks::{DBOptions, Writable};
+use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
+use engine::Engines;
+use engine::CF_RAFT;
+use engine::{Iterable, Mutable, Peekable};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -33,18 +39,12 @@ use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
 use crate::util;
 use crate::util::worker::Scheduler;
-use engine::rocks;
-use engine::rocks::{DBOptions, Writable};
-use engine::Engines;
-use engine::CF_RAFT;
 
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::config;
-use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
-use engine::{Iterable, Mutable, Peekable};
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.

@@ -19,6 +19,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
+use engine::Engines;
+use engine::CF_RAFT;
+use engine::{Peekable, Snapshot as EngineSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SSTMeta;
@@ -41,7 +44,6 @@ use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::util::time::duration_to_sec;
 use crate::util::worker::{Scheduler, Stopped};
 use crate::util::{escape, is_zero_duration};
-use engine::CF_RAFT;
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -64,8 +66,6 @@ use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
-use engine::Engines;
-use engine::{Peekable, Snapshot as EngineSnapshot};
 
 pub struct DestroyPeerJob {
     pub initialized: bool,

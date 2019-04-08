@@ -15,6 +15,11 @@ use std::collections::Bound::Excluded;
 use std::mem;
 use std::sync::Mutex;
 
+use engine::rocks;
+use engine::rocks::DB;
+use engine::LARGE_CFS;
+use engine::{util, Range};
+use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -25,11 +30,6 @@ use super::Host;
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 use crate::storage::mvcc::properties::RangeProperties;
 use crate::util::escape;
-use engine::rocks;
-use engine::rocks::DB;
-use engine::LARGE_CFS;
-use engine::{util, Range};
-use engine::{CF_DEFAULT, CF_WRITE};
 
 pub struct Checker {
     max_size: u64,

@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
 use std::cmp;
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
 use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
-use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 
 /// Snapshot of a region.
 ///

@@ -23,6 +23,13 @@ use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::{cmp, usize};
 
+use crossbeam::channel::{TryRecvError, TrySendError};
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::Engines;
+use engine::{util as engine_util, Mutable, Peekable};
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{Peer as PeerMeta, Region};
 use kvproto::raft_cmdpb::{
@@ -34,6 +41,7 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
+use raft::NO_LIMIT;
 use uuid::Uuid;
 
 use crate::import::SSTImporter;
@@ -51,14 +59,6 @@ use crate::util::time::{duration_to_sec, Instant, SlowTimer};
 use crate::util::worker::Scheduler;
 use crate::util::Either;
 use crate::util::{escape, MustConsumeVec};
-use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::Writable;
-use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
-use engine::Engines;
-use engine::{util as engine_util, Mutable, Peekable};
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use raft::NO_LIMIT;
 
 use super::metrics::*;
 use super::{

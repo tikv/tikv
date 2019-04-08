@@ -17,11 +17,11 @@ mod size;
 mod table;
 
 use engine::rocks::DB;
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
 
 use super::error::Result;
 use super::{KeyEntry, ObserverContext, SplitChecker};
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
 
 pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
 pub use self::keys::{

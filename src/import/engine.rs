@@ -377,6 +377,7 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
 mod tests {
     use super::*;
 
+    use engine::rocks::util::new_engine_opt;
     use engine::rocks::IngestExternalFileOptions;
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
@@ -388,7 +389,6 @@ mod tests {
     use crate::storage::mvcc::MvccReader;
     use crate::util::file::file_exists;
     use crate::util::security::encrypted_env_from_cipher_file;
-    use engine::rocks::util::new_engine_opt;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
