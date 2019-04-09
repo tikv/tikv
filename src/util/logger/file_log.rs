@@ -76,17 +76,11 @@ impl RotatingFileLogger {
     fn rotate(&mut self) -> io::Result<()> {
         self.flush()?;
 
-        let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
-        let mut tmp_new_path = new_path.clone().into_os_string();
-        tmp_new_path.push(".temp");
-        let tmp_new_path = PathBuf::from(tmp_new_path);
-
         // Note: renaming files while they're open only works on Linux and macOS.
-        let new_file = open_log_file(&tmp_new_path)?;
-        fs::rename(&self.file_path, &new_path)?;
-        fs::rename(&tmp_new_path, &self.file_path)?;
+        let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
+        fs::rename(&self.file_path, new_path)?;
+        let new_file = open_log_file(&self.file_path)?;
         self.update_rotation_time();
-
         self.file = new_file;
         Ok(())
     }
