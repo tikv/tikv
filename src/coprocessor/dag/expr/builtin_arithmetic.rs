@@ -1105,20 +1105,23 @@ mod tests {
         ];
 
         let cases = vec![
-            //(flag,sql_mode,strict_sql_mode=>is_ok,has_warning)
-            (0, 0, false, true, true), //warning
+            //(flag,sql_mode,is_ok,has_warning)
+            (0, SqlMode::empty(), true, true), //warning
             (
                 FLAG_IN_UPDATE_OR_DELETE_STMT,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                true,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 false,
             ), //error
-            (FLAG_IN_UPDATE_OR_DELETE_STMT, 0, true, true, false), //ok
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::STRICT_ALL_TABLES,
+                true,
+                false,
+            ), //ok
             (
                 FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                true,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 true,
             ), //warning
@@ -1127,11 +1130,9 @@ mod tests {
             let lhs = datum_expr(left);
             let rhs = datum_expr(right);
             let scalar_func = scalar_func_expr(sig, &[lhs, rhs]);
-            for (flag, sql_mode, strict_sql_mode, is_ok, has_warning) in &cases {
+            for (flag, sql_mode, is_ok, has_warning) in &cases {
                 let mut cfg = EvalConfig::new();
-                cfg.set_by_flags(*flag)
-                    .set_sql_mode(*sql_mode)
-                    .set_strict_sql_mode(*strict_sql_mode);
+                cfg.set_by_flags(*flag).set_sql_mode(*sql_mode);
                 let mut ctx = EvalContext::new(::std::sync::Arc::new(cfg));
                 let op = Expression::build(&ctx, scalar_func.clone()).unwrap();
                 let got = op.eval(&mut ctx, &[]);

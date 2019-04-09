@@ -17,7 +17,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
-use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::expr::{EvalConfig, SqlMode};
 use crate::coprocessor::*;
 use crate::storage::Store;
 
@@ -119,10 +119,7 @@ impl DAGRequestHandler {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
         if req.has_sql_mode() {
-            eval_cfg.set_sql_mode(req.get_sql_mode());
-        }
-        if req.has_is_strict_sql_mode() {
-            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
+            eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
 
         let is_batch = enable_batch_if_possible

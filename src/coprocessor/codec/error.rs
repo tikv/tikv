@@ -71,7 +71,9 @@ impl Error {
         if err.code() == ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
-        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
+        if ctx.cfg.sql_mode.is_strict()
+            && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt)
+        {
             return Err(err);
         }
         ctx.warnings.append_warning(err);

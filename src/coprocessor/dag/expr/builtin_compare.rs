@@ -485,7 +485,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression, SqlMode};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};
@@ -953,7 +953,7 @@ mod tests {
             let mut eval_config = EvalConfig::new();
             eval_config
                 .set_in_insert_stmt(true)
-                .set_strict_sql_mode(true);
+                .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
                 Datum::Bytes(t1.clone()),
