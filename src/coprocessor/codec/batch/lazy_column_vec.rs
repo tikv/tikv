@@ -52,7 +52,7 @@ impl LazyBatchColumnVec {
     ///
     /// Because column numbers won't change, it means constructed instance will be always empty.
     #[inline]
-    pub fn new_empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             columns: Vec::new(),
         }
@@ -309,7 +309,7 @@ mod tests {
             ];
 
             // Empty LazyBatchColumnVec
-            let mut columns = LazyBatchColumnVec::raw(3, 1);
+            let mut columns = LazyBatchColumnVec::with_raw_columns_and_capacity(3, 1);
             assert_eq!(columns.rows_len(), 0);
             assert_eq!(columns.columns_len(), 3);
 
@@ -385,7 +385,7 @@ mod tests {
             },
         ];
 
-        let mut columns = LazyBatchColumnVec::raw(2, 3);
+        let mut columns = LazyBatchColumnVec::with_raw_columns_and_capacity(2, 3);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
         assert_eq!(columns.rows_capacity(), 3);
