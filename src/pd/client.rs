@@ -74,14 +74,14 @@ impl RpcClient {
                         },
                         Some(ref mut cached) if **cached == format!("{}", e) => {
                             if attempts_with_cached_error == RETRY_LOG_PER {
-                                warn!("Multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                                warn!("multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
                                 attempts_with_cached_error = 0;
                             }
                             attempts_with_cached_error += 1;
                         },
                         Some(ref mut cached) => {
-                            warn!("Multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
-                            warn!("Last attempt to validate PD endpoints failed"; "err" => ?e);
+                            warn!("multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                            warn!("last attempt to validate PD endpoints failed"; "err" => ?e);
                             attempts_with_cached_error = 1;
                             **cached = format!("{}", e);
                         }
