@@ -412,9 +412,9 @@ mod tests {
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::tests::Data;
-    use super::super::tests::{build_expr, gen_table_scan_executor, get_range, new_col_info};
+    use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::scanner::tests::Data;
 
     fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
         let mut group_by = Vec::with_capacity(col_ids.len());
