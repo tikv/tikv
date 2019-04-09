@@ -46,10 +46,10 @@ pub fn init_log<D>(
 ) -> Result<(), SetLoggerError>
 where
     D: Drain + Send + 'static,
-    <D as Drain>::Err: std::fmt::Debug,
+    <D as Drain>::Err: std::fmt::Display,
 {
     let logger = if use_async {
-        let drain = Async::new(drain.fuse())
+        let drain = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
             .overflow_strategy(SLOG_CHANNEL_OVERFLOW_STRATEGY)
             .thread_name(thd_name!("slogger"))
@@ -58,7 +58,7 @@ where
             .fuse();
         slog::Logger::root(drain, slog_o!())
     } else {
-        let drain = Mutex::new(drain).filter_level(level).fuse();
+        let drain = LogAndFuse(Mutex::new(drain).filter_level(level));
         slog::Logger::root(drain, slog_o!())
     };
 
@@ -187,6 +187,32 @@ where
 
             Ok(())
         })
+    }
+}
+
+struct LogAndFuse<D>(D);
+
+impl<D> Drain for LogAndFuse<D>
+where
+    D: Drain,
+    <D as Drain>::Err: std::fmt::Display,
+{
+    type Ok = ();
+    type Err = slog::Never;
+
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        if let Err(e) = self.0.log(record, values) {
+            let fatal_drainer = Mutex::new(term_drainer()).ignore_res();
+            fatal_drainer.log(record, values).unwrap();
+            let fatal_logger = slog::Logger::root(fatal_drainer, slog_o!());
+            slog::slog_crit!(
+                fatal_logger,
+                "logger encountered error, TiKV cannot continue working";
+                "err" => %e,
+            );
+            panic!("logger encountered error: {}", e);
+        }
+        Ok(())
     }
 }
 
