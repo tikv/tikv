@@ -23,7 +23,7 @@ use super::{
     RoleObserver,
 };
 use crate::raftstore::store::keys::{data_end_key, data_key};
-use crate::storage::engine::{RegionInfoProvider, Result as EngineResult};
+use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use crate::util::collections::HashMap;
 use crate::util::escape;
 use crate::util::timer::Timer;

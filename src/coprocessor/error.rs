@@ -54,10 +54,10 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<storage::engine::Error> for Error {
-    fn from(e: storage::engine::Error) -> Error {
+impl From<storage::kv::Error> for Error {
+    fn from(e: storage::kv::Error) -> Error {
         match e {
-            storage::engine::Error::Request(e) => Error::Region(e),
+            storage::kv::Error::Request(e) => Error::Region(e),
             _ => Error::Other(Box::new(e)),
         }
     }
