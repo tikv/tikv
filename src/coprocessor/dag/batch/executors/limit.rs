@@ -16,6 +16,8 @@ use tipb::expression::FieldType;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::Result;
 
+/// Executor that retrieves rows from the source executor
+/// and only produces part of the rows.
 pub struct BatchLimitExecutor<Src: BatchExecutor, C: ExecSummaryCollector> {
     src: Src,
     remaining_rows: usize,
@@ -44,15 +46,11 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitEx
         let mut result = self.src.next_batch(expect_rows);
         if result.data.rows_len() < self.remaining_rows {
             self.remaining_rows -= result.data.rows_len();
-            self.summary_collector
-                .inc_produced_rows(result.data.rows_len());
-            self.summary_collector.inc_elapsed_duration(timer);
-            return result;
+        } else {
+            result.data.truncate(self.remaining_rows);
+            self.remaining_rows = 0;
+            result.is_drained = Ok(true);
         }
-
-        result.data.truncate(self.remaining_rows);
-        self.remaining_rows = 0;
-        result.is_drained = Ok(true);
         self.summary_collector
             .inc_produced_rows(result.data.rows_len());
         self.summary_collector.inc_elapsed_duration(timer);
