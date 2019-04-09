@@ -67,7 +67,7 @@ impl Config {
         if self.max_open_engines == 0 {
             return Err("import.max_open_engines can not be 0".into());
         }
-        if self.min_available_ratio < 0.02 {
+        if self.min_available_ratio < 0 {
             return Err("import.min_available_ratio can not less than 0.02".into());
         }
         Ok(())

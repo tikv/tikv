@@ -238,10 +238,7 @@ impl ImportClient for Client {
                 // If the current operator of region is not `scatter-region`, we could assume
                 // that `scatter-operator` has finished or timeout.
                 let scatter_region = "scatter-region";
-                Ok(
-                    resp.desc != scatter_region.as_bytes()
-                        || resp.status != OperatorStatus::RUNNING,
-                )
+                Ok(resp.desc != b"scatter-region" || resp.status != OperatorStatus::RUNNING)
             }
             Err(PdError::RegionNotFound(_)) => Ok(true), // heartbeat may not send to PD
             Err(err) => {
@@ -254,7 +251,7 @@ impl ImportClient for Client {
     fn is_space_enough(&self, store_id: u64, size: u64) -> Result<bool> {
         let stats = self.pd.get_store_stats(store_id)?;
         let available_ratio = (stats.available - size) as f64 / stats.capacity as f64;
-        // Keep 5% available disk space
+        // Ensure target store have available disk space
         Ok(available_ratio > self.min_available_ratio)
     }
 }

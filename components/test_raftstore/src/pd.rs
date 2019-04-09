@@ -1154,7 +1154,7 @@ impl PdClient for TestPdClient {
     }
 
     fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
-        let cluster = self.cluster.wl();
+        let cluster = self.cluster.rl();
         let stats = cluster.store_stats.get(&store_id);
         match stats {
             Some(s) => Ok(s.clone()),
