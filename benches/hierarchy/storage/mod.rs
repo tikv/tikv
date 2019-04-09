@@ -12,12 +12,12 @@
 // limitations under the License.
 
 use criterion::{black_box, Bencher, Criterion};
+use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::Context;
 use test_storage::SyncTestStorageBuilder;
 use test_util::KvGenerator;
-use tikv::storage::engine::Engine;
-
-use tikv::storage::{Key, Mutation, CF_DEFAULT};
+use tikv::storage::kv::Engine;
+use tikv::storage::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 

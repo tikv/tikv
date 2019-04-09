@@ -15,7 +15,7 @@ use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
-use tikv::storage::engine::RocksEngine;
+use tikv::storage::kv::RocksEngine;
 use tikv::storage::{
     AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
     Result, Storage, Value,
