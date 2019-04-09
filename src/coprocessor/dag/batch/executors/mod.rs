@@ -11,17 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod interface;
-pub mod statistics;
-
 mod index_scan_executor;
 mod limit;
-mod ranges_iter;
-mod scan_executor;
 mod table_scan_executor;
+mod util;
 
-pub mod executors {
-    pub use super::index_scan_executor::BatchIndexScanExecutor;
-    pub use super::limit::BatchLimitExecutor;
-    pub use super::table_scan_executor::BatchTableScanExecutor;
-}
+pub use self::index_scan_executor::BatchIndexScanExecutor;
+pub use self::limit::BatchLimitExecutor;
+pub use self::table_scan_executor::BatchTableScanExecutor;
