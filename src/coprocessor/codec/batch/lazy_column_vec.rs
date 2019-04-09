@@ -61,7 +61,7 @@ impl LazyBatchColumnVec {
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
     /// and each of them reserves capacity according to `rows_capacity`.
     #[inline]
-    pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
+    pub fn with_raw_columns_and_capacity(columns_count: usize, rows_capacity: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
             let column = LazyBatchColumn::raw_with_capacity(rows_capacity);
