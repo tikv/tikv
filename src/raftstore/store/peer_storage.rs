@@ -19,6 +19,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use engine::rocks;
+use engine::rocks::{DBOptions, Writable};
+use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
+use engine::Engines;
+use engine::CF_RAFT;
+use engine::{Iterable, Mutable, Peekable};
 use kvproto::metapb::{self, Region};
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
@@ -27,21 +33,18 @@ use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 
-use crate::config;
 use crate::raftstore::store::fsm::GenSnapTask;
-use crate::raftstore::store::util::{conf_state_from_region, Engines};
+use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
-use crate::storage::engine::{DBOptions, Writable, WriteBatch, WriteOptions, DB};
-use crate::storage::CF_RAFT;
+use crate::util;
 use crate::util::worker::Scheduler;
-use crate::util::{self, rocksdb_util};
 
-use super::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use crate::config;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -323,7 +326,7 @@ impl InvokeContext {
             .set_commit(snapshot_index);
         snapshot_raft_state.set_last_index(snapshot_index);
 
-        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::snapshot_raft_state_key(self.region_id),
@@ -334,7 +337,7 @@ impl InvokeContext {
 
     #[inline]
     pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
-        let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
+        let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
             handle,
             &keys::apply_state_key(self.region_id),
@@ -815,9 +818,10 @@ impl PeerStorage {
 
         // Delete any previously appended log entries which never committed.
         for i in (last_index + 1)..=prev_last_index {
-            ready_ctx
+            // TODO: Wrap it as an engine::Error.
+            box_try!(ready_ctx
                 .raft_wb_mut()
-                .delete(&keys::raft_log_key(self.get_region_id(), i))?;
+                .delete(&keys::raft_log_key(self.get_region_id(), i)));
         }
 
         invoke_ctx.raft_state.set_last_index(last_index);
@@ -1268,9 +1272,9 @@ pub fn clear_meta(
     raft_state: &RaftLocalState,
 ) -> Result<()> {
     let t = Instant::now();
-    let handle = rocksdb_util::get_cf_handle(&engines.kv, CF_RAFT)?;
-    kv_wb.delete_cf(handle, &keys::region_state_key(region_id))?;
-    kv_wb.delete_cf(handle, &keys::apply_state_key(region_id))?;
+    let handle = rocks::util::get_cf_handle(&engines.kv, CF_RAFT)?;
+    box_try!(kv_wb.delete_cf(handle, &keys::region_state_key(region_id)));
+    box_try!(kv_wb.delete_cf(handle, &keys::apply_state_key(region_id)));
 
     let last_index = last_index(raft_state);
     let mut first_index = last_index + 1;
@@ -1283,9 +1287,9 @@ pub fn clear_meta(
             Ok(false)
         })?;
     for id in first_index..=last_index {
-        raft_wb.delete(&keys::raft_log_key(region_id, id))?;
+        box_try!(raft_wb.delete(&keys::raft_log_key(region_id, id)));
     }
-    raft_wb.delete(&keys::raft_state_key(region_id))?;
+    box_try!(raft_wb.delete(&keys::raft_state_key(region_id)));
 
     info!(
         "finish clear peer meta";
@@ -1415,7 +1419,7 @@ pub fn write_initial_apply_state<T: Mutable>(
         .mut_truncated_state()
         .set_term(RAFT_INIT_LOG_TERM);
 
-    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
     kv_wb.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
     Ok(())
 }
@@ -1435,7 +1439,7 @@ pub fn write_peer_state<T: Mutable>(
         region_state.set_merge_state(state);
     }
 
-    let handle = rocksdb_util::get_cf_handle(kv_engine, CF_RAFT)?;
+    let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
     debug!(
         "writing merge state";
         "region_id" => region_id,
@@ -1482,8 +1486,9 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
 ) -> Result<()> {
-    use crate::storage::CF_RAFT;
-    if !util::rocksdb_util::db_exist(kv_path) {
+    use engine::{WriteOptions, CF_RAFT};
+
+    if !rocks::util::db_exist(kv_path) {
         debug!("no need upgrade to v3.x");
         return Ok(());
     }
@@ -1503,7 +1508,7 @@ pub fn maybe_upgrade_from_2_to_3(
 
     // Create v2.0.x kv engine.
     let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
-    let mut kv_engine = util::rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
+    let mut kv_engine = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
 
     // Move meta data from kv engine to raft engine.
     let upgrade_raft_wb = WriteBatch::new();
@@ -1521,13 +1526,13 @@ pub fn maybe_upgrade_from_2_to_3(
             "store_id" => m.get_store_id(),
             "cluster_id" => m.get_cluster_id(),
         );
-        upgrade_raft_wb.put_msg(keys::STORE_IDENT_KEY, &m)?;
-        cleanup_kv_wb.delete(keys::STORE_IDENT_KEY)?;
+        box_try!(upgrade_raft_wb.put_msg(keys::STORE_IDENT_KEY, &m));
+        box_try!(cleanup_kv_wb.delete(keys::STORE_IDENT_KEY));
     }
     if let Some(m) = kv_engine.get_msg::<kvproto::metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)? {
         info!("upgrading PREPARE_BOOTSTRAP_KEY"; "region" => ?m);
-        upgrade_raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &m)?;
-        cleanup_kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY)?;
+        box_try!(upgrade_raft_wb.put_msg(keys::PREPARE_BOOTSTRAP_KEY, &m));
+        box_try!(cleanup_kv_wb.delete(keys::PREPARE_BOOTSTRAP_KEY));
     }
 
     // For meta data in the raft CF.
@@ -1541,7 +1546,7 @@ pub fn maybe_upgrade_from_2_to_3(
         if let Ok((region_id, suffix)) = keys::decode_region_raft_key(key) {
             if suffix == keys::APPLY_STATE_SUFFIX {
                 // apply_state_key
-                upgrade_raft_wb.put(key, value)?;
+                box_try!(upgrade_raft_wb.put(key, value));
                 info!("upgrading apply state"; "region_id" => region_id);
                 return Ok(true);
             } else if suffix == keys::SNAPSHOT_RAFT_STATE_SUFFIX {
@@ -1556,7 +1561,7 @@ pub fn maybe_upgrade_from_2_to_3(
                     .get_msg(&raft_state_key)?
                     .unwrap_or_else(RaftLocalState::new);
                 let mut snapshot_raft_state = RaftLocalState::new();
-                snapshot_raft_state.merge_from_bytes(value)?;
+                box_try!(snapshot_raft_state.merge_from_bytes(value));
                 // if we recv append log when applying snapshot, last_index in
                 // raft_local_state will larger than snapshot_index. since
                 // raft_local_state is written to raft engine, and raft
@@ -1566,7 +1571,7 @@ pub fn maybe_upgrade_from_2_to_3(
                 // snapshot_raft_state.last_index = snapshot_index.
                 // After restart, we need check last_index.
                 if last_index(&snapshot_raft_state) > last_index(&raft_state) {
-                    upgrade_raft_wb.put(&raft_state_key, value)?;
+                    box_try!(upgrade_raft_wb.put(&raft_state_key, value));
                     info!(
                         "upgrading snapshot raft state";
                         "region_id" => region_id,
@@ -1578,7 +1583,7 @@ pub fn maybe_upgrade_from_2_to_3(
             }
         } else if let Ok((region_id, suffix)) = keys::decode_region_meta_key(key) {
             if suffix == keys::REGION_STATE_SUFFIX {
-                upgrade_raft_wb.put(key, value)?;
+                box_try!(upgrade_raft_wb.put(key, value));
                 info!("upgrading region state"; "region_id" => region_id);
                 return Ok(true);
             }
@@ -1618,14 +1623,14 @@ pub fn maybe_upgrade_from_2_to_3(
 #[cfg(test)]
 mod tests {
     use crate::raftstore::store::fsm::apply::compact_raft_log;
-    use crate::raftstore::store::util::Engines;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use crate::storage::engine::WriteBatch;
-    use crate::storage::{ALL_CFS, CF_DEFAULT};
-    use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::{Scheduler, Worker};
+    use engine::rocks::util::new_engine;
+    use engine::rocks::WriteBatch;
+    use engine::Engines;
+    use engine::{ALL_CFS, CF_DEFAULT};
     use kvproto::raft_serverpb::RaftSnapshotData;
     use raft::eraftpb::HardState;
     use raft::eraftpb::{ConfState, Entry};
