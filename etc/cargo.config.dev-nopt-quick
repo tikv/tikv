@@ -1,0 +1,12 @@
+# Configuration for `cargo build` without `--release`.
+
+[profile.dev]
+opt-level = 0
+debug = false
+rpath = false
+lto = false
+debug-assertions = false
+codegen-units = 4
+panic = "abort"
+incremental = true
+overflow-checks = false

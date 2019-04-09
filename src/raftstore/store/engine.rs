@@ -16,16 +16,14 @@ use std::ops::Deref;
 use std::option::Option;
 use std::sync::Arc;
 
+use crate::raftstore::Error;
+use crate::raftstore::Result;
+use crate::storage::engine::{
+    CFHandle, DBIterator, DBVector, ReadOptions, UnsafeSnap, Writable, WriteBatch, DB,
+};
 use crate::util::rocksdb_util;
 use byteorder::{BigEndian, ByteOrder};
 use protobuf;
-use rocksdb::{
-    rocksdb_options::UnsafeSnap, CFHandle, DBIterator, DBVector, ReadOptions, Writable, WriteBatch,
-    DB,
-};
-
-use crate::raftstore::Error;
-use crate::raftstore::Result;
 
 pub struct Snapshot {
     db: Arc<DB>,
@@ -430,8 +428,8 @@ impl Mutable for WriteBatch {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::engine::Writable;
     use kvproto::metapb::Region;
-    use rocksdb::Writable;
     use std::sync::Arc;
     use tempdir::TempDir;
 

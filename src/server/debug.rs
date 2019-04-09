@@ -26,10 +26,6 @@ use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, Range, ReadOptions, SeekKey, Writable,
-    WriteBatch, WriteOptions, DB,
-};
 
 use crate::raftstore::store::engine::{IterOption, Mutable};
 use crate::raftstore::store::util as raftstore_util;
@@ -38,6 +34,10 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
+use crate::storage::engine::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, Range,
+    ReadOptions, SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
@@ -52,7 +52,7 @@ use crate::util::worker::Worker;
 use raft::{self, RawNode};
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = RocksIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -325,7 +325,7 @@ impl Debugger {
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
+        info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -347,7 +347,7 @@ impl Debugger {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(wb, &write_opts));
+            box_try!(db.write_opt(&wb, &write_opts));
         }
         Ok(errors)
     }
@@ -576,7 +576,7 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(wb, &write_opts));
+        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
         Ok(())
     }
 
@@ -653,8 +653,8 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(kv.write_opt(kv_wb, &write_opts));
-        box_try!(raft.write_opt(raft_wb, &write_opts));
+        box_try!(kv.write_opt(&kv_wb, &write_opts));
+        box_try!(raft.write_opt(&raft_wb, &write_opts));
         Ok(())
     }
 
@@ -804,7 +804,7 @@ fn recover_mvcc_for_range(
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(wb, &write_opts));
+            box_try!(db.write_opt(&wb, &write_opts));
         } else {
             v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
@@ -1399,9 +1399,9 @@ mod tests {
     use std::iter::FromIterator;
     use std::sync::Arc;
 
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
     use super::*;
@@ -1873,8 +1873,8 @@ mod tests {
             mock_region_state(13, &[]);
         }
 
-        raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
+        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
+        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
@@ -2076,12 +2076,12 @@ mod tests {
             )
             .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
         let wb = WriteBatch::new();
         checker.check_mvcc(&wb, None).unwrap();
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -2125,7 +2125,7 @@ mod tests {
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(wb).unwrap();
+        debugger.engines.kv.write(&wb).unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(

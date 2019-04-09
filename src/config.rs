@@ -12,15 +12,14 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::i32;
 use std::io::Error as IoError;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::usize;
 
-use rocksdb::{
+use crate::storage::engine::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
@@ -1366,24 +1365,18 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
-    where
-        P: fmt::Debug,
-    {
-        fs::File::open(&path)
-            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                let c = ::toml::from_str(&s)?;
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {:?}, err {}",
-                    path, e
-                );
-            })
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        (|| -> Result<Self, Box<dyn Error>> {
+            let s = fs::read_to_string(&path)?;
+            Ok(::toml::from_str(&s)?)
+        })()
+        .unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                path.as_ref().display(),
+                e
+            );
+        })
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {

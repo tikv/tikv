@@ -907,18 +907,9 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let s = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let substr = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
-        if substr.is_empty() {
-            return Ok(Some(1));
-        }
-        if s.is_empty() {
-            return Ok(Some(0));
-        }
-        let s = s.to_lowercase();
-        let substr = substr.to_lowercase();
-        match s.find(&substr) {
-            Some(x) => Ok(Some(1 + s[..x].chars().count() as i64)),
-            None => Ok(Some(0)),
-        }
+        Ok(Self::find_str(&s.to_lowercase(), &substr.to_lowercase())
+            .map(|i| 1 + i as i64)
+            .or(Some(0)))
     }
 
     #[inline]
@@ -1675,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_upper() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1771,7 +1762,7 @@ mod tests {
 
     #[test]
     fn test_lower() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (
                 Datum::Bytes(b"HELLO".to_vec()),
@@ -2068,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_char_length() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (Datum::Bytes(b"HELLO".to_vec()), Datum::I64(5)),
             (Datum::Bytes(b"123".to_vec()), Datum::I64(3)),

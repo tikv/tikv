@@ -492,6 +492,7 @@ mod tests {
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::engine::Modify;
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, WriteBatch, DB};
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
     use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -502,7 +503,6 @@ mod tests {
     };
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
     use tempdir::TempDir;
@@ -596,7 +596,7 @@ mod tests {
                     }
                 }
             }
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
         }
 
         fn flush(&mut self) {
@@ -615,17 +615,17 @@ mod tests {
     }
 
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = rocksdb::DBOptions::new();
-        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
             let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
