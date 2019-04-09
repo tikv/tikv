@@ -15,15 +15,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use protobuf::Message;
-use tikv::storage::engine::Writable;
-
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
+use protobuf::Message;
 
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::Writable;
+use engine::CF_RAFT;
+use engine::{Iterable, Mutable, Peekable};
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
-use tikv::storage::CF_RAFT;
-use tikv::util::rocksdb_util::get_cf_handle;
+use tikv::raftstore::store::keys;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
