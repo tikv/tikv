@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use engine::Engines;
 use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;
 use kvproto::import_sstpb_grpc::create_import_sst;
@@ -16,7 +17,7 @@ use tokio_timer::timer::Handle;
 
 use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
-use crate::raftstore::store::{Engines, SnapManager};
+use crate::raftstore::store::SnapManager;
 use crate::storage::{Engine, Storage};
 use crate::util::security::SecurityManager;
 use crate::util::timer::GLOBAL_TIMER_HANDLE;

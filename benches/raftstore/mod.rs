@@ -3,8 +3,7 @@
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
-use tikv::storage::engine::{Writable, WriteBatch, DB};
-
+use engine::rocks::{Writable, WriteBatch, DB};
 use test_raftstore::*;
 use test_util::*;
 use tikv::raftstore::store::keys;

@@ -7,33 +7,24 @@ use std::time::Duration;
 use std::{error, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::raftstore::store::engine::IterOption;
-use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{Key, Value};
+use engine::rocks::TablePropertiesCollection;
+use engine::IterOption;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 
 mod btree_engine;
+mod compact_listener;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
 pub mod raftkv;
 mod rocksdb_engine;
 
-pub use self::rocksdb_engine::{
-    load_latest_options, run_ldb_tool, set_external_sst_file_global_seq_no, supported_compression,
-    BlockBasedOptions, CColumnFamilyDescriptor, CFHandle, ColumnFamilyOptions, CompactOptions,
-    CompactionJobInfo, CompactionOptions, CompactionPriority, DBBottommostLevelCompaction,
-    DBCompactionStyle, DBCompressionType, DBEntryType, DBIterator, DBOptions, DBRateLimiterMode,
-    DBRecoveryMode, DBStatisticsHistogramType, DBStatisticsTickerType, DBVector, Env, EnvOptions,
-    EventListener, ExternalSstFileInfo, FlushJobInfo, HistogramData, IngestExternalFileOptions,
-    IngestionInfo, Kv, PerfContext, Range, RateLimiter, ReadOptions, SeekKey, SequentialFile,
-    SliceTransform, SstFileWriter, TablePropertiesCollection, TablePropertiesCollector,
-    TablePropertiesCollectorFactory, TitanBlobIndex, TitanDBOptions, UnsafeSnap,
-    UserCollectedProperties, Writable, WriteBatch, WriteOptions, WriteStallCondition,
-    WriteStallInfo, DB,
-};
-
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
+pub use self::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};
@@ -126,7 +117,7 @@ pub trait Snapshot: Send + Clone {
         self.get_properties_cf(CF_DEFAULT)
     }
     fn get_properties_cf(&self, _: CfName) -> Result<TablePropertiesCollection> {
-        Err(Error::RocksDb("no user properties".to_owned()))
+        Err(box_err!("no user properties"))
     }
     // The minimum key this snapshot can retrieve.
     #[inline]
@@ -637,11 +628,6 @@ quick_error! {
             description("request to underhook engine failed")
             display("{:?}", err)
         }
-        RocksDb(msg: String) {
-            from()
-            description("RocksDb error")
-            display("RocksDb {}", msg)
-        }
         Timeout(d: Duration) {
             description("request timeout")
             display("timeout after {:?}", d)
@@ -659,11 +645,16 @@ quick_error! {
     }
 }
 
+impl From<engine::Error> for Error {
+    fn from(err: engine::Error) -> Error {
+        Error::Request(err.into())
+    }
+}
+
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         match *self {
             Error::Request(ref e) => Some(Error::Request(e.clone())),
-            Error::RocksDb(ref msg) => Some(Error::RocksDb(msg.clone())),
             Error::Timeout(d) => Some(Error::Timeout(d)),
             Error::EmptyRequest => Some(Error::EmptyRequest),
             Error::Other(_) => None,
@@ -675,12 +666,13 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 pub mod tests {
-    use super::super::super::raftstore::store::engine::IterOption;
     use super::SEEK_BOUND;
     use super::*;
-    use crate::storage::{CfName, Key, CF_DEFAULT};
+    use crate::storage::{CfName, Key};
     use crate::util::codec::bytes;
     use crate::util::escape;
+    use engine::IterOption;
+    use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 

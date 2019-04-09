@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::engine::DB;
+use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
@@ -20,8 +20,9 @@ pub use self::dispatcher::{CoprocessorHost, Registry};
 pub use self::error::{Error, Result};
 pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::split_check::{
-    HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
-    TableCheckObserver,
+    get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,
+    get_region_approximate_size, get_region_approximate_size_cf, HalfCheckObserver,
+    Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver, TableCheckObserver,
 };
 
 pub use crate::raftstore::store::KeyEntry;

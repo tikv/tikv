@@ -4,12 +4,12 @@ use std::fmt::{self, Display, Formatter};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
-
-use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::CF_RAFT;
-use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
+
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::util::worker::Runnable;
+use engine::CF_RAFT;
+use engine::{Iterable, Peekable, Snapshot};
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
@@ -143,14 +143,14 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raftstore::store::engine::Snapshot;
     use crate::raftstore::store::keys;
-    use crate::storage::engine::Writable;
-    use crate::storage::{CF_DEFAULT, CF_RAFT};
-    use crate::util::rocksdb_util::new_engine;
     use crate::util::worker::Runnable;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
+    use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::Snapshot;
+    use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::metapb::*;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;

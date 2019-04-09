@@ -1,13 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::Engines;
-use crate::storage::engine::DB;
-use crate::util::rocksdb_util::engine_metrics::*;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::{Builder, JoinHandle};
 use std::time::{Duration, Instant};
+
+use crate::rocks::util::engine_metrics::*;
+use crate::rocks::DB;
+use crate::Engines;
 
 pub const DEFAULT_FLUSHER_INTERVAL: u64 = 10000;
 pub const DEFAULT_FLUSHER_RESET_INTERVAL: u64 = 60000;
@@ -36,7 +37,7 @@ impl MetricsFlusher {
         let interval = self.interval;
         self.sender = Some(tx);
         let h = Builder::new()
-            .name(thd_name!("rocksdb-metrics"))
+            .name("rocksdb-metrics".to_owned())
             .spawn(move || {
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
@@ -84,9 +85,10 @@ fn flush_metrics(db: &DB, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions};
-    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use crate::util::rocksdb_util::{self, CFOptions};
+    use crate::rocks;
+    use crate::rocks::util::CFOptions;
+    use crate::rocks::{ColumnFamilyOptions, DBOptions};
+    use crate::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use std::path::Path;
     use std::sync::Arc;
     use std::thread::sleep;
@@ -100,17 +102,17 @@ mod tests {
         let db_opt = DBOptions::new();
         let cf_opts = ColumnFamilyOptions::new();
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb_util::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb_util::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, rocks::util::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, rocks::util::ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         let engine = Arc::new(
-            rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
+            rocks::util::new_engine_opt(path.path().to_str().unwrap(), db_opt, cfs_opts).unwrap(),
         );
 
         let cfs_opts = vec![CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new())];
         let raft_engine = Arc::new(
-            rocksdb_util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
+            rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
         let engines = Engines::new(engine, raft_engine);

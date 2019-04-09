@@ -8,14 +8,14 @@ use std::ops::{Deref, DerefMut};
 use std::u64;
 
 use crate::raftstore::store::keys;
-use crate::storage::engine::{
-    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
-    UserCollectedProperties,
-};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use crate::util::codec::number::{self, NumberEncoder};
 use crate::util::codec::{Error, Result};
+use engine::rocks::{
+    CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    TitanBlobIndex, UserCollectedProperties, DB,
+};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";
@@ -653,15 +653,89 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
+pub fn get_range_entries_and_versions(
+    engine: &DB,
+    cf: &CFHandle,
+    start: &[u8],
+    end: &[u8],
+) -> Option<(u64, u64)> {
+    let range = Range::new(start, end);
+    let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    if collection.is_empty() {
+        return None;
+    }
+
+    // Aggregate total MVCC properties and total number entries.
+    let mut props = MvccProperties::new();
+    let mut num_entries = 0;
+    for (_, v) in &*collection {
+        let mvcc = match MvccProperties::decode(v.user_collected_properties()) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        num_entries += v.num_entries();
+        props.add(&mvcc);
+    }
+
+    Some((num_entries, props.num_versions))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{DBEntryType, TablePropertiesCollector};
+    use rand::Rng;
+    use tempdir::TempDir;
+    use test::Bencher;
+
     use crate::raftstore::store::keys;
-    use crate::storage::engine::{DBEntryType, TablePropertiesCollector};
+    use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
-    use rand::Rng;
-    use test::Bencher;
+    use engine::rocks;
+    use engine::rocks::util::CFOptions;
+    use engine::{CF_WRITE, LARGE_CFS};
+
+    use super::*;
+
+    #[test]
+    fn test_get_range_entries_and_versions() {
+        let path = TempDir::new("_test_get_range_entries_and_versions").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let cases = ["a", "b", "c"];
+        for &key in &cases {
+            let k1 = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
+            let write_cf = db.cf_handle(CF_WRITE).unwrap();
+            db.put_cf(write_cf, &k1, b"v1").unwrap();
+            db.delete_cf(write_cf, &k1).unwrap();
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(3).as_encoded());
+            db.put_cf(write_cf, &key, b"v2").unwrap();
+            db.flush_cf(write_cf, true).unwrap();
+        }
+
+        let start_keys = keys::data_key(&[]);
+        let end_keys = keys::data_end_key(&[]);
+        let cf = rocks::util::get_cf_handle(&db, CF_WRITE).unwrap();
+        let (entries, versions) =
+            get_range_entries_and_versions(&db, cf, &start_keys, &end_keys).unwrap();
+        assert_eq!(entries, (cases.len() * 2) as u64);
+        assert_eq!(versions, cases.len() as u64);
+    }
 
     #[test]
     fn test_mvcc_properties() {

@@ -1,8 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine::rocks::{Writable, WriteBatch, DB};
 use tempdir::TempDir;
 use test::Bencher;
-use tikv::storage::engine::{Writable, WriteBatch, DB};
 
 fn writebatch(db: &DB, round: usize, batch_keys: usize) {
     let v = b"operators are syntactic sugar for calls to methods of built-in traits";

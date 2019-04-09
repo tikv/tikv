@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::engine::IterOption;
-use crate::storage::engine::Result;
-use crate::storage::{CfName, Cursor, Key, ScanMode, Snapshot};
+use crate::storage::kv::Result;
+use crate::storage::{Cursor, Key, ScanMode, Snapshot};
+use engine::CfName;
+use engine::IterOption;
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {

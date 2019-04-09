@@ -65,7 +65,7 @@ mod tests {
     use crate::coprocessor::codec::datum::Datum;
     use cop_datatype::FieldTypeTp;
 
-    use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
+    use super::super::tests::*;
     use super::*;
 
     #[test]

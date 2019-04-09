@@ -1,9 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv::storage::engine::DBStatisticsTickerType;
-
+use engine::rocks::DBStatisticsTickerType;
+use engine::CF_LOCK;
 use test_raftstore::*;
-use tikv::storage::CF_LOCK;
 use tikv::util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {

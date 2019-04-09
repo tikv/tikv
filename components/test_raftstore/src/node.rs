@@ -11,6 +11,7 @@ use kvproto::raft_serverpb::{self, RaftMessage};
 use raft::eraftpb::MessageType;
 use raft::SnapshotStatus;
 
+use engine::*;
 use tikv::config::TiKvConfig;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;

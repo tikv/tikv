@@ -1,12 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use criterion::{black_box, Bencher, Criterion};
+use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::Context;
 use test_storage::SyncTestStorageBuilder;
 use test_util::KvGenerator;
-use tikv::storage::engine::Engine;
-
-use tikv::storage::{Key, Mutation, CF_DEFAULT};
+use tikv::storage::kv::Engine;
+use tikv::storage::{Key, Mutation};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 

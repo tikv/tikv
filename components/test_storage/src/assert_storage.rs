@@ -3,7 +3,7 @@
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::engine::{self, RocksEngine};
+use tikv::storage::kv::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
@@ -213,11 +213,11 @@ impl<E: Engine> AssertionStorage<E> {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
                 ref e,
             ))))
-            | storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))
-            | storage::Error::Engine(engine::Error::Request(ref e)) => {
+            | storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e)))
+            | storage::Error::Engine(kv::Error::Request(ref e)) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",

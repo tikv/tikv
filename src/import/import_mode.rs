@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::engine::DB;
+use engine::rocks::DB;
 use kvproto::import_sstpb::*;
 
 use super::Result;
@@ -161,7 +161,7 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use crate::util::rocksdb_util::new_engine;
+    use engine::rocks::util::new_engine;
     use tempdir::TempDir;
 
     fn check_import_options(

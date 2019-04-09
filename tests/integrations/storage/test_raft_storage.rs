@@ -11,7 +11,7 @@ use test_raftstore::*;
 use test_storage::*;
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
-use tikv::storage::{engine, mvcc, txn};
+use tikv::storage::{kv, mvcc, txn};
 use tikv::util::HandyRwLock;
 
 fn new_raft_storage() -> (
@@ -140,7 +140,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
+    if let storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))) =
         *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());
@@ -186,7 +186,7 @@ fn test_engine_leader_change_twice() {
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let res = engine.put(&ctx, Key::from_raw(b"a"), b"a".to_vec());
-    if let engine::Error::Request(ref e) = *res.as_ref().err().unwrap() {
+    if let kv::Error::Request(ref e) = *res.as_ref().err().unwrap() {
         assert!(e.has_stale_command());
     } else {
         panic!("expect stale command, but got {:?}", res);

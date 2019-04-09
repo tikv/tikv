@@ -11,11 +11,10 @@ use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::*;
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::Peekable;
-use tikv::storage::CF_RAFT;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
 

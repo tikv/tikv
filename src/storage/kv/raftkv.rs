@@ -5,6 +5,11 @@ use std::io::Error as IoError;
 use std::result;
 use std::time::Duration;
 
+use engine::rocks::TablePropertiesCollection;
+use engine::CfName;
+use engine::IterOption;
+use engine::Peekable;
+use engine::CF_DEFAULT;
 use kvproto::errorpb;
 use kvproto::kvrpcpb::Context;
 use kvproto::raft_cmdpb::{
@@ -18,13 +23,10 @@ use super::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::raftstore::errors::Error as RaftServerError;
-use crate::raftstore::store::engine::IterOption;
-use crate::raftstore::store::engine::Peekable;
 use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
-use crate::storage::engine::TablePropertiesCollection;
-use crate::storage::{self, engine, CfName, Key, Value, CF_DEFAULT};
+use crate::storage::{self, kv, Key, Value};
 
 quick_error! {
     #[derive(Debug)]
@@ -38,9 +40,7 @@ quick_error! {
             cause(e)
             description(e.description())
         }
-        RocksDb(reason: String) {
-            description(reason)
-        }
+
         Server(e: RaftServerError) {
             from()
             cause(e)
@@ -65,7 +65,6 @@ fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
         Error::Io(_) => RequestStatusKind::err_io,
-        Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
         Error::Server(_) => RequestStatusKind::err_server,
         Error::InvalidResponse(_) => RequestStatusKind::err_invalid_resp,
         Error::InvalidRequest(_) => RequestStatusKind::err_invalid_req,
@@ -73,33 +72,33 @@ fn get_status_kind_from_error(e: &Error) -> RequestStatusKind {
     }
 }
 
-fn get_status_kind_from_engine_error(e: &engine::Error) -> RequestStatusKind {
+fn get_status_kind_from_engine_error(e: &kv::Error) -> RequestStatusKind {
     match *e {
-        engine::Error::Request(ref header) => {
+        kv::Error::Request(ref header) => {
             RequestStatusKind::from(storage::get_error_kind_from_header(header))
         }
-        engine::Error::RocksDb(_) => RequestStatusKind::err_rocksdb,
-        engine::Error::Timeout(_) => RequestStatusKind::err_timeout,
-        engine::Error::EmptyRequest => RequestStatusKind::err_empty_request,
-        engine::Error::Other(_) => RequestStatusKind::err_other,
+
+        kv::Error::Timeout(_) => RequestStatusKind::err_timeout,
+        kv::Error::EmptyRequest => RequestStatusKind::err_empty_request,
+        kv::Error::Other(_) => RequestStatusKind::err_other,
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<Error> for engine::Error {
-    fn from(e: Error) -> engine::Error {
+impl From<Error> for kv::Error {
+    fn from(e: Error) -> kv::Error {
         match e {
-            Error::RequestFailed(e) => engine::Error::Request(e),
+            Error::RequestFailed(e) => kv::Error::Request(e),
             Error::Server(e) => e.into(),
             e => box_err!(e),
         }
     }
 }
 
-impl From<RaftServerError> for engine::Error {
-    fn from(e: RaftServerError) -> engine::Error {
-        engine::Error::Request(e.into())
+impl From<RaftServerError> for kv::Error {
+    fn from(e: RaftServerError) -> kv::Error {
+        kv::Error::Request(e.into())
     }
 }
 
@@ -252,10 +251,10 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         ctx: &Context,
         modifies: Vec<Modify>,
         cb: Callback<()>,
-    ) -> engine::Result<()> {
+    ) -> kv::Result<()> {
         fail_point!("raftkv_async_write");
         if modifies.is_empty() {
-            return Err(engine::Error::EmptyRequest);
+            return Err(kv::Error::EmptyRequest);
         }
 
         let mut reqs = Vec::with_capacity(modifies.len());
@@ -324,7 +323,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
         })
     }
 
-    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> engine::Result<()> {
+    fn async_snapshot(&self, ctx: &Context, cb: Callback<Self::Snap>) -> kv::Result<()> {
         fail_point!("raftkv_async_snapshot");
         let mut req = Request::new();
         req.set_cmd_type(CmdType::Snap);
@@ -363,7 +362,7 @@ impl<S: RaftStoreRouter> Engine for RaftKv<S> {
 impl Snapshot for RegionSnapshot {
     type Iter = RegionIterator;
 
-    fn get(&self, key: &Key) -> engine::Result<Option<Value>> {
+    fn get(&self, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get", |_| Err(box_err!(
             "injected error for get"
         )));
@@ -371,7 +370,7 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn get_cf(&self, cf: CfName, key: &Key) -> engine::Result<Option<Value>> {
+    fn get_cf(&self, cf: CfName, key: &Key) -> kv::Result<Option<Value>> {
         fail_point!("raftkv_snapshot_get_cf", |_| Err(box_err!(
             "injected error for get_cf"
         )));
@@ -379,7 +378,7 @@ impl Snapshot for RegionSnapshot {
         Ok(v.map(|v| v.to_vec()))
     }
 
-    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> engine::Result<Cursor<Self::Iter>> {
+    fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter", |_| Err(box_err!(
             "injected error for iter"
         )));
@@ -391,7 +390,7 @@ impl Snapshot for RegionSnapshot {
         cf: CfName,
         iter_opt: IterOption,
         mode: ScanMode,
-    ) -> engine::Result<Cursor<Self::Iter>> {
+    ) -> kv::Result<Cursor<Self::Iter>> {
         fail_point!("raftkv_snapshot_iter_cf", |_| Err(box_err!(
             "injected error for iter_cf"
         )));
@@ -401,7 +400,7 @@ impl Snapshot for RegionSnapshot {
         ))
     }
 
-    fn get_properties_cf(&self, cf: CfName) -> engine::Result<TablePropertiesCollection> {
+    fn get_properties_cf(&self, cf: CfName) -> kv::Result<TablePropertiesCollection> {
         RegionSnapshot::get_properties_cf(self, cf).map_err(|e| e.into())
     }
 
@@ -425,14 +424,14 @@ impl EngineIterator for RegionIterator {
         RegionIterator::prev(self)
     }
 
-    fn seek(&mut self, key: &Key) -> engine::Result<bool> {
+    fn seek(&mut self, key: &Key) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek", |_| Err(box_err!(
             "injected error for iter_seek"
         )));
         RegionIterator::seek(self, key.as_encoded()).map_err(From::from)
     }
 
-    fn seek_for_prev(&mut self, key: &Key) -> engine::Result<bool> {
+    fn seek_for_prev(&mut self, key: &Key) -> kv::Result<bool> {
         fail_point!("raftkv_iter_seek_for_prev", |_| Err(box_err!(
             "injected error for iter_seek_for_prev"
         )));
@@ -451,7 +450,7 @@ impl EngineIterator for RegionIterator {
         RegionIterator::valid(self)
     }
 
-    fn validate_key(&self, key: &Key) -> engine::Result<()> {
+    fn validate_key(&self, key: &Key) -> kv::Result<()> {
         self.should_seekable(key.as_encoded()).map_err(From::from)
     }
 

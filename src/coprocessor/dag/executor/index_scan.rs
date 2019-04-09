@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
+use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
@@ -69,8 +69,8 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 
     #[inline]
-    fn scan_on(&self) -> ScanOn {
-        ScanOn::Index
+    fn scan_on(&self) -> super::super::scanner::ScanOn {
+        super::super::scanner::ScanOn::Index
     }
 
     // Since the unique index wouldn't always come with
@@ -125,12 +125,10 @@ pub mod tests {
     use crate::storage::SnapshotStore;
     use crate::util::collections::HashMap;
 
-    use super::super::{
-        scanner::tests::Data,
-        tests::{new_col_info, TestStore},
-        Executor,
-    };
+    use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::executor::Executor;
+    use crate::coprocessor::dag::scanner::tests::Data;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

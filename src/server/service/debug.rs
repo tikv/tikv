@@ -2,6 +2,8 @@
 
 use crate::grpc::{Error as GrpcError, WriteFlags};
 use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use engine::rocks::util::stats as rocksdb_stats;
+use engine::Engines;
 use fail;
 use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
@@ -15,10 +17,10 @@ use kvproto::raft_cmdpb::{
 use protobuf::text_format::print_to_string;
 
 use crate::raftstore::store::msg::Callback;
-use crate::raftstore::store::Engines;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
-use crate::util::{metrics, rocksdb_util::stats as rocksdb_stats};
+use crate::util::metrics;
+
 use tikv_alloc;
 
 fn error_to_status(e: Error) -> RpcStatus {

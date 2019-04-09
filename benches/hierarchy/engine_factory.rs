@@ -3,7 +3,7 @@
 use std::fmt;
 
 use tikv::storage::{
-    engine::{BTreeEngine, RocksEngine},
+    kv::{BTreeEngine, RocksEngine},
     Engine, TestEngineBuilder,
 };
 

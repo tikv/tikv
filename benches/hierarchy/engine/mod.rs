@@ -3,7 +3,7 @@
 use criterion::{black_box, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::{Engine, Snapshot};
+use tikv::storage::kv::{Engine, Snapshot};
 use tikv::storage::{Key, Value};
 
 use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS, DEFAULT_KV_GENERATOR_SEED};

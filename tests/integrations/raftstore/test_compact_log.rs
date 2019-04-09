@@ -1,13 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use protobuf;
-use tikv::storage::engine::DB;
-
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
+use engine::rocks::DB;
+use engine::*;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
-use tikv::storage::CF_RAFT;
 use tikv::util::collections::HashMap;
 use tikv::util::config::*;
 

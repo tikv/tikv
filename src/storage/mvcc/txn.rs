@@ -5,7 +5,7 @@ use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use crate::storage::engine::{Modify, ScanMode, Snapshot};
+use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
@@ -379,7 +379,7 @@ impl<S: Snapshot> MvccTxn<S> {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::engine::Engine;
+    use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};

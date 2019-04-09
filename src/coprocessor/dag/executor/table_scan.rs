@@ -3,7 +3,7 @@
 use crate::util::collections::HashSet;
 use std::sync::Arc;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
+use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
@@ -45,8 +45,8 @@ impl InnerExecutor for TableInnerExecutor {
     }
 
     #[inline]
-    fn scan_on(&self) -> ScanOn {
-        ScanOn::Table
+    fn scan_on(&self) -> super::super::scanner::ScanOn {
+        super::super::scanner::ScanOn::Table
     }
 
     #[inline]
@@ -87,11 +87,10 @@ mod tests {
     use crate::storage::SnapshotStore;
 
     use super::super::{
-        scanner::tests::{get_point_range, prepare_table_data, Data},
+        super::scanner::tests::{get_point_range, prepare_table_data, Data},
         tests::{get_range, TestStore},
         Executor,
     };
-    use super::*;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -145,7 +144,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         let row = table_scanner.next().unwrap().unwrap().take_origin();
         assert_eq!(row.handle, handle as i64);
@@ -181,7 +181,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap().take_origin();
@@ -216,7 +217,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

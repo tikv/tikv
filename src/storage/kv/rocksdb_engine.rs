@@ -5,77 +5,19 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use engine::rocks;
+use engine::rocks::util::CFOptions;
+use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
+use engine::Engines;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
 use kvproto::errorpb::Error as ErrorHeader;
-pub use rocksdb_do_not_use::{
-    load_latest_options,
-    rocksdb::supported_compression,
-    // NOTE(yu): maybe this should be an explicit import
-    //
-    // Like crate::storage::engine::options::UnsafeSnap?
-    rocksdb_options::UnsafeSnap,
-
-    run_ldb_tool,
-    set_external_sst_file_global_seq_no,
-
-    BlockBasedOptions,
-    CColumnFamilyDescriptor,
-    CFHandle,
-    ColumnFamilyOptions,
-    CompactOptions,
-    CompactionJobInfo,
-    CompactionOptions,
-    CompactionPriority,
-    DBBottommostLevelCompaction,
-    DBCompactionStyle,
-    DBCompressionType,
-    DBEntryType,
-    DBIterator,
-    DBOptions,
-    DBRateLimiterMode,
-    DBRecoveryMode,
-    DBStatisticsHistogramType,
-    DBStatisticsTickerType,
-    DBVector,
-    Env,
-    EnvOptions,
-    EventListener,
-    ExternalSstFileInfo,
-    FlushJobInfo,
-    HistogramData,
-    IngestExternalFileOptions,
-    IngestionInfo,
-    Kv,
-    PerfContext,
-    Range,
-    RateLimiter,
-    ReadOptions,
-    SeekKey,
-    SequentialFile,
-    SliceTransform,
-    SstFileWriter,
-    TablePropertiesCollection,
-    TablePropertiesCollector,
-    TablePropertiesCollectorFactory,
-    TitanBlobIndex,
-    TitanDBOptions,
-    UserCollectedProperties,
-    Writable,
-    WriteBatch,
-    WriteOptions,
-    WriteStallCondition,
-    WriteStallInfo,
-    DB,
-};
-
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use crate::raftstore::store::engine::{IterOption, Peekable};
-use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-
+use crate::storage::{Key, Value};
 use crate::util::escape;
-use crate::util::rocksdb_util::{self, CFOptions};
 use crate::util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
@@ -83,7 +25,7 @@ use super::{
     ScanMode, Snapshot,
 };
 
-pub use crate::raftstore::store::engine::SyncSnapshot as RocksSnapshot;
+pub use engine::SyncSnapshot as RocksSnapshot;
 
 const TEMP_DIR: &str = "";
 
@@ -101,7 +43,7 @@ impl Display for Task {
     }
 }
 
-struct Runner(Arc<DB>);
+struct Runner(Engines);
 
 impl Runnable<Task> for Runner {
     fn run(&mut self, t: Task) {
@@ -109,7 +51,7 @@ impl Runnable<Task> for Runner {
             Task::Write(modifies, cb) => cb((CbContext::new(), write_modifies(&self.0, modifies))),
             Task::Snapshot(cb) => cb((
                 CbContext::new(),
-                Ok(RocksSnapshot::new(Arc::clone(&self.0))),
+                Ok(RocksSnapshot::new(Arc::clone(&self.0.kv))),
             )),
         }
     }
@@ -133,7 +75,7 @@ impl Drop for RocksEngineCore {
 pub struct RocksEngine {
     core: Arc<Mutex<RocksEngineCore>>,
     sched: Scheduler<Task>,
-    db: Arc<DB>,
+    engines: Engines,
 }
 
 impl RocksEngine {
@@ -151,17 +93,20 @@ impl RocksEngine {
             _ => (path.to_owned(), None),
         };
         let mut worker = Worker::new("engine-rocksdb");
-        let db = Arc::new(rocksdb_util::new_engine(&path, None, cfs, cfs_opts)?);
-        box_try!(worker.start(Runner(Arc::clone(&db))));
+        let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
+        // It does not use the raft_engine, so it is ok to fill with the same
+        // rocksdb.
+        let engines = Engines::new(db.clone(), db);
+        box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
             core: Arc::new(Mutex::new(RocksEngineCore { temp_dir, worker })),
-            db,
+            engines,
         })
     }
 
     pub fn get_rocksdb(&self) -> Arc<DB> {
-        Arc::clone(&self.db)
+        Arc::clone(&self.engines.kv)
     }
 
     pub fn stop(&self) {
@@ -243,7 +188,7 @@ impl TestEngineBuilder {
     }
 }
 
-fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
+fn write_modifies(engine: &Engines, modifies: Vec<Modify>) -> Result<()> {
     let wb = WriteBatch::new();
     for rev in modifies {
         let res = match rev {
@@ -253,7 +198,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.delete(k.as_encoded())
                 } else {
                     trace!("RocksEngine: delete_cf"; "cf" => cf, "key" => %k);
-                    let handle = rocksdb_util::get_cf_handle(db, cf)?;
+                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
                     wb.delete_cf(handle, k.as_encoded())
                 }
             }
@@ -263,7 +208,7 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     wb.put(k.as_encoded(), &v)
                 } else {
                     trace!("RocksEngine: put_cf"; "cf" => cf, "key" => %k, "value" => escape(&v));
-                    let handle = rocksdb_util::get_cf_handle(db, cf)?;
+                    let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
                     wb.put_cf(handle, k.as_encoded(), &v)
                 }
             }
@@ -274,17 +219,16 @@ fn write_modifies(db: &DB, modifies: Vec<Modify>) -> Result<()> {
                     "start_key" => %start_key,
                     "end_key" => %end_key
                 );
-                let handle = rocksdb_util::get_cf_handle(db, cf)?;
+                let handle = rocks::util::get_cf_handle(&engine.kv, cf)?;
                 wb.delete_range_cf(handle, start_key.as_encoded(), end_key.as_encoded())
             }
         };
+        // TODO: turn the error into an engine error.
         if let Err(msg) = res {
-            return Err(Error::RocksDb(msg));
+            return Err(box_err!("{}", msg));
         }
     }
-    if let Err(msg) = db.write(&wb) {
-        return Err(Error::RocksDb(msg));
-    }
+    engine.write_kv(&wb)?;
     Ok(())
 }
 

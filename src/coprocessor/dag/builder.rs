@@ -7,12 +7,13 @@ use tipb::executor::{self, ExecType};
 
 use crate::storage::Store;
 
-use super::batch_executor::executors::*;
-use super::batch_executor::interface::*;
+use super::batch::executors::*;
+use super::batch::interface::*;
 use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
+use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
@@ -96,6 +97,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = Box::new(BatchTableScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
                     store,
                     config.clone(),
                     columns_info,
@@ -109,6 +111,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_idx_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = Box::new(BatchIndexScanExecutor::new(
+                    ExecSummaryCollectorDisabled,
                     store,
                     config.clone(),
                     columns_info,

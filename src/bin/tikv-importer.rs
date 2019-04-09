@@ -5,7 +5,7 @@
 
 #[macro_use(
     slog_kv,
-    slog_error,
+    slog_crit,
     slog_info,
     slog_log,
     slog_record,

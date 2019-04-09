@@ -50,7 +50,7 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
-            display("unknown error {:?}", err)
+            display("{}", err)
         }
     }
 }

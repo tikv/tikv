@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::storage::engine::Statistics;
+use crate::storage::kv::Statistics;
 use prometheus::local::LocalIntCounterVec;
 
 /// `ExecutorMetrics` is metrics collected from executors group by request.

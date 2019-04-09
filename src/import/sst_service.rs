@@ -3,6 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
+use engine::rocks::util::compact_files_in_range;
+use engine::rocks::DB;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
@@ -12,9 +14,7 @@ use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
-use crate::storage::engine::DB;
 use crate::util::future::paired_future_callback;
-use crate::util::rocksdb_util::compact_files_in_range;
 use crate::util::time::Instant;
 
 use super::import_mode::*;

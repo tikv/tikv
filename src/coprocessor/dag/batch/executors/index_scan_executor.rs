@@ -9,22 +9,24 @@ use tipb::schema::ColumnInfo;
 
 use crate::storage::Store;
 
-use super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<S: Store>(
-    super::scan_executor::ScanExecutor<
+pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
+    super::util::scan_executor::ScanExecutor<
+        C,
         S,
         IndexScanExecutorImpl,
-        super::ranges_iter::PointRangeConditional,
+        super::util::ranges_iter::PointRangeConditional,
     >,
 );
 
-impl<S: Store> BatchIndexScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(
+        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -46,7 +48,7 @@ impl<S: Store> BatchIndexScanExecutor<S> {
         let mut columns_len_without_handle = 0;
         let mut decode_handle = false;
         for ci in &columns_info {
-            schema.push(super::scan_executor::field_type_from_column_info(&ci));
+            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
             if ci.get_pk_handle() {
                 decode_handle = true;
             } else {
@@ -60,18 +62,19 @@ impl<S: Store> BatchIndexScanExecutor<S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper = super::scan_executor::ScanExecutor::new(
+        let wrapper = super::util::scan_executor::ScanExecutor::new(
+            summary_collector,
             imp,
             store,
             desc,
             key_ranges,
-            super::ranges_iter::PointRangeConditional::new(unique),
+            super::util::ranges_iter::PointRangeConditional::new(unique),
         )?;
         Ok(Self(wrapper))
     }
 }
 
-impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
+impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor<C, S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -102,7 +105,7 @@ struct IndexScanExecutorImpl {
     decode_handle: bool,
 }
 
-impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
+impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -120,13 +123,13 @@ impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Ok(Scanner::new(
+        Scanner::new(
             store,
             crate::coprocessor::dag::ScanOn::Index,
             desc,
             false,
             range,
-        )?)
+        )
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -231,6 +234,7 @@ mod tests {
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
+    use crate::coprocessor::dag::batch::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -322,6 +326,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -364,6 +369,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -430,6 +436,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -474,6 +481,7 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
+                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![

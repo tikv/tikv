@@ -10,8 +10,8 @@ use std::time::*;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
+use engine::Peekable;
 use test_raftstore::*;
-use tikv::raftstore::store::engine::Peekable;
 use tikv::raftstore::store::keys;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;

@@ -2,7 +2,6 @@
 
 pub mod cmd_resp;
 pub mod config;
-pub mod engine;
 pub mod fsm;
 pub mod keys;
 pub mod msg;
@@ -23,7 +22,6 @@ pub use self::bootstrap::{
     prepare_bootstrap_cluster, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
 pub use self::config::Config;
-pub use self::engine::{Iterable, Mutable, Peekable};
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
     Callback, CasualMessage, PeerMsg, PeerTick, RaftCommand, ReadCallback, ReadResponse,
@@ -43,7 +41,6 @@ pub use self::snap::{
     SnapManagerBuilder, Snapshot, SnapshotDeleter, SnapshotStatistics,
 };
 pub use self::transport::{CasualRouter, ProposalRouter, StoreRouter, Transport};
-pub use self::util::Engines;
 pub use self::worker::{KeyEntry, ReadTask, RegionTask};
 
 // Only used in tests

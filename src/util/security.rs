@@ -7,7 +7,7 @@ use std::path::Path;
 use std::ptr;
 use std::sync::Arc;
 
-use crate::storage::engine::Env;
+use engine::rocks::Env;
 
 use crate::grpc::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,

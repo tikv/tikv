@@ -6,24 +6,25 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use tempdir::TempDir;
-use tikv::storage::engine::DB;
-
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
+use tempdir::TempDir;
 
+use engine::rocks;
+use engine::rocks::DB;
+use engine::Engines;
+use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::storage::CF_DEFAULT;
 use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, rocksdb_util, HandyRwLock};
+use tikv::util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -132,12 +133,12 @@ impl<T: Simulator> Cluster<T> {
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
             let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
@@ -168,8 +169,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocksdb_util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocksdb_util::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
+            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
         }
     }
 

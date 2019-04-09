@@ -6,11 +6,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::storage::engine::DB;
-use crate::storage::CF_WRITE;
+use crate::storage::mvcc::properties::get_range_entries_and_versions;
 use crate::util::escape;
-use crate::util::rocksdb_util::{self, compact_range, stats::get_range_entries_and_versions};
 use crate::util::worker::Runnable;
+use engine::rocks;
+use engine::rocks::util::compact_range;
+use engine::CF_WRITE;
+use engine::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -97,7 +99,7 @@ impl Runner {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, cf_name));
+        let handle = box_try!(rocks::util::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
@@ -197,7 +199,7 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(rocksdb_util::get_cf_handle(engine, CF_WRITE));
+    let cf = box_try!(rocks::util::get_cf_handle(engine, CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
@@ -242,17 +244,18 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
+    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
+    use engine::rocks::Writable;
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{WriteBatch, DB};
+    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::data_key;
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, WriteBatch, DB};
+    use crate::storage::mvcc::properties::get_range_entries_and_versions;
+    use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
-    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{
-        get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
-        stats::get_range_entries_and_versions, CFOptions,
-    };
 
     use super::*;
 

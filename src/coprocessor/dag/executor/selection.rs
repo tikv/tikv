@@ -91,7 +91,7 @@ mod tests {
     use crate::coprocessor::codec::datum::Datum;
     use crate::util::codec::number::NumberEncoder;
 
-    use super::super::tests::{gen_table_scan_executor, new_col_info};
+    use super::super::tests::*;
     use super::*;
 
     fn new_const_expr() -> Expr {

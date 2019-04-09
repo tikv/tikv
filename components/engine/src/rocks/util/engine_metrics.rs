@@ -1,14 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
 
-use crate::storage::engine::{
-    DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType, HistogramData, DB,
+use crate::rocks::{
+    self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
+    HistogramData, DB,
 };
-use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
-use time;
-
-use crate::util::rocksdb_util;
 
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
@@ -889,7 +887,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
 
 pub fn flush_engine_properties(engine: &DB, name: &str) {
     for cf in engine.cf_names() {
-        let handle = rocksdb_util::get_cf_handle(engine, cf).unwrap();
+        let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
         // families.
         let cf_used_size = engine
@@ -943,7 +941,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         for level in 0..opts.get_num_levels() {
             // Compression ratio at levels
             if let Some(v) =
-                rocksdb_util::get_engine_compression_ratio_at_level(engine, handle, level)
+                rocks::util::get_engine_compression_ratio_at_level(engine, handle, level)
             {
                 STORE_ENGINE_COMPRESSION_RATIO_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
@@ -951,7 +949,7 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
             }
 
             // Num files at levels
-            if let Some(v) = rocksdb_util::get_cf_num_files_at_level(engine, handle, level) {
+            if let Some(v) = rocks::util::get_cf_num_files_at_level(engine, handle, level) {
                 STORE_ENGINE_NUM_FILES_AT_LEVEL_VEC
                     .with_label_values(&[name, cf, &level.to_string()])
                     .set(v as i64);
@@ -1242,14 +1240,14 @@ mod tests {
 
     use tempdir::TempDir;
 
-    use crate::storage::ALL_CFS;
-    use crate::util::rocksdb_util;
+    use crate::rocks;
+    use crate::ALL_CFS;
 
     #[test]
     fn test_flush() {
         let dir = TempDir::new("test-flush").unwrap();
         let db =
-            rocksdb_util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            rocks::util::new_engine(dir.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         for tp in ENGINE_TICKER_TYPES {
             flush_engine_ticker_metrics(*tp, 2, "test-name");
         }

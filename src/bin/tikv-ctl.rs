@@ -4,7 +4,7 @@
 extern crate clap;
 #[macro_use(
     slog_kv,
-    slog_error,
+    slog_crit,
     slog_info,
     slog_log,
     slog_record,
@@ -46,13 +46,14 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 
+use engine::rocks;
+use engine::Engines;
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::{keys, Engines};
+use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::engine::run_ldb_tool;
-use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb_util;
+use tikv::storage::Key;
 use tikv::util::security::{self, SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
@@ -83,7 +84,7 @@ fn new_debug_executor(
                     security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
-            let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
                 .map(ToString::to_string)
@@ -97,7 +98,7 @@ fn new_debug_executor(
                 raft_db_opts.set_env(encrypted_env);
             }
             let raft_db =
-                rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
@@ -692,19 +693,19 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: Vec<Region>) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_all(&self, _: usize, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
@@ -909,7 +910,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only avaliable for online mode");
+        unimplemented!("only available for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -2196,7 +2197,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
             security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    run_ldb_tool(&args, &opts);
+    engine::rocks::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

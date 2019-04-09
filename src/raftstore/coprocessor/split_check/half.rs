@@ -1,15 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::ops::Bound::Excluded;
+
+use engine::rocks::DB;
+use engine::util;
+use engine::{CF_DEFAULT, CF_WRITE};
+use kvproto::metapb::Region;
+use kvproto::pdpb::CheckPolicy;
+
 use crate::raftstore::store::keys;
-use crate::storage::engine::DB;
+use crate::storage::mvcc::properties::RangeProperties;
 use crate::util::config::ReadableSize;
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::size::get_region_approximate_size_cf;
 use super::Host;
-use crate::raftstore::store::util as raftstore_util;
-use kvproto::metapb::Region;
-use kvproto::pdpb::CheckPolicy;
 
 const BUCKET_NUMBER_LIMIT: usize = 1024;
 const BUCKET_SIZE_LIMIT_MB: u64 = 512;
@@ -54,10 +60,10 @@ impl SplitChecker for Checker {
     }
 
     fn approximate_split_keys(&mut self, region: &Region, engine: &DB) -> Result<Vec<Vec<u8>>> {
-        Ok(box_try!(raftstore_util::get_region_approximate_middle(
-            engine, region
-        )
-        .map(|keys| keys.map_or(vec![], |key| vec![key]))))
+        let ks = box_try!(get_region_approximate_middle(engine, region)
+            .map(|keys| keys.map_or(vec![], |key| vec![key])));
+
+        Ok(ks)
     }
 
     fn policy(&self) -> CheckPolicy {
@@ -101,23 +107,82 @@ impl SplitCheckObserver for HalfCheckObserver {
     }
 }
 
+/// Get region approximate middle key based on default and write cf size.
+pub fn get_region_approximate_middle(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+
+    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
+    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+
+    let middle_by_cf = if default_cf_size >= write_cf_size {
+        CF_DEFAULT
+    } else {
+        CF_WRITE
+    };
+
+    get_region_approximate_middle_cf(db, middle_by_cf, region)
+}
+
+/// Get the approximate middle key of the region. If we suppose the region
+/// is stored on disk as a plain file, "middle key" means the key whose
+/// position is in the middle of the file.
+///
+/// The returned key maybe is timestamped if transaction KV is used,
+/// and must start with "z".
+fn get_region_approximate_middle_cf(
+    db: &DB,
+    cfname: &str,
+    region: &Region,
+) -> Result<Option<Vec<u8>>> {
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let collection = box_try!(util::get_range_properties_cf(
+        db, cfname, &start_key, &end_key
+    ));
+
+    let mut keys = Vec::new();
+    for (_, v) in &*collection {
+        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        keys.extend(
+            props
+                .offsets
+                .range::<[u8], _>((Excluded(start_key.as_slice()), Excluded(end_key.as_slice())))
+                .map(|(k, _)| k.to_owned()),
+        );
+    }
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    keys.sort();
+    // Calculate the position by (len-1)/2. So it's the left one
+    // of two middle positions if the number of keys is even.
+    let middle = (keys.len() - 1) / 2;
+    Ok(Some(keys.swap_remove(middle)))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::iter;
     use std::sync::mpsc;
     use std::sync::Arc;
 
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::rocks::Writable;
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
     use kvproto::metapb::Region;
     use kvproto::pdpb::CheckPolicy;
     use tempdir::TempDir;
 
     use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::{Key, ALL_CFS, CF_DEFAULT};
-    use crate::util::config::ReadableSize;
-    use crate::util::rocksdb_util::{
-        new_engine_opt, properties::SizePropertiesCollectorFactory, CFOptions,
+    use crate::storage::mvcc::properties::{
+        RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
     };
+    use crate::storage::Key;
+    use crate::util::config::ReadableSize;
+    use crate::util::escape;
     use crate::util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
@@ -177,5 +242,44 @@ mod tests {
             CheckPolicy::APPROXIMATE,
         ));
         must_split_at(&rx, &region, vec![split_key.into_encoded()]);
+    }
+
+    #[test]
+    fn test_get_region_approximate_middle_cf() {
+        let tmp = TempDir::new("test_raftstore_util").unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(RangePropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.size-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let engine = rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap();
+
+        let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
+        let mut big_value = Vec::with_capacity(256);
+        big_value.extend(iter::repeat(b'v').take(256));
+        for i in 0..100 {
+            let k = format!("key_{:03}", i).into_bytes();
+            let k = keys::data_key(Key::from_raw(&k).as_encoded());
+            engine.put_cf(cf_handle, &k, &big_value).unwrap();
+            // Flush for every key so that we can know the exact middle key.
+            engine.flush_cf(cf_handle, true).unwrap();
+        }
+
+        let mut region = Region::new();
+        region.mut_peers().push(Peer::new());
+        let middle_key = get_region_approximate_middle_cf(&engine, CF_DEFAULT, &region)
+            .unwrap()
+            .unwrap();
+
+        let middle_key = Key::from_encoded_slice(keys::origin_key(&middle_key))
+            .into_raw()
+            .unwrap();
+        assert_eq!(escape(&middle_key), "key_049");
     }
 }
