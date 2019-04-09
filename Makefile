@@ -66,7 +66,7 @@ build:
 	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
 
 ctl:
-	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl 
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
