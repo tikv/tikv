@@ -33,7 +33,6 @@ mod aggregation;
 mod index_scan;
 mod limit;
 mod scan;
-pub mod scanner;
 mod selection;
 mod table_scan;
 mod topn;
@@ -46,7 +45,6 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
 pub use self::scan::ScanExecutor;
-pub use self::scanner::{ScanOn, Scanner};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -274,7 +272,7 @@ pub trait Executor {
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
-    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};

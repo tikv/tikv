@@ -20,7 +20,8 @@ use tipb::checksum::{ChecksumAlgorithm, ChecksumRequest, ChecksumResponse, Check
 
 use crate::storage::{Snapshot, SnapshotStore};
 
-use crate::coprocessor::dag::executor::{ExecutorMetrics, ScanOn, Scanner};
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::dag::{ScanOn, Scanner};
 use crate::coprocessor::*;
 
 // `ChecksumContext` is used to handle `ChecksumRequest`

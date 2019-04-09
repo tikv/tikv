@@ -21,18 +21,18 @@ use tipb::schema::ColumnInfo;
 use crate::storage::Store;
 use crate::util::collections::HashMap;
 
-use super::interface::*;
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
 pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
-    super::scan_executor::ScanExecutor<
+    super::util::scan_executor::ScanExecutor<
         C,
         S,
         TableScanExecutorImpl,
-        super::ranges_iter::PointRangeEnable,
+        super::util::ranges_iter::PointRangeEnable,
     >,
 );
 
@@ -55,7 +55,7 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
         for (index, mut ci) in columns_info.into_iter().enumerate() {
             // For each column info, we need to extract the following info:
             // - Corresponding field type (push into `schema`).
-            schema.push(super::scan_executor::field_type_from_column_info(&ci));
+            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
 
             // - Prepare column default value (will be used to fill missing column later).
             columns_default_value.push(ci.take_default_val());
@@ -82,13 +82,13 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
             handle_index,
             is_column_filled,
         };
-        let wrapper = super::scan_executor::ScanExecutor::new(
+        let wrapper = super::util::scan_executor::ScanExecutor::new(
             summary_collector,
             imp,
             store,
             desc,
             key_ranges,
-            super::ranges_iter::PointRangeEnable,
+            super::util::ranges_iter::PointRangeEnable,
         )?;
         Ok(Self(wrapper))
     }
@@ -141,7 +141,7 @@ struct TableScanExecutorImpl {
     is_column_filled: Vec<bool>,
 }
 
-impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
+impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -159,13 +159,13 @@ impl super::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Ok(Scanner::new(
+        Scanner::new(
             store,
             crate::coprocessor::dag::ScanOn::Table,
             desc,
             self.key_only,
             range,
-        )?)
+        )
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -315,8 +315,8 @@ mod tests {
     use crate::coprocessor::codec::data_type::VectorValue;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch_executor::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch_executor::statistics::*;
+    use crate::coprocessor::dag::batch::interface::BatchExecutor;
+    use crate::coprocessor::dag::batch::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};

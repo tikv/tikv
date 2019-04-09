@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use kvproto::metapb::*;
 
 use crate::pd::RegionInfo;
-use crate::util::rocksdb_util::properties::SizeProperties;
+use crate::storage::mvcc::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -333,7 +333,7 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use crate::storage::engine::Writable;
+    use engine::rocks::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 
