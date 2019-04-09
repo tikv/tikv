@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::env;
+use std::fmt;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
@@ -34,6 +35,16 @@ impl<'a> slog::ser::Serializer for Serializer<'a> {
 /// A logger that add a test case tag before each line of log.
 struct CaseTraceLogger {
     f: Option<Mutex<File>>,
+}
+
+// FIXME: Remove this type when slog::Never implements Display.
+#[derive(Debug)]
+enum Never {}
+
+impl fmt::Display for Never {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
 }
 
 impl CaseTraceLogger {
@@ -70,7 +81,7 @@ impl CaseTraceLogger {
 
 impl Drain for CaseTraceLogger {
     type Ok = ();
-    type Err = slog::Never;
+    type Err = Never;
     fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
         if let Some(ref out) = self.f {
             let mut w = out.lock().unwrap();
