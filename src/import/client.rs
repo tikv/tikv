@@ -71,7 +71,7 @@ impl Client {
             endpoints: vec![pd_addr.to_owned()],
         };
         let sec_mgr = SecurityManager::default();
-        let rpc_client = RpcClient::new(&cfg, Arc::new(sec_mgr))?;
+        let rpc_client = RpcClient::new(&cfg, Arc::new(sec_mgr));
         let env = EnvBuilder::new()
             .name_prefix("import-client")
             .cq_count(cq_count)

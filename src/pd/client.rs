@@ -34,7 +34,7 @@ use crate::util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
-const MAX_RETRY_TIMES: u64 = 10;
+const RETRY_LOG_PER: u64 = 10;
 const RETRY_INTERVAL_MS: u64 = 300;
 
 pub struct RpcClient {
@@ -43,28 +43,53 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
+    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> RpcClient {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        for _ in 0..MAX_RETRY_TIMES {
+        
+        // We don't want to repeat the *same* error multiple times in `RETY_LOG_PER` count...
+        // But if the log message changes we need to output both.
+        // We can't compare PD Errors, but we can compare strings.
+        let mut cached_error = None;
+        let mut attempts_with_cached_error = 0;
+
+        loop {
             match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
                 Ok((client, members)) => {
-                    return Ok(RpcClient {
+                    return RpcClient {
                         cluster_id: members.get_header().get_cluster_id(),
                         leader_client: LeaderClient::new(env, security_mgr, client, members),
-                    });
+                    };
                 }
                 Err(e) => {
-                    warn!("validate PD endpoints failed"; "err" => ?e);
+                    match cached_error.as_mut() {
+                        None => {
+                            warn!("validate PD endpoints failed"; "err" => ?e);
+                            attempts_with_cached_error += 1;
+                            cached_error = Some(format!("{}", e));
+                        },
+                        Some(ref mut cached) if **cached == format!("{}", e) => {
+                            if attempts_with_cached_error == RETRY_LOG_PER {
+                                warn!("Multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                                attempts_with_cached_error = 0;
+                            }
+                            attempts_with_cached_error += 1;
+                        },
+                        Some(ref mut cached) => {
+                            warn!("Multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                            warn!("Last attempt to validate PD endpoints failed"; "err" => ?e);
+                            attempts_with_cached_error = 1;
+                            **cached = format!("{}", e);
+                        }
+                    }
                     thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
                 }
             }
         }
-        Err(box_err!("endpoints are invalid"))
     }
 
     /// Creates a new request header.
