@@ -27,8 +27,8 @@ use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();

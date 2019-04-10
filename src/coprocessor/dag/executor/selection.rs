@@ -100,7 +100,7 @@ mod tests {
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use crate::coprocessor::codec::datum::Datum;
-    use crate::util::codec::number::NumberEncoder;
+    use tikv_util::codec::number::NumberEncoder;
 
     use super::super::tests::*;
     use super::*;

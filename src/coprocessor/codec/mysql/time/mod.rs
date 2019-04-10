@@ -31,8 +31,8 @@ use crate::coprocessor::codec::mysql::duration::{
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;

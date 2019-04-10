@@ -34,8 +34,8 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, Raf
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, HandyRwLock};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 

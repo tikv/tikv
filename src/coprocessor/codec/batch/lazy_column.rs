@@ -44,7 +44,7 @@ impl std::fmt::Debug for LazyBatchColumn {
             LazyBatchColumn::Raw(ref v) => {
                 let vec_display: Vec<_> = v
                     .iter()
-                    .map(|item| crate::util::escape(item.as_slice()))
+                    .map(|item| tikv_util::escape(item.as_slice()))
                     .collect();
                 f.debug_tuple("Raw").field(&vec_display).finish()
             }

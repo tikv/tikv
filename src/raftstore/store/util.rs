@@ -25,8 +25,8 @@ use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::raftstore::{Error, Result};
-use crate::util::time::monotonic_raw_now;
-use crate::util::{escape, Either};
+use tikv_util::time::monotonic_raw_now;
+use tikv_util::{escape, Either};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -619,7 +619,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use crate::raftstore::store::peer_storage;
-    use crate::util::time::{monotonic_now, monotonic_raw_now};
+    use tikv_util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;
 

@@ -30,10 +30,10 @@ use crate::coprocessor::Endpoint;
 use crate::import::ImportSSTService;
 use crate::raftstore::store::SnapManager;
 use crate::storage::{Engine, Storage};
-use crate::util::security::SecurityManager;
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
-use crate::util::worker::Worker;
-use crate::util::Either;
+use tikv_util::security::SecurityManager;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::worker::Worker;
+use tikv_util::Either;
 
 use super::load_statistics::*;
 use super::raft_client::RaftClient;
@@ -253,10 +253,10 @@ mod tests {
     use crate::raftstore::Result as RaftStoreResult;
     use crate::server::readpool::{self, ReadPool};
     use crate::storage::TestStorageBuilder;
-    use crate::util::security::SecurityConfig;
-    use crate::util::worker::FutureWorker;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
+    use tikv_util::security::SecurityConfig;
+    use tikv_util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {

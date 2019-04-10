@@ -18,7 +18,7 @@ use std::time::Duration;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 fn test_basic_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;

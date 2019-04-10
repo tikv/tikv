@@ -14,7 +14,7 @@
 use kvproto::kvrpcpb::Context;
 
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use super::*;
 

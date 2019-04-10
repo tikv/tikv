@@ -22,7 +22,7 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::{Error, Result};
-use crate::util::codec::number;
+use tikv_util::codec::number;
 
 /// Helper to build an `RpnExpression`.
 ///
@@ -388,7 +388,7 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_append_rpn_nodes_recursively() {
-        use crate::util::codec::number::NumberEncoder;
+        use tikv_util::codec::number::NumberEncoder;
 
         // Input:
         // FnD(a, FnA(FnC(b, c, d)), FnA(FnB(e, f))

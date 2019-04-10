@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use test_raftstore::*;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 // TODO add epoch not match test cases.
 

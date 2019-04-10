@@ -21,7 +21,7 @@ use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::properties::RangeProperties;
-use crate::util::config::ReadableSize;
+use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -192,9 +192,9 @@ mod tests {
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
     };
     use crate::storage::Key;
-    use crate::util::config::ReadableSize;
-    use crate::util::escape;
-    use crate::util::worker::Runnable;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::escape;
+    use tikv_util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
     use super::*;

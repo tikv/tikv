@@ -12,7 +12,6 @@
 // limitations under the License.
 
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util;
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -133,7 +132,7 @@ impl Error {
     }
 
     pub fn unexpected_eof() -> Error {
-        util::codec::Error::unexpected_eof().into()
+        tikv_util::codec::Error::unexpected_eof().into()
     }
 
     pub fn invalid_time_format(val: &str) -> Error {
@@ -171,15 +170,15 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
-impl From<util::codec::Error> for Error {
-    fn from(err: util::codec::Error) -> Error {
+impl From<tikv_util::codec::Error> for Error {
+    fn from(err: tikv_util::codec::Error) -> Error {
         box_err!("codec:{:?}", err)
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        let uerr: util::codec::Error = err.into();
+        let uerr: tikv_util::codec::Error = err.into();
         uerr.into()
     }
 }

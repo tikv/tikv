@@ -17,8 +17,8 @@ use engine::rocks::DB;
 use engine::*;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
-use tikv::util::collections::HashMap;
-use tikv::util::config::*;
+use tikv_util::collections::HashMap;
+use tikv_util::config::*;
 
 fn get_msg_cf_or_default<M: protobuf::Message + Default>(engine: &DB, cf: &str, key: &[u8]) -> M {
     engine.get_msg_cf(cf, key).unwrap().unwrap_or_default()

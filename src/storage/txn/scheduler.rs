@@ -40,9 +40,9 @@ use prometheus::HistogramTimer;
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
-use crate::util::collections::HashMap;
-use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
-use crate::util::worker::{self, Runnable};
+use tikv_util::collections::HashMap;
+use tikv_util::threadpool::{ThreadPool, ThreadPoolBuilder};
+use tikv_util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
@@ -501,8 +501,8 @@ mod tests {
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
     use crate::storage::{Command, Key, Mutation, Options};
-    use crate::util::collections::HashMap;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

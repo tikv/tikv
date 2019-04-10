@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use crate::util::time::Instant;
+use tikv_util::time::Instant;
 
 use super::client::*;
 use super::metrics::*;

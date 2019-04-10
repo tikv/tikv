@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::util::collections::HashSet;
 use std::sync::Arc;
+use tikv_util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;

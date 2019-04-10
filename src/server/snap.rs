@@ -28,9 +28,9 @@ use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use crate::util::security::SecurityManager;
-use crate::util::worker::Runnable;
-use crate::util::DeferContext;
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::Runnable;
+use tikv_util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;

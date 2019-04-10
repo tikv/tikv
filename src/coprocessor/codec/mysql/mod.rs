@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::Result;
-use crate::util::escape;
+use tikv_util::escape;
 
 /// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
 pub const UNSPECIFIED_FSP: i8 = -1;

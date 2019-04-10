@@ -13,8 +13,8 @@
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::coprocessor::codec::table;
-use crate::util::codec::bytes::{self, encode_bytes};
-use crate::util::escape;
+use tikv_util::codec::bytes::{self, encode_bytes};
+use tikv_util::escape;
 
 use crate::raftstore::store::util;
 use kvproto::metapb::Region;
@@ -180,10 +180,10 @@ mod tests {
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::raftstore::coprocessor::AdminObserver;
     use crate::raftstore::coprocessor::ObserverContext;
-    use crate::util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
+    use tikv_util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();

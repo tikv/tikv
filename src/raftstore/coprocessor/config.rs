@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use super::Result;
-use crate::util::config::ReadableSize;
+use tikv_util::config::ReadableSize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

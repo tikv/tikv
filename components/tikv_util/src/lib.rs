@@ -11,6 +11,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(fnbox)]
+#![cfg_attr(test, feature(test))]
+
+#[macro_use]
+extern crate futures;
+#[macro_use]
+extern crate lazy_static;
+#[macro_use]
+extern crate prometheus;
+#[macro_use]
+extern crate quick_error;
+#[macro_use]
+extern crate serde_derive;
+#[macro_use(
+    kv,
+    slog_o,
+    slog_kv,
+    slog_error,
+    slog_warn,
+    slog_info,
+    slog_debug,
+    slog_crit,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
+extern crate slog;
+#[macro_use]
+extern crate slog_global;
+#[cfg(test)]
+extern crate test;
+
 use std::collections::hash_map::Entry;
 use std::collections::vec_deque::{Iter, VecDeque};
 use std::fs::File;
@@ -24,8 +57,6 @@ use std::{env, slice, thread, u64};
 use protobuf::Message;
 use rand::{self, ThreadRng};
 
-#[macro_use]
-pub mod macros;
 pub mod codec;
 pub mod collections;
 pub mod config;
@@ -33,6 +64,8 @@ pub mod file;
 pub mod future;
 pub mod futurepool;
 pub mod io_limiter;
+#[macro_use]
+pub mod macros;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
@@ -179,7 +212,7 @@ impl<T> HandyRwLock<T> for RwLock<T> {
 /// # Examples
 ///
 /// ```
-/// use tikv::util::escape;
+/// use tikv_util::escape;
 ///
 /// assert_eq!(r"ab", escape(b"ab"));
 /// assert_eq!(r"a\\023", escape(b"a\\023"));

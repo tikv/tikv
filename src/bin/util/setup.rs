@@ -19,8 +19,8 @@ use chrono;
 use clap::ArgMatches;
 
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv::util::collections::HashMap;
-use tikv::util::{self, logger};
+use tikv_util::collections::HashMap;
+use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -67,9 +67,9 @@ pub fn initial_logger(config: &TiKvConfig) {
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
-    util::metrics::monitor_threads("tikv")
+    tikv_util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
-    util::metrics::monitor_allocator_stats("tikv")
+    tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
@@ -82,7 +82,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     }
 
     info!("start prometheus client");
-    util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    tikv_util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
 #[allow(dead_code)]

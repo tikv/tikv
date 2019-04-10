@@ -24,9 +24,9 @@ use std::{cmp, i32, i64, mem, u32, u64};
 use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
-use crate::util::escape;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
+use tikv_util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {

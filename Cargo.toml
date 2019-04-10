@@ -82,7 +82,6 @@ backtrace = "0.2.3"
 clap = "2.32"
 url = "1.5"
 regex = "1.0"
-fnv = "1.0"
 sys-info = "0.5.1"
 indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
@@ -121,6 +120,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
+tikv_util = { path = "components/tikv_util" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -164,6 +164,7 @@ members = [
   "components/panic_hook",
   "components/cop_datatype",
   "components/log_wrappers",
+  "components/tikv_util",
 ]
 
 [profile.dev]

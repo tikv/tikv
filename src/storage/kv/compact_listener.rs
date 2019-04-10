@@ -14,8 +14,8 @@
 use std::cmp;
 
 use crate::storage::mvcc::properties::RangeProperties;
-use crate::util::collections::HashSet;
 use engine::rocks::{CompactionJobInfo, EventListener};
+use tikv_util::collections::HashSet;
 
 pub struct CompactedEvent {
     pub cf: String,

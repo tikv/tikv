@@ -18,7 +18,7 @@ use std::time::Instant;
 use libc::{getpid, pid_t};
 
 use crate::server::load_statistics::ThreadLoad;
-use crate::util::metrics::{cpu_total, get_thread_ids};
+use tikv_util::metrics::{cpu_total, get_thread_ids};
 
 use procinfo::pid;
 

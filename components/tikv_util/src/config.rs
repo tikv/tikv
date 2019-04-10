@@ -24,7 +24,6 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use crate::util;
 use engine::rocks::DBCompressionType;
 
 quick_error! {
@@ -478,14 +477,14 @@ impl ReadableDuration {
     }
 
     pub fn as_millis(&self) -> u64 {
-        util::time::duration_to_ms(self.0)
+        crate::time::duration_to_ms(self.0)
     }
 }
 
 impl fmt::Display for ReadableDuration {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut dur = util::time::duration_to_ms(self.0);
+        let mut dur = crate::time::duration_to_ms(self.0);
         let mut written = false;
         if dur >= DAY {
             written = true;

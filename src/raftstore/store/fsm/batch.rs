@@ -17,10 +17,10 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
-use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
+use tikv_util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {

@@ -28,12 +28,12 @@ use crate::storage::{
     Statistics, StatisticsSummary, StorageCb,
 };
 use crate::storage::{Key, MvccInfo, Value};
-use crate::util::collections::HashMap;
-use crate::util::threadpool::{
+use tikv_util::collections::HashMap;
+use tikv_util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
 };
-use crate::util::time::SlowTimer;
-use crate::util::worker::{self, ScheduleError};
+use tikv_util::time::SlowTimer;
+use tikv_util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
 use super::scheduler::Msg;

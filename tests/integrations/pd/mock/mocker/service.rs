@@ -13,7 +13,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tikv::util::collections::HashMap;
+use tikv_util::collections::HashMap;
 
 use kvproto::metapb::{Peer, Region, Store, StoreState};
 use kvproto::pdpb::*;

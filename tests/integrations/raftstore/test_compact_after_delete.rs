@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));

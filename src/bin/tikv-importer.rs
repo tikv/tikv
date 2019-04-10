@@ -40,7 +40,7 @@ use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::{self as tikv_util, check_environment_variables};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")

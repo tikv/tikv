@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::util::config::ReadableSize;
+use tikv_util::config::ReadableSize;
 
 // Assume a request can be finished in 1ms, a request at position x will wait about
 // 0.001 * x secs to be actual started. A server-is-busy error will trigger 2 seconds

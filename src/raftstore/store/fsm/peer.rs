@@ -40,10 +40,10 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::time::duration_to_sec;
-use crate::util::worker::{Scheduler, Stopped};
-use crate::util::{escape, is_zero_duration};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::duration_to_sec;
+use tikv_util::worker::{Scheduler, Stopped};
+use tikv_util::{escape, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};

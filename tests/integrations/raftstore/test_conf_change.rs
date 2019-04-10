@@ -28,8 +28,8 @@ use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::util::config::ReadableDuration;
-use tikv::util::HandyRwLock;
+use tikv_util::config::ReadableDuration;
+use tikv_util::HandyRwLock;
 
 fn test_simple_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

@@ -26,8 +26,8 @@ use crate::pd::Error as PdError;
 use crate::raftstore::Error as RaftServerError;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
-use crate::util::codec::Error as CodecError;
-use crate::util::worker::ScheduleError;
+use tikv_util::codec::Error as CodecError;
+use tikv_util::worker::ScheduleError;
 
 quick_error! {
     #[derive(Debug)]

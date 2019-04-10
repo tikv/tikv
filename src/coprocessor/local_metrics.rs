@@ -17,9 +17,9 @@ use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
 use crate::pd::PdTask;
 use crate::storage::kv::{FlowStatistics, Statistics};
-use crate::util::collections::HashMap;
-use crate::util::worker::FutureScheduler;
 use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::FutureScheduler;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {

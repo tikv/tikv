@@ -12,7 +12,7 @@
 // limitations under the License.
 
 #[macro_use]
-extern crate tikv;
+extern crate tikv_util;
 
 mod assert_storage;
 mod sync_storage;

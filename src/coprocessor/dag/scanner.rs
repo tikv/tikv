@@ -17,7 +17,7 @@ use crate::coprocessor::codec::table::truncate_as_row_key;
 use crate::coprocessor::util;
 use crate::coprocessor::Result;
 use crate::storage::{Key, Scanner as KvScanner, Statistics, Store, Value};
-use crate::util::{escape, set_panic_mark};
+use tikv_util::{escape, set_panic_mark};
 
 const MIN_KEY_BUFFER_CAPACITY: usize = 256;
 
@@ -183,7 +183,7 @@ pub mod tests {
     use crate::coprocessor::codec::table;
     use crate::coprocessor::util;
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
+    use tikv_util::collections::HashMap;
 
     use super::*;
 

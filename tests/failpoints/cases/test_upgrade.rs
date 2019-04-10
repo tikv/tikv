@@ -27,7 +27,7 @@ use tikv::raftstore::store::{
 };
 use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv::util::rocksdb_util;
+use tikv_util::rocksdb_util;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;

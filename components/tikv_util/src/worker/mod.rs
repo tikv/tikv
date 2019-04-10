@@ -39,9 +39,9 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use crate::util::mpsc::{self, Receiver, Sender};
-use crate::util::time::{Instant, SlowTimer};
-use crate::util::timer::Timer;
+use crate::mpsc::{self, Receiver, Sender};
+use crate::time::{Instant, SlowTimer};
+use crate::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -188,7 +188,6 @@ impl<T> Clone for Scheduler<T> {
 /// Creates a scheduler that can't schedule any task.
 ///
 /// Useful for test purpose.
-#[cfg(test)]
 pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
     let (tx, rx) = mpsc::unbounded::<Option<T>>();
     (

@@ -21,7 +21,7 @@ use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
-use tikv::util::worker::FutureWorker;
+use tikv_util::worker::FutureWorker;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);

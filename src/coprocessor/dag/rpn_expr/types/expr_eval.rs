@@ -1178,7 +1178,7 @@ mod tests {
         use tipb::expression::ScalarFuncSig;
         use tipb::expression::{Expr, ExprType};
 
-        use crate::util::codec::number::NumberEncoder;
+        use tikv_util::codec::number::NumberEncoder;
 
         // We will build an expression tree from:
         //      FnD(

@@ -16,7 +16,7 @@ use std::u64;
 use time::Duration as TimeDuration;
 
 use crate::raftstore::{coprocessor, Result};
-use crate::util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -539,8 +539,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::util::config::*;
 
     #[test]
     fn test_config_validate() {

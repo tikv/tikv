@@ -65,8 +65,8 @@ use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
-use tikv::util::security::{self, SecurityConfig, SecurityManager};
-use tikv::util::{escape, unescape};
+use tikv_util::security::{self, SecurityConfig, SecurityManager};
+use tikv_util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";

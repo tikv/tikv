@@ -21,7 +21,7 @@ use test_raftstore::{configure_for_merge, new_node_cluster, Cluster, NodeCluster
 use tikv::raftstore::coprocessor::{RegionInfo, RegionInfoAccessor};
 use tikv::raftstore::store::keys::data_end_key;
 use tikv::raftstore::store::util::{find_peer, new_peer};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 fn dump(c: &RegionInfoAccessor) -> Vec<(Region, StateRole)> {
     let (regions, region_ranges) = c.debug_dump();

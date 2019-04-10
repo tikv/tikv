@@ -14,7 +14,7 @@
 use std::error::Error;
 use std::result::Result;
 
-use crate::util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]

@@ -23,9 +23,9 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::codec::{self, Datum};
-use crate::util::codec::number;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
+use tikv_util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -336,7 +336,7 @@ mod tests {
         charset, Decimal, DecimalEncoder, Duration, Json, Time,
     };
     use crate::coprocessor::codec::{mysql, Datum};
-    use crate::util::codec::number::{self, NumberEncoder};
+    use tikv_util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

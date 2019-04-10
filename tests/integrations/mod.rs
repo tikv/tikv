@@ -31,7 +31,7 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
-extern crate tikv;
+extern crate tikv_util;
 #[macro_use]
 extern crate test_util;
 
@@ -51,7 +51,7 @@ fn _0_ci_setup() {
 
 #[test]
 fn _1_check_system_requirement() {
-    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
+    if let Err(e) = tikv_util::config::check_max_open_fds(4096) {
         panic!(
             "To run test, please make sure the maximum number of open file descriptors not \
              less than 2000: {:?}",

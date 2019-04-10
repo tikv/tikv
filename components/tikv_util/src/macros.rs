@@ -18,7 +18,7 @@
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate tikv;
+/// # #[macro_use] extern crate tikv_util;
 /// # fn main() {
 /// assert_eq!(count_args!(), 0);
 /// assert_eq!(count_args!(1), 1);
@@ -37,10 +37,10 @@ macro_rules! count_args {
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate tikv;
+/// # #[macro_use] extern crate tikv_util;
 /// # fn main() {
 /// // empty map
-/// let m: tikv::util::collections::HashMap<u8, u8> = map!();
+/// let m: tikv_util::collections::HashMap<u8, u8> = map!();
 /// assert!(m.is_empty());
 ///
 /// // one initial kv pairs.
@@ -59,13 +59,13 @@ macro_rules! count_args {
 macro_rules! map {
     () => {
         {
-            $crate::util::collections::HashMap::default()
+            $crate::collections::HashMap::default()
         }
     };
     ( $( $k:expr => $v:expr ),+ ) => {
         {
             let mut temp_map =
-                $crate::util::collections::HashMap::with_capacity_and_hasher(
+                $crate::collections::HashMap::with_capacity_and_hasher(
                     count_args!($(($k, $v)),+),
                     Default::default()
                 );
@@ -102,6 +102,7 @@ macro_rules! box_err {
 }
 
 /// Logs slow operations with `warn!`.
+#[macro_export]
 macro_rules! slow_log {
     ($t:expr, $($arg:tt)*) => {{
         if $t.is_slow() {
@@ -114,7 +115,7 @@ macro_rules! slow_log {
 #[macro_export]
 macro_rules! thd_name {
     ($name:expr) => {{
-        $crate::util::get_tag_from_thread_name()
+        $crate::get_tag_from_thread_name()
             .map(|tag| format!("{}::{}", $name, tag))
             .unwrap_or_else(|| $name.to_owned())
     }};
@@ -127,7 +128,7 @@ macro_rules! thd_name {
 #[macro_export]
 macro_rules! defer {
     ($t:expr) => {
-        let __ctx = $crate::util::DeferContext::new(|| $t);
+        let __ctx = $crate::DeferContext::new(|| $t);
     };
 }
 

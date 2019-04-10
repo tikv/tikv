@@ -27,8 +27,8 @@ use raft::eraftpb::MessageType;
 use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use tikv::raftstore::{DiscardReason, Error, Result};
 use tikv::server::transport::*;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{Either, HandyRwLock};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {

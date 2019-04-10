@@ -23,7 +23,7 @@ use test_storage::*;
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
 use tikv::storage::{kv, mvcc, txn};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,

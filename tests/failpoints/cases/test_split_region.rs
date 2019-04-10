@@ -19,7 +19,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use tikv::raftstore::store::util::is_vote_msg;
 use tikv::raftstore::Result;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use test_raftstore::*;
 

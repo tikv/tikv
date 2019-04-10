@@ -15,7 +15,7 @@ use std::thread;
 
 use fail;
 use test_raftstore::*;
-use tikv::util::config::ReadableDuration;
+use tikv_util::config::ReadableDuration;
 
 #[test]
 fn test_one_node_leader_missing() {

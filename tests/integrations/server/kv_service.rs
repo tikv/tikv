@@ -19,7 +19,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use test_raftstore::new_server_cluster;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_batch_commands() {

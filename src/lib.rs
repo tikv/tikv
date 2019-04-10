@@ -27,8 +27,6 @@ extern crate bitflags;
 #[macro_use]
 extern crate fail;
 #[macro_use]
-extern crate futures;
-#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate prometheus;
@@ -38,14 +36,12 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use(
     kv,
-    slog_o,
     slog_kv,
     slog_trace,
     slog_error,
     slog_warn,
     slog_info,
     slog_debug,
-    slog_crit,
     slog_log,
     slog_record,
     slog_b,
@@ -62,12 +58,12 @@ extern crate derive_more;
 extern crate more_asserts;
 #[macro_use]
 extern crate vlog;
+#[macro_use]
+extern crate tikv_util;
 #[cfg(test)]
 extern crate test;
 use grpcio as grpc;
 
-#[macro_use]
-pub mod util;
 pub mod config;
 pub mod coprocessor;
 pub mod import;

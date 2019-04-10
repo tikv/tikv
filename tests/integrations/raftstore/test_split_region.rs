@@ -28,7 +28,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::raftstore::Result;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;

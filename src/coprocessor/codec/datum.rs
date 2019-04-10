@@ -27,9 +27,9 @@ use super::mysql::{
 };
 use super::{convert, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util::codec::bytes::{self, BytesEncoder};
-use crate::util::codec::{number, BytesSlice};
-use crate::util::escape;
+use tikv_util::codec::bytes::{self, BytesEncoder};
+use tikv_util::codec::{number, BytesSlice};
+use tikv_util::escape;
 
 pub const NIL_FLAG: u8 = 0;
 pub const BYTES_FLAG: u8 = 1;
@@ -1047,7 +1047,7 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
-    use crate::util::as_slice;
+    use tikv_util::as_slice;
 
     use std::cmp::Ordering;
     use std::sync::Arc;

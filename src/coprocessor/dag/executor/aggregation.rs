@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
-use crate::util::collections::{OrderMap, OrderMapEntry};
+use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
@@ -408,7 +408,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
+    use tikv_util::collections::HashMap;
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;

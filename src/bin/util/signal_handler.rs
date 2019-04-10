@@ -19,7 +19,7 @@ mod imp {
 
     use engine::rocks::util::stats as rocksdb_stats;
     use engine::Engines;
-    use tikv::util::metrics;
+    use tikv_util::metrics;
 
     #[allow(dead_code)]
     pub fn handle_signal(engines: Option<Engines>) {

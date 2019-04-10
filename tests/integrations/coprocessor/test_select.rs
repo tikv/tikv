@@ -28,7 +28,7 @@ use tikv::coprocessor::codec::{datum, Datum};
 use tikv::server::readpool;
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
-use tikv::util::codec::number::*;
+use tikv_util::codec::number::*;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;

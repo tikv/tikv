@@ -17,7 +17,7 @@ use test::Bencher;
 
 use crossbeam::channel;
 use futures::{Future, Stream};
-use tikv::util::mpsc;
+use tikv_util::mpsc;
 
 #[bench]
 fn bench_thread_channel(b: &mut Bencher) {

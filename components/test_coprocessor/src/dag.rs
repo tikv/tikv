@@ -27,7 +27,7 @@ use tipb::select::{Chunk, DAGRequest};
 
 use tikv::coprocessor::codec::{datum, Datum};
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::util::codec::number::NumberEncoder;
+use tikv_util::codec::number::NumberEncoder;
 
 pub struct DAGSelect {
     pub execs: Vec<Executor>,

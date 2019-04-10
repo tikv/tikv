@@ -14,8 +14,8 @@
 use std::fmt;
 
 use crate::pd;
-use crate::util::futurepool;
-use crate::util::worker;
+use tikv_util::futurepool;
+use tikv_util::worker;
 
 use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};

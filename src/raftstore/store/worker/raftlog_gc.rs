@@ -17,11 +17,11 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys;
-use crate::util::worker::Runnable;
 use engine::rocks::Writable;
 use engine::util::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
 use engine::{WriteBatch, DB};
+use tikv_util::worker::Runnable;
 
 pub struct Task {
     pub raft_engine: Arc<DB>,

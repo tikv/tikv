@@ -23,9 +23,9 @@ use crate::coprocessor::codec::mysql::{
 };
 use crate::coprocessor::codec::Datum;
 
-use crate::util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::number::{self, NumberEncoder};
 #[cfg(test)]
-use crate::util::codec::BytesSlice;
+use tikv_util::codec::BytesSlice;
 
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
@@ -339,7 +339,7 @@ impl Column {
 
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
-        use crate::util::codec::read_slice;
+        use tikv_util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;

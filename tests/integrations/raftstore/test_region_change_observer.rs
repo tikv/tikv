@@ -22,7 +22,7 @@ use tikv::raftstore::coprocessor::{
     Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
 };
 use tikv::raftstore::store::util::{find_peer, new_peer};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 struct TestObserver {
     sender: SyncSender<(Region, RegionChangeEvent)>,

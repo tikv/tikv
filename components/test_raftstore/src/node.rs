@@ -32,8 +32,8 @@ use tikv::raftstore::Result;
 use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 

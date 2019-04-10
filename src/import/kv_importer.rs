@@ -20,13 +20,13 @@ use kvproto::import_kvpb::*;
 use uuid::Uuid;
 
 use crate::config::DbConfig;
-use crate::util::collections::HashMap;
+use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::engine::*;
 use super::import::*;
 use super::{Config, Error, Result};
-use crate::util::security::SecurityConfig;
+use tikv_util::security::SecurityConfig;
 
 pub struct Inner {
     engines: HashMap<Uuid, Arc<EngineFile>>,
