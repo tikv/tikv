@@ -34,6 +34,7 @@ use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::Ready;
 use raft::{self, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use rand::Rng;
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
@@ -2764,9 +2765,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
+        let mut millis = self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64;
+        millis += rand::thread_rng().gen_range(0, millis / 2);
         self.schedule_tick(
             PeerTicks::CHECK_PEER_STALE_STATE,
-            self.ctx.cfg.peer_stale_state_check_interval.0,
+            Duration::from_millis(millis),
         )
     }
 }
