@@ -92,6 +92,7 @@
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
+
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
 
