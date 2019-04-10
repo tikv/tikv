@@ -137,7 +137,7 @@ fn test_node_use_delete_range() {
 }
 
 #[test]
-fn test_node_not_use_delete_range_write() {
+fn test_node_not_use_delete_range() {
     let mut cluster = new_node_cluster(0, 1);
     cluster.cfg.raft_store.use_delete_range = false;
     cluster.run();
