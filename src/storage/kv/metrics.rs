@@ -20,7 +20,6 @@ make_static_metric! {
     pub label_enum RequestStatusKind {
         all,
         success,
-        err_rocksdb,
         err_timeout,
         err_empty_request,
         err_other,

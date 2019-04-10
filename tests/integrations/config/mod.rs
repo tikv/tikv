@@ -16,11 +16,10 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use slog::Level;
-use tikv::storage::engine::{
+
+use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use toml;
-
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;

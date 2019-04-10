@@ -24,7 +24,7 @@ use crate::server::metrics::*;
 use crate::server::snap::Task as SnapTask;
 use crate::server::transport::RaftStoreRouter;
 use crate::server::Error;
-use crate::storage::engine::Error as EngineError;
+use crate::storage::kv::Error as EngineError;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
