@@ -13,17 +13,59 @@
 
 use std::error::Error;
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Debug)]
+/// The configuration for a PD Client.
+///
+/// By default during initialization the client will attempt to reconnect every 300s
+/// for infinity, logging only every 10th duplicate error.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The PD endpoints for the client.
+    ///
+    /// Default is empty.
     pub endpoints: Vec<String>,
+    /// The interval at which to retry a PD connection initialization.
+    /// 
+    /// Default is 300ms. Setting this to 0 disables retry.
+    pub retry_interval: u64,
+    /// The maximum number of times to retry a PD connection initialization.
+    ///
+    /// Default is `None`, which is infinity.
+    pub retry_max_count: Option<usize>,
+    /// If the client observes the same error message on retry, it can repeat the message only
+    /// every `n` times.
+    /// 
+    /// Default is 10. Set to 1 to disable this feature.
+    pub retry_log_every: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            endpoints: Default::default(),
+            retry_interval: 300,
+            retry_max_count: Default::default(),
+            retry_log_every: 10,
+        }
+    }
 }
 
 impl Config {
+    pub fn new(endpoints: Vec<String>) -> Self {
+        Config {
+            endpoints,
+            ..Default::default()
+        }
+    }
+
     pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
         if self.endpoints.is_empty() {
             return Err("please specify pd.endpoints.".into());
+        }
+
+        if self.retry_log_every == 0 {
+            return Err("pd.retry_log_every cannot be 0".into());
         }
 
         Ok(())

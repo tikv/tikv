@@ -7,7 +7,7 @@
 
 ## Log levels: trace, debug, info, warning, error, critical.
 ## Note that `debug` and `trace` are only available in development builds.
-# log-level = "info"
+log-level = "warning"
 
 ## File to store logs.
 ## If it is not set, logs will be appended to stderr.
@@ -136,7 +136,16 @@
 
 [pd]
 ## PD endpoints.
-# endpoints = []
+endpoints = ["127.0.0.1:2379"]
+# The interval at which to retry a PD connection initialization. Set to 0 to disable retrying 
+# connection initialization.
+# retry-interval = 300
+# If the client observes the same error message on retry, it can repeat the message only
+# every `n` times. Set to 1 to disable this feature.
+# retry-log-every = 10
+# The maximum number of times to retry a PD connection initialization. Default is unset,
+# which is infinity.
+# retry-max-count =
 
 [raftstore]
 ## Whether to force to flush logs.

@@ -34,61 +34,67 @@ use crate::util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
-const RETRY_LOG_PER: u64 = 10;
-const RETRY_INTERVAL_MS: u64 = 300;
-
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
 }
 
 impl RpcClient {
-    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> RpcClient {
+    pub fn new(cfg: &Config, security_mgr: Arc<SecurityManager>) -> Result<RpcClient> {
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(CQ_COUNT)
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        
-        // We don't want to repeat the *same* error multiple times in `RETY_LOG_PER` count...
-        // But if the log message changes we need to output both.
-        // We can't compare PD Errors, but we can compare strings.
-        let mut cached_error = None;
-        let mut attempts_with_cached_error = 0;
 
-        loop {
-            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
-                Ok((client, members)) => {
-                    return RpcClient {
-                        cluster_id: members.get_header().get_cluster_id(),
-                        leader_client: LeaderClient::new(env, security_mgr, client, members),
-                    };
-                }
-                Err(e) => {
-                    match cached_error.as_mut() {
-                        None => {
-                            warn!("validate PD endpoints failed"; "err" => ?e);
-                            attempts_with_cached_error += 1;
-                            cached_error = Some(format!("{}", e));
-                        },
-                        Some(ref mut cached) if **cached == format!("{}", e) => {
-                            if attempts_with_cached_error == RETRY_LOG_PER {
-                                warn!("multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
-                                attempts_with_cached_error = 0;
-                            }
-                            attempts_with_cached_error += 1;
-                        },
-                        Some(ref mut cached) => {
-                            warn!("multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
-                            warn!("last attempt to validate PD endpoints failed"; "err" => ?e);
-                            attempts_with_cached_error = 1;
-                            **cached = format!("{}", e);
-                        }
+        if cfg.retry_interval == 0 {
+             let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
+
+            return Ok(RpcClient {
+                cluster_id: members.get_header().get_cluster_id(),
+                leader_client: LeaderClient::new(env, security_mgr, client, members),
+            });
+        } else {
+            // We don't want to repeat the *same* error multiple times in `RETY_LOG_PER` count...
+            // But if the log message changes we need to output both.
+            // We can't compare PD Errors, but we can compare strings.
+            let mut cached_error = None;
+            let mut attempts_with_cached_error = 0;
+
+            while Some(attempts_with_cached_error) != cfg.retry_max_count {
+                match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                    Ok((client, members)) => {
+                        return Ok(RpcClient {
+                            cluster_id: members.get_header().get_cluster_id(),
+                            leader_client: LeaderClient::new(env, security_mgr, client, members),
+                        });
                     }
-                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                    Err(e) => {
+                        match cached_error.as_mut() {
+                            None => {
+                                warn!("validate PD endpoints failed"; "err" => ?e);
+                                attempts_with_cached_error += 1;
+                                cached_error = Some(format!("{}", e));
+                            },
+                            Some(ref mut cached) if **cached == format!("{}", e) => {
+                                if attempts_with_cached_error % cfg.retry_log_every == 0 {
+                                    warn!("multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                                }
+                                attempts_with_cached_error += 1;
+                            },
+                            Some(ref mut cached) => {
+                                warn!("multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
+                                warn!("last attempt to validate PD endpoints failed"; "err" => ?e);
+                                attempts_with_cached_error = 1;
+                                **cached = format!("{}", e);
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(cfg.retry_interval));
+                    }
                 }
             }
+            return Err(box_err!("endpoints are invalid, retry limit of {} reached", attempts_with_cached_error));
         }
     }
 

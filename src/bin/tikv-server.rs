@@ -506,7 +506,8 @@ fn main() {
         SecurityManager::new(&config.security)
             .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
     );
-    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr));
+    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
     let cluster_id = pd_client
         .get_cluster_id()
         .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
