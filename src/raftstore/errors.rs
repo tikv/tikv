@@ -86,12 +86,10 @@ quick_error! {
             description(err.description())
             display("Io {}", err)
         }
-        // RocksDb uses plain string as the error.
-        // Maybe other libs use this too?
-        RocksDb(msg: String) {
+        Engine(err: engine::Error) {
             from()
-            description("RocksDb error")
-            display("RocksDb {}", msg)
+            description("Engine error")
+            display("Engine {:?}", err)
         }
         Protobuf(err: ProtobufError) {
             from()
@@ -208,6 +206,16 @@ impl Into<errorpb::Error> for Error {
                 let mut server_is_busy_err = errorpb::ServerIsBusy::new();
                 server_is_busy_err.set_reason(RAFTSTORE_IS_BUSY.to_owned());
                 errorpb.set_server_is_busy(server_is_busy_err);
+            }
+            Error::Engine(engine::Error::NotInRange(key, region_id, start_key, end_key)) => {
+                errorpb.mut_key_not_in_region().set_key(key);
+                errorpb.mut_key_not_in_region().set_region_id(region_id);
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_start_key(start_key.to_vec());
+                errorpb
+                    .mut_key_not_in_region()
+                    .set_end_key(end_key.to_vec());
             }
             _ => {}
         };
