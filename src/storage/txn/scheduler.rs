@@ -37,12 +37,12 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use storage::engine::Result as EngineResult;
-use storage::Key;
-use storage::{Command, Engine, Error as StorageError, StorageCb};
-use util::collections::HashMap;
-use util::threadpool::{ThreadPool, ThreadPoolBuilder};
-use util::worker::{self, Runnable};
+use crate::storage::kv::Result as EngineResult;
+use crate::storage::Key;
+use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
+use crate::util::collections::HashMap;
+use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
+use crate::util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
@@ -80,14 +80,14 @@ pub enum Msg {
 
 /// Debug for messages.
 impl Debug for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
 
 /// Display for messages.
 impl Display for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
@@ -143,7 +143,7 @@ impl TaskContext {
 pub struct Scheduler<E: Engine> {
     engine: E,
 
-    // cid -> Task
+    /// cid -> Task
     pending_tasks: HashMap<u64, Task>,
 
     // cid -> TaskContext
@@ -159,7 +159,7 @@ pub struct Scheduler<E: Engine> {
     latches: Latches,
 
     // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
+    /// speed of recent write requests.
     sched_pending_write_threshold: usize,
 
     // worker pool
@@ -265,7 +265,7 @@ impl<E: Engine> Scheduler<E> {
     /// 2) there may be non-conflicitng commands running concurrently, but it doesn't matter.
     fn schedule_command(&mut self, cmd: Command, callback: StorageCb) {
         let cid = self.gen_id();
-        debug!("received new command, cid={}, cmd={}", cid, cmd);
+        debug!("received new command"; "cid" => cid, "cmd" => %cmd);
 
         let tag = cmd.tag();
         let priority_tag = cmd.priority_tag();
@@ -326,15 +326,15 @@ impl<E: Engine> Scheduler<E> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority());
 
-        let cb = box move |(cb_ctx, snapshot)| {
+        let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
-        };
+        });
         if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[tag, "async_snapshot_err"])
                 .inc();
 
-            error!("engine async_snapshot failed, err: {:?}", e);
+            error!("engine async_snapshot failed"; "err" => ?e);
             self.finish_with_err(cid, e.into());
         } else {
             SCHED_STAGE_COUNTER_VEC
@@ -345,7 +345,7 @@ impl<E: Engine> Scheduler<E> {
 
     /// Calls the callback with an error.
     fn finish_with_err(&mut self, cid: u64, err: Error) {
-        debug!("command cid={}, finished with error", cid);
+        debug!("command finished with error"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC
@@ -369,7 +369,7 @@ impl<E: Engine> Scheduler<E> {
             .with_label_values(&[tag, "read_finish"])
             .inc();
 
-        debug!("read command(cid={}) finished", cid);
+        debug!("read command finished"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC
@@ -395,12 +395,12 @@ impl<E: Engine> Scheduler<E> {
             .with_label_values(&[tag, "write_finish"])
             .inc();
 
-        debug!("write finished for command, cid={}", cid);
+        debug!("write finished for command"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
         let pr = match result {
             Ok(()) => pr,
             Err(e) => ProcessResult::Failed {
-                err: ::storage::Error::from(e),
+                err: crate::storage::Error::from(e),
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
@@ -467,10 +467,10 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.worker_pool.stop() {
-            error!("scheduler run err when worker pool stop:{:?}", e);
+            error!("scheduler run err when worker pool stop"; "err" => ?e);
         }
         if let Err(e) = self.high_priority_pool.stop() {
-            error!("scheduler run err when high priority pool stop:{:?}", e);
+            error!("scheduler run err when high priority pool stop"; "err" => ?e);
         }
         info!("scheduler stopped");
     }
@@ -498,11 +498,11 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::mvcc;
+    use crate::storage::txn::latch::*;
+    use crate::storage::{Command, Key, Mutation, Options};
+    use crate::util::collections::HashMap;
     use kvproto::kvrpcpb::Context;
-    use storage::mvcc;
-    use storage::txn::latch::*;
-    use storage::{Command, Key, Mutation, Options};
-    use util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

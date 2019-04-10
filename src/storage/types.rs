@@ -17,12 +17,13 @@ use std::fmt::{self, Display, Formatter};
 use std::u64;
 
 use byteorder::{ByteOrder, NativeEndian};
+use hex::ToHex;
 
-use storage::mvcc::{Lock, Write};
-use util::codec::bytes;
-use util::codec::bytes::BytesEncoder;
-use util::codec::number::{self, NumberEncoder};
-use util::{codec, escape};
+use crate::storage::mvcc::{Lock, Write};
+use crate::util::codec;
+use crate::util::codec::bytes;
+use crate::util::codec::bytes::BytesEncoder;
+use crate::util::codec::number::{self, NumberEncoder};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 
@@ -185,7 +186,7 @@ impl Key {
     /// Whether the user key part of a ts encoded key `ts_encoded_key` equals to the encoded
     /// user key `user_key`.
     ///
-    /// There is an optimziation in this function, which is to compare the last 8 encoded bytes
+    /// There is an optimization in this function, which is to compare the last 8 encoded bytes
     /// first before comparing the rest. It is because in TiDB many records are ended with an 8
     /// byte row id and in many situations only this part is different when calling this function.
     //
@@ -223,8 +224,8 @@ impl Clone for Key {
 }
 
 impl Display for Key {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", escape(&self.0))
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.write_hex_upper(f)
     }
 }
 

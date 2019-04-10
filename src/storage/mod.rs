@@ -12,8 +12,8 @@
 // limitations under the License.
 
 pub mod config;
-pub mod engine;
 pub mod gc_worker;
+pub mod kv;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -28,18 +28,17 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
+use engine::rocks::DB;
+use engine::IterOption;
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use rocksdb::DB;
-
-use raftstore::store::engine::IterOption;
-use server::readpool::{self, ReadPool};
-use server::ServerRaftStoreRouter;
-use util;
-use util::collections::HashMap;
-use util::worker::{self, Builder, ScheduleError, Worker};
+use crate::server::readpool::{self, ReadPool};
+use crate::server::ServerRaftStoreRouter;
+use crate::util;
+use crate::util::collections::HashMap;
+use crate::util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -47,30 +46,25 @@ use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::kv::raftkv::RaftKv;
+pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
+    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
+    TestEngineBuilder,
 };
+pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store, StoreScanner};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<FnBox(Result<T>) + Send>;
-
-pub type CfName = &'static str;
-pub const CF_DEFAULT: CfName = "default";
-pub const CF_LOCK: CfName = "lock";
-pub const CF_WRITE: CfName = "write";
-pub const CF_RAFT: CfName = "raft";
-// Cfs that should be very large generally.
-pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -81,15 +75,17 @@ pub enum Mutation {
     Put((Key, Value)),
     Delete(Key),
     Lock(Key),
+    Insert((Key, Value)), // has a constraint that key should not exist.
 }
 
-#[cfg_attr(feature = "cargo-clippy", allow(match_same_arms))]
+#[allow(clippy::match_same_arms)]
 impl Mutation {
     pub fn key(&self) -> &Key {
         match *self {
             Mutation::Put((ref key, _)) => key,
             Mutation::Delete(ref key) => key,
             Mutation::Lock(ref key) => key,
+            Mutation::Insert((ref key, _)) => key,
         }
     }
 }
@@ -160,7 +156,7 @@ pub enum Command {
 }
 
 impl Display for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Command::Prewrite {
                 ref ctx,
@@ -250,7 +246,7 @@ impl Display for Command {
 }
 
 impl Debug for Command {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
@@ -352,25 +348,30 @@ impl Command {
     pub fn write_bytes(&self) -> usize {
         let mut bytes = 0;
         match *self {
-            Command::Prewrite { ref mutations, .. } => for m in mutations {
-                match *m {
-                    Mutation::Put((ref key, ref value)) => {
-                        bytes += key.as_encoded().len();
-                        bytes += value.len();
-                    }
-                    Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
-                        bytes += key.as_encoded().len();
+            Command::Prewrite { ref mutations, .. } => {
+                for m in mutations {
+                    match *m {
+                        Mutation::Put((ref key, ref value))
+                        | Mutation::Insert((ref key, ref value)) => {
+                            bytes += key.as_encoded().len();
+                            bytes += value.len();
+                        }
+                        Mutation::Delete(ref key) | Mutation::Lock(ref key) => {
+                            bytes += key.as_encoded().len();
+                        }
                     }
                 }
-            },
+            }
             Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
             }
-            Command::ResolveLock { ref key_locks, .. } => for lock in key_locks {
-                bytes += lock.0.as_encoded().len();
-            },
+            Command::ResolveLock { ref key_locks, .. } => {
+                for lock in key_locks {
+                    bytes += lock.0.as_encoded().len();
+                }
+            }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
             }
@@ -468,7 +469,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use util::worker::FutureWorker;
+        use crate::util::worker::FutureWorker;
 
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
@@ -534,8 +535,7 @@ impl<E: Engine> Clone for Storage<E> {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage referenced (reference count before operation: {})",
-            refs
+            "Storage referenced"; "original_ref" => refs
         );
 
         Self {
@@ -556,8 +556,7 @@ impl<E: Engine> Drop for Storage<E> {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
         debug!(
-            "Storage de-referenced (reference count before operation: {})",
-            refs
+            "Storage de-referenced"; "original_ref" => refs
         );
 
         if refs != 1 {
@@ -568,17 +567,17 @@ impl<E: Engine> Drop for Storage<E> {
         // destroy the storage now.
         let mut worker = self.worker.lock().unwrap();
         if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit: {:?}", e);
+            error!("Failed to ask scheduler to quit"; "err" => ?e);
         }
 
         let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
-            error!("Failed to join sched_handle: {:?}", e);
+            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
         if let Err(e) = r {
-            error!("Failed to stop gc_worker: {:?}", e);
+            error!("Failed to stop gc_worker:"; "err" => ?e);
         }
 
         info!("Storage stopped.");
@@ -631,6 +630,14 @@ impl<E: Engine> Storage<E> {
         })
     }
 
+    /// Starts running GC automatically.
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &self,
+        cfg: AutoGCConfig<S, R>,
+    ) -> Result<()> {
+        self.gc_worker.start_auto_gc(cfg)
+    }
+
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
@@ -656,7 +663,7 @@ impl<E: Engine> Storage<E> {
         future::result(val)
             .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
-            // map storage::engine::Error -> storage::txn::Error -> storage::Error
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -674,7 +681,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -707,7 +714,7 @@ impl<E: Engine> Storage<E> {
                     result
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -730,7 +737,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -767,7 +774,7 @@ impl<E: Engine> Storage<E> {
                     Ok(kv_pairs)
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -794,7 +801,7 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
+            let timer = {
                 let ctxd = ctxd.clone();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
                 thread_ctx.start_command_duration_timer(CMD, priority)
@@ -814,8 +821,12 @@ impl<E: Engine> Storage<E> {
 
                     let mut scanner;
                     if !options.reverse_scan {
-                        scanner =
-                            snap_store.scanner(false, options.key_only, Some(start_key), end_key)?;
+                        scanner = snap_store.scanner(
+                            false,
+                            options.key_only,
+                            Some(start_key),
+                            end_key,
+                        )?;
                     } else {
                         scanner =
                             snap_store.scanner(true, options.key_only, end_key, Some(start_key))?;
@@ -835,7 +846,7 @@ impl<E: Engine> Storage<E> {
                     })
                 })
                 .then(move |r| {
-                    _timer.observe_duration();
+                    timer.observe_duration();
                     r
                 })
         });
@@ -860,6 +871,7 @@ impl<E: Engine> Storage<E> {
             duration,
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pause.inc();
         Ok(())
     }
 
@@ -888,9 +900,8 @@ impl<E: Engine> Storage<E> {
             start_ts,
             options,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Booleans(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
         Ok(())
     }
 
@@ -909,9 +920,8 @@ impl<E: Engine> Storage<E> {
             lock_ts,
             commit_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.commit.inc();
         Ok(())
     }
 
@@ -927,26 +937,15 @@ impl<E: Engine> Storage<E> {
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
-            // operation, RocksDB will add start key to the prefix bloom, and the start key
-            // will go through function prefix_extractor. In our case the prefix_extractor
-            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
-            // length of start key is less than 8, we will encounter index out of range error.
-            let s = if *cf == CF_WRITE {
-                start_key.clone().append_ts(u64::MAX)
-            } else {
-                start_key.clone()
-            };
-            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
+            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
         }
 
-        self.engine
-            .async_write(&ctx, modifies, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["delete_range"])
-            .inc();
+        self.engine.async_write(
+            &ctx,
+            modifies,
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
+        KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
     }
 
@@ -958,9 +957,8 @@ impl<E: Engine> Storage<E> {
         callback: Callback<()>,
     ) -> Result<()> {
         let cmd = Command::Cleanup { ctx, key, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.cleanup.inc();
         Ok(())
     }
 
@@ -977,9 +975,8 @@ impl<E: Engine> Storage<E> {
             keys,
             start_ts,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.rollback.inc();
         Ok(())
     }
 
@@ -1002,9 +999,8 @@ impl<E: Engine> Storage<E> {
             },
             limit,
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Locks(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.scan_lock.inc();
         Ok(())
     }
 
@@ -1039,9 +1035,8 @@ impl<E: Engine> Storage<E> {
             scan_key: None,
             key_locks: vec![],
         };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::Boolean(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
         Ok(())
     }
 
@@ -1050,9 +1045,7 @@ impl<E: Engine> Storage<E> {
     /// during and after the GC operation.
     pub fn async_gc(&self, ctx: Context, safe_point: u64, callback: Callback<()>) -> Result<()> {
         self.gc_worker.async_gc(ctx, safe_point, callback)?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_GC])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.gc.inc();
         Ok(())
     }
 
@@ -1071,9 +1064,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<()> {
         self.gc_worker
             .async_unsafe_destroy_range(ctx, start_key, end_key, callback)?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&[CMD_TAG_UNSAFE_DESTROY_RANGE])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
         Ok(())
     }
 
@@ -1088,44 +1079,43 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
-                let ctxd = ctxd.clone();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_get.start_coarse_timer();
+
+        let readpool = self.read_pool.clone();
+
+        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+            let res = readpool.future_execute(priority, move |ctxd| {
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                let cf = match Self::rawkv_cf(&cf) {
+                    Ok(x) => x,
+                    Err(e) => return future::err(e),
+                };
+                // no scan_count for this kind of op.
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(&cf)?;
-                    // no scan_count for this kind of op.
+                let key_len = key.len();
+                let result = snapshot
+                    .get_cf(cf, &Key::from_encoded(key))
+                    // map storage::kv::Error -> storage::Error
+                    .map_err(Error::from)
+                    .map(|r| {
+                        if let Some(ref value) = r {
+                            let mut stats = Statistics::default();
+                            stats.data.flow_stats.read_keys = 1;
+                            stats.data.flow_stats.read_bytes = key_len + value.len();
+                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+                            thread_ctx.collect_key_reads(CMD, 1);
+                        }
+                        r
+                    });
 
-                    let key_len = key.len();
-                    snapshot.get_cf(cf, &Key::from_encoded(key))
-                        // map storage::engine::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|r| {
-                            if let Some(ref value) = r {
-                                let mut stats = Statistics::default();
-                                stats.data.flow_stats.read_keys = 1;
-                                stats.data.flow_stats.read_bytes = key_len + value.len();
-                                thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                                thread_ctx.collect_key_reads(CMD, 1);
-                            }
-                            r
-                        })
-                })
-                .then(move |r| {
-                    _timer.observe_duration();
-                    r
-                })
-        });
-
-        future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+                timer.observe_duration();
+                future::result(result)
+            });
+            future::result(res)
+                .map_err(|_| Error::SchedTooBusy)
+                .flatten()
+        })
     }
 
     /// Get the values of some raw keys in a batch.
@@ -1139,52 +1129,50 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC
+            .raw_batch_get
+            .start_coarse_timer();
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
-                let ctxd = ctxd.clone();
+        let readpool = self.read_pool.clone();
+
+        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+            let res = readpool.future_execute(priority, move |ctxd| {
+                let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                let cf = match Self::rawkv_cf(&cf) {
+                    Ok(x) => x,
+                    Err(e) => return future::err(e),
+                };
+                // no scan_count for this kind of op.
+                let mut stats = Statistics::default();
+                let result: Vec<Result<KvPair>> = keys
+                    .into_iter()
+                    .map(|k| {
+                        let v = snapshot.get_cf(cf, &k);
+                        (k, v)
+                    })
+                    .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                    .map(|(k, v)| match v {
+                        Ok(Some(v)) => {
+                            stats.data.flow_stats.read_keys += 1;
+                            stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
+                            Ok((k.into_encoded(), v))
+                        }
+                        Err(e) => Err(Error::from(e)),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                    let cf = Self::rawkv_cf(&cf)?;
-                    // no scan_count for this kind of op.
-                    let mut stats = Statistics::default();
-                    let result: Vec<Result<KvPair>> = keys
-                        .into_iter()
-                        .map(|k| {
-                            let v = snapshot.get_cf(cf, &k);
-                            (k, v)
-                        })
-                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                        .map(|(k, v)| match v {
-                            Ok(Some(v)) => {
-                                stats.data.flow_stats.read_keys += 1;
-                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
-                                Ok((k.into_encoded(), v))
-                            }
-                            Err(e) => Err(Error::from(e)),
-                            _ => unreachable!(),
-                        })
-                        .collect();
-                    thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                    Ok(result)
-                })
-                .then(move |r| {
-                    _timer.observe_duration();
-                    r
-                })
-        });
-
-        future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+                timer.observe_duration();
+                future::ok(result)
+            });
+            future::result(res)
+                .map_err(|_| Error::SchedTooBusy)
+                .flatten()
+        })
     }
 
     /// Write a raw key to the storage.
@@ -1207,9 +1195,9 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&["raw_put"]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
     }
 
@@ -1232,13 +1220,12 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|(k, v)| Modify::Put(cf, Key::from_encoded(k), v))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_put"])
-            .inc();
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
     }
 
@@ -1257,11 +1244,9 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
     }
 
@@ -1282,18 +1267,16 @@ impl<E: Engine> Storage<E> {
             return Ok(());
         }
 
+        let cf = Self::rawkv_cf(&cf)?;
+        let start_key = Key::from_encoded(start_key);
+        let end_key = Key::from_encoded(end_key);
+
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(start_key),
-                Key::from_encoded(end_key),
-            )],
-            box |(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from)),
+            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_delete_range"])
-            .inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
     }
 
@@ -1316,13 +1299,12 @@ impl<E: Engine> Storage<E> {
             .into_iter()
             .map(|k| Modify::Delete(cf, Key::from_encoded(k)))
             .collect();
-        self.engine
-            .async_write(&ctx, requests, box |(_, res): (_, engine::Result<_>)| {
-                callback(res.map_err(Error::from))
-            })?;
-        KV_COMMAND_COUNTER_VEC
-            .with_label_values(&["raw_batch_delete"])
-            .inc();
+        self.engine.async_write(
+            &ctx,
+            requests,
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+        )?;
+        KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
     }
 
@@ -1426,58 +1408,53 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
-                let ctxd = ctxd.clone();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC.raw_scan.start_coarse_timer();
+
+        let readpool = self.read_pool.clone();
+
+        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+            let res = readpool.future_execute(priority, move |ctxd| {
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                let end_key = end_key.map(Key::from_encoded);
 
-                    let end_key = end_key.map(Key::from_encoded);
+                let mut statistics = Statistics::default();
+                let result = if reverse {
+                    Self::reverse_raw_scan(
+                        &snapshot,
+                        &cf,
+                        &Key::from_encoded(key),
+                        end_key,
+                        limit,
+                        &mut statistics,
+                        key_only,
+                    )
+                    .map_err(Error::from)
+                } else {
+                    Self::raw_scan(
+                        &snapshot,
+                        &cf,
+                        &Key::from_encoded(key),
+                        end_key,
+                        limit,
+                        &mut statistics,
+                        key_only,
+                    )
+                    .map_err(Error::from)
+                };
 
-                    let mut statistics = Statistics::default();
-                    let result = if reverse {
-                        Self::reverse_raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        ).map_err(Error::from)
-                    } else {
-                        Self::raw_scan(
-                            &snapshot,
-                            &cf,
-                            &Key::from_encoded(key),
-                            end_key,
-                            limit,
-                            &mut statistics,
-                            key_only,
-                        ).map_err(Error::from)
-                    };
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
+                thread_ctx.collect_scan_count(CMD, &statistics);
 
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
-                    thread_ctx.collect_scan_count(CMD, &statistics);
-
-                    result
-                })
-                .then(move |r| {
-                    _timer.observe_duration();
-                    r
-                })
-        });
-
-        future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+                timer.observe_duration();
+                future::result(result)
+            });
+            future::result(res)
+                .map_err(|_| Error::SchedTooBusy)
+                .flatten()
+        })
     }
 
     /// Check the given raw kv CF name. Return the CF name, or `Err` if given CF name is invalid.
@@ -1530,75 +1507,76 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let mut _timer = {
-                let ctxd = ctxd.clone();
+        let timer = SCHED_HISTOGRAM_VEC_STATIC
+            .raw_batch_scan
+            .start_coarse_timer();
+
+        let readpool = self.read_pool.clone();
+
+        Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
+            let res = readpool.future_execute(priority, move |ctxd| {
                 let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
 
-            Self::async_snapshot(engine, &ctx)
-                .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-
-                    let mut statistics = Statistics::default();
-                    if !Self::check_key_ranges(&ranges, reverse) {
-                        return Err(box_err!("Invalid KeyRanges"));
+                let mut statistics = Statistics::default();
+                if !Self::check_key_ranges(&ranges, reverse) {
+                    return future::result(Err(box_err!("Invalid KeyRanges")));
+                };
+                let mut result = Vec::new();
+                let ranges_len = ranges.len();
+                for i in 0..ranges_len {
+                    let start_key = Key::from_encoded(ranges[i].take_start_key());
+                    let end_key = ranges[i].take_end_key();
+                    let end_key = if end_key.is_empty() {
+                        if i + 1 == ranges_len {
+                            None
+                        } else {
+                            Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+                        }
+                    } else {
+                        Some(Key::from_encoded(end_key))
                     };
-                    let mut result = Vec::new();
-                    let ranges_len = ranges.len();
-                    for i in 0..ranges_len {
-                        let start_key = Key::from_encoded(ranges[i].take_start_key());
-                        let end_key = ranges[i].take_end_key();
-                        let end_key = if end_key.is_empty() {
-                            if i + 1 == ranges_len {
-                                None
-                            } else {
-                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
-                            }
-                        } else {
-                            Some(Key::from_encoded(end_key))
-                        };
-                        let pairs = if reverse {
-                            Self::reverse_raw_scan(
-                                &snapshot,
-                                &cf,
-                                &start_key,
-                                end_key,
-                                each_limit,
-                                &mut statistics,
-                                key_only,
-                            )?
-                        } else {
-                            Self::raw_scan(
-                                &snapshot,
-                                &cf,
-                                &start_key,
-                                end_key,
-                                each_limit,
-                                &mut statistics,
-                                key_only,
-                            )?
-                        };
-                        result.extend(pairs.into_iter());
-                    }
+                    let pairs = if reverse {
+                        match Self::reverse_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &start_key,
+                            end_key,
+                            each_limit,
+                            &mut statistics,
+                            key_only,
+                        ) {
+                            Ok(x) => x,
+                            Err(e) => return future::err(e),
+                        }
+                    } else {
+                        match Self::raw_scan(
+                            &snapshot,
+                            &cf,
+                            &start_key,
+                            end_key,
+                            each_limit,
+                            &mut statistics,
+                            key_only,
+                        ) {
+                            Ok(x) => x,
+                            Err(e) => return future::err(e),
+                        }
+                    };
+                    result.extend(pairs.into_iter());
+                }
 
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                    thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
-                    thread_ctx.collect_scan_count(CMD, &statistics);
+                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
+                thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
+                thread_ctx.collect_scan_count(CMD, &statistics);
 
-                    Ok(result)
-                })
-                .then(move |r| {
-                    _timer.observe_duration();
-                    r
-                })
-        });
-
-        future::result(res)
-            .map_err(|_| Error::SchedTooBusy)
-            .flatten()
+                timer.observe_duration();
+                future::ok(result)
+            });
+            future::result(res)
+                .map_err(|_| Error::SchedTooBusy)
+                .flatten()
+        })
     }
 
     /// Get MVCC info of a transactional key.
@@ -1609,9 +1587,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<MvccInfo>,
     ) -> Result<()> {
         let cmd = Command::MvccByKey { ctx, key };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByKey(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.key_mvcc.inc();
+
         Ok(())
     }
 
@@ -1624,9 +1602,8 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Option<(Key, MvccInfo)>>,
     ) -> Result<()> {
         let cmd = Command::MvccByStartTs { ctx, start_ts };
-        let tag = cmd.tag();
         self.schedule(cmd, StorageCb::MvccInfoByStartTs(callback))?;
-        KV_COMMAND_COUNTER_VEC.with_label_values(&[tag]).inc();
+        KV_COMMAND_COUNTER_VEC_STATIC.start_ts_mvcc.inc();
         Ok(())
     }
 }
@@ -1652,7 +1629,7 @@ quick_error! {
         Closed {
             description("storage is closed.")
         }
-        Other(err: Box<error::Error + Send + Sync>) {
+        Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -1679,13 +1656,13 @@ quick_error! {
     }
 }
 
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub enum ErrorHeaderKind {
     NotLeader,
     RegionNotFound,
     KeyNotInRegion,
-    StaleEpoch,
+    EpochNotMatch,
     ServerIsBusy,
     StaleCommand,
     StoreNotMatch,
@@ -1701,7 +1678,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::NotLeader => "not_leader",
             ErrorHeaderKind::RegionNotFound => "region_not_found",
             ErrorHeaderKind::KeyNotInRegion => "key_not_in_region",
-            ErrorHeaderKind::StaleEpoch => "stale_epoch",
+            ErrorHeaderKind::EpochNotMatch => "epoch_not_match",
             ErrorHeaderKind::ServerIsBusy => "server_is_busy",
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
@@ -1712,7 +1689,7 @@ impl ErrorHeaderKind {
 }
 
 impl Display for ErrorHeaderKind {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.get_str())
     }
 }
@@ -1724,8 +1701,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::RegionNotFound
     } else if header.has_key_not_in_region() {
         ErrorHeaderKind::KeyNotInRegion
-    } else if header.has_stale_epoch() {
-        ErrorHeaderKind::StaleEpoch
+    } else if header.has_epoch_not_match() {
+        ErrorHeaderKind::EpochNotMatch
     } else if header.has_server_is_busy() {
         ErrorHeaderKind::ServerIsBusy
     } else if header.has_stale_command() {
@@ -1746,9 +1723,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
-    use util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);
@@ -1885,7 +1862,6 @@ mod tests {
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                        ()
                     }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
@@ -3090,8 +3066,9 @@ mod tests {
             (b"d".to_vec(), b"dd".to_vec()),
             (b"d1".to_vec(), b"dd11".to_vec()),
             (b"d2".to_vec(), b"dd22".to_vec()),
-        ].into_iter()
-            .map(|(k, v)| Some((k, v)));
+        ]
+        .into_iter()
+        .map(|(k, v)| Some((k, v)));
         expect_multi_values(
             results.clone().collect(),
             <Storage<RocksEngine>>::async_snapshot(storage.get_engine(), &ctx)
@@ -3397,14 +3374,15 @@ mod tests {
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
-        ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::new();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage
@@ -3450,14 +3428,15 @@ mod tests {
             (b"a3".to_vec(), b"a".to_vec()),
             (b"b3".to_vec(), b"b".to_vec()),
             (b"c3".to_vec(), b"c".to_vec()),
-        ].into_iter()
-            .map(|(s, e)| {
-                let mut range = KeyRange::new();
-                range.set_start_key(s);
-                range.set_end_key(e);
-                range
-            })
-            .collect();
+        ]
+        .into_iter()
+        .map(|(s, e)| {
+            let mut range = KeyRange::new();
+            range.set_start_key(s);
+            range.set_end_key(e);
+            range
+        })
+        .collect();
         expect_multi_values(
             results,
             storage
@@ -3675,7 +3654,7 @@ mod tests {
 
     #[test]
     fn test_resolve_lock() {
-        use storage::txn::RESOLVE_LOCK_BATCH_SIZE;
+        use crate::storage::txn::RESOLVE_LOCK_BATCH_SIZE;
 
         let storage = TestStorageBuilder::new().build().unwrap();
         let (tx, rx) = channel();

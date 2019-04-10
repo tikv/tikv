@@ -19,9 +19,8 @@ use std::time::{Duration, Instant};
 
 use kvproto::metapb::*;
 
-use pd::RegionInfo;
-use util::escape;
-use util::rocksdb::properties::SizeProperties;
+use crate::pd::RegionInfo;
+use crate::storage::mvcc::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -30,6 +29,9 @@ use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
+
+const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 125;
+const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 8;
 
 /// PrepareJob is responsible for improving cluster data balance
 ///
@@ -57,15 +59,15 @@ impl<Client: ImportClient> PrepareJob<Client> {
 
     pub fn run(&self) -> Result<Vec<RangeInfo>> {
         let start = Instant::now();
-        info!("{} start", self.tag);
+        info!("start"; "tag" => %self.tag);
 
         let props = match self.engine.get_size_properties() {
             Ok(v) => {
-                info!("{} approximate size {}", self.tag, v.total_size);
+                info!("get size properties"; "tag" => %self.tag, "size" => %v.total_size);
                 v
             }
             Err(e) => {
-                error!("{} get size properties: {:?}", self.tag, e);
+                error!("get size properties failed"; "tag" => %self.tag, "err" => %e);
                 return Err(e);
             }
         };
@@ -77,16 +79,12 @@ impl<Client: ImportClient> PrepareJob<Client> {
         let wait_duration = Duration::from_millis(num_prepares as u64 * 100);
         let wait_duration = cmp::min(wait_duration, self.cfg.max_prepare_duration.0);
         info!(
-            "{} prepare {} ranges waits {:?}",
-            self.tag, num_prepares, wait_duration,
+            "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "waits" => ?wait_duration,
         );
         thread::sleep(wait_duration);
 
         info!(
-            "{} prepare {} ranges takes {:?}",
-            self.tag,
-            num_prepares,
-            start.elapsed(),
+            "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "takes" => ?start.elapsed(),
         );
 
         // One `SubImportJob` is responsible for one range, the max number of `SubImportJob`
@@ -145,7 +143,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 
     fn run(&self) -> Result<bool> {
         let start = Instant::now();
-        info!("{} start {:?}", self.tag, self.range);
+        info!("start"; "tag" => %self.tag, "range" => ?self.range);
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
@@ -155,7 +153,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             let mut region = match self.client.get_region(self.range.get_start()) {
                 Ok(region) => region,
                 Err(e) => {
-                    warn!("{}: {:?}", self.tag, e);
+                    warn!("get_region failed"; "tag" => %self.tag, "err" => %e);
                     continue;
                 }
             };
@@ -163,7 +161,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             for _ in 0..MAX_RETRY_TIMES {
                 match self.prepare(region) {
                     Ok(v) => {
-                        info!("{} takes {:?}", self.tag, start.elapsed());
+                        info!("prepare"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(v);
                     }
                     Err(Error::UpdateRegion(new_region)) => {
@@ -175,7 +173,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             }
         }
 
-        error!("{} run out of time", self.tag);
+        error!("run out of time"; "tag" => %self.tag);
         Err(Error::PrepareRangeJobFailed(self.tag.clone()))
     }
 
@@ -185,6 +183,23 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         }
         match self.split_region(&region) {
             Ok(new_region) => {
+                // We need to wait for a few milliseconds, because PD may have
+                // not received any heartbeat from the new split region, such
+                // that PD cannot create scatter operator for the new split
+                // region because it doesn't have the meta data of the new split
+                // region.
+                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
+                    if self.client.has_region_id(new_region.region.id)? {
+                        if i > 0 {
+                            debug!("waited between split and scatter"; "retry times" => %i);
+                        }
+                        break;
+                    } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
+                        warn!("split region still failed after exhausting all retries");
+                    } else {
+                        thread::sleep(Duration::from_millis(SCATTER_WAIT_INTERVAL_MILLIS));
+                    }
+                }
                 self.scatter_region(&new_region)?;
                 Ok(true)
             }
@@ -192,18 +207,24 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 region.leader = new_leader;
                 Err(Error::UpdateRegion(region))
             }
-            Err(Error::StaleEpoch(new_regions)) => {
-                let new_region = new_regions.iter().find(|&r| self.need_split(r)).cloned();
-                match new_region {
-                    Some(new_region) => {
+            Err(Error::EpochNotMatch(current_regions)) => {
+                let current_region = current_regions
+                    .iter()
+                    .find(|&r| self.need_split(r))
+                    .cloned();
+                match current_region {
+                    Some(current_region) => {
                         let new_leader = region
                             .leader
-                            .and_then(|p| find_region_peer(&new_region, p.get_store_id()));
-                        Err(Error::UpdateRegion(RegionInfo::new(new_region, new_leader)))
+                            .and_then(|p| find_region_peer(&current_region, p.get_store_id()));
+                        Err(Error::UpdateRegion(RegionInfo::new(
+                            current_region,
+                            new_leader,
+                        )))
                     }
                     None => {
-                        warn!("{} stale epoch {:?}", self.tag, new_regions);
-                        Err(Error::StaleEpoch(new_regions))
+                        warn!("epoch not match"; "tag" => %self.tag, "new_regions" => ?current_regions);
+                        Err(Error::EpochNotMatch(current_regions))
                     }
                 }
             }
@@ -226,20 +247,22 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn split_region(&self, region: &RegionInfo) -> Result<RegionInfo> {
         let split_key = self.range.get_end();
         let res = match self.client.split_region(region, split_key) {
-            Ok(mut resp) => if !resp.has_region_error() {
-                Ok(resp)
-            } else {
-                match Error::from(resp.take_region_error()) {
-                    e @ Error::NotLeader(_) | e @ Error::StaleEpoch(_) => return Err(e),
-                    e => Err(e),
+            Ok(mut resp) => {
+                if !resp.has_region_error() {
+                    Ok(resp)
+                } else {
+                    match Error::from(resp.take_region_error()) {
+                        e @ Error::NotLeader(_) | e @ Error::EpochNotMatch(_) => return Err(e),
+                        e => Err(e),
+                    }
                 }
-            },
+            }
             Err(e) => Err(e),
         };
 
         match res {
             Ok(mut resp) => {
-                info!("{} split {:?} at {:?}", self.tag, region, escape(split_key));
+                info!("split"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key));
                 // Just assume that the leader will be at the same store.
                 let left = resp.take_left();
                 let leader = match region.leader {
@@ -250,11 +273,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             }
             Err(e) => {
                 warn!(
-                    "{} split {:?} at {:?}: {:?}",
-                    self.tag,
-                    region,
-                    escape(split_key),
-                    e
+                    "split failed"; "tag" => %self.tag, "region" => ?region, "at" => ::log_wrappers::Key(split_key), "err" => %e
                 );
                 Err(e)
             }
@@ -264,11 +283,11 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
     fn scatter_region(&self, region: &RegionInfo) -> Result<()> {
         match self.client.scatter_region(region) {
             Ok(_) => {
-                info!("{} scatter region {}", self.tag, region.get_id());
+                info!("scatter region"; "tag" => %self.tag, "region" => %region.get_id());
                 Ok(())
             }
             Err(e) => {
-                warn!("{} scatter region {}: {:?}", self.tag, region.get_id(), e);
+                warn!("scatter region failed"; "tag" => %self.tag, "region" => %region.get_id(), "err" => %e);
                 Err(e)
             }
         }
@@ -278,14 +297,15 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use import::test_helpers::*;
+    use crate::import::test_helpers::*;
 
-    use rocksdb::Writable;
+    use engine::rocks::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 
-    use config::DbConfig;
-    use storage::types::Key;
+    use crate::config::DbConfig;
+    use crate::storage::types::Key;
+    use crate::util::security::SecurityConfig;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {
@@ -299,8 +319,9 @@ mod tests {
     fn test_prepare_job() {
         let dir = TempDir::new("test_import_prepare_job").unwrap();
         let uuid = Uuid::new_v4();
-        let opts = DbConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, opts).unwrap());
+        let db_cfg = DbConfig::default();
+        let security_cfg = SecurityConfig::default();
+        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
 
         // Generate entries to prepare.
         let (n, m) = (4, 4);

@@ -35,7 +35,7 @@
 //     select json_extract('{"a": "b", "c": [1, "2"]}', '$.*') -> ["b", [1, "2"]]
 
 use super::json_unquote::unquote_string;
-use coprocessor::codec::Result;
+use crate::coprocessor::codec::Result;
 use regex::Regex;
 use std::ops::Index;
 
@@ -96,7 +96,7 @@ pub fn parse_json_path_expr(path_expr: &str) -> Result<PathExpression> {
         return Err(box_err!("Invalid JSON path: {}", path_expr));
     }
 
-    let expr = path_expr.index(dollar_index + 1..).trim_left();
+    let expr = path_expr.index(dollar_index + 1..).trim_start();
 
     lazy_static! {
         static ref RE: Regex = Regex::new(PATH_EXPR_LEG_RE_STR).unwrap();

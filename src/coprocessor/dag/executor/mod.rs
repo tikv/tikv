@@ -16,25 +16,23 @@ use std::sync::Arc;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
-use tipb::executor::{self, ExecType};
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use storage::{Snapshot, SnapshotStore};
-use util::codec::number;
-use util::collections::HashSet;
+use crate::util::codec::number;
+use crate::util::collections::HashSet;
 
-use coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use coprocessor::codec::table::{self, RowColsDict};
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings};
-use coprocessor::util;
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
+use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+use crate::coprocessor::util;
+use crate::coprocessor::*;
 
 mod aggregate;
 mod aggregation;
 mod index_scan;
 mod limit;
-mod scanner;
+mod scan;
 mod selection;
 mod table_scan;
 mod topn;
@@ -46,7 +44,7 @@ pub use self::aggregation::{HashAggExecutor, StreamAggExecutor};
 pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
-pub use self::scanner::{ScanOn, Scanner};
+pub use self::scan::ScanExecutor;
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -270,79 +268,156 @@ pub trait Executor {
     }
 }
 
-pub fn build_exec<S: Snapshot + 'static>(
-    execs: Vec<executor::Executor>,
-    store: SnapshotStore<S>,
-    ranges: Vec<KeyRange>,
-    ctx: Arc<EvalConfig>,
-    collect: bool,
-) -> Result<Box<Executor + Send>> {
-    let mut execs = execs.into_iter();
-    let first = execs
-        .next()
-        .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-    let mut src = build_first_executor(first, store, ranges, collect)?;
-    for mut exec in execs {
-        let curr: Box<Executor + Send> = match exec.get_tp() {
-            ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                return Err(box_err!("got too much *scan exec, should be only one"))
-            }
-            ExecType::TypeSelection => Box::new(SelectionExecutor::new(
-                exec.take_selection(),
-                Arc::clone(&ctx),
-                src,
-            )?),
-            ExecType::TypeAggregation => Box::new(HashAggExecutor::new(
-                exec.take_aggregation(),
-                Arc::clone(&ctx),
-                src,
-            )?),
-            ExecType::TypeStreamAgg => Box::new(StreamAggExecutor::new(
-                Arc::clone(&ctx),
-                src,
-                exec.take_aggregation(),
-            )?),
-            ExecType::TypeTopN => {
-                Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-            }
-            ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
-        };
-        src = curr;
-    }
-    Ok(src)
-}
+#[cfg(test)]
+pub mod tests {
+    use super::{Executor, TableScanExecutor};
+    use crate::coprocessor::codec::{table, Datum};
+    use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::SnapshotStore;
+    use crate::storage::{Key, Mutation, Options};
+    use crate::util::codec::number::NumberEncoder;
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
+    use kvproto::{
+        coprocessor::KeyRange,
+        kvrpcpb::{Context, IsolationLevel},
+    };
+    use protobuf::RepeatedField;
+    use tipb::{
+        executor::TableScan,
+        expression::{Expr, ExprType},
+        schema::ColumnInfo,
+    };
 
-// We have trait objects which requires 'static.
-fn build_first_executor<S: Snapshot + 'static>(
-    mut first: executor::Executor,
-    store: SnapshotStore<S>,
-    ranges: Vec<KeyRange>,
-    collect: bool,
-) -> Result<Box<Executor + Send>> {
-    match first.get_tp() {
-        ExecType::TypeTableScan => {
-            let ex = Box::new(TableScanExecutor::new(
-                first.take_tbl_scan(),
-                ranges,
-                store,
-                collect,
-            )?);
-            Ok(ex)
+    pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(tp);
+        if tp == ExprType::ColumnRef {
+            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+        } else {
+            expr.mut_children().push(child.unwrap());
         }
-        ExecType::TypeIndexScan => {
-            let unique = first.get_idx_scan().get_unique();
-            let ex = Box::new(IndexScanExecutor::new(
-                first.take_idx_scan(),
-                ranges,
-                store,
-                unique,
-                collect,
-            )?);
-            Ok(ex)
+        expr
+    }
+
+    pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
+        let mut col_info = ColumnInfo::new();
+        col_info.as_mut_accessor().set_tp(tp);
+        col_info.set_column_id(cid);
+        col_info
+    }
+
+    // the first column should be i64 since it will be used as row handle
+    pub fn gen_table_data(
+        tid: i64,
+        cis: &[ColumnInfo],
+        rows: &[Vec<Datum>],
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut kv_data = Vec::new();
+        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
+        for cols in rows.iter() {
+            let col_values: Vec<_> = cols.to_vec();
+            let value = table::encode_row(col_values, &col_ids).unwrap();
+            let key = table::encode_row_key(tid, cols[0].i64());
+            kv_data.push((key, value));
         }
-        _ => Err(box_err!(
-            "first exec type should be *Scan, but get {:?}",
-            first.get_tp()
-        )),
+        kv_data
+    }
+
+    const START_TS: u64 = 10;
+    const COMMIT_TS: u64 = 20;
+
+    pub struct TestStore {
+        snapshot: RocksSnapshot,
+        ctx: Context,
+        engine: RocksEngine,
+    }
+
+    impl TestStore {
+        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
+            let engine = TestEngineBuilder::new().build().unwrap();
+            let ctx = Context::new();
+            let snapshot = engine.snapshot(&ctx).unwrap();
+            let mut store = TestStore {
+                snapshot,
+                ctx,
+                engine,
+            };
+            store.init_data(kv_data);
+            store
+        }
+
+        fn init_data(&mut self, kv_data: &[(Vec<u8>, Vec<u8>)]) {
+            if kv_data.is_empty() {
+                return;
+            }
+
+            // do prewrite.
+            let txn_motifies = {
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                let mut pk = vec![];
+                for &(ref key, ref value) in kv_data {
+                    if pk.is_empty() {
+                        pk = key.clone();
+                    }
+                    txn.prewrite(
+                        Mutation::Put((Key::from_raw(key), value.to_vec())),
+                        &pk,
+                        &Options::default(),
+                    )
+                    .unwrap();
+                }
+                txn.into_modifies()
+            };
+            self.write_modifies(txn_motifies);
+
+            // do commit
+            let txn_modifies = {
+                let mut txn = MvccTxn::new(self.snapshot.clone(), START_TS, true).unwrap();
+                for &(ref key, _) in kv_data {
+                    txn.commit(Key::from_raw(key), COMMIT_TS).unwrap();
+                }
+                txn.into_modifies()
+            };
+            self.write_modifies(txn_modifies);
+        }
+
+        #[inline]
+        fn write_modifies(&mut self, txn: Vec<Modify>) {
+            self.engine.write(&self.ctx, txn).unwrap();
+            self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
+        }
+
+        pub fn get_snapshot(&mut self) -> (RocksSnapshot, u64) {
+            (self.snapshot.clone(), COMMIT_TS + 1)
+        }
+    }
+
+    #[inline]
+    pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
+        let mut key_range = KeyRange::new();
+        key_range.set_start(table::encode_row_key(table_id, start));
+        key_range.set_end(table::encode_row_key(table_id, end));
+        key_range
+    }
+
+    pub fn gen_table_scan_executor(
+        tid: i64,
+        cis: Vec<ColumnInfo>,
+        raw_data: &[Vec<Datum>],
+        key_ranges: Option<Vec<KeyRange>>,
+    ) -> Box<dyn Executor + Send> {
+        let table_data = gen_table_data(tid, &cis, raw_data);
+        let mut test_store = TestStore::new(&table_data);
+
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+
+        let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
+
+        let (snapshot, start_ts) = test_store.get_snapshot();
+        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
+        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, true).unwrap())
     }
 }

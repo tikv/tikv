@@ -11,32 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(box_syntax)]
 #![feature(test)]
 
-extern crate crc;
-extern crate futures;
-extern crate futures_cpupool;
-extern crate grpcio as grpc;
-extern crate kvproto;
-#[macro_use]
-extern crate log;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate slog;
-extern crate tempdir;
-extern crate test;
-extern crate tipb;
-extern crate toml;
-extern crate uuid;
+use grpcio as grpc;
 
+extern crate test;
+
+#[macro_use(
+    slog_kv,
+    slog_error,
+    slog_info,
+    slog_debug,
+    slog_log,
+    slog_record,
+    slog_b,
+    slog_record_static
+)]
+extern crate slog;
+#[macro_use]
+extern crate slog_global;
 #[macro_use]
 extern crate tikv;
-extern crate test_coprocessor;
-extern crate test_raftstore;
-extern crate test_storage;
 #[macro_use]
 extern crate test_util;
 
@@ -45,6 +40,7 @@ mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;
+mod server;
 mod storage;
 
 // The prefix "_" here is to guarantee running this case first.

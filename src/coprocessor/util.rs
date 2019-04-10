@@ -14,28 +14,7 @@
 use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
-use coprocessor::codec::datum::Datum;
-use coprocessor::*;
-
-/// A `RequestHandler` that always produces errors.
-pub struct ErrorRequestHandler {
-    error: Option<Error>,
-}
-
-impl ErrorRequestHandler {
-    pub fn new(error: Error) -> ErrorRequestHandler {
-        ErrorRequestHandler { error: Some(error) }
-    }
-}
-
-impl RequestHandler for ErrorRequestHandler {
-    fn handle_request(&mut self) -> Result<coppb::Response> {
-        Err(self.error.take().unwrap())
-    }
-    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-        Err(self.error.take().unwrap())
-    }
-}
+use crate::coprocessor::codec::datum::Datum;
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {
@@ -118,6 +97,7 @@ pub fn is_prefix_next(key: &[u8], next: &[u8]) -> bool {
 }
 
 /// `is_point` checks if the key range represents a point.
+#[inline]
 pub fn is_point(range: &coppb::KeyRange) -> bool {
     is_prefix_next(range.get_start(), range.get_end())
 }

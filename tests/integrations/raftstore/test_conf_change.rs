@@ -23,11 +23,11 @@ use kvproto::raft_cmdpb::{RaftCmdResponse, RaftResponseHeader};
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
+use engine::*;
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
-use tikv::storage::CF_RAFT;
 use tikv::util::config::ReadableDuration;
 use tikv::util::HandyRwLock;
 
@@ -153,7 +153,7 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable default max peer count check.
     pd_client.disable_default_operator();
 
-    cluster.start();
+    cluster.start().unwrap();
 
     let region = &pd_client.get_region(b"").unwrap();
     let region_id = region.get_id();
@@ -179,12 +179,10 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let peer2 = new_conf_change_peer(&stores[1], &pd_client);
     let engine_2 = cluster.get_engine(peer2.get_store_id());
-    assert!(
-        engine_2
-            .get_value(&keys::data_key(b"k1"))
-            .unwrap()
-            .is_none()
-    );
+    assert!(engine_2
+        .get_value(&keys::data_key(b"k1"))
+        .unwrap()
+        .is_none());
     // add new peer to first region.
     pd_client.must_add_peer(region_id, peer2.clone());
 
@@ -238,13 +236,6 @@ fn test_pd_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 }
 
 #[test]
-fn test_node_simple_conf_change() {
-    let count = 5;
-    let mut cluster = new_node_cluster(0, count);
-    test_simple_conf_change(&mut cluster);
-}
-
-#[test]
 fn test_server_simple_conf_change() {
     let count = 5;
     let mut cluster = new_server_cluster(0, count);
@@ -285,7 +276,7 @@ fn wait_till_reach_count(pd_client: Arc<TestPdClient>, region_id: u64, c: usize)
 }
 
 fn test_auto_adjust_replica<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.start();
+    cluster.start().unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let mut region = pd_client.get_region(b"").unwrap();
@@ -405,8 +396,8 @@ fn test_after_remove_itself<T: Simulator>(cluster: &mut Cluster<T>) {
     // so here will return timeout error, we should ignore it.
     let _ = cluster.call_command(req, Duration::from_millis(1));
 
-    cluster.run_node(2);
-    cluster.run_node(3);
+    cluster.run_node(2).unwrap();
+    cluster.run_node(3).unwrap();
 
     for _ in 0..250 {
         let region: RegionLocalState = engine1
@@ -637,7 +628,8 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
         r1,
         ConfChangeType::AddLearnerNode,
         new_learner_peer(4, 11),
-    ).unwrap();
+    )
+    .unwrap();
     let err_msg = resp.get_header().get_error().get_message();
     assert!(err_msg.contains("duplicated"));
 
@@ -769,7 +761,7 @@ fn test_learner_with_slow_snapshot() {
         filter: Arc<AtomicBool>,
     }
 
-    impl Filter<RaftMessage> for SnapshotFilter {
+    impl Filter for SnapshotFilter {
         fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
             let count = msgs
                 .iter()
@@ -795,10 +787,10 @@ fn test_learner_with_slow_snapshot() {
 
     let count = Arc::new(AtomicUsize::new(0));
     let filter = Arc::new(AtomicBool::new(true));
-    let snap_filter = box SnapshotFilter {
+    let snap_filter = Box::new(SnapshotFilter {
         count: Arc::clone(&count),
         filter: Arc::clone(&filter),
-    };
+    });
 
     // New added learner should keep pending until snapshot is applied.
     cluster.sim.wl().add_send_filter(1, snap_filter);
@@ -828,7 +820,7 @@ fn test_learner_with_slow_snapshot() {
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
     count.store(0, Ordering::SeqCst);
-    cluster.run_node(3);
+    cluster.run_node(3).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
     // Transfer leader so that peer 3 can report to pd with `Peer` in memory.
     pd_client.transfer_leader(r1, new_peer(3, 3));

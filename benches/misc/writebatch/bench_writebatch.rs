@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{Writable, WriteBatch, DB};
+use engine::rocks::{Writable, WriteBatch, DB};
 use tempdir::TempDir;
 use test::Bencher;
 
@@ -23,7 +23,7 @@ fn writebatch(db: &DB, round: usize, batch_keys: usize) {
             let k = format!("key_round{}_key{}", r, i);
             batch.put(k.as_bytes(), v).unwrap();
         }
-        db.write(batch).unwrap()
+        db.write(&batch).unwrap()
     }
 }
 

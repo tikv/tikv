@@ -13,13 +13,13 @@
 
 use std::mem;
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::metrics::*;
-use pd::PdTask;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::metrics::*;
+use crate::pd::PdTask;
+use crate::storage::kv::{FlowStatistics, Statistics};
+use crate::util::collections::HashMap;
+use crate::util::worker::FutureScheduler;
 use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
-use storage::engine::{FlowStatistics, Statistics};
-use util::collections::HashMap;
-use util::worker::FutureScheduler;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.
 pub struct CopFlowStatistics {
@@ -50,7 +50,10 @@ impl CopFlowStatistics {
         if let Err(e) = self.sender.schedule(PdTask::ReadStats {
             read_stats: to_send_stats,
         }) {
-            error!("send coprocessor statistics: {:?}", e);
+            error!(
+                "send coprocessor statistics failed";
+                "err" => %e
+            );
         };
     }
 }

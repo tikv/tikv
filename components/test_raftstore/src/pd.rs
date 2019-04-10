@@ -67,12 +67,14 @@ enum SchedulePolicy {
 impl SchedulePolicy {
     fn schedule(&mut self) -> bool {
         match *self {
-            SchedulePolicy::Repeat(ref mut c) => if *c > 0 {
-                *c -= 1;
-                true
-            } else {
-                false
-            },
+            SchedulePolicy::Repeat(ref mut c) => {
+                if *c > 0 {
+                    *c -= 1;
+                    true
+                } else {
+                    false
+                }
+            }
             SchedulePolicy::TillSuccess => true,
             SchedulePolicy::Stop => false,
         }
@@ -229,6 +231,8 @@ struct Cluster {
     down_peers: HashMap<u64, pdpb::PeerStats>,
     pending_peers: HashMap<u64, metapb::Peer>,
     is_bootstraped: bool,
+
+    gc_safe_point: u64,
 }
 
 impl Cluster {
@@ -253,6 +257,8 @@ impl Cluster {
             down_peers: HashMap::default(),
             pending_peers: HashMap::default(),
             is_bootstraped: false,
+
+            gc_safe_point: 0,
         }
     }
 
@@ -330,16 +336,14 @@ impl Cluster {
 
     fn add_region(&mut self, region: &metapb::Region) {
         let end_key = enc_end_key(region);
-        assert!(
-            self.regions
-                .insert(end_key.clone(), region.clone())
-                .is_none()
-        );
-        assert!(
-            self.region_id_keys
-                .insert(region.get_id(), end_key.clone())
-                .is_none()
-        );
+        assert!(self
+            .regions
+            .insert(end_key.clone(), region.clone())
+            .is_none());
+        assert!(self
+            .region_id_keys
+            .insert(region.get_id(), end_key.clone())
+            .is_none());
     }
 
     fn remove_region(&mut self, region: &metapb::Region) {
@@ -586,6 +590,14 @@ impl Cluster {
         self.handle_heartbeat_version(region.clone())?;
         self.handle_heartbeat_conf_ver(region, leader)
     }
+
+    fn set_gc_safe_point(&mut self, safe_point: u64) {
+        self.gc_safe_point = safe_point;
+    }
+
+    fn get_gc_safe_point(&self) -> u64 {
+        self.gc_safe_point
+    }
 }
 
 fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) -> Result<()> {
@@ -598,7 +610,7 @@ fn check_stale_region(region: &metapb::Region, check_region: &metapb::Region) ->
     }
 
     Err(box_err!(
-        "stale epoch {:?}, we are now {:?}",
+        "epoch not match {:?}, we are now {:?}",
         check_epoch,
         epoch
     ))
@@ -795,6 +807,34 @@ impl TestPdClient {
         self.schedule_operator(region.get_id(), op);
     }
 
+    pub fn must_half_split_region(&self, region: metapb::Region) {
+        self.half_split_region(region.clone());
+        for _ in 1..500 {
+            sleep_ms(10);
+
+            let now = self
+                .get_region_by_id(region.get_id())
+                .wait()
+                .unwrap()
+                .unwrap();
+            if (now.get_start_key() != region.get_start_key()
+                && self.get_region(region.get_start_key()).is_ok())
+                || (now.get_end_key() != region.get_end_key()
+                    && self.get_region(now.get_end_key()).is_ok())
+            {
+                if now.get_end_key() != region.get_end_key() {
+                    assert!(now.get_end_key().is_empty());
+                }
+                assert!(
+                    now.get_region_epoch().get_version() > region.get_region_epoch().get_version()
+                );
+                return;
+            }
+        }
+
+        panic!("region {:?} is still not split.", region);
+    }
+
     pub fn must_add_peer(&self, region_id: u64, peer: metapb::Peer) {
         self.add_peer(region_id, peer.clone());
         self.must_have_peer(region_id, peer.clone());
@@ -895,6 +935,10 @@ impl TestPdClient {
 
     pub fn get_region_approximate_keys(&self, region_id: u64) -> Option<u64> {
         self.cluster.rl().get_region_approximate_keys(region_id)
+    }
+
+    pub fn set_gc_safe_point(&self, safe_point: u64) {
+        self.cluster.wl().set_gc_safe_point(safe_point);
     }
 }
 
@@ -999,7 +1043,8 @@ impl PdClient for TestPdClient {
                     stream::unfold(timer, |timer| {
                         let interval = timer.delay(Instant::now() + Duration::from_millis(500));
                         Some(interval.then(|_| Ok(((), timer))))
-                    }).map(move |_| {
+                    })
+                    .map(move |_| {
                         let mut cluster = cluster1.wl();
                         cluster.poll_heartbeat_responses_for(store_id)
                     }),
@@ -1097,5 +1142,14 @@ impl PdClient for TestPdClient {
         }
         self.cluster.wl().split_count += regions.len() - 1;
         Box::new(ok(()))
+    }
+
+    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        if let Err(e) = self.check_bootstrap() {
+            return Box::new(err(e));
+        }
+
+        let safe_point = self.cluster.rl().get_gc_safe_point();
+        Box::new(ok(safe_point))
     }
 }

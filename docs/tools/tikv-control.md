@@ -23,15 +23,14 @@ When you compile TiKV, the `tikv-ctl` command is also compiled at the same time.
     ```
 
     However, sometimes `tikv-ctl` communicates with PD instead of TiKV. In this case, you need to use the `--pd` option instead of `--host`. Here is an example:
-    
+
     ```
     $ tikv-ctl --pd 127.0.0.1:2379 compact-cluster
     store:"127.0.0.1:20160" compact db:KV cf:default range:([], []) success!
     ```
 
-- Local mode: 
+- Local mode:
   - Use the `--db` option to specify the local TiKV data directory path
-  - Use the `ldb` option to run the ldb command of RocksDB
 
 Unless otherwise noted, all commands support both the remote mode and the local mode.
 
@@ -106,6 +105,21 @@ key: zmDB:29\000\000\377\000\374\000\000\000\000\000\000\377\000H\000\000\000\00
 ```
 
 In this command, the key is also the escaped form of raw key.
+
+### Scan raw keys
+
+The `raw-scan` command scans directly from the RocksDB. Note that to scan data keys you need to add a `'z'` prefix to keys.
+
+Use `--from` and `--to` options to specify the range to scan (unbounded by default). Use `--limit` to limit at most how
+many keys to print out (30 by default). Use `--cf` to specify which cf to scan (can be `default`, `write` or `lock`).
+
+```bash
+$ ./tikv-ctl --db /var/lib/tikv/db/ raw-scan --from 'zt' --limit 2 --cf default
+key: "zt\200\000\000\000\000\000\000\377\005_r\200\000\000\000\000\377\000\000\001\000\000\000\000\000\372\372b2,^\033\377\364", value: "\010\002\002\002%\010\004\002\010root\010\006\002\000\010\010\t\002\010\n\t\002\010\014\t\002\010\016\t\002\010\020\t\002\010\022\t\002\010\024\t\002\010\026\t\002\010\030\t\002\010\032\t\002\010\034\t\002\010\036\t\002\010 \t\002\010\"\t\002\010$\t\002\010&\t\002\010(\t\002\010*\t\002\010,\t\002\010.\t\002\0100\t\002\0102\t\002\0104\t\002"
+key: "zt\200\000\000\000\000\000\000\377\025_r\200\000\000\000\000\377\000\000\023\000\000\000\000\000\372\372b2,^\033\377\364", value: "\010\002\002&slow_query_log_file\010\004\002P/usr/local/mysql/data/localhost-slow.log"
+
+Total scanned keys: 2
+```
 
 ### Print a specific key value
 
@@ -237,7 +251,7 @@ success!
 ```
 
 > **Note:**
-> 
+>
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - You must run this command for all stores where specified Regions' peers are located. If `-r` is not set, all Regions are involved, and you need to run this command for all stores.
 
@@ -253,28 +267,28 @@ success!
 ```
 
 > **Note**:
-> 
+>
 > - This command only supports the local mode. It prints `success!` when successfully run.
 > - The argument of the `-p` option specifies the PD endpoints without the `http` prefix. Specifying the PD endpoints is to query whether the specified `region_id` is validated or not.
 > - You need to run this command for all stores where specified Regions' peers are located.
 
 ### Ldb Command
 
-The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below. 
-For more information, refer to the help message displayed when running `tikv-ctl ldb` without any arguments or check the documents from RocksDB.
+The ldb command line tool offers multiple data access and database administration commands. Some examples are listed below.
+For more information, refer to the help message displayed when running `tikv-ctl ldb` or check the documents from RocksDB.
 
 Examples of data access sequence:
 
 To dump an existing RocksDB in HEX:
 
 ```bash
-$ tikv-ctl ldb --db=/tmp/test_db dump --hex > /tmp/dbdump
+$ tikv-ctl ldb --hex --db=/tmp/db dump
 ```
 
 To dump the manifest of an existing RocksDB:
 
 ```bash
-$ tikv-ctl ldb manifest_dump --path=/tmp/test_db/MANIFEST-000001 --json
+$ tikv-ctl ldb --hex manifest_dump --path=/tmp/db/MANIFEST-000001
 ```
 
 You can specify the column family that your query is against using the `--column_family=<string>` command line.

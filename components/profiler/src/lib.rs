@@ -50,20 +50,9 @@
 //!
 //! Also see `examples/prime.rs`.
 
-// TODO: Simplify these using Edition 2018.
-
 #[cfg(all(target_os = "linux", feature = "profiling"))]
 #[macro_use]
 extern crate lazy_static;
-
-#[cfg(all(target_os = "linux", feature = "profiling"))]
-extern crate cpuprofiler;
-
-#[cfg(all(target_os = "linux", feature = "profiling"))]
-extern crate valgrind_request;
-
-#[cfg(all(target_os = "linux", feature = "profiling"))]
-extern crate callgrind;
 
 #[cfg(all(target_os = "linux", feature = "profiling"))]
 mod profiler_linux;

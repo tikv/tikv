@@ -11,9 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod error;
+// TODO: Replace by failure crate.
+/// A shortcut to box an error.
+macro_rules! invalid_type {
+    ($e:expr) => ({
+        use crate::coprocessor::codec::Error;
+        Error::InvalidDataType(($e).into())
+    });
+    ($f:tt, $($arg:expr),+) => ({
+        use crate::coprocessor::codec::Error;
+        Error::InvalidDataType(format!($f, $($arg),+))
+    });
+}
 
+pub mod batch;
+pub mod chunk;
+pub mod convert;
+pub mod data_type;
+pub mod datum;
+pub mod error;
+pub mod mysql;
+mod overflow;
+pub mod table;
+
+pub use self::datum::Datum;
 pub use self::error::{Error, Result};
+pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};
+
 const TEN_POW: &[u32] = &[
     1,
     10,
@@ -26,26 +50,3 @@ const TEN_POW: &[u32] = &[
     100_000_000,
     1_000_000_000,
 ];
-
-/// A shortcut to box an error.
-macro_rules! invalid_type {
-    ($e:expr) => ({
-        use coprocessor::codec::Error;
-        Error::InvalidDataType(($e).into())
-    });
-    ($f:tt, $($arg:expr),+) => ({
-        use coprocessor::codec::Error;
-        Error::InvalidDataType(format!($f, $($arg),+))
-    });
-}
-
-pub mod batch;
-pub mod chunk;
-pub mod convert;
-pub mod datum;
-pub mod mysql;
-mod overflow;
-pub mod table;
-
-pub use self::datum::Datum;
-pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};

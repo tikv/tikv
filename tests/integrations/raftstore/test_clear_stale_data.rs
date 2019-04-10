@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::{CompactOptions, Writable, DB};
-
+use engine::rocks::{CompactOptions, Writable, DB};
+use engine::{CF_DEFAULT, CF_LOCK};
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
-use tikv::storage::{CF_DEFAULT, CF_LOCK};
 
 fn init_db_with_sst_files(db: &DB, level: i32, n: u8) {
     let mut opts = CompactOptions::new();
@@ -117,7 +116,7 @@ fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Restart the node.
     cluster.stop_node(node_id);
-    cluster.run_node(node_id);
+    cluster.run_node(node_id).unwrap();
 
     // Keys in removed peers should not exist.
     for i in 0..n {

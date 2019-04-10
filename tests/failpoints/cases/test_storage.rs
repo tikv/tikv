@@ -29,7 +29,7 @@ use tikv::util::HandyRwLock;
 
 #[test]
 fn test_storage_gcworker_busy() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let snapshot_fp = "raftkv_async_snapshot";
     let (_cluster, engine, ctx) = new_raft_engine(3, "");
     let storage = TestStorageBuilder::from_engine(engine.clone())
@@ -41,10 +41,14 @@ fn test_storage_gcworker_busy() {
     for _i in 0..GC_MAX_PENDING_TASKS {
         let tx1 = tx1.clone();
         storage
-            .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-                assert!(res.is_ok());
-                tx1.send(1).unwrap();
-            })
+            .async_gc(
+                ctx.clone(),
+                1,
+                Box::new(move |res: storage::Result<()>| {
+                    assert!(res.is_ok());
+                    tx1.send(1).unwrap();
+                }),
+            )
             .unwrap();
     }
     // Sleep to make sure the failpoint is triggered.
@@ -52,34 +56,42 @@ fn test_storage_gcworker_busy() {
     // Schedule one more request. So that there is a request being processed and
     // `GC_MAX_PENDING` requests in queue.
     storage
-        .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-            assert!(res.is_ok());
-            tx1.send(1).unwrap();
-        })
+        .async_gc(
+            ctx.clone(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                assert!(res.is_ok());
+                tx1.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
     let (tx2, rx2) = channel();
     storage
-        .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-            match res {
-                Err(storage::Error::GCWorkerTooBusy) => {}
-                res => panic!("expect too busy, got {:?}", res),
-            }
-            tx2.send(1).unwrap();
-        })
+        .async_gc(
+            Context::new(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                match res {
+                    Err(storage::Error::GCWorkerTooBusy) => {}
+                    res => panic!("expect too busy, got {:?}", res),
+                }
+                tx2.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     rx2.recv().unwrap();
     fail::remove(snapshot_fp);
-    for _ in 0..(GC_MAX_PENDING_TASKS + 1) {
+    for _ in 0..=GC_MAX_PENDING_TASKS {
         rx1.recv().unwrap();
     }
 }
 
 #[test]
 fn test_scheduler_leader_change_twice() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let snapshot_fp = "scheduler_async_snapshot_finish";
     let mut cluster = new_server_cluster(0, 2);
     cluster.run();
@@ -104,9 +116,9 @@ fn test_scheduler_leader_change_twice() {
             b"k".to_vec(),
             10,
             Options::default(),
-            box move |res: storage::Result<_>| {
+            Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
-            },
+            }),
         )
         .unwrap();
     // Sleep to make sure the failpoint is triggered.
@@ -117,8 +129,8 @@ fn test_scheduler_leader_change_twice() {
     fail::remove(snapshot_fp);
 
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
-        Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
-        | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
+        Err(storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))))
+        | Err(storage::Error::Engine(kv::Error::Request(ref e))) => {
             assert!(e.has_stale_command(), "{:?}", e);
         }
         res => {
@@ -129,7 +141,7 @@ fn test_scheduler_leader_change_twice() {
 
 #[test]
 fn test_server_catching_api_error() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let raftkv_fp = "raftkv_early_error_report";
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();

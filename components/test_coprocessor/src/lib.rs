@@ -11,15 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-extern crate kvproto;
-extern crate tipb;
-
-extern crate futures;
-extern crate protobuf;
-
-extern crate test_storage;
-extern crate tikv;
-
 mod column;
 mod dag;
 mod fixture;
@@ -27,9 +18,9 @@ mod store;
 mod table;
 mod util;
 
-pub use column::*;
-pub use dag::*;
-pub use fixture::*;
-pub use store::*;
-pub use table::*;
-pub use util::*;
+pub use crate::column::*;
+pub use crate::dag::*;
+pub use crate::fixture::*;
+pub use crate::store::*;
+pub use crate::table::*;
+pub use crate::util::*;

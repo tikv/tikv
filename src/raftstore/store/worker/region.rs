@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,32 +20,29 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::WriteBatch;
+use engine::CF_RAFT;
+use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{Writable, WriteBatch};
 
-use raftstore::store::engine::{Mutable, Snapshot};
-use raftstore::store::peer_storage::{
+use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use raftstore::store::util::Engines;
-use raftstore::store::{
-    self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
+use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
+use crate::raftstore::store::{
+    self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
 };
-use storage::CF_RAFT;
-use util::rocksdb::get_cf_num_files_at_level;
-use util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use util::time;
-use util::timer::Timer;
-use util::worker::{Runnable, RunnableWithTimer};
-use util::{escape, rocksdb};
+use crate::util::escape;
+use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use crate::util::time;
+use crate::util::timer::Timer;
+use crate::util::worker::{Runnable, RunnableWithTimer};
 
-use super::super::util;
 use super::metrics::*;
-
-use std::collections::Bound::{Excluded, Included, Unbounded};
 
 const GENERATE_POOL_SIZE: usize = 2;
 
@@ -56,11 +54,13 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
-/// region related task.
+/// Region related task
 #[derive(Debug)]
 pub enum Task {
     Gen {
         region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
         notifier: SyncSender<RaftSnapshot>,
     },
     Apply {
@@ -88,7 +88,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
@@ -116,13 +116,15 @@ struct StalePeerInfo {
     pub timeout: time::Instant,
 }
 
+/// A structure records all ranges to be deleted with some delay.
+/// The delay is because there may be some coprocessor requests related to these ranges.
 #[derive(Clone, Default)]
 struct PendingDeleteRanges {
     ranges: BTreeMap<Vec<u8>, StalePeerInfo>, // start_key -> StalePeerInfo
 }
 
 impl PendingDeleteRanges {
-    // find ranges that overlap with [start_key, end_key)
+    /// Finds ranges that overlap with [start_key, end_key).
     fn find_overlap_ranges(
         &self,
         start_key: &[u8],
@@ -155,7 +157,7 @@ impl PendingDeleteRanges {
         ranges
     }
 
-    // get ranges that overlap with [start_key, end_key)
+    /// Gets ranges that overlap with [start_key, end_key).
     pub fn drain_overlap_ranges(
         &mut self,
         start_key: &[u8],
@@ -169,13 +171,16 @@ impl PendingDeleteRanges {
         ranges
     }
 
+    /// Removes and returns the peer info with the `start_key`.
     fn remove(&mut self, start_key: &[u8]) -> Option<(u64, Vec<u8>, Vec<u8>)> {
         self.ranges
             .remove(start_key)
             .map(|peer_info| (peer_info.region_id, start_key.to_owned(), peer_info.end_key))
     }
 
-    // before an insert is called, must call drain_overlap_ranges to clean the overlap range
+    /// Inserts a new range waiting to be deleted.
+    ///
+    /// Before an insert is called, it must call drain_overlap_ranges to clean the overlapping range.
     fn insert(&mut self, region_id: u64, start_key: &[u8], end_key: &[u8], timeout: time::Instant) {
         if !self.find_overlap_ranges(&start_key, &end_key).is_empty() {
             panic!(
@@ -193,6 +198,7 @@ impl PendingDeleteRanges {
         self.ranges.insert(start_key.to_owned(), info);
     }
 
+    /// Gets all timeout ranges info.
     pub fn timeout_ranges<'a>(
         &'a self,
         now: time::Instant,
@@ -219,15 +225,19 @@ struct SnapContext {
 }
 
 impl SnapContext {
-    fn generate_snap(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) -> Result<()> {
+    /// Generates the snapshot of the Region.
+    fn generate_snap(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) -> Result<()> {
         // do we need to check leader here?
-        let raft_engine = Arc::clone(&self.engines.raft);
-        let raw_snap = Snapshot::new(Arc::clone(&self.engines.kv));
-
         let snap = box_try!(store::do_snapshot(
             self.mgr.clone(),
-            &raft_engine,
-            &raw_snap,
+            raft_snap,
+            kv_snap,
             region_id
         ));
         // Only enable the fail point when the region id is equal to 1, which is
@@ -235,23 +245,30 @@ impl SnapContext {
         fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
         if let Err(e) = notifier.try_send(snap) {
             info!(
-                "[region {}] failed to notify snap result, maybe leadership has changed, \
-                 ignore: {:?}",
-                region_id, e
+                "failed to notify snap result, leadership may have changed, ignore error";
+                "region_id" => region_id,
+                "err" => %e,
             );
         }
         Ok(())
     }
 
-    fn handle_gen(&self, region_id: u64, notifier: SyncSender<RaftSnapshot>) {
+    /// Handles the task of generating snapshot of the Region. It calls `generate_snap` to do the actual work.
+    fn handle_gen(
+        &self,
+        region_id: u64,
+        raft_snap: Snapshot,
+        kv_snap: Snapshot,
+        notifier: SyncSender<RaftSnapshot>,
+    ) {
         SNAP_COUNTER_VEC
             .with_label_values(&["generate", "all"])
             .inc();
         let gen_histogram = SNAP_HISTOGRAM.with_label_values(&["generate"]);
         let timer = gen_histogram.start_coarse_timer();
 
-        if let Err(e) = self.generate_snap(region_id, notifier) {
-            error!("[region {}] failed to generate snap: {:?}!!!", region_id, e);
+        if let Err(e) = self.generate_snap(region_id, raft_snap, kv_snap, notifier) {
+            error!("failed to generate snap!!!"; "region_id" => region_id, "err" => %e);
             return;
         }
 
@@ -261,8 +278,9 @@ impl SnapContext {
         timer.observe_duration();
     }
 
+    /// Applies snapshot data of the Region.
     fn apply_snap(&mut self, region_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
-        info!("[region {}] begin apply snap data", region_id);
+        info!("begin apply snap data"; "region_id" => region_id);
         fail_point!("region_apply_snap");
         check_abort(&abort)?;
         let region_key = keys::region_state_key(region_id);
@@ -273,7 +291,7 @@ impl SnapContext {
                     return Err(box_err!(
                         "failed to get region_state from {}",
                         escape(&region_key)
-                    ))
+                    ));
                 }
             };
 
@@ -283,7 +301,7 @@ impl SnapContext {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(util::delete_all_in_range(
+        box_try!(engine_util::delete_all_in_range(
             &self.engines.kv,
             &start_key,
             &end_key,
@@ -299,7 +317,7 @@ impl SnapContext {
                     return Err(box_err!(
                         "failed to get raftstate from {}",
                         escape(&state_key)
-                    ))
+                    ));
                 }
             };
         let term = apply_state.get_truncated_state().get_term();
@@ -325,40 +343,21 @@ impl SnapContext {
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocksdb::get_cf_handle(&self.engines.kv, CF_RAFT));
+        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
-        self.engines.kv.write(wb).unwrap_or_else(|e| {
+        self.engines.kv.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
-            "[region {}] apply new data takes {:?}",
-            region_id,
-            timer.elapsed()
+            "apply new data";
+            "region_id" => region_id,
+            "time_takes" => ?timer.elapsed(),
         );
         Ok(())
     }
 
-    // check the number of files at level 0 to avoid write stall after ingesting sst,
-    // return indicate whether ingest will cause write stall or not.
-    fn ingest_maybe_stall(&self) -> bool {
-        for cf in SNAPSHOT_CFS {
-            // no need to check lock cf
-            if plain_file_used(cf) {
-                continue;
-            }
-
-            let handle = rocksdb::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
-                let options = self.engines.kv.get_options_cf(handle);
-                if n + 1 >= u64::from(options.get_level_zero_slowdown_writes_trigger()) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
+    /// Tries to apply the snapshot of the specified Region. It calls `apply_snap` to do the actual work.
     fn handle_apply(&mut self, region_id: u64, status: Arc<AtomicUsize>) {
         status.compare_and_swap(JOB_STATUS_PENDING, JOB_STATUS_RUNNING, Ordering::SeqCst);
         SNAP_COUNTER_VEC.with_label_values(&["apply", "all"]).inc();
@@ -373,7 +372,7 @@ impl SnapContext {
                     .inc();
             }
             Err(Error::Abort) => {
-                warn!("applying snapshot for region {} is aborted.", region_id);
+                warn!("applying snapshot is aborted"; "region_id" => region_id);
                 assert_eq!(
                     status.swap(JOB_STATUS_CANCELLED, Ordering::SeqCst),
                     JOB_STATUS_CANCELLING
@@ -383,7 +382,7 @@ impl SnapContext {
                     .inc();
             }
             Err(e) => {
-                error!("failed to apply snap: {:?}!!!", e);
+                error!("failed to apply snap!!!"; "err" => %e);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER_VEC.with_label_values(&["apply", "fail"]).inc();
             }
@@ -392,6 +391,7 @@ impl SnapContext {
         timer.observe_duration();
     }
 
+    /// Cleans up the data within the range.
     fn cleanup_range(
         &self,
         region_id: u64,
@@ -400,37 +400,43 @@ impl SnapContext {
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
+            if let Err(e) =
+                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+            {
                 error!(
-                    "[region {}] failed to delete files in [{}, {}): {:?}",
-                    region_id,
-                    escape(start_key),
-                    escape(end_key),
-                    e
+                    "failed to delete files in range";
+                    "region_id" => region_id,
+                    "start_key" => log_wrappers::Key(start_key),
+                    "end_key" => log_wrappers::Key(end_key),
+                    "err" => %e,
                 );
                 return;
             }
         }
-        if let Err(e) =
-            util::delete_all_in_range(&self.engines.kv, start_key, end_key, self.use_delete_range)
-        {
+        if let Err(e) = engine_util::delete_all_in_range(
+            &self.engines.kv,
+            start_key,
+            end_key,
+            self.use_delete_range,
+        ) {
             error!(
-                "[region {}] failed to delete data in [{}, {}): {:?}",
-                region_id,
-                escape(start_key),
-                escape(end_key),
-                e
+                "failed to delete data in range";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
+                "err" => %e,
             );
         } else {
             info!(
-                "[region {}] succeed in deleting data in [{}, {})",
-                region_id,
-                escape(start_key),
-                escape(end_key),
+                "succeed in deleting data in range";
+                "region_id" => region_id,
+                "start_key" => log_wrappers::Key(start_key),
+                "end_key" => log_wrappers::Key(end_key),
             );
         }
     }
 
+    /// Gets the overlapping ranges and cleans them up.
     fn cleanup_overlap_ranges(&mut self, start_key: &[u8], end_key: &[u8]) {
         let overlap_ranges = self
             .pending_delete_ranges
@@ -441,6 +447,7 @@ impl SnapContext {
         }
     }
 
+    /// Inserts a new pending range, and it will be cleaned up with some delay.
     fn insert_pending_delete_range(
         &mut self,
         region_id: u64,
@@ -454,10 +461,10 @@ impl SnapContext {
         self.cleanup_overlap_ranges(start_key, end_key);
 
         info!(
-            "[region {}] register deleting data in [{}, {})",
-            region_id,
-            escape(start_key),
-            escape(end_key),
+            "register deleting data in range";
+            "region_id" => region_id,
+            "start_key" => log_wrappers::Key(start_key),
+            "end_key" => log_wrappers::Key(end_key),
         );
         let timeout = time::Instant::now() + self.clean_stale_peer_delay;
         self.pending_delete_ranges
@@ -465,6 +472,7 @@ impl SnapContext {
         true
     }
 
+    /// Cleans up timeouted ranges.
     fn clean_timeout_ranges(&mut self) {
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
 
@@ -484,7 +492,7 @@ impl SnapContext {
                 if elapsed >= CLEANUP_MAX_DURATION {
                     let len = cleaned_range_keys.len();
                     let elapsed = elapsed.as_millis() as f64 / 1000f64;
-                    info!("clean {} timeout ranges in {}s, now backoff", len, elapsed);
+                    info!("clean timeout ranges, now backoff"; "key_count" => len, "time_takes" => elapsed);
                     break;
                 }
             }
@@ -496,6 +504,29 @@ impl SnapContext {
                 escape(&key)
             );
         }
+    }
+
+    /// Checks the number of files at level 0 to avoid write stall after ingesting sst.
+    /// Returns true if the ingestion causes write stall.
+    fn ingest_maybe_stall(&self) -> bool {
+        for cf in SNAPSHOT_CFS {
+            // no need to check lock cf
+            if plain_file_used(cf) {
+                continue;
+            }
+
+            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
+            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
+                let options = self.engines.kv.get_options_cf(handle);
+                let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
+                // Leave enough buffer to tolerate heavy write workload,
+                // which may flush some memtables in a short time.
+                if n > u64::from(slowdown_trigger) / 2 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -545,7 +576,7 @@ impl Runner {
         timer
     }
 
-    // try to apply pending tasks if there is some.
+    /// Tries to apply pending tasks if there is some.
     fn handle_pending_applies(&mut self) {
         while !self.pending_applies.is_empty() {
             // should not handle too many applies than the number of files that can be ingested.
@@ -565,13 +596,15 @@ impl Runnable<Task> for Runner {
         match task {
             Task::Gen {
                 region_id,
+                raft_snap,
+                kv_snap,
                 notifier,
             } => {
                 // It is safe for now to handle generating and applying snapshot concurrently,
                 // but it may not when merge is implemented.
                 let ctx = self.ctx.clone();
                 self.pool
-                    .execute(move |_| ctx.handle_gen(region_id, notifier))
+                    .execute(move |_| ctx.handle_gen(region_id, raft_snap, kv_snap, notifier))
             }
             task @ Task::Apply { .. } => {
                 // to makes sure appling snapshots in order.
@@ -605,12 +638,12 @@ impl Runnable<Task> for Runner {
 
     fn shutdown(&mut self) {
         if let Err(e) = self.pool.stop() {
-            warn!("Stop threadpool failed with {:?}", e);
+            warn!("Stop threadpool failed"; "err" => %e);
         }
     }
 }
 
-/// region related timeout event.
+/// Region related timeout event
 pub enum Event {
     CheckStalePeer,
     CheckApply,
@@ -645,19 +678,20 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
+    use crate::raftstore::store::snap::tests::get_test_db_for_regions;
+    use crate::raftstore::store::worker::RegionRunner;
+    use crate::raftstore::store::{keys, SnapKey, SnapManager};
+    use crate::util::time;
+    use crate::util::timer::Timer;
+    use crate::util::worker::Worker;
+    use engine::rocks;
+    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::Engines;
+    use engine::{Mutable, Peekable};
+    use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use raftstore::store::engine::{Mutable, Peekable};
-    use raftstore::store::peer_storage::JOB_STATUS_PENDING;
-    use raftstore::store::snap::tests::get_test_db_for_regions;
-    use raftstore::store::worker::RegionRunner;
-    use raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
-    use storage::{CF_DEFAULT, CF_RAFT};
     use tempdir::TempDir;
-    use util::rocksdb;
-    use util::time;
-    use util::timer::Timer;
-    use util::worker::Worker;
 
     use super::Event;
     use super::PendingDeleteRanges;
@@ -744,12 +778,13 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = vec![
-            rocksdb::CFOptions::new("default", cf_opts.clone()),
-            rocksdb::CFOptions::new("write", cf_opts.clone()),
-            rocksdb::CFOptions::new("lock", cf_opts.clone()),
-            rocksdb::CFOptions::new("raft", cf_opts.clone()),
+            rocks::util::CFOptions::new("default", cf_opts.clone()),
+            rocks::util::CFOptions::new("write", cf_opts.clone()),
+            rocks::util::CFOptions::new("lock", cf_opts.clone()),
+            rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let db = get_test_db_for_regions(&temp_dir, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
+        let db =
+            get_test_db_for_regions(&temp_dir, None, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
 
         for cf_name in db.cf_names() {
             let cf = db.cf_handle(cf_name).unwrap();
@@ -759,23 +794,18 @@ mod tests {
                 db.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+                    rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
                     u64::from(i) + 1
                 );
             }
         }
 
+        let engines = Engines::new(Arc::clone(&db), Arc::clone(&db));
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
         let sched = worker.scheduler();
-        let runner = RegionRunner::new(
-            Engines::new(Arc::clone(&db), Arc::clone(&db)),
-            mgr,
-            0,
-            true,
-            Duration::from_secs(0),
-        );
+        let runner = RegionRunner::new(engines.clone(), mgr, 0, true, Duration::from_secs(0));
         let mut timer = Timer::new(1);
         timer.add_task(Duration::from_millis(100), Event::CheckApply);
         worker.start_with_timer(runner, timer).unwrap();
@@ -786,6 +816,8 @@ mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
+                    raft_snap: Snapshot::new(engines.raft.clone()),
+                    kv_snap: Snapshot::new(engines.kv.clone()),
                     notifier: tx,
                 })
                 .unwrap();
@@ -808,7 +840,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
@@ -827,7 +859,8 @@ mod tests {
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()
-                    .get_state() == PeerState::Normal
+                    .get_state()
+                    == PeerState::Normal
                 {
                     break;
                 }
@@ -837,49 +870,82 @@ mod tests {
 
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 6);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            6
+        );
 
         // compact all files to the bottomest level
-        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            0
+        );
 
         wait_apply_finish(1);
 
         // the pending apply task should be finished and snapshots are ingested.
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 2);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            2
+        );
 
         // no write stall, ingest without delay
         gen_and_apply_snap(2);
         wait_apply_finish(2);
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            4
+        );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            4
+        );
         gen_and_apply_snap(4);
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            4
+        );
         gen_and_apply_snap(5);
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            4
+        );
 
         // compact all files to the bottomest level
-        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            0
+        );
 
         // make sure have checked pending applies
         wait_apply_finish(4);
 
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 4);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            4
+        );
 
         // make sure have checked pending applies
-        rocksdb::compact_files_in_range(&db, None, None, None).unwrap();
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 0);
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            0
+        );
         wait_apply_finish(5);
 
         // the last one pending task finished
-        assert_eq!(rocksdb::get_cf_num_files_at_level(&db, cf, 0).unwrap(), 2);
+        assert_eq!(
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            2
+        );
     }
 }

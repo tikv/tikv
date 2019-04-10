@@ -12,7 +12,6 @@
 // limitations under the License.
 
 #![cfg_attr(test, feature(test))]
-#![feature(try_from)]
 
 #[macro_use]
 extern crate bitflags;
@@ -20,11 +19,8 @@ extern crate bitflags;
 extern crate enum_primitive_derive;
 #[macro_use]
 extern crate failure;
-extern crate num_traits;
-#[cfg(test)]
-extern crate test;
-
-extern crate tipb;
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
 
 mod def;
 mod error;

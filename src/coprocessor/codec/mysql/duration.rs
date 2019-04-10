@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::codec::number::{self, NumberEncoder};
+use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use time::{self, Tm};
-use util::codec::number::{self, NumberEncoder};
-use util::codec::BytesSlice;
 
 use super::super::Result;
 use super::{check_fsp, parse_frac, Decimal};
@@ -47,13 +47,15 @@ fn tm_to_secs(t: Tm) -> u64 {
     t.tm_hour as u64 * SECS_PER_HOUR + t.tm_min as u64 * SECS_PER_MINUTE + t.tm_sec as u64
 }
 
-/// `Duration` is the type for `MySQL` time type.
-#[derive(Debug, Clone)]
+/// `Duration` is the type for MySQL `time` type.
+///
+/// It only occupies 24 bytes in memory.
+#[derive(Debug, Clone, Copy)]
 pub struct Duration {
-    pub dur: StdDuration,
-    // Fsp is short for Fractional Seconds Precision.
-    // See http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fsp: u8,
+    dur: StdDuration,
+    /// Fractional Seconds Precision
+    /// See http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
+    fsp: u8,
     neg: bool,
 }
 
@@ -66,8 +68,13 @@ impl Duration {
         }
     }
 
-    pub fn get_fsp(&self) -> u8 {
+    pub fn fsp(&self) -> u8 {
         self.fsp
+    }
+
+    /// Changes the FSP part of the duration.
+    pub fn set_fsp(&mut self, fsp: u8) {
+        self.fsp = fsp;
     }
 
     pub fn hours(&self) -> u64 {
@@ -99,7 +106,7 @@ impl Duration {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         self.to_nanos() == 0
     }
 
@@ -132,9 +139,9 @@ impl Duration {
         })
     }
 
-    // `parse` parses the time form a formatted string with a fractional seconds part,
-    // returns the duration type Time value.
-    // See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
+    /// Parses the time form a formatted string with a fractional seconds part,
+    /// returns the duration type `Time` value.
+    /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(mut s: &[u8], fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
 
@@ -220,23 +227,45 @@ impl Duration {
         Ok(d)
     }
 
-    pub fn round_frac(&mut self, fsp: i8) -> Result<()> {
+    /// Rounds fractional seconds precision with new FSP and returns a new one.
+    /// We will use the “round half up” rule, e.g, >= 0.5 -> 1, < 0.5 -> 0,
+    /// so 10:10:10.999999 round 0 -> 10:10:11
+    /// and 10:10:10.000000 round 0 -> 10:10:10
+    pub fn round_frac(mut self, fsp: i8) -> Result<Self> {
         let fsp = check_fsp(fsp)?;
         if fsp >= self.fsp {
             self.fsp = fsp;
-            return Ok(());
+            return Ok(self);
         }
         self.fsp = fsp;
         let nanos = f64::from(self.dur.subsec_nanos())
             / f64::from(10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
         let nanos = (nanos.round() as u32) * (10u32.pow(NANO_WIDTH - u32::from(self.fsp)));
         self.dur = StdDuration::new(self.dur.as_secs(), nanos);
-        Ok(())
+        Ok(self)
+    }
+
+    /// Checked duration addition. Computes self + rhs, returning None if overflow occurred.
+    pub fn checked_add(self, rhs: &Duration) -> Option<Duration> {
+        let add = match self.to_nanos().checked_add(rhs.to_nanos()) {
+            Some(result) => result,
+            None => return None,
+        };
+        Duration::from_nanos(add, self.fsp().max(rhs.fsp()) as i8).ok()
+    }
+
+    /// Checked duration subtraction. Computes self - rhs, returning None if overflow occurred.
+    pub fn checked_sub(self, rhs: &Duration) -> Option<Duration> {
+        let sub = match self.to_nanos().checked_sub(rhs.to_nanos()) {
+            Some(result) => result,
+            None => return None,
+        };
+        Duration::from_nanos(sub, self.fsp().max(rhs.fsp()) as i8).ok()
     }
 }
 
 impl Display for Duration {
-    fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         if self.neg {
             write!(formatter, "-")?;
         }
@@ -291,18 +320,28 @@ pub trait DurationEncoder: NumberEncoder {
 
 impl Duration {
     /// `decode` decodes duration encoded by `encode_duration`.
-    pub fn decode(data: &mut BytesSlice) -> Result<Duration> {
+    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
         let nanos = number::decode_i64(data)?;
         let fsp = number::decode_i64(data)?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
 
+impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
+    #[inline]
+    fn as_mysql_bool(
+        &self,
+        _context: &mut crate::coprocessor::dag::expr::EvalContext,
+    ) -> crate::coprocessor::Result<bool> {
+        Ok(!self.is_zero())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coprocessor::codec::mysql::MAX_FSP;
-    use util::escape;
+    use crate::coprocessor::codec::mysql::MAX_FSP;
+    use crate::util::escape;
 
     #[test]
     fn test_hours() {
@@ -443,9 +482,11 @@ mod tests {
                         panic!("expect parse {} to {}, got {}", escape(input), exp, s);
                     }
                 }
-                None => if !d.is_err() {
-                    panic!("{} should not be passed, got {:?}", escape(input), d);
-                },
+                None => {
+                    if !d.is_err() {
+                        panic!("{} should not be passed, got {:?}", escape(input), d);
+                    }
+                }
             }
         }
     }
@@ -489,8 +530,10 @@ mod tests {
             ("-1 11:59:59.9999", 2, "-36:00:00.00"),
         ];
         for (input, fsp, exp) in cases {
-            let mut t = Duration::parse(input.as_bytes(), MAX_FSP).unwrap();
-            t.round_frac(fsp).unwrap();
+            let t = Duration::parse(input.as_bytes(), MAX_FSP)
+                .unwrap()
+                .round_frac(fsp)
+                .unwrap();
             let res = format!("{}", t);
             assert_eq!(exp, res);
         }
@@ -509,11 +552,42 @@ mod tests {
             ("-1 11:59:59.9999", 2),
         ];
         for (input, fsp) in cases {
-            let mut t = Duration::parse(input.as_bytes(), fsp).unwrap();
+            let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
             let got = Duration::decode(&mut buf.as_slice()).unwrap();
             assert_eq!(t, got);
         }
+    }
+
+    #[test]
+    fn test_checked_add_and_sub_duration() {
+        let cases = vec![
+            ("11:30:45.123456", "00:00:14.876545", "11:31:00.000001"),
+            ("11:30:45.123456", "00:30:00", "12:00:45.123456"),
+            ("11:30:45.123456", "12:30:00", "1 00:00:45.123456"),
+            ("11:30:45.123456", "1 12:30:00", "2 00:00:45.123456"),
+        ];
+        for (lhs, rhs, exp) in cases.clone() {
+            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_add(&rhs).unwrap();
+            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            assert_eq!(res, exp);
+        }
+        for (exp, rhs, lhs) in cases {
+            let lhs = Duration::parse(lhs.as_bytes(), 6).unwrap();
+            let rhs = Duration::parse(rhs.as_bytes(), 6).unwrap();
+            let res = lhs.checked_sub(&rhs).unwrap();
+            let exp = Duration::parse(exp.as_bytes(), 6).unwrap();
+            assert_eq!(res, exp);
+        }
+
+        let lhs = Duration::parse(b"00:00:01", 6).unwrap();
+        let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        assert_eq!(lhs.checked_add(&rhs), None);
+        let lhs = Duration::parse(b"-00:00:01", 6).unwrap();
+        let rhs = Duration::from_nanos(MAX_TIME_IN_SECS as i64 * NANOS_PER_SEC, 6).unwrap();
+        assert_eq!(lhs.checked_sub(&rhs), None);
     }
 }

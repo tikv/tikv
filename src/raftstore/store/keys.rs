@@ -13,10 +13,10 @@
 
 use byteorder::{BigEndian, ByteOrder};
 
+use crate::raftstore::Result;
+use crate::util::escape;
 use kvproto::metapb::Region;
-use raftstore::Result;
 use std::mem;
-use util::escape;
 
 pub const MIN_KEY: &[u8] = &[];
 pub const MAX_KEY: &[u8] = &[0xFF];
@@ -137,6 +137,11 @@ pub fn raft_log_prefix(region_id: u64) -> [u8; 11] {
     make_region_prefix(region_id, RAFT_LOG_SUFFIX)
 }
 
+/// Decode region raft key, return the region id and raft suffix type.
+pub fn decode_region_raft_key(key: &[u8]) -> Result<(u64, u8)> {
+    decode_region_key(REGION_RAFT_PREFIX_KEY, key, "raft")
+}
+
 #[inline]
 fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
     let mut key = [0; 11];
@@ -146,27 +151,32 @@ fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
     key
 }
 
-// Decode region meta key, return the region key and meta suffix type.
-pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
-    if REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
+/// Decode region key, return the region id and meta suffix type.
+fn decode_region_key(prefix: &[u8], key: &[u8], category: &str) -> Result<(u64, u8)> {
+    if prefix.len() + mem::size_of::<u64>() + mem::size_of::<u8>() != key.len() {
         return Err(box_err!(
-            "invalid region meta key length for key {}",
+            "invalid region {} key length for key {}",
+            category,
             escape(key)
         ));
     }
 
-    if !key.starts_with(REGION_META_PREFIX_KEY) {
+    if !key.starts_with(prefix) {
         return Err(box_err!(
-            "invalid region meta prefix for key {}",
+            "invalid region {} prefix for key {}",
+            category,
             escape(key)
         ));
     }
 
-    let region_id = BigEndian::read_u64(
-        &key[REGION_META_PREFIX_KEY.len()..REGION_META_PREFIX_KEY.len() + mem::size_of::<u64>()],
-    );
+    let region_id = BigEndian::read_u64(&key[prefix.len()..prefix.len() + mem::size_of::<u64>()]);
 
     Ok((region_id, key[key.len() - 1]))
+}
+
+/// Decode region meta key, return the region id and meta suffix type.
+pub fn decode_region_meta_key(key: &[u8]) -> Result<(u64, u8)> {
+    decode_region_key(REGION_META_PREFIX_KEY, key, "meta")
 }
 
 pub fn region_meta_prefix(region_id: u64) -> [u8; 10] {
@@ -230,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_region_id_key() {
-        let region_ids = vec![0, 1, 1024, ::std::u64::MAX];
+        let region_ids = vec![0, 1, 1024, std::u64::MAX];
         for region_id in region_ids {
             let prefix = region_raft_prefix(region_id);
 
@@ -277,20 +287,31 @@ mod tests {
     }
 
     #[test]
-    fn test_region_meta_key() {
+    fn test_region_key() {
         let ids = vec![1, 1024, u64::max_value()];
         for id in ids {
-            let prefix = region_meta_prefix(id);
-            let info_key = region_state_key(id);
-            assert!(info_key.starts_with(&prefix));
+            // region meta key
+            let meta_prefix = region_meta_prefix(id);
+            let meta_info_key = region_state_key(id);
+            assert!(meta_info_key.starts_with(&meta_prefix));
 
             assert_eq!(
-                decode_region_meta_key(&info_key).unwrap(),
+                decode_region_meta_key(&meta_info_key).unwrap(),
                 (id, REGION_STATE_SUFFIX)
+            );
+
+            // region raft key
+            let raft_prefix = region_raft_prefix(id);
+            let raft_apply_key = apply_state_key(id);
+            assert!(raft_apply_key.starts_with(&raft_prefix));
+
+            assert_eq!(
+                decode_region_raft_key(&raft_apply_key).unwrap(),
+                (id, APPLY_STATE_SUFFIX)
             );
         }
 
-        // test sort.
+        // test region key sort.
         let tbls: Vec<(u64, u64, Ordering)> = vec![
             (1, 2, Ordering::Less),
             (1, 1, Ordering::Equal),
@@ -298,9 +319,15 @@ mod tests {
         ];
 
         for (lkey, rkey, order) in tbls {
-            let lhs = region_state_key(lkey);
-            let rhs = region_state_key(rkey);
-            assert_eq!(lhs.partial_cmp(&rhs), Some(order));
+            // region meta key.
+            let meta_lhs = region_state_key(lkey);
+            let meta_rhs = region_state_key(rkey);
+            assert_eq!(meta_lhs.partial_cmp(&meta_rhs), Some(order));
+
+            // region meta key.
+            let raft_lhs = apply_state_key(lkey);
+            let raft_rhs = apply_state_key(rkey);
+            assert_eq!(raft_lhs.partial_cmp(&raft_rhs), Some(order));
         }
     }
 

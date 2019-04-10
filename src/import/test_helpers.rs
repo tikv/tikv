@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,16 +20,16 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
-use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
-use pd::RegionInfo;
-use raftstore::store::keys;
+use crate::pd::RegionInfo;
+use crate::raftstore::store::keys;
+use crate::util::collections::HashMap;
+use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 
 use super::client::*;
 use super::common::*;
 use super::Result;
-use util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -61,8 +60,7 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u
 }
 
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
-    let mut data = Vec::new();
-    File::open(path).unwrap().read_to_end(&mut data).unwrap();
+    let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SSTMeta::new();
@@ -161,5 +159,10 @@ impl ImportClient for MockClient {
         let mut regions = self.scatter_regions.lock().unwrap();
         regions.insert(region.get_id(), region.region.clone());
         Ok(())
+    }
+
+    fn has_region_id(&self, region_id: u64) -> Result<bool> {
+        let regions = self.regions.lock().unwrap();
+        Ok(regions.contains_key(&region_id))
     }
 }

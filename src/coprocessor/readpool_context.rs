@@ -13,9 +13,9 @@
 
 use std::fmt;
 
-use pd;
-use util::futurepool;
-use util::worker;
+use crate::pd;
+use crate::util::futurepool;
+use crate::util::worker;
 
 use super::dag::executor::ExecutorMetrics;
 use super::local_metrics::{BasicLocalMetrics, ExecLocalMetrics};
@@ -27,7 +27,7 @@ pub struct Context {
 }
 
 impl fmt::Debug for Context {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("coprocessor::ReadPoolContext").finish()
     }
 }

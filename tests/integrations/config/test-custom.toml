@@ -1,6 +1,8 @@
 log-level = "debug"
 log-file = "foo"
 log-rotation-timespan = "1d"
+panic-when-unexpected-key-or-data = true
+
 [readpool.storage]
 high-concurrency = 1
 normal-concurrency = 3
@@ -37,11 +39,13 @@ end-point-recursion-limit = 100
 end-point-stream-channel-size = 16
 end-point-batch-row-limit = 64
 end-point-stream-batch-row-limit = 4096
+end-point-enable-batch-if-possible = true
 end-point-request-max-handle-duration = "12s"
 snap-max-write-bytes-per-sec = "10MB"
 snap-max-total-size = "10GB"
 stats-concurrency = 10
 heavy-load-threshold = 1000
+heavy-load-wait-duration = "2ms"
 
 [server.labels]
 a = "b"
@@ -115,6 +119,11 @@ merge-check-tick-interval = "11s"
 use-delete-range = true
 cleanup-import-sst-interval = "12m"
 local-read-batch-size = 33
+apply-max-batch-size = 22
+apply-pool-size = 4
+store-max-batch-size = 21
+store-pool-size = 3
+future-poll-size = 2
 
 [coprocessor]
 split-region-on-table = true
@@ -142,6 +151,8 @@ info-log-roll-time = "12s"
 info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
+rate-limiter-mode = 3
+auto-tuned = true
 bytes-per-sync = "1MB"
 wal-bytes-per-sync = "32KB"
 max-sub-compactions = 12
@@ -389,6 +400,7 @@ hard-pending-compaction-bytes-limit = "12GB"
 ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
+cipher-file = "invalid path"
 
 [import]
 import-dir = "/abc"

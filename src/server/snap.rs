@@ -17,29 +17,30 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{future, Async, Future, Poll, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
-use grpc::{
+use crate::grpc::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
+use futures::{future, Async, Future, Poll, Stream};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use util::security::SecurityManager;
-use util::worker::Runnable;
-use util::DeferContext;
+use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use crate::util::security::SecurityManager;
+use crate::util::worker::Runnable;
+use crate::util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
 use super::{Config, Error, Result};
 
-pub type Callback = Box<FnBox(Result<()>) + Send>;
+pub type Callback = Box<dyn FnBox(Result<()>) + Send>;
 
 const DEFAULT_POOL_SIZE: usize = 4;
 
+/// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
     Recv {
         stream: RequestStream<SnapshotChunk>,
@@ -53,7 +54,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Recv { .. } => write!(f, "Recv"),
             Task::Send {
@@ -65,7 +66,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<Snapshot>,
+    snap: Box<dyn Snapshot>,
     remain_bytes: usize,
 }
 
@@ -187,7 +188,7 @@ fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<Snapshot>>,
+    file: Option<Box<dyn Snapshot>>,
     raft_msg: RaftMessage,
 }
 
@@ -214,7 +215,7 @@ impl RecvSnapContext {
 
             if s.exists() {
                 let p = s.path();
-                info!("{} snapshot file {} already exists, skip receiving", key, p);
+                info!("snapshot file already exists, skip receiving"; "snap_key" => %key, "file" => p);
                 None
             } else {
                 Some(s)
@@ -231,7 +232,7 @@ impl RecvSnapContext {
     fn finish<R: RaftStoreRouter>(self, raft_router: R) -> Result<()> {
         let key = self.key;
         if let Some(mut file) = self.file {
-            info!("{} saving snapshot file {}", key, file.path());
+            info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
             if let Err(e) = file.save() {
                 let path = file.path();
                 let e = box_err!("{} failed to save snapshot file {}: {:?}", key, path, e);
@@ -254,14 +255,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
     let stream = stream.map_err(Error::from);
 
     let f = stream.into_future().map_err(|(e, _)| e).and_then(
-        move |(head, chunks)| -> Box<Future<Item = (), Error = Error> + Send> {
+        move |(head, chunks)| -> Box<dyn Future<Item = (), Error = Error> + Send> {
             let context = match RecvSnapContext::new(head, &snap_mgr) {
                 Ok(context) => context,
-                Err(e) => return box future::err(e),
+                Err(e) => return Box::new(future::err(e)),
             };
 
             if context.file.is_none() {
-                return box future::result(context.finish(raft_router));
+                return Box::new(future::result(context.finish(raft_router)));
             }
 
             let context_key = context.key.clone();
@@ -281,12 +282,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context)
             });
 
-            box recv_chunks
-                .and_then(move |context| context.finish(raft_router))
-                .then(move |r| {
-                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-                    r
-                })
+            Box::new(
+                recv_chunks
+                    .and_then(move |context| context.finish(raft_router))
+                    .then(move |r| {
+                        snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
+                        r
+                    }),
+            )
         },
     );
     f.then(move |res| match res {
@@ -295,7 +298,8 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
             let status = RpcStatus::new(RpcStatusCode::Unknown, Some(format!("{:?}", e)));
             sink.fail(status)
         }
-    }).map_err(Error::from)
+    })
+    .map_err(Error::from)
 }
 
 pub struct Runner<R: RaftStoreRouter + 'static> {
@@ -353,7 +357,7 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                 let f = recv_snap(stream, sink, snap_mgr, raft_router).then(move |result| {
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
-                        error!("failed to recv snapshot {}", e);
+                        error!("failed to recv snapshot"; "err" => %e);
                     }
                     future::ok::<_, ()>(())
                 });
@@ -383,13 +387,16 @@ impl<R: RaftStoreRouter + 'static> Runnable<Task> for Runner<R> {
                         match res {
                             Ok(stat) => {
                                 info!(
-                                    "[region {}] sent snapshot {} [size: {}, dur: {:?}]",
-                                    stat.key.region_id, stat.key, stat.total_size, stat.elapsed,
+                                    "sent snapshot";
+                                    "region_id" => stat.key.region_id,
+                                    "snap_key" => %stat.key,
+                                    "size" => stat.total_size,
+                                    "duration" => ?stat.elapsed
                                 );
                                 cb(Ok(()));
                             }
                             Err(e) => {
-                                error!("failed to send snap to {}: {:?}", addr, e);
+                                error!("failed to send snap"; "to_addr" => addr, "err" => ?e);
                                 cb(Err(e));
                             }
                         };

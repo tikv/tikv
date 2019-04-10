@@ -13,15 +13,14 @@
 
 use kvproto::kvrpcpb::IsolationLevel;
 
-use storage::mvcc::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
-use storage::mvcc::{Error as MvccError, MvccReader};
-use storage::{Key, KvPair, Snapshot, Statistics, Value};
+use crate::storage::metrics::*;
+use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
+use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
-pub trait Store {
+pub trait Store: Send {
     type Scanner: Scanner;
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
@@ -37,7 +36,7 @@ pub trait Store {
     ) -> Result<Self::Scanner>;
 }
 
-pub trait Scanner {
+pub trait Scanner: Send {
     fn next(&mut self) -> Result<Option<(Key, Value)>>;
 
     fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
@@ -68,7 +67,7 @@ pub struct SnapshotStore<S: Snapshot> {
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
-    type Scanner = StoreScanner<S>;
+    type Scanner = MvccScanner<S>;
 
     #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
@@ -111,29 +110,17 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         key_only: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-    ) -> Result<StoreScanner<S>> {
-        let (forward_scanner, backward_scanner) = if !desc {
-            let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                .range(lower_bound, upper_bound)
-                .omit_value(key_only)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .build()?;
-            (Some(forward_scanner), None)
-        } else {
-            let backward_scanner =
-                BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                    .range(lower_bound, upper_bound)
-                    .omit_value(key_only)
-                    .fill_cache(self.fill_cache)
-                    .isolation_level(self.isolation_level)
-                    .build()?;
-            (None, Some(backward_scanner))
-        };
-        Ok(StoreScanner {
-            forward_scanner,
-            backward_scanner,
-        })
+    ) -> Result<MvccScanner<S>> {
+        // Check request bounds with physical bound
+        self.verify_range(&lower_bound, &upper_bound)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+            .range(lower_bound, upper_bound)
+            .omit_value(key_only)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build()?;
+
+        Ok(scanner)
     }
 }
 
@@ -151,43 +138,64 @@ impl<S: Snapshot> SnapshotStore<S> {
             fill_cache,
         }
     }
-}
 
-pub struct StoreScanner<S: Snapshot> {
-    forward_scanner: Option<ForwardScanner<S>>,
-    backward_scanner: Option<BackwardScanner<S>>,
-}
+    fn verify_range(&self, lower_bound: &Option<Key>, upper_bound: &Option<Key>) -> Result<()> {
+        if let Some(ref l) = lower_bound {
+            if let Some(b) = self.snapshot.lower_bound() {
+                if !b.is_empty() && l.as_encoded().as_slice() < b {
+                    REQUEST_EXCEED_BOUND.inc();
+                    return Err(Error::InvalidReqRange {
+                        start: Some(l.as_encoded().clone()),
+                        end: upper_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        lower_bound: Some(b.to_vec()),
+                        upper_bound: self.snapshot.upper_bound().map(|b| b.to_vec()),
+                    });
+                }
+            }
+        }
+        if let Some(ref u) = upper_bound {
+            if let Some(b) = self.snapshot.upper_bound() {
+                if !b.is_empty() && (u.as_encoded().as_slice() > b || u.as_encoded().is_empty()) {
+                    REQUEST_EXCEED_BOUND.inc();
+                    return Err(Error::InvalidReqRange {
+                        start: lower_bound.as_ref().map(|ref b| b.as_encoded().clone()),
+                        end: Some(u.as_encoded().clone()),
+                        lower_bound: self.snapshot.lower_bound().map(|b| b.to_vec()),
+                        upper_bound: Some(b.to_vec()),
+                    });
+                }
+            }
+        }
 
-impl<S: Snapshot> Scanner for StoreScanner<S> {
-    #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        // TODO: Verify that these branches can be optimized away in `scan()`.
-        if let Some(scanner) = self.forward_scanner.as_mut() {
-            Ok(scanner.read_next()?)
-        } else {
-            Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
-        }
-    }
-
-    #[inline]
-    fn take_statistics(&mut self) -> Statistics {
-        if self.forward_scanner.is_some() {
-            return self.forward_scanner.as_mut().unwrap().take_statistics();
-        }
-        if self.backward_scanner.is_some() {
-            return self.backward_scanner.as_mut().unwrap().take_statistics();
-        }
-        unreachable!();
+        Ok(())
     }
 }
 
 /// A Store that reads on fixtures.
 pub struct FixtureStore {
-    data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+    data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+}
+
+impl Clone for FixtureStore {
+    fn clone(&self) -> Self {
+        let data = self
+            .data
+            .iter()
+            .map(|(k, v)| {
+                let owned_k = k.clone();
+                let owned_v = match v {
+                    Ok(v) => Ok(v.clone()),
+                    Err(e) => Err(e.maybe_clone().unwrap()),
+                };
+                (owned_k, owned_v)
+            })
+            .collect();
+        Self { data }
+    }
 }
 
 impl FixtureStore {
-    pub fn new(data: ::std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+    pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore { data }
     }
 }
@@ -268,7 +276,7 @@ impl Store for FixtureStore {
 
 /// A Scanner that scans on fixtures.
 pub struct FixtureStoreScanner {
-    data: ::std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
 }
 
 impl Scanner for FixtureStoreScanner {
@@ -293,11 +301,17 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
+    use crate::storage::kv::{
+        Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
+    };
+    use crate::storage::mvcc::Error as MvccError;
+    use crate::storage::mvcc::MvccTxn;
+    use crate::storage::{
+        CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
+        TestEngineBuilder, Value,
+    };
+    use engine::IterOption;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
-    use storage::engine::{Engine, RocksEngine, RocksSnapshot};
-    use storage::mvcc::Error as MvccError;
-    use storage::mvcc::MvccTxn;
-    use storage::{Key, KvPair, Mutation, Options, Statistics, TestEngineBuilder};
 
     const KEY_PREFIX: &str = "key_prefix";
     const START_TS: u64 = 10;
@@ -342,7 +356,8 @@ mod tests {
                         Mutation::Put((Key::from_raw(key), key.to_vec())),
                         pk,
                         &Options::default(),
-                    ).unwrap();
+                    )
+                    .unwrap();
                 }
                 self.engine.write(&self.ctx, txn.into_modifies()).unwrap();
             }
@@ -371,6 +386,89 @@ mod tests {
                 IsolationLevel::SI,
                 true,
             )
+        }
+    }
+
+    // Snapshot with bound
+    #[derive(Clone)]
+    struct MockRangeSnapshot {
+        start: Vec<u8>,
+        end: Vec<u8>,
+    }
+
+    #[derive(Default)]
+    struct MockRangeSnapshotIter {}
+
+    impl Iterator for MockRangeSnapshotIter {
+        fn next(&mut self) -> bool {
+            true
+        }
+        fn prev(&mut self) -> bool {
+            true
+        }
+        fn seek(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_for_prev(&mut self, _: &Key) -> EngineResult<bool> {
+            Ok(true)
+        }
+        fn seek_to_first(&mut self) -> bool {
+            true
+        }
+        fn seek_to_last(&mut self) -> bool {
+            true
+        }
+        fn valid(&self) -> bool {
+            true
+        }
+        fn validate_key(&self, _: &Key) -> EngineResult<()> {
+            Ok(())
+        }
+        fn key(&self) -> &[u8] {
+            b""
+        }
+        fn value(&self) -> &[u8] {
+            b""
+        }
+    }
+
+    impl MockRangeSnapshot {
+        fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
+            Self { start, end }
+        }
+    }
+
+    impl Snapshot for MockRangeSnapshot {
+        type Iter = MockRangeSnapshotIter;
+
+        fn get(&self, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn get_cf(&self, _: CfName, _: &Key) -> EngineResult<Option<Value>> {
+            Ok(None)
+        }
+        fn iter(&self, _: IterOption, _: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn iter_cf(
+            &self,
+            _: CfName,
+            _: IterOption,
+            _: ScanMode,
+        ) -> EngineResult<Cursor<Self::Iter>> {
+            Ok(Cursor::new(
+                MockRangeSnapshotIter::default(),
+                ScanMode::Forward,
+            ))
+        }
+        fn lower_bound(&self) -> Option<&[u8]> {
+            Some(self.start.as_slice())
+        }
+        fn upper_bound(&self) -> Option<&[u8]> {
+            Some(self.end.as_slice())
         }
     }
 
@@ -422,7 +520,7 @@ mod tests {
         let result = scanner.scan(half).unwrap();
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
         let expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         assert_eq!(result, expect, "expect {:?}, but got {:?}", expect, result);
@@ -446,7 +544,7 @@ mod tests {
         let result: Vec<Option<KvPair>> = result.into_iter().map(Result::ok).collect();
 
         let mut expect: Vec<Option<KvPair>> = expect
-            .into_iter()
+            .iter()
             .map(|k| Some((k.clone().into_bytes(), k.clone().into_bytes())))
             .collect();
         expect.reverse();
@@ -493,6 +591,44 @@ mod tests {
             result.push(k);
         }
         assert_eq!(result, expected.into_iter().rev().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_scanner_verify_bound() {
+        // Store with a limited range
+        let snap = MockRangeSnapshot::new(b"b".to_vec(), b"c".to_vec());
+        let store = SnapshotStore::new(snap, 0, IsolationLevel::SI, true);
+        let bound_a = Key::from_encoded(b"a".to_vec());
+        let bound_b = Key::from_encoded(b"b".to_vec());
+        let bound_c = Key::from_encoded(b"c".to_vec());
+        let bound_d = Key::from_encoded(b"d".to_vec());
+        assert!(store.scanner(false, false, None, None).is_ok());
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_c.clone()))
+            .is_ok());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_c.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_b.clone()), Some(bound_d.clone()))
+            .is_err());
+        assert!(store
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_d.clone()))
+            .is_err());
+
+        // Store with whole range
+        let snap2 = MockRangeSnapshot::new(b"".to_vec(), b"".to_vec());
+        let store2 = SnapshotStore::new(snap2, 0, IsolationLevel::SI, true);
+        assert!(store2.scanner(false, false, None, None).is_ok());
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), None)
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, Some(bound_a.clone()), Some(bound_b.clone()))
+            .is_ok());
+        assert!(store2
+            .scanner(false, false, None, Some(bound_c.clone()))
+            .is_ok());
     }
 
     fn gen_fixture_store() -> FixtureStore {
@@ -789,13 +925,13 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use test;
+    use crate::test;
 
     use rand::{self, Rng};
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
-    use storage::{Key, Statistics};
+    use crate::storage::{Key, Statistics};
 
     fn gen_payload(n: usize) -> Vec<u8> {
         let mut data = vec![0; n];

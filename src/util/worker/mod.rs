@@ -39,9 +39,9 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use util::mpsc::{self, Receiver, Sender};
-use util::time::{Instant, SlowTimer};
-use util::timer::Timer;
+use crate::util::mpsc::{self, Receiver, Sender};
+use crate::util::time::{Instant, SlowTimer};
+use crate::util::timer::Timer;
 
 pub use self::future::Runnable as FutureRunnable;
 pub use self::future::Scheduler as FutureScheduler;
@@ -71,13 +71,13 @@ impl<T> Error for ScheduleError<T> {
 }
 
 impl<T> Display for ScheduleError<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.description())
     }
 }
 
 impl<T> Debug for ScheduleError<T> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
     }
 }
@@ -105,7 +105,7 @@ pub trait Runnable<T: Display> {
 }
 
 pub trait RunnableWithTimer<T: Display, U>: Runnable<T> {
-    fn on_timeout(&mut self, &mut Timer<U>, U);
+    fn on_timeout(&mut self, _: &mut Timer<U>, _: U);
 }
 
 struct DefaultRunnerWithTimer<R>(R);
@@ -189,9 +189,12 @@ impl<T> Clone for Scheduler<T> {
 ///
 /// Useful for test purpose.
 #[cfg(test)]
-pub fn dummy_scheduler<T: Display>() -> Scheduler<T> {
-    let (tx, _) = mpsc::unbounded::<Option<T>>();
-    Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx)
+pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
+    let (tx, rx) = mpsc::unbounded::<Option<T>>();
+    (
+        Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx),
+        rx,
+    )
 }
 
 #[derive(Copy, Clone)]
@@ -340,9 +343,9 @@ impl<T: Display + Send + 'static> Worker<T> {
         U: Send + 'static,
     {
         let mut receiver = self.receiver.lock().unwrap();
-        info!("starting working thread: {}", self.scheduler.name);
+        info!("starting working thread"; "worker" => &self.scheduler.name);
         if receiver.is_none() {
-            warn!("worker {} has been started.", self.scheduler.name);
+            warn!("worker has been started"; "worker" => &self.scheduler.name);
             return Ok(());
         }
 
@@ -380,10 +383,10 @@ impl<T: Display + Send + 'static> Worker<T> {
     /// Stops the worker thread.
     pub fn stop(&mut self) -> Option<thread::JoinHandle<()>> {
         // Closes sender explicitly so the background thread will exit.
-        info!("stoping {}", self.scheduler.name);
+        info!("stoping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
         if let Err(e) = self.scheduler.sender.send(None) {
-            warn!("failed to stop worker thread: {:?}", e);
+            warn!("failed to stop worker thread"; "err" => ?e);
         }
         Some(handle)
     }

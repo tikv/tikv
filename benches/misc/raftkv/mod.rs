@@ -13,27 +13,28 @@
 
 use std::sync::Arc;
 
-use rocksdb::DB;
+use crate::test;
 use tempdir::TempDir;
-use test;
 
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb::Region;
-use kvproto::raft_cmdpb::{RaftCmdResponse, Response};
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
+use kvproto::raft_serverpb::RaftMessage;
 
+use engine;
+use engine::rocks;
+use engine::rocks::DB;
+use engine::{ALL_CFS, CF_DEFAULT};
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, Callback, Msg, ReadResponse, RegionSnapshot, SignificantMsg,
-    WriteResponse,
+    cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
+    SignificantMsg, WriteResponse,
 };
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::storage::engine::raftkv::CmdRes;
-use tikv::storage::engine::{
-    Callback as EngineCallback, CbContext, Modify, Result as EngineResult,
-};
+use tikv::storage::kv::raftkv::CmdRes;
+use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::types::Key;
-use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
-use tikv::util::rocksdb;
+use tikv::storage::{Engine, RaftKv};
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -48,47 +49,45 @@ impl SyncBenchRouter {
 }
 
 impl SyncBenchRouter {
-    fn invoke(&self, msg: Msg) {
+    fn invoke(&self, cmd: RaftCommand) {
         let mut response = RaftCmdResponse::new();
         cmd_resp::bind_term(&mut response, 1);
-        if let Msg::RaftCmd {
-            request, callback, ..
-        } = msg
-        {
-            match callback {
-                Callback::Read(cb) => {
-                    let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
-                    let region = self.region.to_owned();
-                    cb(ReadResponse {
-                        response,
-                        snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
-                    })
-                }
-                Callback::Write(cb) => {
-                    let mut resp = Response::new();
-                    let cmd_type = request.get_requests()[0].get_cmd_type();
-                    resp.set_cmd_type(cmd_type);
-                    response.mut_responses().push(resp);
-                    cb(WriteResponse { response })
-                }
-                _ => unreachable!(),
+        match cmd.callback {
+            Callback::Read(cb) => {
+                let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
+                let region = self.region.to_owned();
+                cb(ReadResponse {
+                    response,
+                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                })
             }
+            Callback::Write(cb) => {
+                let mut resp = Response::new();
+                let cmd_type = cmd.request.get_requests()[0].get_cmd_type();
+                resp.set_cmd_type(cmd_type);
+                response.mut_responses().push(resp);
+                cb(WriteResponse { response })
+            }
+            _ => unreachable!(),
         }
     }
 }
 
 impl RaftStoreRouter for SyncBenchRouter {
-    fn send(&self, msg: Msg) -> Result<()> {
-        self.invoke(msg);
+    fn send_raft_msg(&self, _: RaftMessage) -> Result<()> {
         Ok(())
     }
 
-    fn try_send(&self, msg: Msg) -> Result<()> {
-        self.invoke(msg);
+    fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> Result<()> {
+        self.invoke(RaftCommand::new(req, cb));
         Ok(())
     }
 
-    fn significant_send(&self, _: SignificantMsg) -> Result<()> {
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> Result<()> {
+        Ok(())
+    }
+
+    fn casual_send(&self, _: u64, _: CasualMessage) -> Result<()> {
         Ok(())
     }
 }
@@ -96,7 +95,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb::new_engine(&path, ALL_CFS, None).unwrap();
+    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 
@@ -185,6 +184,7 @@ fn bench_async_write(b: &mut test::Bencher) {
                 Key::from_encoded(b"fooo".to_vec()),
             )],
             on_finished,
-        ).unwrap();
+        )
+        .unwrap();
     });
 }

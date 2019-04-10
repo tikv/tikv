@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::Range;
-
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::Range;
+use engine::CF_WRITE;
 use test_raftstore::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};
 use tikv::storage::mvcc::{Write, WriteType};
 use tikv::storage::types::Key as MvccKey;
-use tikv::storage::CF_WRITE;
 use tikv::util::config::*;
-use tikv::util::rocksdb::get_cf_handle;
 
 fn gen_mvcc_put_kv(k: &[u8], v: &[u8], start_ts: u64, commit_ts: u64) -> (Vec<u8>, Vec<u8>) {
     let k = MvccKey::from_encoded(data_key(k));

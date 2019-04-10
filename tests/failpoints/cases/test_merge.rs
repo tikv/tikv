@@ -22,18 +22,17 @@ use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::*;
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::Peekable;
-use tikv::storage::CF_RAFT;
 use tikv::util::config::*;
 use tikv::util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
 #[test]
 fn test_node_merge_rollback() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -120,7 +119,7 @@ fn test_node_merge_rollback() {
 /// Test if merge is still working when restart a cluster during merge.
 #[test]
 fn test_node_merge_restart() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.run();
@@ -149,7 +148,7 @@ fn test_node_merge_restart() {
     let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
-    cluster.start();
+    cluster.start().unwrap();
 
     // Wait till merge is finished.
     let timer = Instant::now();
@@ -212,7 +211,7 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     fail::remove(skip_destroy_fp);
     cluster.clear_send_filters();
-    cluster.start();
+    cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
 }
@@ -220,7 +219,7 @@ fn test_node_merge_restart() {
 /// Test if merging state will be removed after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
-    let _guard = ::setup();
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.raft_log_gc_threshold = 12;
@@ -269,16 +268,15 @@ fn test_node_merge_multiple_snapshots_together() {
     test_node_merge_multiple_snapshots(true)
 }
 
-// To be fixed
-//
 // Test if a merge handled properly when there are two different snapshots of one region arrive
 // in different raftstore tick.
-// #[test]
-// fn test_node_merge_multiple_snapshots_not_together() {
-//     test_node_merge_multiple_snapshots(false)
-// }
+#[test]
+fn test_node_merge_multiple_snapshots_not_together() {
+    test_node_merge_multiple_snapshots(false)
+}
 
 fn test_node_merge_multiple_snapshots(together: bool) {
+    let _guard = crate::setup();
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -332,7 +330,10 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::new(AtomicBool::new(false)), together),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::new(AtomicBool::new(false)),
+            together,
+        )),
     );
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {
@@ -349,8 +350,6 @@ fn test_node_merge_multiple_snapshots(together: bool) {
 
     // Let peer of right region on store 3 to make append response to trigger a new snapshot
     // one is snapshot before merge, the other is snapshot after merge.
-    // Then the old and new snapshot messages are received and handled in one tick,
-    // so `pending_cross_snap` may updated improperly and make merge source peer destory itself.
     // Here blocks raftstore for a while to make it not to apply snapshot and receive new log now.
     fail::cfg("on_raft_ready", "sleep(100)").unwrap();
     cluster.clear_send_filters();
@@ -370,8 +369,7 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     fail::cfg("on_raft_ready", "off").unwrap();
 
     // Wait some time to let already merged peer on store 1 or store 2 to notify
-    // the peer of left region on store 3 is stale, and then the peer will check
-    // `pending_cross_snap`
+    // the peer of left region on store 3 is stale.
     thread::sleep(Duration::from_millis(300));
 
     cluster.must_put(b"k9", b"v9");

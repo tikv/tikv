@@ -14,6 +14,7 @@
 use kvproto::kvrpcpb;
 use std::fmt;
 
+/// A `Priority` decides which thread pool a task is scheduled to.
 #[derive(Debug, Copy, Clone)]
 pub enum Priority {
     Normal,
@@ -32,7 +33,7 @@ impl From<kvrpcpb::CommandPri> for Priority {
 }
 
 impl fmt::Display for Priority {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Priority::High => write!(f, "high"),
             Priority::Normal => write!(f, "normal"),

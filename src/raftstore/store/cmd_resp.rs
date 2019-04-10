@@ -13,8 +13,8 @@
 
 use std::error;
 
+use crate::raftstore::Error;
 use kvproto::raft_cmdpb::RaftCmdResponse;
-use raftstore::Error;
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {
     if term == 0 {
@@ -42,7 +42,7 @@ pub fn err_resp(e: Error, term: u64) -> RaftCmdResponse {
 
 pub fn message_error<E>(err: E) -> RaftCmdResponse
 where
-    E: Into<Box<error::Error + Send + Sync>>,
+    E: Into<Box<dyn error::Error + Send + Sync>>,
 {
     new_error(Error::Other(err.into()))
 }

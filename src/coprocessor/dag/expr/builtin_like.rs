@@ -14,7 +14,7 @@
 use std::slice::Iter;
 
 use super::{EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use regex::{bytes::Regex as BytesRegex, Regex};
 
 const MAX_RECURSE_LEVEL: usize = 1024;
@@ -51,7 +51,7 @@ impl ScalarFunc {
 
 // Do match until '%' is found.
 #[inline]
-fn partial_like(tcs: &mut Iter<u8>, pcs: &mut Iter<u8>, escape: u32) -> Option<bool> {
+fn partial_like(tcs: &mut Iter<'_, u8>, pcs: &mut Iter<'_, u8>, escape: u32) -> Option<bool> {
     loop {
         match pcs.next().cloned() {
             None => return Some(tcs.next().is_none()),
@@ -84,9 +84,11 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
         let next_char = loop {
             match pcs.next().cloned() {
                 Some(b'%') => {}
-                Some(b'_') => if tcs.next().is_none() {
-                    return Ok(false);
-                },
+                Some(b'_') => {
+                    if tcs.next().is_none() {
+                        return Ok(false);
+                    }
+                }
                 // So the pattern should be some thing like 'xxx%'
                 None => return Ok(true),
                 Some(c) => {
@@ -120,9 +122,9 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
     #[test]

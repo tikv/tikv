@@ -48,7 +48,7 @@ use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use util::time::{Duration, Instant};
+use crate::util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -59,7 +59,7 @@ const SINGLE_GROUP: &[u8] = b"SingleGroup";
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
 /// An interface for all kind of Coprocessor request handlers.
-trait RequestHandler: Send {
+pub trait RequestHandler: Send {
     /// Processes current request and produces a response.
     fn handle_request(&mut self) -> Result<coppb::Response> {
         panic!("unary request is not supported for this handler");
@@ -75,11 +75,11 @@ trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn into_boxed(self) -> Box<RequestHandler + Send>
+    fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,
     {
-        box self
+        Box::new(self)
     }
 }
 
@@ -110,6 +110,10 @@ impl Deadline {
 
     /// Returns error if the deadline is exceeded.
     pub fn check_if_exceeded(&self) -> Result<()> {
+        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
+            Error::Outdated(Duration::from_secs(60), self.tag)
+        ));
+
         let now = Instant::now_coarse();
         if self.deadline <= now {
             let elapsed = now.duration_since(self.start_time);
@@ -122,7 +126,7 @@ impl Deadline {
 /// Denotes for a function that builds a `RequestHandler`.
 /// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler + Send>> + Send>;
+    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]

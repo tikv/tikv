@@ -17,8 +17,7 @@ use std::time::Duration;
 
 use test_raftstore::*;
 use tikv::raftstore::coprocessor::RegionInfoAccessor;
-use tikv::raftstore::store::SeekRegionResult;
-use tikv::storage::engine::RegionInfoProvider;
+use tikv::storage::kv::RegionInfoProvider;
 use tikv::util::collections::HashMap;
 use tikv::util::HandyRwLock;
 
@@ -77,114 +76,52 @@ fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
         let engine = &region_info_providers[&node_id];
 
         // Test traverse all regions
-        let mut sought_regions = Vec::new();
-        let mut key = b"".to_vec();
-        loop {
-            let res = engine.seek_region(&key, box |_, _| true, 100).unwrap();
-            match res {
-                SeekRegionResult::Found(region) => {
-                    key = region.get_end_key().to_vec();
-                    sought_regions.push(region);
-                    // Break on the last region
-                    if key.is_empty() {
-                        break;
-                    }
-                }
-                SeekRegionResult::Ended => break,
-                r => panic!("expect getting a region or Ended, but got {:?}", r),
-            }
-        }
+        let key = b"".to_vec();
+        let (tx, rx) = channel();
+        let tx_ = tx.clone();
+        engine
+            .seek_region(
+                &key,
+                Box::new(move |infos| {
+                    tx_.send(infos.map(|i| i.region.clone()).collect()).unwrap();
+                }),
+            )
+            .unwrap();
+        let sought_regions: Vec<_> = rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(sought_regions, regions);
 
         // Test end_key is exclusive
-        let res = engine.seek_region(b"k1", box |_, _| true, 100).unwrap();
-        match res {
-            SeekRegionResult::Found(region) => {
-                assert_eq!(region, regions[1]);
-            }
-            r => panic!("expect getting a region, but got {:?}", r),
-        }
-
-        // Test exactly reaches limit
-        let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 5)
+        let (tx, rx) = channel();
+        let tx_ = tx.clone();
+        engine
+            .seek_region(
+                b"k1",
+                Box::new(move |infos| tx_.send(infos.next().unwrap().region.clone()).unwrap()),
+            )
             .unwrap();
-        match res {
-            SeekRegionResult::Found(region) => {
-                assert_eq!(region, regions[4]);
-            }
-            r => panic!("expect getting a region, but got {:?}", r),
-        }
-
-        // Test exactly exceeds limit
-        let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key() == b"k9", 4)
-            .unwrap();
-        match res {
-            SeekRegionResult::LimitExceeded { next_key } => {
-                assert_eq!(&next_key, b"k7");
-            }
-            r => panic!("expect getting LimitExceeded, but got {:?}", r),
-        }
-
-        // Test seek to the end
-        let res = engine.seek_region(b"", box |_, _| false, 100).unwrap();
-        match res {
-            SeekRegionResult::Ended => {}
-            r => panic!("expect getting Ended, but got {:?}", r),
-        }
-
-        // Test exactly to the end
-        let res = engine
-            .seek_region(b"", box |r, _| r.get_end_key().is_empty(), 6)
-            .unwrap();
-        match res {
-            SeekRegionResult::Found(region) => {
-                assert_eq!(region, regions[5]);
-            }
-            r => panic!("expect getting a region, but got {:?}", r),
-        }
-
-        // Test limit exactly reaches end
-        let res = engine.seek_region(b"", box |_, _| false, 6).unwrap();
-        match res {
-            SeekRegionResult::Ended => {}
-            r => panic!("expect getting Ended, but got {:?}", r),
-        }
+        let region = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(region, regions[1]);
 
         // Test seek from non-starting key
-        let res = engine
-            .seek_region(b"k6\xff\xff\xff\xff\xff", box |_, _| true, 1)
+        let tx_ = tx.clone();
+        engine
+            .seek_region(
+                b"k6\xff\xff\xff\xff\xff",
+                Box::new(move |infos| tx_.send(infos.next().unwrap().region.clone()).unwrap()),
+            )
             .unwrap();
-        match res {
-            SeekRegionResult::Found(region) => {
-                assert_eq!(region, regions[3]);
-            }
-            r => panic!("expect getting a region, but got {:?}", r),
-        }
-        let res = engine
-            .seek_region(b"\xff\xff\xff\xff\xff\xff\xff\xff", box |_, _| true, 1)
+        let region = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(region, regions[3]);
+        let tx_ = tx.clone();
+        engine
+            .seek_region(
+                b"\xff\xff\xff\xff\xff\xff\xff\xff",
+                Box::new(move |infos| tx_.send(infos.next().unwrap().region.clone()).unwrap()),
+            )
             .unwrap();
-        match res {
-            SeekRegionResult::Found(region) => {
-                assert_eq!(region, regions[5]);
-            }
-            r => panic!("expect getting a region, but got {:?}", r),
-        }
+        let region = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(region, regions[5]);
     }
-}
-
-#[test]
-fn test_raftkv_seek_region() {
-    let mut cluster = new_server_cluster(0, 3);
-    cluster.run();
-
-    let mut region_info_providers = HashMap::default();
-    for node_id in cluster.get_node_ids() {
-        region_info_providers.insert(node_id, cluster.sim.rl().storages[&node_id].clone());
-    }
-
-    test_seek_region_impl(cluster, region_info_providers);
 }
 
 #[test]
@@ -195,11 +132,11 @@ fn test_region_collection_seek_region() {
     cluster
         .sim
         .wl()
-        .post_create_coprocessor_host(box move |id, host| {
+        .post_create_coprocessor_host(Box::new(move |id, host| {
             let p = RegionInfoAccessor::new(host);
             p.start();
             tx.send((id, p)).unwrap()
-        });
+        }));
 
     cluster.run();
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();

@@ -7,38 +7,60 @@ category: Roadmap
 
 This document defines the roadmap for TiKV development.
 
-## Raft
-- [x] Region Merge - Merge small Regions together to reduce overhead
-- [x] Local Read Thread - Process read requests in a local read thread
-- [x] Split Region in Batch - Speed up Region split for large Regions
-- [x] Raft Learner - Support Raft learner to smooth the configuration change process
-- [x] Raft Pre-vote - Support Raft pre-vote to avoid unnecessary leader election on network isolation
-- [ ] Joint Consensus - Change multi members safely.
-- [ ] Multi-thread Raftstore - Process Region Raft logic in multiple threads
-- [ ] Multi-thread apply pool - Apply Region Raft committed entries in multiple threads
-
 ## Engine
-- [ ] Titan - Separate large key-values from LSM-Tree
+
+- [ ] Titan - Use the separated key-value engine in production
 - [ ] Pluggable Engine Interface - Clean up the engine wrapper code and provide more extendibility
 
-## Storage
-- [ ] Flow Control - Do flow control in scheduler to avoid write stall in advance
+## Raft
 
-## Transaction
-- [x] Optimize transaction conflicts
-- [ ] Distributed GC - Distribute MVCC garbage collection control to TiKV
+- [ ] Joint Consensus - Change multi members safely
+- [ ] Quiescent Region - Reduce the heartbeat cost of inactive Regions
+- [ ] Raft engine - Customize engine to replace RocksDB
+- [ ] Remove KV RocksDB WAL - Use Raft log as the WAL of state machine engine
+- [ ] Crossing datacenter optimization
+    - [ ] Raft witness role - Can only vote but not sync logs from Raft leader
+    - [ ] Follower snapshot - Get the snapshot from the follower when a new node is added 
+    - [ ] Chain replication - Get Raft logs from the non-leader node
+
+## Distributed Transaction 
+
+- [ ] Flow control - Do flow control in scheduler to avoid write stall in advance
+- [ ] History version - Use another place to save history version data
+- [ ] Performance
+    - [ ] Optimize storage format 
+    - [ ] Reduce the latency of getting timestamp
+    - [ ] Optimize transaction conflicts
 
 ## Coprocessor
-- [x] Streaming - Cut large data set into small chunks to optimize memory consumption
-- [ ] Chunk Execution - Process data in chunk to improve performance
-- [ ] Request Tracing - Provide per-request execution details
+
+- [ ] More pushdown expressions support
+- [ ] Common expression pipeline optimization 
+- [ ] Batch executor - Process multiple rows at a time
+- [ ] Vectorized expression evaluation - Evaluate expressions by column
+- [ ] Chunk - Compute over the data stored in the continuous memory
+- [ ] Explain support - Evaluate the cost of execution
 
 ## Tools
-- [x] TiKV Importer - Speed up data importing by SST file ingestion
+
+- [ ] Use Raft learner to support Backup/Restore/Replication 
 
 ## Client
-- [ ] TiKV client (Rust crate)
-- [ ] Batch gRPC Message - Reduce message overhead
+
+- [ ] Rust
+- [ ] Go
+- [ ] Java
+- [ ] C++
 
 ## PD
-- [ ] Optimize Region metadata - Save Region metadata in detached storage engine
+
+- [ ] Visualization - Show the cluster status visually
+- [ ] Learner scheduler - Schedule learner Regions to specified nodes
+- [ ] Improve hot Region scheduler
+- [ ] Improve simulator
+- [ ] Range scheduler - Schedule Regions in the specified range
+
+## Misc
+
+- [ ] Tolerate corrupted Region - TiKV can be started even when the data in some Regions is corrupted
+- [ ] Support huge Region whose size is larger than 1 GB

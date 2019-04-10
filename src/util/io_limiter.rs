@@ -15,7 +15,7 @@ use std::io::{Result, Write};
 use std::option::Option;
 use std::sync::Arc;
 
-use rocksdb::RateLimiter;
+use engine::rocks::RateLimiter;
 
 const PRIORITY_HIGH: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;
@@ -76,7 +76,7 @@ impl IOLimiter {
     }
 }
 
-pub struct LimitWriter<'a, T: Write + 'a> {
+pub struct LimitWriter<'a, T: Write> {
     limiter: Option<Arc<IOLimiter>>,
     writer: &'a mut T,
 }
@@ -118,8 +118,8 @@ impl<'a, T: Write + 'a> Write for LimitWriter<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::{Read, Write};
+    use std::fs::{self, File};
+    use std::io::Write;
     use std::sync::Arc;
     use tempdir::TempDir;
 
@@ -155,9 +155,7 @@ mod tests {
         limit_writer.write_all(s.as_bytes()).unwrap();
         limit_writer.flush().unwrap();
 
-        let mut file = File::open(&path).unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, s);
     }
 }

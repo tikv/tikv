@@ -16,21 +16,25 @@ mod keys;
 mod size;
 mod table;
 
-use rocksdb::DB;
-
-use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
+use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-pub use self::half::HalfCheckObserver;
-pub use self::keys::KeysCheckObserver;
-pub use self::size::SizeCheckObserver;
+use super::error::Result;
+use super::{KeyEntry, ObserverContext, SplitChecker};
+
+pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
+pub use self::keys::{
+    get_region_approximate_keys, get_region_approximate_keys_cf, KeysCheckObserver,
+};
+pub use self::size::{
+    get_region_approximate_size, get_region_approximate_size_cf, SizeCheckObserver,
+};
 pub use self::table::TableCheckObserver;
 
 #[derive(Default)]
 pub struct Host {
-    checkers: Vec<Box<SplitChecker>>,
+    checkers: Vec<Box<dyn SplitChecker>>,
     auto_split: bool,
 }
 
@@ -95,7 +99,7 @@ impl Host {
     }
 
     #[inline]
-    pub fn add_checker(&mut self, checker: Box<SplitChecker>) {
+    pub fn add_checker(&mut self, checker: Box<dyn SplitChecker>) {
         self.checkers.push(checker);
     }
 }

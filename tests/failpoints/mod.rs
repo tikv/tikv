@@ -12,25 +12,14 @@
 // limitations under the License.
 
 #![recursion_limit = "100"]
-#![feature(box_syntax)]
 #![cfg_attr(feature = "no-fail", allow(dead_code))]
 
-extern crate fail;
-extern crate futures;
-extern crate grpcio;
-extern crate kvproto;
-extern crate raft;
 #[macro_use]
 extern crate lazy_static;
+#[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
+extern crate slog;
 #[macro_use]
-extern crate log;
-
-extern crate panic_hook;
-extern crate test_coprocessor;
-extern crate test_raftstore;
-extern crate test_storage;
-extern crate test_util;
-extern crate tikv;
+extern crate slog_global;
 
 #[cfg(not(feature = "no-fail"))]
 mod cases;
@@ -61,7 +50,8 @@ fn test_setup() {
         panic_hook::mute();
         let _g = setup();
         panic!("Poison!");
-    }).join();
+    })
+    .join();
 
     let _g = setup();
 }

@@ -17,9 +17,12 @@ use std::time::Instant;
 
 use libc::{getpid, pid_t};
 
-use server::load_statistics::ThreadLoad;
-use util::metrics::{get_thread_ids, Stat};
+use crate::server::load_statistics::ThreadLoad;
+use crate::util::metrics::{cpu_total, get_thread_ids};
 
+use procinfo::pid;
+
+/// A Linux-specific `ThreadLoadStatistics`. It collects threads load metrics.
 pub struct ThreadLoadStatistics {
     pid: pid_t,
     tids: Vec<pid_t>,
@@ -38,13 +41,13 @@ impl ThreadLoadStatistics {
     pub fn new(slots: usize, prefix: &str, thread_load: Arc<ThreadLoad>) -> Self {
         let pid: pid_t = unsafe { getpid() };
         let mut tids = vec![];
-        let mut cpu_total = 0f64;
+        let mut cpu_total_count = 0f64;
         for tid in get_thread_ids(pid).unwrap() {
-            if let Ok(stat) = Stat::collect(pid, tid) {
-                if !stat.name().starts_with(prefix) {
+            if let Ok(stat) = pid::stat_task(pid, tid) {
+                if !stat.command.starts_with(prefix) {
                     continue;
                 }
-                cpu_total += stat.cpu_total();
+                cpu_total_count += cpu_total(&stat);
                 tids.push(tid);
             }
         }
@@ -53,7 +56,7 @@ impl ThreadLoadStatistics {
             tids,
             slots,
             cur_pos: 0,
-            cpu_usages: vec![cpu_total; slots],
+            cpu_usages: vec![cpu_total_count; slots],
             instants: vec![Instant::now(); slots],
             thread_load,
         }
@@ -70,8 +73,8 @@ impl ThreadLoadStatistics {
         self.cpu_usages[self.cur_pos] = 0f64;
         for tid in &self.tids {
             // TODO: if monitored threads exited and restarted then, we should update `self.tids`.
-            if let Ok(stat) = Stat::collect(self.pid, *tid) {
-                self.cpu_usages[self.cur_pos] += stat.cpu_total();
+            if let Ok(stat) = pid::stat_task(self.pid, *tid) {
+                self.cpu_usages[self.cur_pos] += cpu_total(&stat);
             }
         }
         let current_instant = self.instants[self.cur_pos];
@@ -84,7 +87,10 @@ impl ThreadLoadStatistics {
 
         let millis = (current_instant - earlist_instant).as_millis() as usize;
         if millis > 0 {
-            let cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            let mut cpu_usage = calc_cpu_load(millis, earlist_cpu_usage, current_cpu_usage);
+            if cpu_usage > self.tids.len() * 100 {
+                cpu_usage = self.tids.len() * 100;
+            }
             self.thread_load.load.store(cpu_usage, Ordering::Release);
             self.thread_load.term.fetch_add(1, Ordering::Release);
         }
@@ -105,22 +111,28 @@ mod tests {
     use super::*;
 
     #[test]
+    // FIXME(#4364) Flaky test - on CI gets 0 cpu usages, but passes locally.
+    #[ignore]
     fn test_thread_load_statistic() {
         // OS thread name is truncated to 16 bytes, including the last '\0'.
-        let thread_name = thread::current().name().unwrap()[0..15].to_owned();
+        let t = thread::current();
+        let thread_name = t.name().unwrap();
+        let end = ::std::cmp::min(thread_name.len(), 15);
+        let thread_name = thread_name[..end].to_owned();
 
         let load = Arc::new(ThreadLoad::with_threshold(80));
         let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));
         let start = Instant::now();
         loop {
-            if (Instant::now() - start).as_millis() > 100 {
+            if (Instant::now() - start).as_millis() > 200 {
                 break;
             }
         }
         stats.record(Instant::now());
-        match load.load() {
-            80...100 => {}
-            e => panic!("the load must be heavy than 80, but got {}", e),
+        let cpu_usage = load.load();
+        assert!(cpu_usage < 100); // There is only 1 thread.
+        if cpu_usage < 80 {
+            panic!("the load must be heavy than 80, but got {}", cpu_usage);
         }
     }
 }

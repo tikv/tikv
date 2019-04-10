@@ -18,11 +18,11 @@ use std::sync::Arc;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
-use util::collections::{OrderMap, OrderMapEntry};
+use crate::util::collections::{OrderMap, OrderMapEntry};
 
-use coprocessor::codec::datum::{self, Datum};
-use coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use coprocessor::*;
+use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::*;
 
 use super::aggregate::{self, AggrFunc};
 use super::ExecutorMetrics;
@@ -61,7 +61,7 @@ impl AggFuncExpr {
     }
 }
 
-impl AggrFunc {
+impl dyn AggrFunc {
     fn update_with_expr(
         &mut self,
         ctx: &mut EvalContext,
@@ -80,7 +80,7 @@ struct AggExecutor {
     executed: bool,
     ctx: EvalContext,
     related_cols_offset: Vec<usize>, // offset of related columns
-    src: Box<Executor + Send>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
@@ -89,7 +89,7 @@ impl AggExecutor {
         group_by: Vec<Expr>,
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<AggExecutor> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -143,7 +143,7 @@ impl AggExecutor {
 
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
-            warnings.merge(self.ctx.take_warnings());
+            warnings.merge(&mut self.ctx.take_warnings());
             Some(warnings)
         } else {
             Some(self.ctx.take_warnings())
@@ -159,7 +159,7 @@ impl AggExecutor {
 // and updates all the values in group_key_aggrs, then returns a result.
 pub struct HashAggExecutor {
     inner: AggExecutor,
-    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<AggrFunc>>>,
+    group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<dyn AggrFunc>>>,
     cursor: usize,
 }
 
@@ -167,7 +167,7 @@ impl HashAggExecutor {
     pub fn new(
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
     ) -> Result<HashAggExecutor> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
@@ -270,7 +270,7 @@ impl Executor for StreamAggExecutor {
         while let Some(cols) = self.inner.next()? {
             self.has_data = true;
             let new_group = self.meet_new_group(&cols)?;
-            let mut ret = if new_group {
+            let ret = if new_group {
                 Some(self.get_partial_result()?)
             } else {
                 None
@@ -315,7 +315,7 @@ impl Executor for StreamAggExecutor {
 pub struct StreamAggExecutor {
     inner: AggExecutor,
     // save partial agg result
-    agg_funcs: Vec<Box<AggrFunc>>,
+    agg_funcs: Vec<Box<dyn AggrFunc>>,
     cur_group_row: Vec<Datum>,
     next_group_row: Vec<Datum>,
     count: i64,
@@ -325,7 +325,7 @@ pub struct StreamAggExecutor {
 impl StreamAggExecutor {
     pub fn new(
         eval_config: Arc<EvalConfig>,
-        src: Box<Executor + Send>,
+        src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
     ) -> Result<StreamAggExecutor> {
         let group_bys = meta.take_group_by().into_vec();
@@ -401,35 +401,20 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
-    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
-    use coprocessor::codec::datum::{self, Datum};
-    use coprocessor::codec::mysql::decimal::Decimal;
-    use coprocessor::codec::table;
-    use storage::SnapshotStore;
-    use util::codec::number::NumberEncoder;
-    use util::collections::HashMap;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::coprocessor::codec::mysql::decimal::Decimal;
+    use crate::coprocessor::codec::table;
+    use crate::storage::SnapshotStore;
+    use crate::util::collections::HashMap;
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::tests::{get_range, new_col_info, Data, TestStore};
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::tests::gen_table_data;
+    use super::super::tests::*;
     use super::*;
-
-    #[inline]
-    fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
-        let mut expr = Expr::new();
-        expr.set_tp(tp);
-        if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
-        } else {
-            expr.mut_children().push(child.unwrap());
-        }
-        expr
-    }
+    use crate::coprocessor::dag::scanner::tests::Data;
 
     fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
         let mut group_by = Vec::with_capacity(col_ids.len());
@@ -521,13 +506,15 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 0;
         let mut row_data = Vec::with_capacity(1);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -551,13 +538,15 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 1;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -599,13 +588,15 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
-        ).unwrap();
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = agg_ect.next().unwrap() {
@@ -723,17 +714,9 @@ mod tests {
                 Datum::F64(7.0),
             ],
         ];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
-        // init TableScan Exectutor
+
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -749,11 +732,8 @@ mod tests {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init the hash aggregation executor
-        let mut aggr_ect = HashAggExecutor::new(
-            aggregation,
-            Arc::new(EvalConfig::default()),
-            Box::new(ts_ect),
-        ).unwrap();
+        let mut aggr_ect =
+            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {

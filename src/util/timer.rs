@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::util::time::{monotonic_raw_now, Instant};
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread::Builder;
 use std::time::Duration;
-use tokio_timer::{self, timer::Handle};
-use util::time::Instant;
+use time::Timespec;
+use tokio_executor::park::ParkThread;
+use tokio_timer::{self, clock::Clock, clock::Now, timer::Handle, Delay};
 
 pub struct Timer<T> {
     pending: BinaryHeap<Reverse<TimeoutTask<T>>>,
@@ -107,13 +109,114 @@ fn start_global_timer() -> Handle {
     rx.recv().unwrap()
 }
 
+/// A struct that marks the *zero* time.
+///
+/// A *zero* time can be any time, as what it represents is `Instant`,
+/// which is Opaque.
+struct TimeZero {
+    /// An arbitrary time used as the zero time.
+    ///
+    /// Note that `zero` doesn't have to be related to `steady_time_point`, as what's
+    /// observed here is elapsed time instead of time point.
+    zero: std::time::Instant,
+    /// A base time point.
+    ///
+    /// The source of time point should grow steady.
+    steady_time_point: Timespec,
+}
+
+/// A clock that produces time in a steady speed.
+///
+/// Time produced by the clock is not affected by clock jump or time adjustment.
+/// Internally it uses CLOCK_MONOTONIC_RAW to get a steady time source.
+///
+/// `Instant`s produced by this clock can't be compared or used to calculate elapse
+/// unless they are produced using the same zero time.
+#[derive(Clone)]
+pub struct SteadyClock {
+    zero: Arc<TimeZero>,
+}
+
+lazy_static! {
+    static ref STEADY_CLOCK: SteadyClock = SteadyClock {
+        zero: Arc::new(TimeZero {
+            zero: std::time::Instant::now(),
+            steady_time_point: monotonic_raw_now(),
+        }),
+    };
+}
+
+impl Default for SteadyClock {
+    #[inline]
+    fn default() -> SteadyClock {
+        STEADY_CLOCK.clone()
+    }
+}
+
+impl Now for SteadyClock {
+    #[inline]
+    fn now(&self) -> std::time::Instant {
+        let n = monotonic_raw_now();
+        let dur = Instant::elapsed_duration(n, self.zero.steady_time_point);
+        self.zero.zero + dur
+    }
+}
+
+/// A timer that creates steady delays.
+///
+/// Delay created by this timer will not be affected by time adjustment.
+#[derive(Clone)]
+pub struct SteadyTimer {
+    clock: SteadyClock,
+    handle: Handle,
+}
+
+impl SteadyTimer {
+    /// Creates a delay future that will be notified after the given duration.
+    pub fn delay(&self, dur: Duration) -> Delay {
+        self.handle.delay(self.clock.now() + dur)
+    }
+}
+
+lazy_static! {
+    static ref GLOBAL_STEADY_TIMER: SteadyTimer = start_global_steady_timer();
+}
+
+impl Default for SteadyTimer {
+    #[inline]
+    fn default() -> SteadyTimer {
+        GLOBAL_STEADY_TIMER.clone()
+    }
+}
+
+fn start_global_steady_timer() -> SteadyTimer {
+    let (tx, rx) = mpsc::channel();
+    let clock = SteadyClock::default();
+    let clock_ = clock.clone();
+    Builder::new()
+        .name(thd_name!("steady-timer"))
+        .spawn(move || {
+            let c = Clock::new_with_now(clock_);
+            let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
+            tx.send(timer.handle()).unwrap();
+            loop {
+                timer.turn(None).unwrap();
+            }
+        })
+        .unwrap();
+    SteadyTimer {
+        clock,
+        handle: rx.recv().unwrap(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};
-    use util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
 
     #[derive(Debug, PartialEq, Eq, Copy, Clone)]
     enum Task {
@@ -221,8 +324,17 @@ mod tests {
     fn test_global_timer() {
         let handle = super::GLOBAL_TIMER_HANDLE.clone();
         let delay =
-            handle.delay(::std::time::Instant::now() + ::std::time::Duration::from_millis(100));
+            handle.delay(::std::time::Instant::now() + std::time::Duration::from_millis(100));
         let timer = Instant::now();
+        delay.wait().unwrap();
+        assert!(timer.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_global_steady_timer() {
+        let t = SteadyTimer::default();
+        let timer = t.clock.now();
+        let delay = t.delay(Duration::from_millis(100));
         delay.wait().unwrap();
         assert!(timer.elapsed() >= Duration::from_millis(100));
     }

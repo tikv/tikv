@@ -65,7 +65,7 @@ impl State {
     /// respectively can notify it after sending some messages into the channel.
     #[inline]
     fn yield_poll(&self) -> bool {
-        let t = Box::into_raw(box task::current());
+        let t = Box::into_raw(Box::new(task::current()));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
         if !origin.is_null() {
             unsafe { drop(Box::from_raw(origin)) };
@@ -209,12 +209,14 @@ impl<T> Stream for Receiver<T> {
     fn poll(&mut self) -> Poll<Option<T>, ()> {
         match self.try_recv() {
             Ok(m) => Ok(Async::Ready(Some(m))),
-            Err(TryRecvError::Empty) => if self.state.yield_poll() {
-                Ok(Async::NotReady)
-            } else {
-                // For the case that all senders are dropped before the current task is saved.
-                self.poll()
-            },
+            Err(TryRecvError::Empty) => {
+                if self.state.yield_poll() {
+                    Ok(Async::NotReady)
+                } else {
+                    // For the case that all senders are dropped before the current task is saved.
+                    self.poll()
+                }
+            }
             Err(TryRecvError::Disconnected) => Ok(Async::Ready(None)),
         }
     }
@@ -260,9 +262,11 @@ impl<T, E, I: Fn() -> E, C: Fn(&mut E, T)> Stream for BatchReceiver<T, E, I, C> 
                     }
                 }
                 Err(TryRecvError::Disconnected) => break true,
-                Err(TryRecvError::Empty) => if self.rx.state.yield_poll() {
-                    break false;
-                },
+                Err(TryRecvError::Empty) => {
+                    if self.rx.state.yield_poll() {
+                        break false;
+                    }
+                }
             }
         };
 
@@ -293,8 +297,16 @@ mod tests {
         pool.spawn(rx.for_each(move |_| {
             msg_counter1.fetch_add(1, Ordering::AcqRel);
             Ok(())
-        })).forget();
-        thread::sleep(time::Duration::from_millis(10));
+        }))
+        .forget();
+
+        // Wait until the receiver is suspended.
+        loop {
+            thread::sleep(time::Duration::from_millis(10));
+            if !tx.state.recv_task.load(Ordering::SeqCst).is_null() {
+                break;
+            }
+        }
 
         // Send without notify, the receiver can't get batched messages.
         assert!(tx.send(0).is_ok());
@@ -329,7 +341,8 @@ mod tests {
             assert!(len <= 8);
             msg_counter1.fetch_add(len, Ordering::AcqRel);
             Ok(())
-        })).forget();
+        }))
+        .forget();
         thread::sleep(time::Duration::from_millis(10));
 
         // Send without notify, the receiver can't get batched messages.

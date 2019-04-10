@@ -20,12 +20,12 @@ use rand::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
+use crate::coprocessor::codec::mysql::charset;
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::{self, Datum};
+use crate::util::codec::number;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
-use coprocessor::codec::mysql::charset;
-use coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use coprocessor::codec::{self, Datum};
-use util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -46,7 +46,7 @@ mod ctx;
 mod scalar_function;
 
 pub use self::ctx::*;
-pub use coprocessor::codec::{Error, Result};
+pub use crate::coprocessor::codec::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
@@ -81,8 +81,8 @@ struct CusRng {
     rng: RefCell<Option<XorShiftRng>>,
 }
 
-impl ::std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Debug for CusRng {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "()")
     }
 }
@@ -235,7 +235,10 @@ impl Expression {
     }
 
     pub fn build(ctx: &EvalContext, mut expr: Expr) -> Result<Self> {
-        debug!("build expr:{:?}", expr);
+        debug!(
+            "build-expr";
+            "expr" => ?expr
+        );
         let field_type = expr.take_field_type();
         match expr.get_tp() {
             ExprType::Null => Ok(Expression::new_const(Datum::Null, field_type)),
@@ -259,7 +262,7 @@ impl Expression {
                 .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = field_type.decimal() as i8;
-                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, &ctx.cfg.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
@@ -327,11 +330,13 @@ mod tests {
     use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
     use super::{Error, EvalConfig, EvalContext, Expression};
-    use coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
-    use coprocessor::codec::mysql::json::JsonEncoder;
-    use coprocessor::codec::mysql::{charset, Decimal, DecimalEncoder, Duration, Json, Time};
-    use coprocessor::codec::{mysql, Datum};
-    use util::codec::number::{self, NumberEncoder};
+    use crate::coprocessor::codec::error::{ERR_DATA_OUT_OF_RANGE, ERR_DIVISION_BY_ZERO};
+    use crate::coprocessor::codec::mysql::json::JsonEncoder;
+    use crate::coprocessor::codec::mysql::{
+        charset, Decimal, DecimalEncoder, Duration, Json, Time,
+    };
+    use crate::coprocessor::codec::{mysql, Datum};
+    use crate::util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

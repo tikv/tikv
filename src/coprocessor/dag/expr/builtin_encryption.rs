@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
-use coprocessor::codec::Datum;
+use crate::coprocessor::codec::Datum;
 use crypto::{
     digest::Digest,
     md5::Md5,
@@ -109,7 +109,7 @@ impl ScalarFunc {
             return Ok(Some(Cow::Borrowed(b"")));
         }
         let mut e = ZlibEncoder::new(input.as_ref(), Compression::default());
-        // prefered capacity is input length plus four bytes length header and one extra end "."
+        // preferred capacity is input length plus four bytes length header and one extra end "."
         // max capacity is isize::max_value(), or will panic with "capacity overflow"
         let mut vec = Vec::with_capacity((input.len() + 5).min(isize::max_value() as usize));
         vec.resize(4, 0);
@@ -179,9 +179,9 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use coprocessor::codec::Datum;
-    use coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
-    use coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::codec::Datum;
+    use crate::coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use hex;
     use tipb::expression::ScalarFuncSig;
 

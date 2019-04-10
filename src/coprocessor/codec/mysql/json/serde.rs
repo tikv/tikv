@@ -20,7 +20,7 @@ use std::str::FromStr;
 use std::{f64, str};
 
 use super::Json;
-use coprocessor::codec::Error;
+use crate::coprocessor::codec::Error;
 
 impl Json {
     pub fn to_string(&self) -> String {
@@ -71,7 +71,7 @@ impl Serialize for Json {
 struct JsonVisitor;
 impl<'de> Visitor<'de> for JsonVisitor {
     type Value = Json;
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "a json value")
     }
 

@@ -16,23 +16,23 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
+use crate::grpc::Error as GrpcError;
 use futures::Canceled;
-use grpc::Error as GrpcError;
 use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
-use pd::Error as PdError;
-use raftstore::Error as RaftServerError;
-use storage::engine::Error as EngineError;
-use storage::Error as StorageError;
-use util::codec::Error as CodecError;
-use util::worker::ScheduleError;
+use crate::pd::Error as PdError;
+use crate::raftstore::Error as RaftServerError;
+use crate::storage::kv::Error as EngineError;
+use crate::storage::Error as StorageError;
+use crate::util::codec::Error as CodecError;
+use crate::util::worker::ScheduleError;
 
-quick_error!{
+quick_error! {
     #[derive(Debug)]
     pub enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -81,6 +81,12 @@ quick_error!{
             description(err.description())
         }
         Storage(err: StorageError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        RealEngine(err: engine::Error) {
             from()
             cause(err)
             display("{:?}", err)

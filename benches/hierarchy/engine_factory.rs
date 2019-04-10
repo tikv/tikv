@@ -14,7 +14,7 @@
 use std::fmt;
 
 use tikv::storage::{
-    engine::{BTreeEngine, RocksEngine},
+    kv::{BTreeEngine, RocksEngine},
     Engine, TestEngineBuilder,
 };
 
@@ -32,7 +32,7 @@ impl EngineFactory<BTreeEngine> for BTreeEngineFactory {
 }
 
 impl fmt::Debug for BTreeEngineFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BTree")
     }
 }
@@ -47,7 +47,7 @@ impl EngineFactory<RocksEngine> for RocksEngineFactory {
 }
 
 impl fmt::Debug for RocksEngineFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Rocks")
     }
 }

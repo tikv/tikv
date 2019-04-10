@@ -11,37 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::process;
-use std::sync::mpsc::Receiver;
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use mio::EventLoop;
-
 use super::transport::RaftStoreRouter;
 use super::Result;
-use import::SSTImporter;
+use crate::import::SSTImporter;
+use crate::pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
+use crate::raftstore::coprocessor::dispatcher::CoprocessorHost;
+use crate::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
+use crate::raftstore::store::{
+    self, initial_region, keys, Config as StoreConfig, ReadTask, SnapManager, Transport,
+};
+use crate::server::readpool::ReadPool;
+use crate::server::Config as ServerConfig;
+use crate::server::ServerRaftStoreRouter;
+use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
+use crate::util::worker::{FutureWorker, Worker};
+use engine::rocks::DB;
+use engine::Engines;
+use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
-use pd::{Error as PdError, PdClient, PdTask, INVALID_ID};
 use protobuf::RepeatedField;
-use raftstore::coprocessor::dispatcher::CoprocessorHost;
-use raftstore::store::{
-    self, keys, Config as StoreConfig, Engines, Msg, Peekable, ReadTask, SignificantMsg,
-    SnapManager, Store, StoreChannel, Transport,
-};
-use rocksdb::DB;
-use server::readpool::ReadPool;
-use server::Config as ServerConfig;
-use server::ServerRaftStoreRouter;
-use storage::{self, Config as StorageConfig, RaftKv, Storage};
-use util::transport::SendCh;
-use util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 
+/// Creates a new storage engine which is backed by the Raft consensus
+/// protocol.
 pub fn create_raft_storage<S>(
     router: S,
     cfg: &StorageConfig,
@@ -57,34 +56,14 @@ where
     Ok(store)
 }
 
-fn check_region_epoch(region: &metapb::Region, other: &metapb::Region) -> Result<()> {
-    let epoch = region.get_region_epoch();
-    let other_epoch = other.get_region_epoch();
-    if epoch.get_conf_ver() != other_epoch.get_conf_ver() {
-        return Err(box_err!(
-            "region conf_ver inconsist: {} with {}",
-            epoch.get_conf_ver(),
-            other_epoch.get_conf_ver()
-        ));
-    }
-    if epoch.get_version() != other_epoch.get_version() {
-        return Err(box_err!(
-            "region version inconsist: {} with {}",
-            epoch.get_version(),
-            other_epoch.get_version()
-        ));
-    }
-    Ok(())
-}
-
-// Node is a wrapper for raft store.
+/// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
 pub struct Node<C: PdClient + 'static> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: StoreConfig,
     store_handle: Option<thread::JoinHandle<()>>,
-    ch: SendCh<Msg>,
+    system: RaftBatchSystem,
 
     pd_client: Arc<C>,
 }
@@ -93,15 +72,13 @@ impl<C> Node<C>
 where
     C: PdClient,
 {
-    pub fn new<T>(
-        event_loop: &mut EventLoop<Store<T, C>>,
+    /// Creates a new Node.
+    pub fn new(
+        system: RaftBatchSystem,
         cfg: &ServerConfig,
         store_cfg: &StoreConfig,
         pd_client: Arc<C>,
-    ) -> Node<C>
-    where
-        T: Transport + 'static,
-    {
+    ) -> Node<C> {
         let mut store = metapb::Store::new();
         store.set_id(INVALID_ID);
         if cfg.advertise_addr.is_empty() {
@@ -120,25 +97,25 @@ where
         }
         store.set_labels(RepeatedField::from_vec(labels));
 
-        let ch = SendCh::new(event_loop.channel(), "raftstore");
         Node {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg: store_cfg.clone(),
             store_handle: None,
             pd_client,
-            ch,
+            system,
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    /// Starts the Node. It tries to bootstrap cluster if the cluster is not
+    /// bootstrapped yet. Then it spawns a thread to run the raftstore in
+    /// background.
+    #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
-        event_loop: EventLoop<Store<T, C>>,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
@@ -147,39 +124,32 @@ where
     where
         T: Transport + 'static,
     {
-        let bootstrapped = self.check_cluster_bootstrapped()?;
         let mut store_id = self.check_store(&engines)?;
         if store_id == INVALID_ID {
             store_id = self.bootstrap_store(&engines)?;
-        } else if !bootstrapped {
-            // We have saved data before, and the cluster must be bootstrapped.
-            return Err(box_err!(
-                "store {} is not empty, but cluster {} is not bootstrapped, \
-                 maybe you connected a wrong PD or need to remove the TiKV data \
-                 and start again",
-                store_id,
-                self.cluster_id
-            ));
+            fail_point!("node_after_bootstrap_store", |_| Err(box_err!(
+                "injected error: node_after_bootstrap_store"
+            )));
         }
-
         self.store.set_id(store_id);
-        self.check_prepare_bootstrap_cluster(&engines)?;
-        if !bootstrapped {
+
+        if let Some(first_region) = self.check_or_prepare_bootstrap_cluster(&engines, store_id)? {
+            info!("try bootstrap cluster"; "store_id" => store_id, "region" => ?first_region);
             // cluster is not bootstrapped, and we choose first store to bootstrap
-            // prepare bootstrap.
-            let region = self.prepare_bootstrap_cluster(&engines, store_id)?;
-            self.bootstrap_cluster(&engines, region)?;
+            fail_point!("node_after_prepare_bootstrap_cluster", |_| Err(box_err!(
+                "injected error: node_after_prepare_bootstrap_cluster"
+            )));
+            self.bootstrap_cluster(&engines, first_region)?;
         }
 
-        // inform pd.
+        // Put store only if the cluster is bootstrapped.
         self.pd_client.put_store(self.store.clone())?;
+
         self.start_store(
-            event_loop,
             store_id,
             engines,
             trans,
             snap_mgr,
-            significant_msg_receiver,
             pd_worker,
             local_read_worker,
             coprocessor_host,
@@ -188,12 +158,15 @@ where
         Ok(())
     }
 
+    /// Gets the store id.
     pub fn id(&self) -> u64 {
         self.store.get_id()
     }
 
-    pub fn get_sendch(&self) -> SendCh<Msg> {
-        self.ch.clone()
+    /// Gets a transmission end of a channel which is used to send `Msg` to the
+    /// raftstore.
+    pub fn get_router(&self) -> RaftRouter {
+        self.system.router()
     }
 
     // check store, return store id for the engine.
@@ -206,20 +179,18 @@ where
 
         let ident = res.unwrap();
         if ident.get_cluster_id() != self.cluster_id {
-            error!(
-                "cluster ID mismatch: local_id {} remote_id {}. \
+            return Err(box_err!(
+                "cluster ID mismatch, local {} != remote {}, \
                  you are trying to connect to another cluster, please reconnect to the correct PD",
                 ident.get_cluster_id(),
                 self.cluster_id
-            );
-            process::exit(1);
+            ));
         }
 
         let store_id = ident.get_store_id();
         if store_id == INVALID_ID {
             return Err(box_err!("invalid store ident {:?}", ident));
         }
-
         Ok(store_id)
     }
 
@@ -230,13 +201,15 @@ where
 
     fn bootstrap_store(&self, engines: &Engines) -> Result<u64> {
         let store_id = self.alloc_id()?;
-        info!("alloc store id {} ", store_id);
+        info!("alloc store id"; "store_id" => store_id);
 
         store::bootstrap_store(engines, self.cluster_id, store_id)?;
 
         Ok(store_id)
     }
 
+    // Exported for tests.
+    #[doc(hidden)]
     pub fn prepare_bootstrap_cluster(
         &self,
         engines: &Engines,
@@ -244,67 +217,81 @@ where
     ) -> Result<metapb::Region> {
         let region_id = self.alloc_id()?;
         info!(
-            "alloc first region id {} for cluster {}, store {}",
-            region_id, self.cluster_id, store_id
+            "alloc first region id";
+            "region_id" => region_id,
+            "cluster_id" => self.cluster_id,
+            "store_id" => store_id
         );
         let peer_id = self.alloc_id()?;
         info!(
-            "alloc first peer id {} for first region {}",
-            peer_id, region_id
+            "alloc first peer id for first region";
+            "peer_id" => peer_id,
+            "region_id" => region_id,
         );
 
-        let region = store::prepare_bootstrap(engines, store_id, region_id, peer_id)?;
+        let region = initial_region(store_id, region_id, peer_id);
+        store::prepare_bootstrap_cluster(engines, &region)?;
         Ok(region)
     }
 
-    fn check_prepare_bootstrap_cluster(&self, engines: &Engines) -> Result<()> {
-        let res = engines
-            .kv
-            .get_msg::<metapb::Region>(keys::PREPARE_BOOTSTRAP_KEY)?;
-        if res.is_none() {
-            return Ok(());
+    fn check_or_prepare_bootstrap_cluster(
+        &self,
+        engines: &Engines,
+        store_id: u64,
+    ) -> Result<Option<metapb::Region>> {
+        if let Some(first_region) = engines.kv.get_msg(keys::PREPARE_BOOTSTRAP_KEY)? {
+            Ok(Some(first_region))
+        } else {
+            if self.check_cluster_bootstrapped()? {
+                Ok(None)
+            } else {
+                self.prepare_bootstrap_cluster(engines, store_id).map(Some)
+            }
         }
+    }
 
-        let first_region = res.unwrap();
-        for _ in 0..MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
-            match self.pd_client.get_region(b"") {
-                Ok(region) => {
-                    if region.get_id() == first_region.get_id() {
-                        check_region_epoch(&region, &first_region)?;
-                        store::clear_prepare_bootstrap_state(engines)?;
-                    } else {
-                        store::clear_prepare_bootstrap(engines, first_region.get_id())?;
-                    }
+    fn bootstrap_cluster(&mut self, engines: &Engines, first_region: metapb::Region) -> Result<()> {
+        let region_id = first_region.get_id();
+        let mut retry = 0;
+        while retry < MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT {
+            match self
+                .pd_client
+                .bootstrap_cluster(self.store.clone(), first_region.clone())
+            {
+                Ok(_) => {
+                    info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
+                    fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
+                        "injected error: node_after_prepare_bootstrap_cluster"
+                    )));
+                    store::clear_prepare_bootstrap_key(engines)?;
                     return Ok(());
                 }
-
+                Err(PdError::ClusterBootstrapped(_)) => match self.pd_client.get_region(b"") {
+                    Ok(region) => {
+                        if region == first_region {
+                            store::clear_prepare_bootstrap_key(engines)?;
+                            return Ok(());
+                        } else {
+                            info!("cluster is already bootstrapped"; "cluster_id" => self.cluster_id);
+                            store::clear_prepare_bootstrap_cluster(engines, region_id)?;
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        warn!("get the first region failed"; "err" => ?e);
+                    }
+                },
+                // TODO: should we clean region for other errors too?
                 Err(e) => {
-                    warn!("check cluster prepare bootstrapped failed: {:?}", e);
+                    error!("bootstrap cluster"; "cluster_id" => self.cluster_id, "error" => ?e)
                 }
             }
+            retry += 1;
             thread::sleep(Duration::from_secs(
                 CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS,
             ));
         }
-        Err(box_err!("check cluster prepare bootstrapped failed"))
-    }
-
-    fn bootstrap_cluster(&mut self, engines: &Engines, region: metapb::Region) -> Result<()> {
-        let region_id = region.get_id();
-        match self.pd_client.bootstrap_cluster(self.store.clone(), region) {
-            Err(PdError::ClusterBootstrapped(_)) => {
-                error!("cluster {} is already bootstrapped", self.cluster_id);
-                store::clear_prepare_bootstrap(engines, region_id)?;
-                Ok(())
-            }
-            // TODO: should we clean region for other errors too?
-            Err(e) => panic!("bootstrap cluster {} err: {:?}", self.cluster_id, e),
-            Ok(_) => {
-                store::clear_prepare_bootstrap_state(engines)?;
-                info!("bootstrap cluster {} ok", self.cluster_id);
-                Ok(())
-            }
-        }
+        Err(box_err!("bootstrapped cluster failed"))
     }
 
     fn check_cluster_bootstrapped(&self) -> Result<bool> {
@@ -312,7 +299,7 @@ where
             match self.pd_client.is_cluster_bootstrapped() {
                 Ok(b) => return Ok(b),
                 Err(e) => {
-                    warn!("check cluster bootstrapped failed: {:?}", e);
+                    warn!("check cluster bootstrapped failed"; "err" => ?e);
                 }
             }
             thread::sleep(Duration::from_secs(
@@ -322,15 +309,13 @@ where
         Err(box_err!("check cluster bootstrapped failed"))
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))]
+    #[allow(clippy::too_many_arguments)]
     fn start_store<T>(
         &mut self,
-        mut event_loop: EventLoop<Store<T, C>>,
         store_id: u64,
         engines: Engines,
         trans: T,
         snap_mgr: SnapManager,
-        significant_msg_receiver: Receiver<SignificantMsg>,
         pd_worker: FutureWorker<PdTask>,
         local_read_worker: Worker<ReadTask>,
         coprocessor_host: CoprocessorHost,
@@ -339,7 +324,7 @@ where
     where
         T: Transport + 'static,
     {
-        info!("start raft store {} thread", store_id);
+        info!("start raft store thread"; "store_id" => store_id);
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));
@@ -348,94 +333,29 @@ where
         let cfg = self.store_cfg.clone();
         let pd_client = Arc::clone(&self.pd_client);
         let store = self.store.clone();
-        let sender = event_loop.channel();
-
-        let (tx, rx) = mpsc::channel();
-        let builder = thread::Builder::new().name(thd_name!(format!("raftstore-{}", store_id)));
-        let h = builder.spawn(move || {
-            let ch = StoreChannel {
-                sender,
-                significant_msg_receiver,
-            };
-            let mut store = match Store::new(
-                ch,
-                store,
-                cfg,
-                engines,
-                trans,
-                pd_client,
-                snap_mgr,
-                pd_worker,
-                local_read_worker,
-                coprocessor_host,
-                importer,
-            ) {
-                Err(e) => panic!("construct store {} err {:?}", store_id, e),
-                Ok(s) => s,
-            };
-            tx.send(0).unwrap();
-            if let Err(e) = store.run(&mut event_loop) {
-                error!("store {} run err {:?}", store_id, e);
-            };
-        })?;
-        // wait for store to be initialized
-        rx.recv().unwrap();
-
-        self.store_handle = Some(h);
+        self.system.spawn(
+            store,
+            cfg,
+            engines,
+            trans,
+            pd_client,
+            snap_mgr,
+            pd_worker,
+            local_read_worker,
+            coprocessor_host,
+            importer,
+        )?;
         Ok(())
     }
 
-    fn stop_store(&mut self, store_id: u64) -> Result<()> {
-        info!("stop raft store {} thread", store_id);
-        let h = match self.store_handle.take() {
-            None => return Ok(()),
-            Some(h) => h,
-        };
-
-        box_try!(self.ch.send(Msg::Quit));
-        if let Err(e) = h.join() {
-            return Err(box_err!("join store {} thread err {:?}", store_id, e));
-        }
-
-        Ok(())
+    fn stop_store(&mut self, store_id: u64) {
+        info!("stop raft store thread"; "store_id" => store_id);
+        self.system.shutdown();
     }
 
-    pub fn stop(&mut self) -> Result<()> {
+    /// Stops the Node.
+    pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::check_region_epoch;
-    use kvproto::metapb;
-    use raftstore::store::keys;
-
-    #[test]
-    fn test_check_region_epoch() {
-        let mut r1 = metapb::Region::new();
-        r1.set_id(1);
-        r1.set_start_key(keys::EMPTY_KEY.to_vec());
-        r1.set_end_key(keys::EMPTY_KEY.to_vec());
-        r1.mut_region_epoch().set_version(1);
-        r1.mut_region_epoch().set_conf_ver(1);
-
-        let mut r2 = metapb::Region::new();
-        r2.set_id(1);
-        r2.set_start_key(keys::EMPTY_KEY.to_vec());
-        r2.set_end_key(keys::EMPTY_KEY.to_vec());
-        r2.mut_region_epoch().set_version(2);
-        r2.mut_region_epoch().set_conf_ver(1);
-
-        let mut r3 = metapb::Region::new();
-        r3.set_id(1);
-        r3.set_start_key(keys::EMPTY_KEY.to_vec());
-        r3.set_end_key(keys::EMPTY_KEY.to_vec());
-        r3.mut_region_epoch().set_version(1);
-        r3.mut_region_epoch().set_conf_ver(2);
-
-        assert!(check_region_epoch(&r1, &r2).is_err());
-        assert!(check_region_epoch(&r1, &r3).is_err());
     }
 }

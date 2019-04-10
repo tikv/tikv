@@ -17,7 +17,9 @@ To use the Raw Key-Value API in applications developed in the Go language, take 
 1. Install the necessary packages.
 
     ```bash
-    go get -v -u github.com/pingcap/tidb/store/tikv
+    export GO111MODULE=on
+    go mod init rawkv-demo
+    go get github.com/pingcap/tidb@master
     ```
 
 2. Import the dependency packages.
@@ -50,7 +52,7 @@ To use the Raw Key-Value API in applications developed in the Go language, take 
     func (c *RawKVClient) Delete(key []byte) error
     func (c *RawKVClient) Get(key []byte) ([]byte, error)
     func (c *RawKVClient) Put(key, value []byte) error
-    func (c *RawKVClient) Scan(startKey []byte, limit int) (keys [][]byte, values [][]byte, err error)
+    func (c *RawKVClient) Scan(startKey, endKey []byte, limit int) (keys [][]byte, values [][]byte, err error)
     ```
 
 ### Usage example of the Raw Key-Value API
@@ -143,10 +145,9 @@ To use the Transactional Key-Value API in applications developed by golang, take
 1. Install the necessary packages.
 
     ```bash
-    go get -v -u github.com/juju/errors
-    go get -v -u github.com/pingcap/tidb/kv
-    go get -v -u github.com/pingcap/tidb/store/tikv
-    go get -v -u golang.org/x/net/context
+    export GO111MODULE=on
+    go mod init txnkv-demo
+    go get github.com/pingcap/tidb@master
     ```
 
 2. Import the dependency packages.
@@ -183,7 +184,7 @@ To use the Transactional Key-Value API in applications developed by golang, take
     Begin() -> Txn
     Txn.Get(key []byte) -> (value []byte)
     Txn.Set(key []byte, value []byte)
-    Txn.Seek(begin []byte) -> Iterator
+    Txn.Iter(begin, end []byte) -> Iterator
     Txn.Delete(key []byte)
     Txn.Commit()
     ```
@@ -284,7 +285,7 @@ func scan(keyPrefix []byte, limit int) ([]KV, error) {
     if err != nil {
         return nil, errors.Trace(err)
     }
-    it, err := tx.Seek(keyPrefix)
+    it, err := tx.Iter(kv.Key(keyPrefix), nil)
     if err != nil {
         return nil, errors.Trace(err)
     }

@@ -15,8 +15,11 @@ use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 use tikv::storage::config::Config;
-use tikv::storage::engine::RocksEngine;
-use tikv::storage::{Engine, Key, KvPair, Mutation, Options, Result, Storage, Value};
+use tikv::storage::kv::RocksEngine;
+use tikv::storage::{
+    AutoGCConfig, Engine, GCSafePointProvider, Key, KvPair, Mutation, Options, RegionInfoProvider,
+    Result, Storage, Value,
+};
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
 use tikv::util::collections::HashMap;
 
@@ -70,6 +73,13 @@ pub struct SyncTestStorage<E: Engine> {
 }
 
 impl<E: Engine> SyncTestStorage<E> {
+    pub fn start_auto_gc<S: GCSafePointProvider, R: RegionInfoProvider>(
+        &mut self,
+        cfg: AutoGCConfig<S, R>,
+    ) {
+        self.store.start_auto_gc(cfg).unwrap();
+    }
+
     pub fn get_storage(&self) -> Storage<E> {
         self.store.clone()
     }
@@ -150,7 +160,8 @@ impl<E: Engine> SyncTestStorage<E> {
             start_ts,
             Options::default(),
             cb
-        )).unwrap()
+        ))
+        .unwrap()
     }
 
     pub fn commit(
@@ -181,7 +192,7 @@ impl<E: Engine> SyncTestStorage<E> {
         wait_op!(|cb| self
             .store
             .async_scan_locks(ctx, max_ts, start_key, limit, cb))
-            .unwrap()
+        .unwrap()
     }
 
     pub fn resolve_lock(&self, ctx: Context, start_ts: u64, commit_ts: Option<u64>) -> Result<()> {

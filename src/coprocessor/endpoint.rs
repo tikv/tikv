@@ -23,16 +23,15 @@ use tipb::checksum::{ChecksumRequest, ChecksumScanOn};
 use tipb::executor::ExecType;
 use tipb::select::DAGRequest;
 
-use server::readpool::{self, ReadPool};
-use server::Config;
-use storage::{self, Engine};
-use util::Either;
+use crate::server::readpool::{self, ReadPool};
+use crate::server::Config;
+use crate::storage::{self, Engine, SnapshotStore};
+use crate::util::Either;
 
-use coprocessor::dag::executor::ExecutorMetrics;
-use coprocessor::metrics::*;
-use coprocessor::tracker::Tracker;
-use coprocessor::util as cop_util;
-use coprocessor::*;
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::metrics::*;
+use crate::coprocessor::tracker::Tracker;
+use crate::coprocessor::*;
 
 const OUTDATED_ERROR_MSG: &str = "request outdated.";
 const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
@@ -51,6 +50,7 @@ pub struct Endpoint<E: Engine> {
     batch_row_limit: usize,
     stream_batch_row_limit: usize,
     stream_channel_size: usize,
+    enable_batch_if_possible: bool,
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
@@ -66,7 +66,7 @@ impl<E: Engine> Clone for Endpoint<E> {
     }
 }
 
-impl<E: Engine> ::util::AssertSend for Endpoint<E> {}
+impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
@@ -75,6 +75,7 @@ impl<E: Engine> Endpoint<E> {
             read_pool,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
+            enable_batch_if_possible: cfg.end_point_enable_batch_if_possible,
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
@@ -83,12 +84,16 @@ impl<E: Engine> Endpoint<E> {
 
     /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
     /// Returns `Err` if fails.
-    fn try_parse_request(
+    fn parse_request(
         &self,
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
     ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        fail_point!("coprocessor_parse_request", |_| Err(box_err!(
+            "unsupported tp (failpoint)"
+        )));
+
         let (context, data, ranges) = (
             req.take_context(),
             req.take_data(),
@@ -125,11 +130,25 @@ impl<E: Engine> Endpoint<E> {
                     Some(dag.get_start_ts()),
                 );
                 let batch_row_limit = self.get_batch_row_limit(is_streaming);
-                builder = box move |snap, req_ctx: &_| {
-                    // See rust-lang#41078 to know why we have `: &_` here.
-                    dag::DAGContext::new(dag, ranges, snap, req_ctx, batch_row_limit)
-                        .map(|h| h.into_boxed())
-                };
+                let enable_batch_if_possible = self.enable_batch_if_possible;
+                builder = Box::new(move |snap, req_ctx: &ReqContext| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
+                    let store = SnapshotStore::new(
+                        snap,
+                        dag.get_start_ts(),
+                        req_ctx.context.get_isolation_level(),
+                        !req_ctx.context.get_not_fill_cache(),
+                    );
+                    dag::DAGRequestHandler::build(
+                        dag,
+                        ranges,
+                        store,
+                        req_ctx.deadline,
+                        batch_row_limit,
+                        is_streaming,
+                        enable_batch_if_possible,
+                    )
+                });
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::new();
@@ -144,10 +163,11 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(analyze.get_start_ts()),
                 );
-                builder = box move |snap, req_ctx: &_| {
+                builder = Box::new(move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     statistics::analyze::AnalyzeContext::new(analyze, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
-                };
+                });
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::new();
@@ -162,42 +182,15 @@ impl<E: Engine> Endpoint<E> {
                     None,
                     Some(checksum.get_start_ts()),
                 );
-                builder = box move |snap, req_ctx: &_| {
+                builder = Box::new(move |snap, req_ctx: &_| {
+                    // TODO: Remove explicit type once rust-lang#41078 is resolved
                     checksum::ChecksumContext::new(checksum, ranges, snap, req_ctx)
                         .map(|h| h.into_boxed())
-                };
+                });
             }
             tp => return Err(box_err!("unsupported tp {}", tp)),
         };
         Ok((builder, req_ctx))
-    }
-
-    /// Parse the raw `Request` to create `RequestHandlerBuilder` and `ReqContext`.
-    #[inline]
-    fn parse_request(
-        &self,
-        req: coppb::Request,
-        peer: Option<String>,
-        is_streaming: bool,
-    ) -> (RequestHandlerBuilder<E::Snap>, ReqContext) {
-        match self.try_parse_request(req, peer, is_streaming) {
-            Ok(v) => v,
-            Err(err) => {
-                // If there are errors when parsing requests, create a dummy request handler.
-                let builder =
-                    box |_, _: &_| Ok(cop_util::ErrorRequestHandler::new(err).into_boxed());
-                let req_ctx = ReqContext::new(
-                    "invalid",
-                    kvrpcpb::Context::new(),
-                    &[],
-                    Duration::from_secs(60), // Large enough to avoid becoming outdated error
-                    None,
-                    None,
-                    None,
-                );
-                (builder, req_ctx)
-            }
-        }
     }
 
     /// Get the batch row limit configuration.
@@ -215,10 +208,10 @@ impl<E: Engine> Endpoint<E> {
         engine: E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = ::util::future::paired_future_callback();
+        let (callback, future) = crate::util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
+            .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error
             .map_err(Error::from)
@@ -278,39 +271,46 @@ impl<E: Engine> Endpoint<E> {
             })
     }
 
-    /// Handle a unary request and run on the read pool. Returns a future producing the
-    /// result, which must be a `Response` and will never fail. If there are errors during
-    /// handling, they will be embedded in the `Response`.
+    /// Handle a unary request and run on the read pool.
+    ///
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in other cases.
+    /// The future inside may be an error however.
     fn handle_unary_request(
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Item = coppb::Response, Error = ()> {
+    ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        let mut tracker = box Tracker::new(req_ctx);
+        // box the tracker so that moving it is cheap.
+        let mut tracker = Box::new(Tracker::new(req_ctx));
 
-        let result = self.read_pool.future_execute(priority, move |ctxd| {
-            tracker.attach_ctxd(ctxd);
-
-            Self::handle_unary_request_impl(engine, tracker, handler_builder)
-        });
-
-        future::result(result)
-            // If the read pool is full, an error response will be returned directly.
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                tracker.attach_ctxd(ctxd);
+                Self::handle_unary_request_impl(engine, tracker, handler_builder)
+            })
             .map_err(|_| Error::Full)
-            .flatten()
-            .or_else(|e| Ok(make_error_response(e)))
     }
 
+    /// Parses and handles a unary request. Returns a future that will never fail. If there are
+    /// errors during parsing or handling, they will be converted into a `Response` as the success
+    /// result of the future.
     #[inline]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Item = coppb::Response, Error = ()> {
-        let (handler_builder, req_ctx) = self.parse_request(req, peer, false);
-        self.handle_unary_request(req_ctx, handler_builder)
+        let result_of_future =
+            self.parse_request(req, peer, false)
+                .and_then(|(handler_builder, req_ctx)| {
+                    self.handle_unary_request(req_ctx, handler_builder)
+                });
+
+        future::result(result_of_future)
+            .flatten()
+            .or_else(|e| Ok(make_error_response(e)))
     }
 
     /// The real implementation of handling a stream request.
@@ -327,21 +327,21 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
 
-        let tracker_and_handler_future = future::result(
-            tracker.req_ctx.deadline.check_if_exceeded(),
-        ).and_then(move |_| {
-            Self::async_snapshot(engine, &tracker.req_ctx.context)
-                .map(|snapshot| (tracker, snapshot))
-        })
-            .and_then(move |(tracker, snapshot)| {
-                // When snapshot is retrieved, deadline may exceed.
-                future::result(tracker.req_ctx.deadline.check_if_exceeded())
-                    .map(|_| (tracker, snapshot))
-            })
-            .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
-                    .map(|handler| (tracker, handler))
-            });
+        let tracker_and_handler_future =
+            future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                .and_then(move |_| {
+                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                        .map(|snapshot| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    // When snapshot is retrieved, deadline may exceed.
+                    future::result(tracker.req_ctx.deadline.check_if_exceeded())
+                        .map(|_| (tracker, snapshot))
+                })
+                .and_then(move |(tracker, snapshot)| {
+                    future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                        .map(|handler| (tracker, handler))
+                });
 
         tracker_and_handler_future
             .map(|(mut tracker, handler)| {
@@ -395,7 +395,8 @@ impl<E: Engine> Endpoint<E> {
                             None
                         }
                     }
-                }).filter_map(|resp_or_tracker| match resp_or_tracker {
+                })
+                .filter_map(|resp_or_tracker| match resp_or_tracker {
                     Either::Left(resp) => Some(resp),
                     Either::Right(mut tracker) => {
                         tracker.on_finish_all_items();
@@ -406,62 +407,57 @@ impl<E: Engine> Endpoint<E> {
             .flatten_stream()
     }
 
-    /// Handle a stream request and run on the read pool. Returns a stream producing each
-    /// result, which must be a `Response` and will never fail. If there are errors during
-    /// handling, they will be embedded in the `Response`.
+    /// Handle a stream request and run on the read pool.
+    ///
+    /// Returns `Err(err)` if the read pool is full. Returns `Ok(stream)` in other cases.
+    /// The stream inside may produce errors however.
     fn handle_stream_request(
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let (tx, rx) = mpsc::channel::<coppb::Response>(self.stream_channel_size);
+    ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
+        let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = box Tracker::new(req_ctx);
+        let mut tracker = Box::new(Tracker::new(req_ctx));
 
-        let tx1 = tx.clone();
-        let result = self.read_pool.future_execute(priority, move |ctxd| {
-            tracker.attach_ctxd(ctxd);
+        self.read_pool
+            .future_execute(priority, move |ctxd| {
+                tracker.attach_ctxd(ctxd);
 
-            Self::handle_stream_request_impl(engine, tracker, handler_builder)
-                .or_else(|e| Ok::<_, mpsc::SendError<_>>(make_error_response(e)))
-                // Although returning `Ok()` from `or_else` will continue the stream,
-                // our stream has already ended when error is returned.
-                // Thus the stream will not continue any more even after we converting errors
-                // into a response.
-                .forward(tx1)
-        });
-
-        match result {
-            Err(_) => {
-                stream::once::<_, mpsc::SendError<_>>(Ok(make_error_response(Error::Full)))
+                Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
+                    .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
-                    .then(|_| {
-                        // ignore sink send failures
-                        Ok::<_, ()>(())
-                    })
-                    // Should not be blocked, since the channel is large enough to hold 1 value.
-                    .wait()
-                    .unwrap();
-            }
-            Ok(cpu_future) => {
+            })
+            .map_err(|_| Error::Full)
+            .and_then(move |cpu_future| {
                 // Keep running stream producer
                 cpu_future.forget();
-            }
-        }
 
-        rx
+                // Returns the stream instead of a future
+                Ok(rx.then(|r| r.unwrap()))
+            })
     }
 
+    /// Parses and handles a stream request. Returns a stream that produce each result in a
+    /// `Response` and will never fail. If there are errors during parsing or handling, they will
+    /// be converted into a `Response` as the only stream item.
     #[inline]
     pub fn parse_and_handle_stream_request(
         &self,
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl Stream<Item = coppb::Response, Error = ()> {
-        let (handler_builder, req_ctx) = self.parse_request(req, peer, true);
-        self.handle_stream_request(req_ctx, handler_builder)
+        let result_of_stream =
+            self.parse_request(req, peer, true)
+                .and_then(|(handler_builder, req_ctx)| {
+                    self.handle_stream_request(req_ctx, handler_builder)
+                }); // Result<Stream<Resp, Error>, Error>
+
+        stream::once(result_of_stream) // Stream<Stream<Resp, Error>, Error>
+            .flatten() // Stream<Resp, Error>
+            .or_else(|e| Ok(make_error_response(e))) // Stream<Resp, ()>
     }
 }
 
@@ -474,7 +470,10 @@ fn make_tag(is_table_scan: bool) -> &'static str {
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
-    error!("{:?}", e);
+    error!(
+        "error-response";
+        "err" => %e
+    );
     let mut resp = coppb::Response::new();
     let tag;
     match e {
@@ -522,8 +521,8 @@ mod tests {
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
-    use storage::TestEngineBuilder;
-    use util::worker::FutureWorker;
+    use crate::storage::TestEngineBuilder;
+    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -619,7 +618,7 @@ mod tests {
 
     /// A streaming `RequestHandler` that produces values according a closure.
     struct StreamFromClosure {
-        result_generator: Box<Fn(usize) -> HandlerStreamStepResult + Send>,
+        result_generator: Box<dyn Fn(usize) -> HandlerStreamStepResult + Send>,
         nth: usize,
     }
 
@@ -629,7 +628,7 @@ mod tests {
             F: Fn(usize) -> HandlerStreamStepResult + Send + 'static,
         {
             StreamFromClosure {
-                result_generator: box result_generator,
+                result_generator: Box::new(result_generator),
                 nth: 0,
             }
         }
@@ -654,16 +653,17 @@ mod tests {
 
         // a normal request
         let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .wait()
             .unwrap();
         assert!(resp.get_other_error().is_empty());
 
         // an outdated request
         let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed());
+            Box::new(|_, _: &_| Ok(UnaryFixture::new(Ok(coppb::Response::new())).into_boxed()));
         let outdated_req_ctx = ReqContext::new(
             "test",
             kvrpcpb::Context::new(),
@@ -673,11 +673,11 @@ mod tests {
             None,
             None,
         );
-        let resp = cop
+        assert!(cop
             .handle_unary_request(outdated_req_ctx, handler_builder)
+            .unwrap()
             .wait()
-            .unwrap();
-        assert_eq!(resp.get_other_error(), OUTDATED_ERROR_MSG);
+            .is_err());
     }
 
     #[test]
@@ -784,27 +784,31 @@ mod tests {
             let mut context = kvrpcpb::Context::new();
             context.set_priority(kvrpcpb::CommandPri::Normal);
 
-            let handler_builder =
-                box |_, _: &_| Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed());
-            let future = cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
-            let tx = tx.clone();
-            thread::spawn(move || tx.send(future.wait().unwrap()));
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new_with_duration(Ok(response), 1000).into_boxed())
+            });
+            let result_of_future =
+                cop.handle_unary_request(ReqContext::default_for_test(), handler_builder);
+            match result_of_future {
+                Err(full_error) => {
+                    tx.send(Err(full_error)).unwrap();
+                }
+                Ok(future) => {
+                    let tx = tx.clone();
+                    thread::spawn(move || {
+                        tx.send(future.wait()).unwrap();
+                    });
+                }
+            }
             thread::sleep(Duration::from_millis(100));
         }
 
         // verify
         for _ in 2..5 {
-            let resp: coppb::Response = rx.recv().unwrap();
-            assert_eq!(resp.get_data().len(), 0);
-            assert!(resp.has_region_error());
-            assert!(resp.get_region_error().has_server_is_busy());
-            assert_eq!(
-                resp.get_region_error().get_server_is_busy().get_reason(),
-                BUSY_ERROR_MSG
-            );
+            assert!(rx.recv().unwrap().is_err());
         }
         for i in 0..2 {
-            let resp = rx.recv().unwrap();
+            let resp = rx.recv().unwrap().unwrap();
             assert_eq!(resp.get_data(), [1, 2, i]);
             assert!(!resp.has_region_error());
         }
@@ -819,10 +823,12 @@ mod tests {
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
-        let handler_builder =
-            box |_, _: &_| Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| {
+            Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed())
+        });
         let resp = cop
             .handle_unary_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .wait()
             .unwrap();
         assert_eq!(resp.get_data().len(), 0);
@@ -830,7 +836,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
     fn test_error_streaming_response() {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
@@ -840,11 +845,12 @@ mod tests {
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // Fail immediately
-        let handler_builder = box |_, _: &_| {
+        let handler_builder = Box::new(|_, _: &_| {
             Ok(StreamFixture::new(vec![Err(Error::Other(box_err!("foo")))]).into_boxed())
-        };
+        });
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -861,9 +867,10 @@ mod tests {
         }
         responses.push(Err(Error::Other(box_err!("foo"))));
 
-        let handler_builder = box |_, _: &_| Ok(StreamFixture::new(responses).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(responses).into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -884,9 +891,10 @@ mod tests {
         });
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
-        let handler_builder = box |_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed());
+        let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -919,9 +927,10 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -944,9 +953,10 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -969,9 +979,10 @@ mod tests {
                 Err(box_err!("unreachable"))
             }
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .collect()
             .wait()
             .unwrap();
@@ -1006,9 +1017,10 @@ mod tests {
             counter_clone.fetch_add(1, atomic::Ordering::SeqCst);
             Ok((Some(resp), false))
         });
-        let handler_builder = box move |_, _: &_| Ok(handler.into_boxed());
+        let handler_builder = Box::new(move |_, _: &_| Ok(handler.into_boxed()));
         let resp_vec = cop
             .handle_stream_request(ReqContext::default_for_test(), handler_builder)
+            .unwrap()
             .take(7)
             .collect()
             .wait()
@@ -1019,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_handle_time() {
-        use util::config::ReadableDuration;
+        use crate::util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: i64 = 500;
@@ -1049,7 +1061,7 @@ mod tests {
 
         let cop = Endpoint::new(&config, engine, read_pool);
 
-        let (tx, rx) = ::std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
 
         // A request that requests execution details.
         let mut req_with_exec_detail = ReqContext::default_for_test();
@@ -1059,28 +1071,31 @@ mod tests {
             let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_SMALL as u64,
-                ).into_boxed())
-            };
-            let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                )
+                .into_boxed())
+            });
+            let resp_future_1 = cop
+                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
+                .unwrap();
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Unary, error response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(
                     UnaryFixture::new_with_duration(Err(box_err!("foo")), PAYLOAD_LARGE as u64)
                         .into_boxed(),
                 )
-            };
-            let resp_future_2 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+            });
+            let resp_future_2 = cop
+                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
+                .unwrap();
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_2.wait().unwrap()]).unwrap());
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
@@ -1131,21 +1146,23 @@ mod tests {
             let mut wait_time: i64 = 0;
 
             // Request 1: Unary, success response.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(UnaryFixture::new_with_duration(
                     Ok(coppb::Response::new()),
                     PAYLOAD_LARGE as u64,
-                ).into_boxed())
-            };
-            let resp_future_1 =
-                cop.handle_unary_request(req_with_exec_detail.clone(), handler_builder);
+                )
+                .into_boxed())
+            });
+            let resp_future_1 = cop
+                .handle_unary_request(req_with_exec_detail.clone(), handler_builder)
+                .unwrap();
             let sender = tx.clone();
             thread::spawn(move || sender.send(vec![resp_future_1.wait().unwrap()]).unwrap());
             // Sleep a while to make sure that thread is spawn and snapshot is taken.
             thread::sleep(Duration::from_millis(SNAPSHOT_DURATION_MS as u64));
 
             // Request 2: Stream.
-            let handler_builder = box |_, _: &_| {
+            let handler_builder = Box::new(|_, _: &_| {
                 Ok(StreamFixture::new_with_duration(
                     vec![
                         Ok(coppb::Response::new()),
@@ -1157,10 +1174,12 @@ mod tests {
                         PAYLOAD_LARGE as u64,
                         PAYLOAD_SMALL as u64,
                     ],
-                ).into_boxed())
-            };
-            let resp_future_3 =
-                cop.handle_stream_request(req_with_exec_detail.clone(), handler_builder);
+                )
+                .into_boxed())
+            });
+            let resp_future_3 = cop
+                .handle_stream_request(req_with_exec_detail.clone(), handler_builder)
+                .unwrap();
             let sender = tx.clone();
             thread::spawn(move || {
                 sender

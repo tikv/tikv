@@ -13,11 +13,12 @@
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
-use grpc::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;
@@ -25,13 +26,16 @@ use protobuf::RepeatedField;
 use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
-use pd::{Config, PdFuture};
-use util::security::SecurityManager;
-use util::time::{duration_to_sec, time_now_sec};
-use util::{Either, HandyRwLock};
+use crate::pd::{Config, PdFuture};
+use crate::util::security::SecurityManager;
+use crate::util::time::{duration_to_sec, time_now_sec};
+use crate::util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
+
+const MAX_RETRY_TIMES: u64 = 10;
+const RETRY_INTERVAL_MS: u64 = 300;
 
 pub struct RpcClient {
     cluster_id: u64,
@@ -46,12 +50,21 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
-
-        Ok(RpcClient {
-            cluster_id: members.get_header().get_cluster_id(),
-            leader_client: LeaderClient::new(env, security_mgr, client, members),
-        })
+        for _ in 0..MAX_RETRY_TIMES {
+            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                Ok((client, members)) => {
+                    return Ok(RpcClient {
+                        cluster_id: members.get_header().get_cluster_id(),
+                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                    });
+                }
+                Err(e) => {
+                    warn!("validate PD endpoints failed"; "err" => ?e);
+                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                }
+            }
+        }
+        Err(box_err!("endpoints are invalid"))
     }
 
     /// Creates a new request header.
@@ -102,7 +115,7 @@ impl RpcClient {
 }
 
 impl fmt::Debug for RpcClient {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("RpcClient")
             .field("cluster_id", &self.cluster_id)
             .field("leader", &self.get_leader())
@@ -197,23 +210,29 @@ impl PdClient for RpcClient {
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_store())
+        let store = resp.take_store();
+        if store.get_state() != metapb::StoreState::Tombstone {
+            Ok(store)
+        } else {
+            Err(Error::StoreTombstone(format!("{:?}", store)))
+        }
     }
 
-    fn get_all_stores(&self) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_all_stores"])
             .start_coarse_timer();
 
         let mut req = pdpb::GetAllStoresRequest::new();
         req.set_header(self.header());
+        req.set_exclude_tombstone_stores(exclude_tombstone);
 
         let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
             client.get_all_stores_opt(&req, Self::call_option())
         })?;
         check_resp_header(resp.get_header())?;
 
-        Ok(resp.take_stores().to_vec())
+        Ok(resp.take_stores().into_vec())
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
@@ -289,7 +308,7 @@ impl PdClient for RpcClient {
         req.set_bytes_written(region_stat.written_bytes);
         req.set_keys_written(region_stat.written_keys);
         req.set_bytes_read(region_stat.read_bytes);
-        req.set_keys_read(region_stat.read_bytes);
+        req.set_keys_read(region_stat.read_keys);
         req.set_approximate_size(region_stat.approximate_size);
         req.set_approximate_keys(region_stat.approximate_keys);
         let mut interval = pdpb::TimeInterval::new();
@@ -307,7 +326,7 @@ impl PdClient for RpcClient {
                 )) as PdFuture<_>;
             }
 
-            info!("heartbeat sender is refreshed.");
+            info!("heartbeat sender is refreshed");
             let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
             let (tx, rx) = mpsc::unbounded();
             tx.unbounded_send(req).unwrap();
@@ -326,7 +345,7 @@ impl PdClient for RpcClient {
                             Ok(())
                         }
                         Err(e) => {
-                            error!("failed to send heartbeat: {:?}", e);
+                            error!("failed to send heartbeat"; "err" => ?e);
                             Err(e)
                         }
                     }),
@@ -479,5 +498,32 @@ impl PdClient for RpcClient {
 
     fn handle_reconnect<F: Fn() + Sync + Send + 'static>(&self, f: F) {
         self.leader_client.on_reconnect(Box::new(f))
+    }
+
+    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+        let timer = Instant::now();
+
+        let mut req = pdpb::GetGCSafePointRequest::new();
+        req.set_header(self.header());
+
+        let executor = move |client: &RwLock<Inner>, req: pdpb::GetGCSafePointRequest| {
+            let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+            let handler = client
+                .rl()
+                .client
+                .get_gc_safe_point_async_opt(&req, option)
+                .unwrap();
+            Box::new(handler.map_err(Error::Grpc).and_then(move |resp| {
+                PD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["get_gc_safe_point"])
+                    .observe(duration_to_sec(timer.elapsed()));
+                check_resp_header(resp.get_header())?;
+                Ok(resp.get_safe_point())
+            })) as PdFuture<_>
+        };
+
+        self.leader_client
+            .request(req, executor, LEADER_CHANGE_RETRY)
+            .execute()
     }
 }

@@ -70,13 +70,6 @@ lazy_static! {
             &["type"]
         ).unwrap();
 
-    pub static ref STORE_PD_HEARTBEAT_GAUGE_VEC: IntGaugeVec =
-        register_int_gauge_vec!(
-            "tikv_pd_heartbeat_tick_total",
-            "Total number of pd heartbeat ticks.",
-            &["type"]
-        ).unwrap();
-
     pub static ref STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC: IntGaugeVec =
         register_int_gauge_vec!(
             "tikv_raftstore_snapshot_traffic_total",
@@ -184,14 +177,14 @@ lazy_static! {
         register_histogram!(
             "tikv_snapshot_kv_count",
             "Total number of kv in snapshot",
-             exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
+            exponential_buckets(100.0, 2.0, 20).unwrap() //100,100*2^1,...100M
         ).unwrap();
 
     pub static ref SNAPSHOT_SIZE_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_snapshot_size",
             "Size of snapshot",
-             exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
+            exponential_buckets(1024.0, 2.0, 22).unwrap() // 1024,1024*2^1,..,4G
         ).unwrap();
 
     pub static ref RAFT_ENTRY_FETCHES: IntCounterVec =

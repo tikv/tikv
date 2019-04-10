@@ -15,10 +15,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
-use rocksdb::{CompactionPriority, DBCompactionStyle, DBCompressionType, DBRecoveryMode};
 use slog::Level;
-use toml;
 
+use engine::rocks::{
+    CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
+};
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -58,7 +59,7 @@ fn test_serde_custom_tikv_config() {
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
-        labels: map!{ "a".to_owned() => "b".to_owned() },
+        labels: map! { "a".to_owned() => "b".to_owned() },
         advertise_addr: "example.com:443".to_owned(),
         status_addr: "example.com:443".to_owned(),
         status_thread_pool_size: 1,
@@ -78,11 +79,13 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
         end_point_stream_batch_row_limit: 4096,
+        end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),
         stats_concurrency: 10,
         heavy_load_threshold: 1000,
+        heavy_load_wait_duration: ReadableDuration::millis(2),
     };
     value.readpool = ReadPoolConfig {
         storage: StorageReadPoolConfig {
@@ -161,6 +164,11 @@ fn test_serde_custom_tikv_config() {
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
+        apply_max_batch_size: 22,
+        apply_pool_size: 4,
+        store_max_batch_size: 21,
+        store_pool_size: 3,
+        future_poll_size: 2,
     };
     value.pd = PdConfig {
         endpoints: vec!["example.com:443".to_owned()],
@@ -183,6 +191,8 @@ fn test_serde_custom_tikv_config() {
         info_log_keep_log_file_num: 1000,
         info_log_dir: "/var".to_owned(),
         rate_bytes_per_sec: ReadableSize::kb(1),
+        rate_limiter_mode: DBRateLimiterMode::AllIo,
+        auto_tuned: true,
         bytes_per_sync: ReadableSize::mb(1),
         wal_bytes_per_sync: ReadableSize::kb(32),
         max_sub_compactions: 12,
@@ -479,6 +489,7 @@ fn test_serde_custom_tikv_config() {
         cert_path: "invalid path".to_owned(),
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
+        cipher_file: "invalid path".to_owned(),
     };
     value.import = ImportConfig {
         import_dir: "/abc".to_owned(),
@@ -490,6 +501,7 @@ fn test_serde_custom_tikv_config() {
         stream_channel_window: 123,
         max_open_engines: 2,
     };
+    value.panic_when_unexpected_key_or_data = true;
 
     let custom = read_file_in_project_dir("tests/integrations/config/test-custom.toml");
     let load = toml::from_str(&custom).unwrap();

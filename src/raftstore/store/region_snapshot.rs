@@ -11,15 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
-use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use std::cmp;
 use std::sync::Arc;
 
-use raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
-use raftstore::store::{keys, util, PeerStorage};
-use raftstore::Result;
-use util::set_panic_mark;
+use crate::raftstore::store::{keys, util, PeerStorage};
+use crate::raftstore::Result;
+use crate::util::metrics::CRITICAL_ERROR;
+use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Snapshot of a region.
 ///
@@ -110,7 +111,10 @@ impl RegionSnapshot {
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
-        util::get_region_properties_cf(&self.snap.get_db(), cf, self.get_region())
+        let start = keys::enc_start_key(&self.region);
+        let end = keys::enc_end_key(&self.region);
+        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        Ok(prop)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
@@ -132,14 +136,24 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -154,7 +168,6 @@ pub struct RegionIterator {
     region: Arc<Region>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-    panic_when_exceed_bound: bool,
 }
 
 fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
@@ -181,7 +194,7 @@ fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     iter_opt.set_upper_bound(upper_bound);
 }
 
-// we use rocksdb's style iterator, doesn't need to impl std iterator.
+// we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
@@ -195,7 +208,6 @@ impl RegionIterator {
             start_key,
             end_key,
             region,
-            panic_when_exceed_bound: true,
         }
     }
 
@@ -216,13 +228,7 @@ impl RegionIterator {
             start_key,
             end_key,
             region,
-            panic_when_exceed_bound: true,
         }
-    }
-
-    // Set false only in test.
-    pub fn panic_when_exceed_bound(&mut self, panic: bool) {
-        self.panic_when_exceed_bound = panic;
     }
 
     pub fn seek_to_first(&mut self) -> bool {
@@ -316,7 +322,10 @@ impl RegionIterator {
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            if self.panic_when_exceed_bound {
+            CRITICAL_ERROR
+                .with_label_values(&["key not in region"])
+                .inc();
+            if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
             } else {
@@ -329,22 +338,23 @@ impl RegionIterator {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::path::Path;
-    use std::rc::Rc;
     use std::sync::Arc;
 
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::Writable;
     use tempdir::TempDir;
 
-    use raftstore::store::engine::*;
-    use raftstore::store::keys::*;
-    use raftstore::store::{CacheQueryStats, Engines, PeerStorage};
-    use raftstore::Result;
-    use storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use util::rocksdb::compact_files_in_range;
-    use util::{escape, rocksdb, worker};
+    use crate::raftstore::store::keys::*;
+    use crate::raftstore::store::PeerStorage;
+    use crate::raftstore::Result;
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use crate::util::{escape, worker};
+    use engine::rocks;
+    use engine::rocks::util::compact_files_in_range;
+    use engine::rocks::Writable;
+    use engine::Engines;
+    use engine::*;
+    use engine::{ALL_CFS, CF_DEFAULT};
 
     use super::*;
 
@@ -353,22 +363,20 @@ mod tests {
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
-            Arc::new(rocksdb::new_engine(path.path().to_str().unwrap(), ALL_CFS, None).unwrap()),
             Arc::new(
-                rocksdb::new_engine(raft_path.to_str().unwrap(), &[CF_DEFAULT], None).unwrap(),
+                rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                    .unwrap(),
+            ),
+            Arc::new(
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                    .unwrap(),
             ),
         )
     }
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
-        let metrics = Rc::new(RefCell::new(CacheQueryStats::default()));
-        PeerStorage::new(
-            engines,
-            r,
-            worker::dummy_scheduler(),
-            "".to_owned(),
-            metrics,
-        ).unwrap()
+        let (sched, _) = worker::dummy_scheduler();
+        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
@@ -447,18 +455,10 @@ mod tests {
         r.set_end_key(b"key4".to_vec());
         let store = new_peer_storage(engines.clone(), &r);
 
-        let (key1, value1) = (b"key1", 2u64);
-        engines.kv.put_u64(&data_key(key1), value1).expect("");
-        let (key2, value2) = (b"key2", 2i64);
-        engines.kv.put_i64(&data_key(key2), value2).expect("");
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::new(&store);
-        let v1 = snap.get_u64(key1).expect("");
-        assert_eq!(v1, Some(value1));
-        let v2 = snap.get_i64(key2).expect("");
-        assert_eq!(v2, Some(value2));
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
@@ -469,7 +469,7 @@ mod tests {
         assert!(v4.is_err());
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    #[allow(clippy::type_complexity)]
     #[test]
     fn test_seek_and_seek_prev() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -492,7 +492,6 @@ mod tests {
                 true,
             );
             let mut iter = snap.iter(iter_opt);
-            iter.panic_when_exceed_bound(false);
             for (seek_key, in_range, seek_exp, prev_exp) in seek_table.clone() {
                 let check_res =
                     |iter: &RegionIterator, res: Result<bool>, exp: Option<(&[u8], &[u8])>| {
@@ -517,12 +516,7 @@ mod tests {
             }
         };
 
-        let mut seek_table: Vec<(
-            &[u8],
-            bool,
-            Option<(&[u8], &[u8])>,
-            Option<(&[u8], &[u8])>,
-        )> = vec![
+        let mut seek_table: Vec<(&[u8], bool, Option<(&[u8], &[u8])>, Option<(&[u8], &[u8])>)> = vec![
             (b"a1", false, None, None),
             (b"a2", true, Some((b"a3", b"v3")), None),
             (b"a3", true, Some((b"a3", b"v3")), Some((b"a3", b"v3"))),
@@ -578,7 +572,7 @@ mod tests {
         check_seek_result(&snap, Some(b"a00"), Some(b"a15"), &seek_table);
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
+    #[allow(clippy::type_complexity)]
     #[test]
     fn test_iterate() {
         let path = TempDir::new("test-raftstore").unwrap();
@@ -590,7 +584,8 @@ mod tests {
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(data.len(), 2);
         assert_eq!(data, &base_data[1..3]);
@@ -599,7 +594,8 @@ mod tests {
         snap.scan(b"a2", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(false)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(data.len(), 1);
 
@@ -623,7 +619,8 @@ mod tests {
         snap.scan(b"", &[0xFF, 0xFF], false, |key, value| {
             data.push((key.to_vec(), value.to_vec()));
             Ok(true)
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(data.len(), 5);
         assert_eq!(data, base_data);
@@ -664,45 +661,36 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut statistics = CFStatistics::default();
-        let mut it = snap.iter(IterOption::default());
-        it.panic_when_exceed_bound(false);
+        let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a7"), &mut statistics)
+            .unwrap());
         let mut pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a5".to_vec(), b"v5".to_vec()));
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
-                .unwrap()
-        );
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a5"), &mut statistics)
+            .unwrap());
         pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
         );
         assert_eq!(pair, (b"a3".to_vec(), b"v3".to_vec()));
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .is_err()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
-                .is_err()
-        );
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a3"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .is_err());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a8"), &mut statistics)
+            .is_err());
 
         assert!(iter.seek_to_last(&mut statistics));
         let mut res = vec![];
@@ -724,18 +712,14 @@ mod tests {
         region.mut_peers().push(Peer::new());
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut it = snap.iter(IterOption::default());
-        it.panic_when_exceed_bound(false);
+        let it = snap.iter(IterOption::default());
         let mut iter = Cursor::new(it, ScanMode::Mixed);
-        assert!(
-            !iter
-                .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
-                .unwrap()
-        );
-        assert!(
-            iter.reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
-                .unwrap()
-        );
+        assert!(!iter
+            .reverse_seek(&Key::from_encoded_slice(b"a1"), &mut statistics)
+            .unwrap());
+        assert!(iter
+            .reverse_seek(&Key::from_encoded_slice(b"a2"), &mut statistics)
+            .unwrap());
         let pair = (
             iter.key(&mut statistics).to_vec(),
             iter.value(&mut statistics).to_vec(),
@@ -781,7 +765,6 @@ mod tests {
         let mut iter_opt = IterOption::default();
         iter_opt.set_lower_bound(b"a3".to_vec());
         let mut iter = snap.iter(iter_opt);
-        iter.panic_when_exceed_bound(false);
         assert!(iter.seek_to_last());
         let mut res = vec![];
         loop {

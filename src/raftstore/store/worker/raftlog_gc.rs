@@ -11,16 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use raftstore::store::engine::Iterable;
-use raftstore::store::keys;
-use raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use util::worker::Runnable;
-
-use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+use crate::raftstore::store::keys;
+use crate::util::worker::Runnable;
+use engine::rocks::Writable;
+use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine::Iterable;
+use engine::{WriteBatch, DB};
 
 pub struct Task {
     pub raft_engine: Arc<DB>,
@@ -34,7 +35,7 @@ pub struct TaskRes {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",
@@ -46,7 +47,7 @@ impl Display for Task {
 quick_error! {
     #[derive(Debug)]
     enum Error {
-        Other(err: Box<error::Error + Sync + Send>) {
+        Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
             description(err.description())
@@ -64,7 +65,7 @@ impl Runner {
         Runner { ch }
     }
 
-    /// Do the gc job and return the count of log collected.
+    /// Does the GC job and returns the count of logs collected.
     fn gc_raft_log(
         &mut self,
         raft_engine: Arc<DB>,
@@ -81,22 +82,22 @@ impl Runner {
             }
         }
         if first_idx >= end_idx {
-            info!("[region {}] no need to gc", region_id);
+            info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let mut raft_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Avoid large write batch to reduce latency.
-                raft_engine.write(raft_wb).unwrap();
-                raft_wb = WriteBatch::new();
+                raft_engine.write(&raft_wb).unwrap();
+                raft_wb.clear();
             }
         }
         // TODO: disable WAL here.
         if !raft_wb.is_empty() {
-            raft_engine.write(raft_wb).unwrap();
+            raft_engine.write(&raft_wb).unwrap();
         }
         Ok(end_idx - first_idx)
     }
@@ -116,8 +117,9 @@ impl Runner {
 impl Runnable<Task> for Runner {
     fn run(&mut self, task: Task) {
         debug!(
-            "[region {}] execute gc log to {}",
-            task.region_id, task.end_idx
+            "execute gc log";
+            "region_id" => task.region_id,
+            "end_index" => task.end_idx,
         );
         match self.gc_raft_log(
             task.raft_engine,
@@ -126,11 +128,11 @@ impl Runnable<Task> for Runner {
             task.end_idx,
         ) {
             Err(e) => {
-                error!("[region {}] failed to gc: {:?}", task.region_id, e);
+                error!("failed to gc"; "region_id" => task.region_id, "err" => %e);
                 self.report_collected(0);
             }
             Ok(n) => {
-                debug!("[region {}] collected {} log entries", task.region_id, n);
+                debug!("collected log entries"; "region_id" => task.region_id, "entry_count" => n);
                 self.report_collected(n);
             }
         }
@@ -140,16 +142,16 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::rocks::util::new_engine;
+    use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
-    use storage::CF_DEFAULT;
     use tempdir::TempDir;
-    use util::rocksdb::new_engine;
 
     #[test]
     fn test_gc_raft_log() {
         let path = TempDir::new("gc-raft-log-test").unwrap();
-        let raft_db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT], None).unwrap();
+        let raft_db = new_engine(path.path().to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap();
         let raft_db = Arc::new(raft_db);
 
         let (tx, rx) = mpsc::channel();
@@ -162,7 +164,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(raft_wb).unwrap();
+        raft_db.write(&raft_wb).unwrap();
 
         let tbls = vec![
             (

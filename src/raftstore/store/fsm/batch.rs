@@ -16,15 +16,11 @@
 //! represents a peer, the other is control FSM, which usually represents something
 //! that controls how the former is created or metrics are collected.
 
-// TODO: remove this
-#![allow(dead_code)]
-
 use super::router::{BasicMailbox, Router};
+use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
-use std::cmp;
 use std::thread::{self, JoinHandle};
-use util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -32,27 +28,32 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handles.
     fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
+    /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 }
 
 /// A Fsm is a finite state machine. It should be able to be notified for
-/// updating internal state according to incomming messages.
+/// updating internal state according to incoming messages.
 pub trait Fsm {
     type Message: Send;
 
     fn is_stopped(&self) -> bool;
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
-        Self: Sized;
+        Self: Sized,
+    {
+    }
     /// Take the mailbox from Fsm. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        None
+    }
 }
 
 /// A unify type for FSMs so that they can be sent to channel easily.
@@ -126,6 +127,7 @@ impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
 }
 
 /// A basic struct for a round of polling.
+#[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
     control: Option<Box<C>>,
@@ -140,6 +142,10 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
+    pub fn normals_mut(&mut self) -> &mut [Box<N>] {
+        &mut self.normals
+    }
+
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
             FsmTypes::Normal(n) => self.normals.push(n),
@@ -150,6 +156,11 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             FsmTypes::Empty => return false,
         }
         true
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.normals.len() + self.control.is_some() as usize
     }
 
     fn is_empty(&self) -> bool {
@@ -250,7 +261,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 /// Sync.
 pub trait PollHandler<N, C> {
     /// This function is called at the very beginning of every round.
-    fn begin(&mut self);
+    fn begin(&mut self, batch_size: usize);
 
     /// This function is called when handling readiness for control FSM.
     ///
@@ -267,7 +278,7 @@ pub trait PollHandler<N, C> {
     fn handle_normal(&mut self, normal: &mut N) -> Option<usize>;
 
     /// This function is called at the end of every round.
-    fn end(&mut self);
+    fn end(&mut self, batch: &mut [Box<N>]);
 }
 
 /// Internal poller that fetches batch and call handler hooks for readiness.
@@ -280,20 +291,30 @@ struct Poller<N: Fsm, C: Fsm, Handler> {
 
 impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     fn fetch_batch(&self, batch: &mut Batch<N, C>, max_size: usize) {
-        let mut pushed = match self.fsm_receiver.recv() {
-            Ok(fsm) => batch.push(fsm),
-            Err(_) => return,
+        let curr_batch_len = batch.len();
+        if batch.control.is_some() || curr_batch_len >= max_size {
+            // Do nothing if there's a pending control fsm or the batch is already full.
+            return;
+        }
+
+        let mut pushed = if curr_batch_len == 0 {
+            // Block if the batch is empty.
+            match self.fsm_receiver.recv() {
+                Ok(fsm) => batch.push(fsm),
+                Err(_) => return,
+            }
+        } else {
+            true
         };
-        let mut tried = 1;
+
         while pushed {
-            if tried < max_size {
+            if batch.len() < max_size {
                 let fsm = match self.fsm_receiver.try_recv() {
                     Ok(fsm) => fsm,
                     Err(TryRecvError::Empty) => return,
                     Err(TryRecvError::Disconnected) => unreachable!(),
                 };
                 pushed = batch.push(fsm);
-                tried += 1;
             } else {
                 return;
             }
@@ -303,12 +324,12 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     // Poll for readiness and forward to handler. Remove stale peer if necessary.
     fn poll(&mut self) {
-        let mut batch_size = self.max_batch_size;
-        let mut batch = Batch::with_capacity(batch_size);
-        let mut exhausted_fsms = Vec::with_capacity(batch_size);
-        self.fetch_batch(&mut batch, batch_size);
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+        let mut exhausted_fsms = Vec::with_capacity(self.max_batch_size);
+
+        self.fetch_batch(&mut batch, self.max_batch_size);
         while !batch.is_empty() {
-            self.handler.begin();
+            self.handler.begin(batch.len());
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
@@ -327,7 +348,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     }
                 }
             }
-            self.handler.end();
+            self.handler.end(batch.normals_mut());
             // Because release use `swap_remove` internally, so using pop here
             // to remove the correct FSM.
             while let Some((r, mark)) = exhausted_fsms.pop() {
@@ -337,12 +358,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     batch.remove(r);
                 }
             }
-            if batch.is_empty() {
-                batch_size = cmp::min(batch_size + 1, self.max_batch_size);
-                self.fetch_batch(&mut batch, batch_size);
-            } else {
-                batch_size = cmp::max(batch_size - 1, 1);
-            }
+            // Fetch batch after every round is finished. It's helpful to protect regions
+            // from becoming hungry if some regions are hot points.
+            self.fetch_batch(&mut batch, self.max_batch_size);
         }
     }
 }
@@ -360,8 +378,8 @@ pub trait HandlerBuilder<N, C> {
 /// to be defined: Normal and Control. Normal FSM handles the general
 /// task while Control FSM creates normal FSM instances.
 pub struct BatchSystem<N: Fsm, C: Fsm> {
-    name_prefix: String,
-    router: Router<N, C, NormalScheduler<N, C>, ControlScheduler<N, C>>,
+    name_prefix: Option<String>,
+    router: BatchRouter<N, C>,
     receiver: channel::Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
@@ -373,14 +391,18 @@ where
     N: Fsm + Send + 'static,
     C: Fsm + Send + 'static,
 {
+    pub fn router(&self) -> &BatchRouter<N, C> {
+        &self.router
+    }
+
     /// Start the batch system.
-    pub fn spawn<B>(&mut self, mut builder: B)
+    pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B)
     where
         B: HandlerBuilder<N, C>,
         B::Handler: Send + 'static,
     {
         for i in 0..self.pool_size {
-            let mut handler = builder.build();
+            let handler = builder.build();
             let mut poller = Poller {
                 router: self.router.clone(),
                 fsm_receiver: self.receiver.clone(),
@@ -388,24 +410,27 @@ where
                 max_batch_size: self.max_batch_size,
             };
             let t = thread::Builder::new()
-                .name(thd_name!(format!("{}-{}", self.name_prefix, i)))
-                .spawn(move || {
-                    poller.poll();
-                })
+                .name(thd_name!(format!("{}-{}", name_prefix, i)))
+                .spawn(move || poller.poll())
                 .unwrap();
             self.workers.push(t);
         }
+        self.name_prefix = Some(name_prefix);
     }
 
     /// Shutdown the batch system and wait till all background threads exit.
     pub fn shutdown(&mut self) {
-        info!("shutdown batch system {}", self.name_prefix);
+        if self.name_prefix.is_none() {
+            return;
+        }
+        let name_prefix = self.name_prefix.take().unwrap();
+        info!("shutdown batch system {}", name_prefix);
         self.router.broadcast_shutdown();
         for h in self.workers.drain(..) {
             debug!("waiting for {}", h.thread().name().unwrap());
             h.join().unwrap();
         }
-        info!("batch system {} is stopped.", self.name_prefix);
+        info!("batch system {} is stopped.", name_prefix);
     }
 }
 
@@ -415,7 +440,6 @@ pub type BatchRouter<N, C> = Router<N, C, NormalScheduler<N, C>, ControlSchedule
 ///
 /// `sender` and `controller` should be paired.
 pub fn create_system<N: Fsm, C: Fsm>(
-    name_prefix: String,
     pool_size: usize,
     max_batch_size: usize,
     sender: mpsc::LooseBoundedSender<C::Message>,
@@ -427,7 +451,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
     let control_scheduler = ControlScheduler { sender: tx };
     let router = Router::new(control_box, normal_scheduler, control_scheduler);
     let system = BatchSystem {
-        name_prefix,
+        name_prefix: None,
         router: router.clone(),
         receiver: rx,
         pool_size,
@@ -438,28 +462,38 @@ pub fn create_system<N: Fsm, C: Fsm>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::router::*;
     use super::*;
     use std::borrow::Cow;
     use std::boxed::FnBox;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    struct Runner {
+    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
+
+    pub struct Runner {
         is_stopped: bool,
-        recv: mpsc::Receiver<Box<FnBox(&mut Runner) + Send>>,
+        recv: mpsc::Receiver<Message>,
         mailbox: Option<BasicMailbox<Runner>>,
+        pub dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for Runner {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
     }
 
     impl Fsm for Runner {
-        type Message = Box<FnBox(&mut Runner) + Send>;
+        type Message = Message;
 
         fn is_stopped(&self) -> bool {
             self.is_stopped
         }
 
-        fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
+        fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
             self.mailbox = Some(mailbox.into_owned());
         }
 
@@ -468,18 +502,14 @@ mod tests {
         }
     }
 
-    #[cfg_attr(feature = "cargo-clippy", allow(type_complexity))]
-    fn new_runner(
-        cap: usize,
-    ) -> (
-        mpsc::LooseBoundedSender<Box<FnBox(&mut Runner) + Send>>,
-        Box<Runner>,
-    ) {
+    #[allow(clippy::type_complexity)]
+    pub fn new_runner(cap: usize) -> (mpsc::LooseBoundedSender<Message>, Box<Runner>) {
         let (tx, rx) = mpsc::loose_bounded(cap);
         let fsm = Runner {
             is_stopped: false,
             recv: rx,
             mailbox: None,
+            dropped: Arc::default(),
         };
         (tx, Box::new(fsm))
     }
@@ -491,21 +521,22 @@ mod tests {
         normal: usize,
     }
 
-    struct Handler {
+    pub struct Handler {
         local: HandleMetrics,
-        router: BatchRouter<Runner, Runner>,
         metrics: Arc<Mutex<HandleMetrics>>,
     }
 
     impl PollHandler<Runner, Runner> for Handler {
-        fn begin(&mut self) {
+        fn begin(&mut self, _batch_size: usize) {
             self.local.begin += 1;
         }
 
         fn handle_control(&mut self, control: &mut Runner) -> Option<usize> {
             self.local.control += 1;
             while let Ok(r) = control.recv.try_recv() {
-                r.call_box((control,));
+                if let Some(r) = r {
+                    r.call_box((control,));
+                }
             }
             Some(0)
         }
@@ -513,21 +544,30 @@ mod tests {
         fn handle_normal(&mut self, normal: &mut Runner) -> Option<usize> {
             self.local.normal += 1;
             while let Ok(r) = normal.recv.try_recv() {
-                r.call_box((normal,));
+                if let Some(r) = r {
+                    r.call_box((normal,));
+                }
             }
             Some(0)
         }
 
-        fn end(&mut self) {
+        fn end(&mut self, _normals: &mut [Box<Runner>]) {
             let mut c = self.metrics.lock().unwrap();
             *c += self.local;
             self.local = HandleMetrics::default();
         }
     }
 
-    struct Builder {
-        router: BatchRouter<Runner, Runner>,
+    pub struct Builder {
         metrics: Arc<Mutex<HandleMetrics>>,
+    }
+
+    impl Builder {
+        pub fn new() -> Builder {
+            Builder {
+                metrics: Arc::default(),
+            }
+        }
     }
 
     impl HandlerBuilder<Runner, Runner> for Builder {
@@ -536,7 +576,6 @@ mod tests {
         fn build(&mut self) -> Handler {
             Handler {
                 local: HandleMetrics::default(),
-                router: self.router.clone(),
                 metrics: self.metrics.clone(),
             }
         }
@@ -545,35 +584,31 @@ mod tests {
     #[test]
     fn test_batch() {
         let (control_tx, control_fsm) = new_runner(10);
-        let (router, mut system) =
-            super::create_system("test".to_owned(), 2, 2, control_tx, control_fsm);
-        let builder = Builder {
-            metrics: Arc::default(),
-            router: router.clone(),
-        };
+        let (router, mut system) = super::create_system(2, 2, control_tx, control_fsm);
+        let builder = Builder::new();
         let metrics = builder.metrics.clone();
-        system.spawn(builder);
+        system.spawn("test".to_owned(), builder);
         let mut expected_metrics = HandleMetrics::default();
         assert_eq!(*metrics.lock().unwrap(), expected_metrics);
         let (tx, rx) = mpsc::unbounded();
         let tx_ = tx.clone();
         let r = router.clone();
         router
-            .send_control(Box::new(move |_: &mut Runner| {
+            .send_control(Some(Box::new(move |_: &mut Runner| {
                 let (tx, runner) = new_runner(10);
                 let mailbox = BasicMailbox::new(tx, runner);
                 tx_.send(1).unwrap();
                 r.register(1, mailbox);
-            }))
+            })))
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(1));
         let tx_ = tx.clone();
         router
             .send(
                 1,
-                Box::new(move |_: &mut Runner| {
+                Some(Box::new(move |_: &mut Runner| {
                     tx_.send(2).unwrap();
-                }),
+                })),
             )
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)), Ok(2));
