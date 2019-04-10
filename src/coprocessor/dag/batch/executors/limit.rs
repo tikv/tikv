@@ -185,6 +185,19 @@ mod tests {
     }
 
     #[test]
+    fn test_limit_remainning() {
+        let src = MockExecutor::new();
+        let mut executor = BatchLimitExecutor::new(src, 5, ExecSummaryCollectorDisabled).unwrap();
+        let expect_rows = 3;
+        let mut remaining_rows = 5;
+        while remaining_rows > 0 {
+            let res = executor.next_batch(expect_rows);
+            remaining_rows -= res.data.rows_len();
+            assert_eq!(remaining_rows, executor.remaining_rows);
+        }
+    }
+
+    #[test]
     fn test_execution_summary() {
         let src = MockExecutor::new();
         let mut executor =
