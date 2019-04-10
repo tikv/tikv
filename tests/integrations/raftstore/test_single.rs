@@ -61,10 +61,7 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName, use_delete_range: bool) {
-    cluster.cfg.raft_store.use_delete_range = use_delete_range;
-    cluster.run();
-
+fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
     for i in 1..1000 {
         let (k, v) = (format!("key{:08}", i), format!("value{}", i));
         let key = k.as_bytes();
@@ -130,20 +127,23 @@ fn test_node_delete() {
 }
 
 #[test]
-fn test_node_delete_range_default() {
+fn test_node_use_delete_range() {
     let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster, CF_DEFAULT, false);
-    let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster, CF_DEFAULT, true);
+    cluster.cfg.raft_store.use_delete_range = true;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
 }
 
 #[test]
-fn test_node_delete_range_write() {
+fn test_node_not_use_delete_range_write() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.use_delete_range = false;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
     // Prefix bloom filter is always enabled in the Write CF.
-    let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster, CF_WRITE, false);
-    let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster, CF_WRITE, true);
+    test_delete_range(&mut cluster, CF_WRITE);
 }
 
 #[test]
