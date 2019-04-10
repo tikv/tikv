@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use test_raftstore::*;
 use tikv::raftstore::coprocessor::RegionInfoAccessor;
-use tikv::storage::engine::RegionInfoProvider;
+use tikv::storage::kv::RegionInfoProvider;
 use tikv::util::collections::HashMap;
 use tikv::util::HandyRwLock;
 

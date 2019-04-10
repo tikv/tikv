@@ -272,7 +272,7 @@ pub trait Executor {
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
-    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
