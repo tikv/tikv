@@ -27,7 +27,6 @@ use kvproto::pdpb::OperatorStatus;
 use kvproto::tikvpb_grpc::*;
 
 use crate::pd::{Config as PdConfig, Error as PdError, PdClient, RegionInfo, RpcClient};
-use crate::storage::engine::SequentialFile;
 use crate::storage::types::Key;
 use crate::util::collections::{HashMap, HashMapEntry};
 use crate::util::security::SecurityManager;
@@ -237,7 +236,6 @@ impl ImportClient for Client {
             Ok(resp) => {
                 // If the current operator of region is not `scatter-region`, we could assume
                 // that `scatter-operator` has finished or timeout.
-                let scatter_region = "scatter-region";
                 Ok(resp.desc != b"scatter-region" || resp.status != OperatorStatus::RUNNING)
             }
             Err(PdError::RegionNotFound(_)) => Ok(true), // heartbeat may not send to PD
