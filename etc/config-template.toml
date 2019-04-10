@@ -7,7 +7,7 @@
 
 ## Log levels: trace, debug, info, warning, error, critical.
 ## Note that `debug` and `trace` are only available in development builds.
-log-level = "warning"
+# log-level = "info"
 
 ## File to store logs.
 ## If it is not set, logs will be appended to stderr.
@@ -136,7 +136,7 @@ log-level = "warning"
 
 [pd]
 ## PD endpoints.
-endpoints = ["127.0.0.1:2379"]
+# endpoints = []
 # The interval at which to retry a PD connection initialization. Set to 0 to disable retrying 
 # connection initialization.
 # retry-interval = 300
