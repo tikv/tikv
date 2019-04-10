@@ -15,7 +15,7 @@
 
 //! Batch executor common structures.
 
-pub use super::statistics::BatchExecuteStatistics;
+pub use super::statistics::{BatchExecuteStatistics, ExecSummaryCollector};
 
 use tipb::expression::FieldType;
 

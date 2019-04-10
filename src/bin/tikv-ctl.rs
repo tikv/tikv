@@ -15,7 +15,7 @@
 extern crate clap;
 #[macro_use(
     slog_kv,
-    slog_error,
+    slog_crit,
     slog_info,
     slog_log,
     slog_record,
@@ -33,8 +33,8 @@ mod util;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::iter::FromIterator;
 use std::string::ToString;
 use std::sync::Arc;
@@ -57,13 +57,14 @@ use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 
+use engine::rocks;
+use engine::Engines;
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::{keys, Engines};
+use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
-use tikv::storage::engine::run_ldb_tool;
-use tikv::storage::{Key, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use tikv::util::rocksdb_util;
+use tikv::storage::Key;
 use tikv::util::security::{self, SecurityConfig, SecurityManager};
 use tikv::util::{escape, unescape};
 
@@ -94,7 +95,7 @@ fn new_debug_executor(
                     security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
-            let kv_db = rocksdb_util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
+            let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
 
             let raft_path = raft_db
                 .map(ToString::to_string)
@@ -108,7 +109,7 @@ fn new_debug_executor(
                 raft_db_opts.set_env(encrypted_env);
             }
             let raft_db =
-                rocksdb_util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
+                rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
@@ -703,19 +704,19 @@ impl DebugExecutor for DebugClient {
     }
 
     fn set_region_tombstone(&self, _: Vec<Region>) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_regions(&self, _: Vec<Region>, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn recover_all(&self, _: usize, _: bool) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn print_bad_regions(&self) {
-        unimplemented!("only avaliable for local mode");
+        unimplemented!("only available for local mode");
     }
 
     fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>) {
@@ -920,7 +921,7 @@ impl DebugExecutor for Debugger {
     }
 
     fn dump_metrics(&self, _tags: Vec<&str>) {
-        unimplemented!("only avaliable for online mode");
+        unimplemented!("only available for online mode");
     }
 
     fn check_region_consistency(&self, _: u64) {
@@ -1687,14 +1688,8 @@ fn main() {
     // Initialize configuration and security manager.
     let cfg_path = matches.value_of("config");
     let cfg = cfg_path.map_or_else(TiKvConfig::default, |path| {
-        File::open(&path)
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s).unwrap();
-                let c = toml::from_str(&s).unwrap();
-                Ok(c)
-            })
-            .unwrap()
+        let s = fs::read_to_string(&path).unwrap();
+        toml::from_str(&s).unwrap()
     });
     let mgr = new_security_mgr(&matches);
 
@@ -2073,11 +2068,8 @@ fn new_security_mgr(matches: &ArgMatches<'_>) -> Arc<SecurityManager> {
 }
 
 fn dump_snap_meta_file(path: &str) {
-    let mut f =
-        File::open(path).unwrap_or_else(|e| panic!("open file {} failed, error {:?}", path, e));
-    let mut content = Vec::new();
-    f.read_to_end(&mut content)
-        .unwrap_or_else(|e| panic!("read meta file error {:?}", e));
+    let content =
+        fs::read(path).unwrap_or_else(|e| panic!("read meta file {} failed, error {:?}", path, e));
 
     let mut meta = SnapshotMeta::new();
     meta.merge_from_bytes(&content)
@@ -2216,7 +2208,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
             security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
-    run_ldb_tool(&args, &opts);
+    engine::rocks::run_ldb_tool(&args, &opts);
 }
 
 #[cfg(test)]

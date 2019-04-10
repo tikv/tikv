@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_upper() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (
                 Datum::Bytes(b"hello".to_vec()),
@@ -1762,7 +1762,7 @@ mod tests {
 
     #[test]
     fn test_lower() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (
                 Datum::Bytes(b"HELLO".to_vec()),
@@ -2059,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_char_length() {
-        // Test non-bianry string case
+        // Test non-binary string case
         let cases = vec![
             (Datum::Bytes(b"HELLO".to_vec()), Datum::I64(5)),
             (Datum::Bytes(b"123".to_vec()), Datum::I64(3)),

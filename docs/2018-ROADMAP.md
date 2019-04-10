@@ -15,8 +15,8 @@ This document defines the roadmap for TiKV development.
 - [x] Raft Learner - Support Raft learner to smooth the configuration change process
 - [x] Raft Pre-vote - Support Raft pre-vote to avoid unnecessary leader election on network isolation
 - [ ] Joint Consensus - Change multi members safely
-- [ ] Multi-thread Raftstore - Process Region Raft logic in multiple threads
-- [ ] Multi-thread Apply Pool - Apply Region Raft committed entries in multiple threads
+- [X] Multi-thread Raftstore - Process Region Raft logic in multiple threads
+- [X] Multi-thread Apply Pool - Apply Region Raft committed entries in multiple threads
 
 ## Engine
 
@@ -29,8 +29,8 @@ This document defines the roadmap for TiKV development.
 
 ## Transaction
 
-- [x] Optimize transaction conflicts
-- [ ] Distributed GC - Distribute MVCC garbage collection control to TiKV
+- [X] Optimize transaction conflicts
+- [X] Distributed GC - Distribute MVCC garbage collection control to TiKV
 
 ## Coprocessor
 

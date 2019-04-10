@@ -15,13 +15,13 @@ mod backward;
 mod forward;
 mod util;
 
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    CfName, Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
-    Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
 use self::backward::BackwardScanner;

@@ -11,16 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::raftstore::store::engine::Iterable;
-use crate::raftstore::store::keys;
-use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use crate::storage::engine::{Writable, WriteBatch, DB};
-use crate::util::worker::Runnable;
-
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+use crate::raftstore::store::keys;
+use crate::util::worker::Runnable;
+use engine::rocks::Writable;
+use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine::Iterable;
+use engine::{WriteBatch, DB};
 
 pub struct Task {
     pub raft_engine: Arc<DB>,
@@ -141,8 +142,8 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::CF_DEFAULT;
-    use crate::util::rocksdb_util::new_engine;
+    use engine::rocks::util::new_engine;
+    use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
     use tempdir::TempDir;

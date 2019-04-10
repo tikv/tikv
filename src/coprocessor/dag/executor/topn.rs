@@ -175,7 +175,7 @@ pub mod tests {
     use crate::util::codec::number::NumberEncoder;
     use crate::util::collections::HashMap;
 
-    use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
+    use super::super::tests::*;
     use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {

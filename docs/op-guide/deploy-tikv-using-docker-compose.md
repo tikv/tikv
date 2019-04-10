@@ -122,7 +122,7 @@ All the following example docker compose config file will contain this base conf
     field0="0"
     ```
 
-### Use [Titan](https://github.com/meitu/titan) to connect to the TiKV cluster via the Redis protocal:
+### Use [Titan](https://github.com/meitu/titan) to connect to the TiKV cluster via the Redis protocol:
 
 1. Create a `titan-docker-compose.yml` file, add the above base config to this file, and then append the following section:
 
