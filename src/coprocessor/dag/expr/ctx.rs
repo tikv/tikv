@@ -209,7 +209,7 @@ impl EvalConfig {
 }
 
 // Warning details caused in eval computation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct EvalWarnings {
     // max number of warnings to return.
     max_warning_cnt: usize,

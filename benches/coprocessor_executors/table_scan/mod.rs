@@ -14,23 +14,17 @@
 mod fixture;
 mod util;
 
-use protobuf::RepeatedField;
-use tipb::executor::TableScan;
-
 /// 1 interested column, which is PK (which is in the key)
 ///
 /// This kind of scanner is used in SQLs like SELECT COUNT(*).
 fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_two_columns();
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["id"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["id"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 1 interested column, at the front of each row. Each row contains 100 columns.
@@ -38,164 +32,135 @@ fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &BenchInput) 
 /// This kind of scanner is used in SQLs like `SELECT COUNT(column)`.
 fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_multi_columns(100);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["col0"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["col0"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 2 interested columns, at the front of each row. Each row contains 100 columns.
 fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_multi_columns(100);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["col0"].as_column_info());
-    req.mut_columns().push(table["col1"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[
+            table["col0"].as_column_info(),
+            table["col1"].as_column_info(),
+        ],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 1 interested column, at the end of each row. Each row contains 100 columns.
 fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_multi_columns(100);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["col99"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["col99"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 100 interested columns, all columns in the row are interested (i.e. there are totally 100
 /// columns in the row).
 fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_multi_columns(100);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.set_columns(RepeatedField::from_vec(table.columns_info()));
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &table.columns_info(),
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 3 columns in the row and the last column is very long but only PK is interested.
 fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_long_column();
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["id"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["id"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 3 columns in the row and the last column is very long but a short column is interested.
 fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_long_column();
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["foo"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["foo"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 3 columns in the row and the last column is very long and the long column is interested.
 fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_long_column();
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["bar"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["bar"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 3 columns in the row and the last column is very long and the all columns are interested.
 fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_long_column();
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["id"].as_column_info());
-    req.mut_columns().push(table["foo"].as_column_info());
-    req.mut_columns().push(table["bar"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[
+            table["id"].as_column_info(),
+            table["foo"].as_column_info(),
+            table["bar"].as_column_info(),
+        ],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 10 columns.
 fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_missing_column(10);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["col0"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["col0"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 100 columns.
 fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_missing_column(100);
-
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["col0"].as_column_info());
-
-    input
-        .0
-        .bench(b, &req, &[table.get_record_range_all()], &store);
+    input.0.bench(
+        b,
+        &[table["col0"].as_column_info()],
+        &[table.get_record_range_all()],
+        &store,
+    );
 }
 
 /// 1 interested column, which is PK. However the range given are point ranges.
 fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &BenchInput) {
     let (table, store) = fixture::table_with_two_columns();
 
-    let mut req = TableScan::new();
-    req.set_table_id(table.id);
-    req.set_desc(false);
-    req.mut_columns().push(table["id"].as_column_info());
-
     let mut ranges = vec![];
     for i in 0..=1024 {
         ranges.push(table.get_record_range_one(i));
     }
 
-    input.0.bench(b, &req, &ranges, &store);
+    input
+        .0
+        .bench(b, &[table["id"].as_column_info()], &ranges, &store);
 }
 
 struct BenchInput(Box<dyn util::TableScanBencher>);

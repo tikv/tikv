@@ -13,9 +13,14 @@
 
 use std::sync::Arc;
 
+use criterion::black_box;
+
+use protobuf::RepeatedField;
+
 use kvproto::coprocessor::KeyRange;
 use tipb::executor::Executor as PbExecutor;
 use tipb::executor::{ExecType, TableScan};
+use tipb::schema::ColumnInfo;
 
 use test_coprocessor::*;
 use tikv::coprocessor::dag::batch_executor::executors::BatchTableScanExecutor;
@@ -26,17 +31,20 @@ use tikv::coprocessor::dag::executor::TableScanExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::storage::{FixtureStore, RocksEngine};
 
-use crate::util::Bencher;
+use crate::util::bencher::Bencher;
 
 fn create_table_scan_executor(
-    req: &TableScan,
+    columns: &[ColumnInfo],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
 ) -> TableScanExecutor<FixtureStore> {
+    let mut req = TableScan::new();
+    req.set_columns(RepeatedField::from_slice(columns));
+
     let mut executor = TableScanExecutor::table_scan(
-        req.clone(),
-        ranges.to_vec(),
-        store.to_fixture_store(),
+        black_box(req),
+        black_box(ranges.to_vec()),
+        black_box(store.to_fixture_store()),
         false,
     )
     .unwrap();
@@ -47,17 +55,17 @@ fn create_table_scan_executor(
 }
 
 fn create_batch_table_scan_executor(
-    req: &TableScan,
+    columns: &[ColumnInfo],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
 ) -> BatchTableScanExecutor<ExecSummaryCollectorDisabled, FixtureStore> {
     let mut executor = BatchTableScanExecutor::new(
         ExecSummaryCollectorDisabled,
-        store.to_fixture_store(),
-        Arc::new(EvalConfig::default()),
-        req.get_columns().to_vec(),
-        ranges.to_vec(),
-        false,
+        black_box(store.to_fixture_store()),
+        black_box(Arc::new(EvalConfig::default())),
+        black_box(columns.to_vec()),
+        black_box(ranges.to_vec()),
+        black_box(false),
     )
     .unwrap();
     // There is a step of building scanner in the first `next()` which cost time,
@@ -72,7 +80,7 @@ pub trait TableScanBencher {
     fn bench(
         &self,
         b: &mut criterion::Bencher,
-        req: &TableScan,
+        columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     );
@@ -84,18 +92,18 @@ pub struct NormalTableScanExecutorNext1Bencher;
 
 impl TableScanBencher for NormalTableScanExecutorNext1Bencher {
     fn name(&self) -> &'static str {
-        "normal_next_1"
+        "normal/next=1"
     }
 
     fn bench(
         &self,
         b: &mut criterion::Bencher,
-        req: &TableScan,
+        columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::NormalExecutorNext1Bencher::new(|| {
-            create_table_scan_executor(req, ranges, store)
+        crate::util::bencher::NormalExecutorNext1Bencher::new(|| {
+            create_table_scan_executor(columns, ranges, store)
         })
         .bench(b);
     }
@@ -109,18 +117,18 @@ pub struct NormalTableScanExecutorNext1024Bencher;
 
 impl TableScanBencher for NormalTableScanExecutorNext1024Bencher {
     fn name(&self) -> &'static str {
-        "normal_next_1024"
+        "normal/next=1024"
     }
 
     fn bench(
         &self,
         b: &mut criterion::Bencher,
-        req: &TableScan,
+        columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::NormalExecutorNext1024Bencher::new(|| {
-            create_table_scan_executor(req, ranges, store)
+        crate::util::bencher::NormalExecutorNext1024Bencher::new(|| {
+            create_table_scan_executor(columns, ranges, store)
         })
         .bench(b);
     }
@@ -134,18 +142,18 @@ pub struct BatchTableScanExecutorNext1024Bencher;
 
 impl TableScanBencher for BatchTableScanExecutorNext1024Bencher {
     fn name(&self) -> &'static str {
-        "batch_next_1024"
+        "batch/next=1024"
     }
 
     fn bench(
         &self,
         b: &mut criterion::Bencher,
-        req: &TableScan,
+        columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::BatchExecutorNext1024Bencher::new(|| {
-            create_batch_table_scan_executor(req, ranges, store)
+        crate::util::bencher::BatchExecutorNext1024Bencher::new(|| {
+            create_batch_table_scan_executor(columns, ranges, store)
         })
         .bench(b);
     }
@@ -163,23 +171,24 @@ pub struct TableScanExecutorDAGBencher {
 impl TableScanBencher for TableScanExecutorDAGBencher {
     fn name(&self) -> &'static str {
         if self.batch {
-            "normal_dag"
+            "normal/with_dag"
         } else {
-            "batch_dag"
+            "batch/with_dag"
         }
     }
 
     fn bench(
         &self,
         b: &mut criterion::Bencher,
-        req: &TableScan,
+        columns: &[ColumnInfo],
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::DAGHandleBencher::new(|| {
+        crate::util::bencher::DAGHandleBencher::new(|| {
             let mut exec = PbExecutor::new();
             exec.set_tp(ExecType::TypeTableScan);
-            exec.set_tbl_scan(req.clone());
+            exec.mut_tbl_scan()
+                .set_columns(RepeatedField::from_slice(columns));
             crate::util::build_dag_handler(&[exec], ranges, store, self.batch)
         })
         .bench(b);

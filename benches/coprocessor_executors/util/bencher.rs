@@ -12,41 +12,10 @@
 // limitations under the License.
 
 use criterion::black_box;
-use protobuf::RepeatedField;
 
-use kvproto::coprocessor::KeyRange;
-use tipb::executor::Executor as PbExecutor;
-
-use test_coprocessor::*;
-use tikv::coprocessor::dag::batch_executor::interface::BatchExecutor;
+use tikv::coprocessor::dag::batch_executor::interface::*;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::RocksEngine;
-
-pub fn build_dag_handler(
-    executors: &[PbExecutor],
-    ranges: &[KeyRange],
-    store: &Store<RocksEngine>,
-    enable_batch: bool,
-) -> Box<dyn RequestHandler> {
-    use tikv::coprocessor::dag::DAGRequestHandler;
-    use tikv::coprocessor::Deadline;
-    use tipb::select::DAGRequest;
-
-    let mut dag = DAGRequest::new();
-    dag.set_executors(RepeatedField::from_vec(executors.to_vec()));
-
-    DAGRequestHandler::build(
-        dag,
-        ranges.to_vec(),
-        store.to_fixture_store(),
-        Deadline::from_now("", std::time::Duration::from_secs(10)),
-        64,
-        false,
-        enable_batch,
-    )
-    .unwrap()
-}
 
 pub trait Bencher {
     fn bench(&mut self, b: &mut criterion::Bencher);
@@ -65,10 +34,13 @@ impl<E: Executor, F: FnMut() -> E> NormalExecutorNext1Bencher<E, F> {
 
 impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
-        b.iter_with_setup(&mut self.executor_builder, |mut executor| {
-            let executor = black_box(&mut executor);
-            black_box(executor.next().unwrap());
-        });
+        b.iter_batched_ref(
+            &mut self.executor_builder,
+            |executor| {
+                black_box(executor.next().unwrap());
+            },
+            criterion::BatchSize::SmallInput,
+        );
     }
 }
 
@@ -85,13 +57,16 @@ impl<E: Executor, F: FnMut() -> E> NormalExecutorNext1024Bencher<E, F> {
 
 impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1024Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
-        b.iter_with_setup(&mut self.executor_builder, |mut executor| {
-            let executor = black_box(&mut executor);
-            let iter_times = black_box(1024);
-            for _ in 0..iter_times {
-                black_box(executor.next().unwrap());
-            }
-        });
+        b.iter_batched_ref(
+            &mut self.executor_builder,
+            |executor| {
+                let iter_times = black_box(1024);
+                for _ in 0..iter_times {
+                    black_box(executor.next().unwrap());
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        );
     }
 }
 
@@ -108,12 +83,15 @@ impl<E: BatchExecutor, F: FnMut() -> E> BatchExecutorNext1024Bencher<E, F> {
 
 impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchExecutorNext1024Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
-        b.iter_with_setup(&mut self.executor_builder, |mut executor| {
-            let executor = black_box(&mut executor);
-            let iter_times = black_box(1024);
-            let r = black_box(executor.next_batch(iter_times));
-            r.is_drained.unwrap();
-        });
+        b.iter_batched_ref(
+            &mut self.executor_builder,
+            |executor| {
+                let iter_times = black_box(1024);
+                let r = black_box(executor.next_batch(iter_times));
+                r.is_drained.unwrap();
+            },
+            criterion::BatchSize::SmallInput,
+        );
     }
 }
 
@@ -130,9 +108,12 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> DAGHandleBencher<F> {
 
 impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
-        b.iter_with_setup(&mut self.handler_builder, |mut handler| {
-            let handler = black_box(&mut handler);
-            black_box(handler.handle_request().unwrap());
-        });
+        b.iter_batched_ref(
+            &mut self.handler_builder,
+            |handler| {
+                black_box(handler.handle_request().unwrap());
+            },
+            criterion::BatchSize::SmallInput,
+        );
     }
 }
