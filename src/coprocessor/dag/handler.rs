@@ -22,7 +22,7 @@ use crate::coprocessor::*;
 use crate::storage::Store;
 
 use super::executor::{Executor, ExecutorMetrics};
-use crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled;
+use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {

@@ -60,7 +60,7 @@ pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExe
 
 impl
     BatchSimpleAggregationExecutor<
-        crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
         Box<dyn BatchExecutor>,
     >
 {
@@ -354,7 +354,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::new_empty(),
+                    data: LazyBatchColumnVec::empty(),
                     warnings: self.context.take_warnings(),
                     is_drained: Err(e),
                 }
@@ -362,7 +362,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
             Ok(None) => {
                 // When there is no error and is not drained, we also return empty data.
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::new_empty(),
+                    data: LazyBatchColumnVec::empty(),
                     warnings: self.context.take_warnings(),
                     is_drained: Ok(false),
                 }

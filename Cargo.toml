@@ -10,8 +10,8 @@ publish = false
 
 [features]
 default = []
-portable = ["rocksdb_do_not_use/portable"]
-sse = ["rocksdb_do_not_use/sse"]
+portable = ["engine/portable"]
+sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
 no-jemalloc = ["tikv_alloc/no-jemalloc"]
@@ -120,13 +120,10 @@ panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
+engine = { path = "components/engine" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
-
-[dependencies.rocksdb_do_not_use]
-git = "https://github.com/pingcap/rust-rocksdb.git"
-package = "rocksdb"
 
 [dependencies.prometheus]
 version = "0.4.2"

@@ -12,9 +12,12 @@
 // limitations under the License.
 
 mod index_scan_executor;
-mod ranges_iter;
-mod scan_executor;
+mod selection_executor;
+mod simple_aggr_executor;
 mod table_scan_executor;
+mod util;
 
 pub use self::index_scan_executor::BatchIndexScanExecutor;
+pub use self::selection_executor::BatchSelectionExecutor;
+pub use self::simple_aggr_executor::BatchSimpleAggregationExecutor;
 pub use self::table_scan_executor::BatchTableScanExecutor;

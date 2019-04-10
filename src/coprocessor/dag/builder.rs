@@ -18,8 +18,8 @@ use tipb::executor::{self, ExecType};
 
 use crate::storage::Store;
 
-use super::batch_executor::executors::*;
-use super::batch_executor::interface::*;
+use super::batch::executors::*;
+use super::batch::interface::*;
 use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,

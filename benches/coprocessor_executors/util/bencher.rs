@@ -13,7 +13,7 @@
 
 use criterion::black_box;
 
-use tikv::coprocessor::dag::batch_executor::interface::*;
+use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::coprocessor::RequestHandler;
 

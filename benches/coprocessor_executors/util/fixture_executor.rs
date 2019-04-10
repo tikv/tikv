@@ -18,7 +18,7 @@ use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
 use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
-use tikv::coprocessor::dag::batch_executor::interface::*;
+use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::executor::{Executor, ExecutorMetrics, Row};
 
 use super::bencher::Bencher;

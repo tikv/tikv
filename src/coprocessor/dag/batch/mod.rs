@@ -11,6 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod simple_aggr_executor;
-
-pub use self::simple_aggr_executor::BatchSimpleAggregationExecutor;
+pub mod executors;
+pub mod interface;
+pub mod statistics;

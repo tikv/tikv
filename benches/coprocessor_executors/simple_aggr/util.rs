@@ -18,8 +18,8 @@ use criterion::black_box;
 use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch_executor::executors::BatchSimpleAggregationExecutor;
-use tikv::coprocessor::dag::batch_executor::statistics::*;
+use tikv::coprocessor::dag::batch::executors::BatchSimpleAggregationExecutor;
+use tikv::coprocessor::dag::batch::statistics::*;
 use tikv::coprocessor::dag::executor::StreamAggExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 

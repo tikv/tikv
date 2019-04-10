@@ -13,7 +13,7 @@
 
 use kvproto::kvrpcpb;
 
-use crate::storage::engine::{PerfStatisticsDelta, PerfStatisticsInstant};
+use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
 use crate::util::futurepool;
 use crate::util::time::{self, Duration, Instant};
 

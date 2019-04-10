@@ -16,10 +16,9 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use engine::rocks::{DBIterator, SeekKey, DB};
 use kvproto::import_sstpb::*;
 use kvproto::metapb::*;
-
-use crate::storage::engine::{DBIterator, SeekKey, DB};
 
 use super::client::*;
 use super::common::*;
@@ -208,7 +207,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use crate::storage::engine::{DBIterator, DBOptions, ReadOptions, Writable, DB};
+    use engine::rocks::{DBIterator, DBOptions, ReadOptions, Writable, DB};
     use tempdir::TempDir;
 
     use crate::config::DbConfig;

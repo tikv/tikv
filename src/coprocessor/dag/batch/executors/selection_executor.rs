@@ -17,7 +17,7 @@ use tipb::executor::Selection;
 use tipb::expression::Expr;
 use tipb::expression::FieldType;
 
-use super::interface::*;
+use super::super::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::{Error, Result};
@@ -32,7 +32,7 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
 
 impl
     BatchSelectionExecutor<
-        crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
         Box<dyn BatchExecutor>,
     >
 {

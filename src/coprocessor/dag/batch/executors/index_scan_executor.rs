@@ -19,32 +19,33 @@ use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use super::super::interface::*;
+use crate::storage::{FixtureStore, Store};
+
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
-use crate::storage::{FixtureStore, Store};
 
 pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
-    super::scan_executor::ScanExecutor<
+    super::util::scan_executor::ScanExecutor<
         C,
         S,
         IndexScanExecutorImpl,
-        super::ranges_iter::PointRangeConditional,
+        super::util::ranges_iter::PointRangeConditional,
     >,
 );
 
 impl
     BatchIndexScanExecutor<
-        crate::coprocessor::dag::batch_executor::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
-        super::scan_executor::check_columns_info_supported(descriptor.get_columns())
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
             .map_err(|e| box_err!("Unable to use BatchIndexScanExecutor: {}", e))
     }
 }
@@ -73,7 +74,7 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
         let mut columns_len_without_handle = 0;
         let mut decode_handle = false;
         for ci in &columns_info {
-            schema.push(super::scan_executor::field_type_from_column_info(&ci));
+            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
             if ci.get_pk_handle() {
                 decode_handle = true;
             } else {
@@ -87,13 +88,13 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
             columns_len_without_handle,
             decode_handle,
         };
-        let wrapper = super::scan_executor::ScanExecutor::new(
+        let wrapper = super::util::scan_executor::ScanExecutor::new(
             summary_collector,
             imp,
             store,
             desc,
             key_ranges,
-            super::ranges_iter::PointRangeConditional::new(unique),
+            super::util::ranges_iter::PointRangeConditional::new(unique),
         )?;
         Ok(Self(wrapper))
     }
@@ -130,7 +131,7 @@ struct IndexScanExecutorImpl {
     decode_handle: bool,
 }
 
-impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
+impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
@@ -148,13 +149,13 @@ impl super::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Ok(Scanner::new(
+        Scanner::new(
             store,
             crate::coprocessor::dag::ScanOn::Index,
             desc,
             false,
             range,
-        )?)
+        )
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -259,7 +260,7 @@ mod tests {
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch_executor::statistics::*;
+    use crate::coprocessor::dag::batch::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
