@@ -91,6 +91,11 @@ impl GroupState {
         *self = GroupState::FollowerChaos;
     }
 
+    fn become_partial_ordered(&mut self) {
+        assert!(self.is_inactive());
+        *self = GroupState::PartialOrdered;
+    }
+
     #[inline]
     fn become_leader_absence(&mut self) {
         *self = GroupState::LeaderAbsence;
@@ -2695,7 +2700,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.group_state.is_inactive() {
             if self.fsm.peer.is_leader() {
                 self.fsm.last_base_tick = None;
-                self.fsm.group_state.become_chaos();
+                let status = self.fsm.peer.raft_group.status();
+                let recent_active = status
+                    .progress
+                    .iter()
+                    .chain(status.learner_progress.iter())
+                    .any(|(id, p)| *id != self.fsm.peer.peer_id() && p.recent_active);
+                if recent_active {
+                    self.fsm.group_state.become_chaos();
+                } else {
+                    self.fsm.group_state.become_partial_ordered();
+                }
                 self.register_raft_base_tick();
             } else {
                 self.fsm.group_state.become_leader_absence();
