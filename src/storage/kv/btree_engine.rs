@@ -18,14 +18,15 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::RangeBounds;
 use std::sync::{Arc, RwLock};
 
+use engine::IterOption;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::Context;
 
-use crate::raftstore::store::engine::IterOption;
-use crate::storage::engine::{
+use crate::storage::kv::{
     Callback as EngineCallback, CbContext, Cursor, Engine, Error as EngineError, Iterator, Modify,
     Result as EngineResult, ScanMode, Snapshot,
 };
-use crate::storage::{CfName, Key, Value, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use crate::storage::{Key, Value};
 
 type RwLockTree = RwLock<BTreeMap<Key, Value>>;
 

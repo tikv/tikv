@@ -21,13 +21,13 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use raft::SnapshotStatus;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
+use crate::storage::kv::CompactedEvent;
 use crate::util::escape;
-use crate::util::rocksdb_util::CompactedEvent;
-use raft::SnapshotStatus;
 
 use super::RegionSnapshot;
 
