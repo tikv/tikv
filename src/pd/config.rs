@@ -26,7 +26,7 @@ pub struct Config {
     /// Default is empty.
     pub endpoints: Vec<String>,
     /// The interval at which to retry a PD connection initialization.
-    /// 
+    ///
     /// Default is 300ms. Setting this to 0 disables retry.
     pub retry_interval: u64,
     /// The maximum number of times to retry a PD connection initialization.
@@ -35,7 +35,7 @@ pub struct Config {
     pub retry_max_count: Option<usize>,
     /// If the client observes the same error message on retry, it can repeat the message only
     /// every `n` times.
-    /// 
+    ///
     /// Default is 10. Set to 1 to disable this feature.
     pub retry_log_every: usize,
 }

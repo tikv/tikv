@@ -49,12 +49,12 @@ impl RpcClient {
         );
 
         if cfg.retry_interval == 0 {
-             let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
+            let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
 
-            return Ok(RpcClient {
+            Ok(RpcClient {
                 cluster_id: members.get_header().get_cluster_id(),
                 leader_client: LeaderClient::new(env, security_mgr, client, members),
-            });
+            })
         } else {
             // We don't want to repeat the *same* error multiple times in `RETY_LOG_PER` count...
             // But if the log message changes we need to output both.
@@ -76,13 +76,13 @@ impl RpcClient {
                                 warn!("validate PD endpoints failed"; "err" => ?e);
                                 attempts_with_cached_error += 1;
                                 cached_error = Some(format!("{}", e));
-                            },
+                            }
                             Some(ref mut cached) if **cached == format!("{}", e) => {
                                 if attempts_with_cached_error % cfg.retry_log_every == 0 {
                                     warn!("multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
                                 }
                                 attempts_with_cached_error += 1;
-                            },
+                            }
                             Some(ref mut cached) => {
                                 warn!("multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
                                 warn!("last attempt to validate PD endpoints failed"; "err" => ?e);
@@ -94,7 +94,10 @@ impl RpcClient {
                     }
                 }
             }
-            return Err(box_err!("endpoints are invalid, retry limit of {} reached", attempts_with_cached_error));
+            Err(box_err!(
+                "endpoints are invalid, retry limit of {} reached",
+                attempts_with_cached_error
+            ))
         }
     }
 

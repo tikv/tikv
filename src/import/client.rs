@@ -67,9 +67,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(pd_addr: &str, cq_count: usize) -> Result<Client> {
-        let cfg = PdConfig::new(
-            vec![pd_addr.to_owned()],
-        );
+        let cfg = PdConfig::new(vec![pd_addr.to_owned()]);
         let sec_mgr = SecurityManager::default();
         let rpc_client = RpcClient::new(&cfg, Arc::new(sec_mgr))?;
         let env = EnvBuilder::new()
