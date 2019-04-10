@@ -102,7 +102,7 @@ pub type AllocStats = Vec<(&'static str, usize)>;
 #[path = "jemalloc.rs"]
 mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
-#[path = "tc.rs"]
+#[path = "tcmalloc.rs"]
 mod imp;
 #[cfg(not(all(unix, not(fuzzing), any(feature = "jemalloc", feature = "tcmalloc"))))]
 #[path = "system.rs"]

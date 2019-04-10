@@ -1,10 +1,10 @@
 SHELL := /bin/bash
-ENABLE_FEATURES ?= default
+ENABLE_FEATURES ?=
 
 ifeq ($(TCMALLOC),1)
-ENABLE_FEATURES = tcmalloc
+ENABLE_FEATURES += tcmalloc
 else
-ENABLE_FEATURES = jemalloc
+ENABLE_FEATURES += jemalloc
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
