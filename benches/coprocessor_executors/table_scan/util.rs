@@ -171,9 +171,9 @@ pub struct TableScanExecutorDAGBencher {
 impl TableScanBencher for TableScanExecutorDAGBencher {
     fn name(&self) -> &'static str {
         if self.batch {
-            "normal/with_dag"
-        } else {
             "batch/with_dag"
+        } else {
+            "normal/with_dag"
         }
     }
 
