@@ -17,32 +17,31 @@ use std::sync::Arc;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use engine::rocks::util::*;
+use engine::rocks::DB;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
+use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
+use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::util::{
-    get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
-};
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
-use crate::storage::engine::DB;
 use crate::storage::FlowStatistics;
 use crate::util::collections::HashMap;
 use crate::util::escape;
-use crate::util::rocksdb_util::*;
 use crate::util::time::time_now_sec;
 use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
-use prometheus::local::LocalHistogram;
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {

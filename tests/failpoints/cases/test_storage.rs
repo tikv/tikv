@@ -129,8 +129,8 @@ fn test_scheduler_leader_change_twice() {
     fail::remove(snapshot_fp);
 
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
-        Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
-        | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
+        Err(storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))))
+        | Err(storage::Error::Engine(kv::Error::Request(ref e))) => {
             assert!(e.has_stale_command(), "{:?}", e);
         }
         res => {
