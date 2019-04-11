@@ -1920,7 +1920,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(0, |t| now.duration_since(*t).as_secs())
+            .map_or(10, |t| now.duration_since(*t).as_secs())
             < 10
         {
             return;
