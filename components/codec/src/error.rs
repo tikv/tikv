@@ -23,12 +23,11 @@ quick_error! {
         BadPadding {
             description("Data padding is wrong")
         }
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(_err: std::io::Error) -> Error {
-        Error::UnexpectedEOF
+        Io(err: std::io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
     }
 }
 

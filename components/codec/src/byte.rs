@@ -442,17 +442,10 @@ impl CompactByteEncoder for std::fs::File {
 ///     - This function won't check whether the bytes are encoded correctly.
 ///     - There can be multiple compact-encoded data, placed one by one. This function only returns
 ///       the length of the first one.
-pub fn encoded_compact_len(mut data: &[u8]) -> usize {
+pub fn encoded_compact_len(mut data: &[u8]) -> Result<usize> {
     let last_encoded = data.as_ptr();
-    let total_len = data.len();
-    let vn = match data.read_var_i64() {
-        Ok(vn) => vn as usize,
-        Err(e) => {
-            dbg!(format!("failed to decode bytes' length: {:?}", e));
-            return total_len;
-        }
-    };
-    unsafe { vn + data.as_ptr().offset_from(last_encoded) as usize }
+    let vn = data.read_var_i64()? as usize;
+    unsafe { Ok(vn + data.as_ptr().offset_from(last_encoded) as usize) }
 }
 
 /// Gets the first encoded bytes' length in memory-comparable-encoded data.
@@ -583,7 +576,7 @@ mod tests {
             (7, vec![12, 228, 184, 150, 231, 149, 140, 222]),
         ];
         for (len, case) in cases {
-            assert_eq!(len, encoded_compact_len(&case));
+            assert_eq!(len, encoded_compact_len(&case).unwrap());
         }
     }
 
