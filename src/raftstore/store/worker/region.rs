@@ -20,28 +20,28 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::u64;
 
+use engine::rocks;
+use engine::rocks::Writable;
+use engine::WriteBatch;
+use engine::CF_RAFT;
+use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
-use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
 use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
-    self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
+    self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
 };
-use crate::storage::engine::{Writable, WriteBatch};
-use crate::storage::CF_RAFT;
+use crate::util::escape;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
 use crate::util::timer::Timer;
 use crate::util::worker::{Runnable, RunnableWithTimer};
-use crate::util::{escape, rocksdb_util};
 
-use super::super::util;
 use super::metrics::*;
 
 const GENERATE_POOL_SIZE: usize = 2;
@@ -301,7 +301,7 @@ impl SnapContext {
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         self.cleanup_overlap_ranges(&start_key, &end_key);
-        box_try!(util::delete_all_in_range(
+        box_try!(engine_util::delete_all_in_range(
             &self.engines.kv,
             &start_key,
             &end_key,
@@ -343,7 +343,7 @@ impl SnapContext {
 
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
-        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT));
+        let handle = box_try!(rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT));
         box_try!(wb.put_msg_cf(handle, &region_key, &region_state));
         box_try!(wb.delete_cf(handle, &keys::snapshot_raft_state_key(region_id)));
         self.engines.kv.write(&wb).unwrap_or_else(|e| {
@@ -400,7 +400,9 @@ impl SnapContext {
         use_delete_files: bool,
     ) {
         if use_delete_files {
-            if let Err(e) = util::delete_all_files_in_range(&self.engines.kv, start_key, end_key) {
+            if let Err(e) =
+                engine_util::delete_all_files_in_range(&self.engines.kv, start_key, end_key)
+            {
                 error!(
                     "failed to delete files in range";
                     "region_id" => region_id,
@@ -411,9 +413,12 @@ impl SnapContext {
                 return;
             }
         }
-        if let Err(e) =
-            util::delete_all_in_range(&self.engines.kv, start_key, end_key, self.use_delete_range)
-        {
+        if let Err(e) = engine_util::delete_all_in_range(
+            &self.engines.kv,
+            start_key,
+            end_key,
+            self.use_delete_range,
+        ) {
             error!(
                 "failed to delete data in range";
                 "region_id" => region_id,
@@ -510,8 +515,8 @@ impl SnapContext {
                 continue;
             }
 
-            let handle = rocksdb_util::get_cf_handle(&self.engines.kv, cf).unwrap();
-            if let Some(n) = rocksdb_util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
+            let handle = rocks::util::get_cf_handle(&self.engines.kv, cf).unwrap();
+            if let Some(n) = rocks::util::get_cf_num_files_at_level(&self.engines.kv, handle, 0) {
                 let options = self.engines.kv.get_options_cf(handle);
                 let slowdown_trigger = options.get_level_zero_slowdown_writes_trigger();
                 // Leave enough buffer to tolerate heavy write workload,
@@ -673,17 +678,18 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use crate::raftstore::store::engine::{Mutable, Peekable, Snapshot};
     use crate::raftstore::store::peer_storage::JOB_STATUS_PENDING;
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
-    use crate::raftstore::store::{keys, Engines, SnapKey, SnapManager};
-    use crate::storage::engine::{ColumnFamilyOptions, Writable, WriteBatch};
-    use crate::storage::{CF_DEFAULT, CF_RAFT};
-    use crate::util::rocksdb_util;
+    use crate::raftstore::store::{keys, SnapKey, SnapManager};
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
+    use engine::rocks;
+    use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
+    use engine::Engines;
+    use engine::{Mutable, Peekable};
+    use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempdir::TempDir;
 
@@ -772,10 +778,10 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let cfs_opts = vec![
-            rocksdb_util::CFOptions::new("default", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("write", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("lock", cf_opts.clone()),
-            rocksdb_util::CFOptions::new("raft", cf_opts.clone()),
+            rocks::util::CFOptions::new("default", cf_opts.clone()),
+            rocks::util::CFOptions::new("write", cf_opts.clone()),
+            rocks::util::CFOptions::new("lock", cf_opts.clone()),
+            rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
         let db =
             get_test_db_for_regions(&temp_dir, None, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
@@ -788,7 +794,7 @@ mod tests {
                 db.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+                    rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
                     u64::from(i) + 1
                 );
             }
@@ -865,14 +871,14 @@ mod tests {
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             6
         );
 
         // compact all files to the bottomest level
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             0
         );
 
@@ -882,7 +888,7 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             2
         );
 
@@ -890,31 +896,31 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             4
         );
 
         // compact all files to the bottomest level
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             0
         );
 
@@ -924,21 +930,21 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             4
         );
 
         // make sure have checked pending applies
-        rocksdb_util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            rocksdb_util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
             2
         );
     }
