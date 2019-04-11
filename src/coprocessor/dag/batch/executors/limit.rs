@@ -215,7 +215,6 @@ mod tests {
 
         // we get 1 row since the limit is 4
         executor.next_batch(10);
-        //s.clear();
         executor.collect_statistics(&mut s);
         let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
         assert_eq!(4, exec_summary.num_produced_rows);
