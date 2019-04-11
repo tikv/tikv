@@ -48,7 +48,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
