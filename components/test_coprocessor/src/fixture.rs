@@ -19,7 +19,7 @@ use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::Endpoint;
 use tikv::server::readpool;
 use tikv::server::Config;
-use tikv::storage::engine::RocksEngine;
+use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
 
 #[derive(Clone)]

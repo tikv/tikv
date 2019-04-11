@@ -17,6 +17,7 @@
 #[macro_use(
     kv,
     slog_kv,
+    slog_crit,
     slog_error,
     slog_warn,
     slog_info,
@@ -47,6 +48,9 @@ use std::usize;
 use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
+use engine::rocks;
+use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -54,16 +58,17 @@ use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
+use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
+use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::rocksdb_util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use tikv::util::security::{self, SecurityManager};
 use tikv::util::time::Monitor;
 use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
+use tikv::util::{self as tikv_util, check_environment_variables};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -171,7 +176,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         raft_db_opts.set_env(ec.clone());
     }
     let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = rocksdb_util::new_engine_opt(
+    let raft_engine = rocks::util::new_engine_opt(
         raft_db_path.to_str().unwrap(),
         raft_db_opts,
         raft_db_cf_opts,
@@ -197,9 +202,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create kv engine, storage.
     let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let kv_engine =
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+    let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
 

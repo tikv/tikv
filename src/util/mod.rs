@@ -36,7 +36,6 @@ pub mod io_limiter;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
-pub mod rocksdb_util;
 pub mod security;
 pub mod sys;
 pub mod threadpool;
@@ -388,14 +387,6 @@ impl<T> RingQueue<T> {
     }
 }
 
-/// Returns a Vec of cf which is in `a' but not in `b'.
-pub fn cfs_diff<'a>(a: &[&'a str], b: &[&str]) -> Vec<&'a str> {
-    a.iter()
-        .filter(|x| b.iter().find(|y| y == x).is_none())
-        .cloned()
-        .collect()
-}
-
 #[inline]
 pub fn is_even(n: usize) -> bool {
     n & 1 == 0
@@ -690,22 +681,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_cfs_diff() {
-        let a = vec!["1", "2", "3"];
-        let a_diff_a = cfs_diff(&a, &a);
-        assert!(a_diff_a.is_empty());
-        let b = vec!["4"];
-        assert_eq!(a, cfs_diff(&a, &b));
-        let c = vec!["4", "5", "3", "6"];
-        assert_eq!(vec!["1", "2"], cfs_diff(&a, &c));
-        assert_eq!(vec!["4", "5", "6"], cfs_diff(&c, &a));
-        let d = vec!["1", "2", "3", "4"];
-        let a_diff_d = cfs_diff(&a, &d);
-        assert!(a_diff_d.is_empty());
-        assert_eq!(vec!["4"], cfs_diff(&d, &a));
     }
 
     #[test]

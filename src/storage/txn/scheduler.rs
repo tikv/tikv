@@ -37,7 +37,7 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use crate::storage::engine::Result as EngineResult;
+use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 use crate::util::collections::HashMap;

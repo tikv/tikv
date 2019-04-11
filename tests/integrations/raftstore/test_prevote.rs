@@ -227,7 +227,7 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the rest.
     cluster.run();
-    // Choose a predictable leader so we don't accidently partition the leader.
+    // Choose a predictable leader so we don't accidentally partition the leader.
     cluster.must_transfer_leader(region, new_peer(1, 1));
     cluster.partition(vec![1, 2, 3], vec![4, 5]);
 
