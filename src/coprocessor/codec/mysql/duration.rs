@@ -483,7 +483,7 @@ mod tests {
                     }
                 }
                 None => {
-                    if !d.is_err() {
+                    if d.is_ok() {
                         panic!("{} should not be passed, got {:?}", escape(input), d);
                     }
                 }
