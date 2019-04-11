@@ -1,5 +1,21 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! TiKV - A distributed key/value database
+//!
+//! TiKV ("Ti" stands for Titanium) is an open source distributed
+//! transactional key-value database. Unlike other traditional NoSQL
+//! systems, TiKV not only provides classical Key-Value APIs, but also
+//! transactional APIs with ACID compliance. TiKV was originally
+//! created to complement [TiDB], a distributed HTAP database
+//! compatible with the MySQL protocol.
+//!
+//! [TiDB]: https://github.com/pingcap/tidb
+//!
+//! The design of TiKV is inspired by some great distributed systems
+//! from Google, such as BigTable, Spanner, and Percolator, and some
+//! of the latest achievements in academia in recent years, such as
+//! the Raft consensus algorithm.
+
 #![crate_type = "lib"]
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "200"]
