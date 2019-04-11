@@ -159,9 +159,9 @@ macro_rules! cf_config {
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
-            pub titan: TitanCfConfig,
             pub prop_size_index_distance: u64,
             pub prop_keys_index_distance: u64,
+            pub titan: TitanCfConfig,
         }
     };
 }
