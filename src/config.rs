@@ -1,5 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire system
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 use std::error::Error;
 use std::fs;
 use std::i32;
