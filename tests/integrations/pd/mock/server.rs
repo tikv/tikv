@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use futures::{Future, Sink, Stream};
 use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
-use futures::{Future, Sink, Stream};
 use tikv::pd::Error as PdError;
 use tikv::util::security::*;
 

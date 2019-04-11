@@ -16,9 +16,9 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
+use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;

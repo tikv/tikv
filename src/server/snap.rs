@@ -17,12 +17,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::{future, Async, Future, Poll, Stream};
+use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use grpcio::{
     ChannelBuilder, ClientStreamingSink, Environment, RequestStream, RpcStatus, RpcStatusCode,
     WriteFlags,
 };
-use futures::{future, Async, Future, Poll, Stream};
-use futures_cpupool::{Builder as CpuPoolBuilder, CpuPool};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;

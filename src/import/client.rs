@@ -15,9 +15,9 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use grpcio::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
+use grpcio::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 
 use engine::rocks::SequentialFile;
 use kvproto::import_sstpb::*;

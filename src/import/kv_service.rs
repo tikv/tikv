@@ -13,10 +13,10 @@
 
 use std::sync::Arc;
 
-use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
+use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_kvpb::*;
 use kvproto::import_kvpb_grpc::*;
 use uuid::Uuid;

@@ -15,10 +15,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::coprocessor::Endpoint;
-use grpcio::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
-};
 use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -35,6 +31,10 @@ use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crate::util::worker::Scheduler;
 use futures::{future, Future, Sink, Stream};
+use grpcio::{
+    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
+    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
