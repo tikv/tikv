@@ -14,7 +14,6 @@
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
-use std::cmp;
 use std::sync::Arc;
 
 use crate::raftstore::store::{keys, util, PeerStorage};
@@ -70,8 +69,11 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let iter_opt = IterOption::new(
+            Some(keys::data_key(start_key)),
+            Some(keys::data_key(end_key)),
+            fill_cache,
+        );
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -87,8 +89,11 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let iter_opt = IterOption::new(
+            Some(keys::data_key(start_key)),
+            Some(keys::data_key(end_key)),
+            fill_cache,
+        );
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -170,37 +175,31 @@ pub struct RegionIterator {
     end_key: Vec<u8>,
 }
 
-fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
-    let lower_bound = match iter_opt.lower_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::max(k, region_start_key)
-        }
-        _ => region_start_key,
-    };
-    iter_opt.set_lower_bound(lower_bound);
+    let need_update_bound =
+        iter_opt.lower_bound().is_empty() || region_start_key.as_slice() > iter_opt.lower_bound();
+    if need_update_bound {
+        iter_opt.set_lower_bound(region_start_key);
+    }
 }
 
-fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
-    let upper_bound = match iter_opt.upper_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::min(k, region_end_key)
-        }
-        _ => region_end_key,
-    };
-    iter_opt.set_upper_bound(upper_bound);
+    let need_update_bound =
+        iter_opt.upper_bound().is_empty() || region_end_key.as_slice() < iter_opt.upper_bound();
+    if need_update_bound {
+        iter_opt.set_upper_bound(region_end_key);
+    }
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
+        let start_key = iter_opt.lower_bound().to_vec();
+        let end_key = iter_opt.upper_bound().to_vec();
         let iter = snap.db_iterator(iter_opt);
         RegionIterator {
             iter,
@@ -217,10 +216,10 @@ impl RegionIterator {
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
-        let start_key = iter_opt.lower_bound().unwrap().to_vec();
-        let end_key = iter_opt.upper_bound().unwrap().to_vec();
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
+        let start_key = iter_opt.lower_bound().to_vec();
+        let end_key = iter_opt.upper_bound().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
         RegionIterator {
             iter,
@@ -487,8 +486,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| v.to_vec()),
-                upper_bound.map(|v| v.to_vec()),
+                lower_bound.map(|v| keys::data_key(v)),
+                upper_bound.map(|v| keys::data_key(v)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -641,7 +640,7 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(IterOption::new(None, Some(b"a5".to_vec()), true));
+        let mut iter = snap.iter(IterOption::new(None, Some(keys::data_key(b"a5")), true));
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -763,7 +762,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();
-        iter_opt.set_lower_bound(b"a3".to_vec());
+        iter_opt.set_lower_bound(keys::data_key(b"a3"));
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last());
         let mut res = vec![];

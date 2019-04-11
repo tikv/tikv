@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::raftstore::store::keys;
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
@@ -84,8 +85,8 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let mut iter_opt = IterOption::new(
-            self.lower_bound.map(|k| k.into_encoded()),
-            self.upper_bound.map(|k| k.into_encoded()),
+            self.lower_bound.map(|k| keys::data_key(k.as_encoded())),
+            self.upper_bound.map(|k| keys::data_key(k.as_encoded())),
             self.fill_cache,
         );
         if self.prefix_seek {

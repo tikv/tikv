@@ -216,19 +216,7 @@ pub trait Peekable {
     }
 }
 
-#[derive(Clone, PartialEq)]
-enum SeekMode {
-    TotalOrder,
-    Prefix,
-}
-
-pub struct IterOption {
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
-    prefix_same_as_start: bool,
-    fill_cache: bool,
-    seek_mode: SeekMode,
-}
+pub struct IterOption(ReadOptions);
 
 impl IterOption {
     pub fn new(
@@ -236,79 +224,64 @@ impl IterOption {
         upper_bound: Option<Vec<u8>>,
         fill_cache: bool,
     ) -> IterOption {
-        IterOption {
-            lower_bound,
-            upper_bound,
-            prefix_same_as_start: false,
-            fill_cache,
-            seek_mode: SeekMode::TotalOrder,
+        let mut read_options = ReadOptions::new();
+        read_options.fill_cache(fill_cache);
+        if let Some(l) = lower_bound {
+            read_options.set_iterate_lower_bound(l);
         }
+        if let Some(u) = upper_bound {
+            read_options.set_iterate_upper_bound(u);
+        }
+        IterOption(read_options)
     }
 
     #[inline]
     pub fn use_prefix_seek(mut self) -> IterOption {
-        self.seek_mode = SeekMode::Prefix;
+        self.0.set_total_order_seek(false);
+        self
+    }
+
+    pub fn use_total_order_seek(mut self) -> IterOption {
+        self.0.set_total_order_seek(true);
         self
     }
 
     #[inline]
-    pub fn total_order_seek_used(&self) -> bool {
-        self.seek_mode == SeekMode::TotalOrder
-    }
-
-    #[inline]
-    pub fn lower_bound(&self) -> Option<&[u8]> {
-        self.lower_bound.as_ref().map(|v| v.as_slice())
+    pub fn lower_bound(&self) -> &[u8] {
+        self.0.iterate_lower_bound()
     }
 
     #[inline]
     pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
-        self.lower_bound = Some(bound);
+        self.0.set_iterate_lower_bound(bound);
     }
 
     #[inline]
-    pub fn upper_bound(&self) -> Option<&[u8]> {
-        self.upper_bound.as_ref().map(|v| v.as_slice())
+    pub fn upper_bound(&self) -> &[u8] {
+        self.0.iterate_upper_bound()
     }
 
     #[inline]
     pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(bound);
+        self.0.set_iterate_upper_bound(bound)
     }
 
     #[inline]
     pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
-        self.prefix_same_as_start = enable;
+        self.0.set_prefix_same_as_start(enable);
         self
     }
 
-    pub fn build_read_opts(&self) -> ReadOptions {
-        let mut opts = ReadOptions::new();
-        opts.fill_cache(self.fill_cache);
-        if self.total_order_seek_used() {
-            opts.set_total_order_seek(true);
-        } else if self.prefix_same_as_start {
-            opts.set_prefix_same_as_start(true);
-        }
-        if let Some(ref key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key);
-        }
-        if let Some(ref key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key);
-        }
-        opts
+    pub fn build_read_opts(self) -> ReadOptions {
+        self.0
     }
 }
 
 impl Default for IterOption {
     fn default() -> IterOption {
-        IterOption {
-            lower_bound: None,
-            upper_bound: None,
-            prefix_same_as_start: false,
-            fill_cache: true,
-            seek_mode: SeekMode::TotalOrder,
-        }
+        IterOption::new(None, None, true)
+            .set_prefix_same_as_start(false)
+            .use_total_order_seek()
     }
 }
 

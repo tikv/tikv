@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::raftstore::store::keys;
 use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
 use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
@@ -282,8 +283,12 @@ impl<S: Snapshot> MvccReader<S> {
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
             let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
+                self.lower_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
+                self.upper_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
                 self.fill_cache,
             );
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
@@ -295,8 +300,12 @@ impl<S: Snapshot> MvccReader<S> {
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
             let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
+                self.lower_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
+                self.upper_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
                 self.fill_cache,
             );
             let iter = self
@@ -310,8 +319,12 @@ impl<S: Snapshot> MvccReader<S> {
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
             let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
+                self.lower_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
+                self.upper_bound
+                    .as_ref()
+                    .map(|ref bound| keys::data_key(bound.as_slice())),
                 true,
             );
             let iter = self

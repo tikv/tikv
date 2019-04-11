@@ -124,14 +124,16 @@ pub struct BTreeEngineIterator {
 
 impl BTreeEngineIterator {
     pub fn new(tree: Arc<RwLockTree>, iter_opt: IterOption) -> BTreeEngineIterator {
-        let lower_bound = match iter_opt.lower_bound() {
-            None => Unbounded,
-            Some(key) => Included(Key::from_raw(key)),
+        let lower_bound = if iter_opt.lower_bound().is_empty() {
+            Unbounded
+        } else {
+            Included(Key::from_raw(iter_opt.lower_bound()))
         };
 
-        let upper_bound = match iter_opt.upper_bound() {
-            None => Unbounded,
-            Some(key) => Excluded(Key::from_raw(key)),
+        let upper_bound = if iter_opt.upper_bound().is_empty() {
+            Unbounded
+        } else {
+            Excluded(Key::from_raw(iter_opt.upper_bound()))
         };
         let bounds = (lower_bound.clone(), upper_bound.clone());
         Self {
