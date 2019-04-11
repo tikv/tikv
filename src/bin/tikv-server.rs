@@ -17,6 +17,7 @@
 #[macro_use(
     kv,
     slog_kv,
+    slog_crit,
     slog_error,
     slog_warn,
     slog_info,
