@@ -37,7 +37,7 @@ pub struct TlsCop {
 }
 
 thread_local! {
-    pub static TLS_METRICS: TlsCop = TlsCop {
+    pub static TLS_COP_METRICS: TlsCop = TlsCop {
     local_copr_req_histogram_vec:
         RefCell::new(COPR_REQ_HISTOGRAM_VEC.local()),
     local_outdated_req_wait_time:
@@ -88,7 +88,7 @@ impl ReadPoolImpl {
 
     #[inline]
     fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
-        TLS_METRICS.with(|m| {
+        TLS_COP_METRICS.with(|m| {
             // Flush Prometheus metrics
             m.local_copr_req_histogram_vec.borrow_mut().flush();
             m.local_copr_req_handle_time.borrow_mut().flush();
@@ -118,7 +118,7 @@ impl ReadPoolImpl {
         // cf statistics group by type
         for (cf, details) in stats.details() {
             for (tag, count) in details {
-                TLS_METRICS.with(|m| {
+                TLS_COP_METRICS.with(|m| {
                     m.local_copr_scan_details
                         .borrow_mut()
                         .with_label_values(&[type_str, cf, tag])
@@ -133,7 +133,7 @@ impl ReadPoolImpl {
         let scan_counter = metrics.scan_counter;
         // exec count
         let executor_count = metrics.executor_count;
-        TLS_METRICS.with(|m| {
+        TLS_COP_METRICS.with(|m| {
             scan_counter.consume(&mut m.local_copr_get_or_scan_count.borrow_mut());
             executor_count.consume(&mut m.local_copr_executor_count.borrow_mut());
         });
@@ -141,7 +141,7 @@ impl ReadPoolImpl {
 
     #[inline]
     pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
-        TLS_METRICS.with(|m| {
+        TLS_COP_METRICS.with(|m| {
             let mut map = m.local_cop_flow_stats.borrow_mut();
             let flow_stats = map
                 .entry(region_id)

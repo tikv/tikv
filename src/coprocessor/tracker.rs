@@ -178,7 +178,7 @@ impl Tracker {
             std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
 
         // req time
-        TLS_METRICS.with(|m| {
+        TLS_COP_METRICS.with(|m| {
             m.local_copr_req_histogram_vec
                 .borrow_mut()
                 .with_label_values(&[self.req_ctx.tag])
