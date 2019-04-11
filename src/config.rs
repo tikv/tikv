@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Configuration for the entire system
+//! Configuration for the entire server.
 //!
 //! TiKV is configured through the `TiKvConfig` type, which is in turn
 //! made up of many other configuration types.
@@ -1388,6 +1388,11 @@ impl TiKvConfig {
     }
 }
 
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
 pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.
