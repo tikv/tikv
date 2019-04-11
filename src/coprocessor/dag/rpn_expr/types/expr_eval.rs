@@ -266,7 +266,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_scalar());
@@ -394,7 +394,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 4, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -444,7 +444,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -560,7 +560,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -1060,7 +1060,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1117,7 +1117,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1165,7 +1165,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1342,8 +1342,9 @@ mod tests {
         node_fn_d.mut_children().push(node_fn_a);
 
         // Build RPN expression from this expression tree.
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper)
-            .unwrap();
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper, 2)
+                .unwrap();
 
         let mut columns = LazyBatchColumnVec::from(vec![
             {

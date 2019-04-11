@@ -24,8 +24,8 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use crate::storage::engine::DBCompressionType;
 use crate::util;
+use engine::rocks::DBCompressionType;
 
 quick_error! {
     #[derive(Debug)]
@@ -88,7 +88,7 @@ pub mod compression_type_level_serde {
     use serde::ser::SerializeSeq;
     use serde::{Deserializer, Serializer};
 
-    use crate::storage::engine::DBCompressionType;
+    use engine::rocks::DBCompressionType;
 
     pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -174,7 +174,7 @@ macro_rules! numeric_enum_mod {
 
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
-            use crate::storage::engine::$enum;
+            use engine::rocks::$enum;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -210,7 +210,7 @@ macro_rules! numeric_enum_mod {
             #[cfg(test)]
             mod tests {
                 use toml;
-                use crate::storage::engine::$enum;
+                use engine::rocks::$enum;
 
                 #[test]
                 fn test_serde() {
@@ -1029,7 +1029,7 @@ mod tests {
 
     use super::*;
 
-    use crate::storage::engine::DBCompressionType;
+    use engine::rocks::DBCompressionType;
     use tempdir::TempDir;
     use toml;
 
