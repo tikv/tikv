@@ -19,7 +19,6 @@ use kvproto::pdpb::StoreStats;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest};
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
-use rocksdb::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -34,6 +33,7 @@ use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::Result;
+use crate::storage::engine::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
 use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use crate::util::collections::{HashMap, HashSet};
 use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
@@ -72,6 +72,8 @@ use crate::raftstore::store::{
 
 type Key = Vec<u8>;
 
+const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
+const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
 
 pub struct StoreInfo {
@@ -468,30 +470,37 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         if !self.poll_ctx.kv_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            let kv_wb = mem::replace(&mut self.poll_ctx.kv_wb, WriteBatch::new());
             self.poll_ctx
                 .engines
                 .kv
-                .write_opt(kv_wb, &write_opts)
+                .write_opt(&self.poll_ctx.kv_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save append state result: {:?}", self.tag, e);
                 });
+            let data_size = self.poll_ctx.kv_wb.data_size();
+            if data_size > KV_WB_SHRINK_SIZE {
+                self.poll_ctx.kv_wb = WriteBatch::with_capacity(4 * 1024);
+            } else {
+                self.poll_ctx.kv_wb.clear();
+            }
         }
         fail_point!("raft_between_save");
         if !self.poll_ctx.raft_wb.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
-            let raft_wb = mem::replace(
-                &mut self.poll_ctx.raft_wb,
-                WriteBatch::with_capacity(4 * 1024),
-            );
             self.poll_ctx
                 .engines
                 .raft
-                .write_opt(raft_wb, &write_opts)
+                .write_opt(&self.poll_ctx.raft_wb, &write_opts)
                 .unwrap_or_else(|e| {
                     panic!("{} failed to save raft append result: {:?}", self.tag, e);
                 });
+            let data_size = self.poll_ctx.raft_wb.data_size();
+            if data_size > RAFT_WB_SHRINK_SIZE {
+                self.poll_ctx.raft_wb = WriteBatch::with_capacity(4 * 1024);
+            } else {
+                self.poll_ctx.raft_wb.clear();
+            }
         }
         fail_point!("raft_after_save");
         if ready_cnt != 0 {
@@ -643,6 +652,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             .process_ready
             .observe(duration_to_sec(self.timer.elapsed()) as f64);
         self.poll_ctx.raft_metrics.flush();
+        self.poll_ctx.store_stat.flush();
     }
 }
 
@@ -743,11 +753,11 @@ impl<T, C> RaftPollerBuilder<T, C> {
         })?;
 
         if !kv_wb.is_empty() {
-            self.engines.kv.write(kv_wb).unwrap();
+            self.engines.kv.write(&kv_wb).unwrap();
             self.engines.kv.sync_wal().unwrap();
         }
         if !raft_wb.is_empty() {
-            self.engines.raft.write(raft_wb).unwrap();
+            self.engines.raft.write(&raft_wb).unwrap();
             self.engines.raft.sync_wal().unwrap();
         }
 

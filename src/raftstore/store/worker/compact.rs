@@ -17,11 +17,11 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::storage::engine::DB;
 use crate::storage::CF_WRITE;
 use crate::util::escape;
 use crate::util::rocksdb_util::{self, compact_range, stats::get_range_entries_and_versions};
 use crate::util::worker::Runnable;
-use rocksdb::DB;
 
 use super::metrics::COMPACT_RANGE_CF;
 
@@ -256,6 +256,7 @@ mod tests {
     use tempdir::TempDir;
 
     use crate::raftstore::store::keys::data_key;
+    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, WriteBatch, DB};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
     use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -263,7 +264,6 @@ mod tests {
         get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
         stats::get_range_entries_and_versions, CFOptions,
     };
-    use rocksdb::{self, Writable, WriteBatch, DB};
 
     use super::*;
 
@@ -286,7 +286,7 @@ mod tests {
             wb.put_cf(handle, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
@@ -296,7 +296,7 @@ mod tests {
             wb.put_cf(handle, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Get the total SST files size.
@@ -333,15 +333,15 @@ mod tests {
     }
 
     fn open_db(path: &str) -> DB {
-        let db_opts = rocksdb::DBOptions::new();
-        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()
