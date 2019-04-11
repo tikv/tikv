@@ -19,7 +19,7 @@ use tikv::coprocessor::codec::Datum;
 use tikv::coprocessor::{Endpoint, ReadPoolContext};
 use tikv::server::readpool::{self, ReadPool};
 use tikv::server::Config;
-use tikv::storage::engine::RocksEngine;
+use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
 use tikv::util::worker::FutureWorker;
 
