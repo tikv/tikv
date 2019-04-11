@@ -13,7 +13,6 @@
 
 mod lock;
 mod metrics;
-pub mod properties;
 mod reader;
 mod txn;
 mod write;

@@ -34,6 +34,7 @@ use protobuf::{self, Message, RepeatedField};
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
+use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
 use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
@@ -43,7 +44,6 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
-use crate::storage::mvcc::properties::{MvccProperties, RangeProperties};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;

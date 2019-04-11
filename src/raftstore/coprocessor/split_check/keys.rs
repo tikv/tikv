@@ -12,8 +12,6 @@
 // limitations under the License.
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::mvcc::properties::get_range_entries_and_versions;
-use crate::storage::mvcc::properties::RangeProperties;
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
@@ -24,6 +22,7 @@ use std::sync::Mutex;
 
 use super::super::error::Result;
 use super::super::metrics::*;
+use super::super::properties::{get_range_entries_and_versions, RangeProperties};
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
 
@@ -225,11 +224,11 @@ pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) ->
 #[cfg(test)]
 mod tests {
     use super::super::size::tests::must_split_at;
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
-    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::properties::{
+    use crate::raftstore::coprocessor::properties::{
         MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
     };
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
     use crate::util::worker::Runnable;

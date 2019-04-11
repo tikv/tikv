@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use kvproto::metapb::*;
 
 use crate::pd::RegionInfo;
-use crate::storage::mvcc::properties::SizeProperties;
+use crate::raftstore::coprocessor::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;

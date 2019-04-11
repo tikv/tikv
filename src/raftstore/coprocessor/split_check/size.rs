@@ -23,13 +23,14 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::util::escape;
+
 use super::super::error::Result;
 use super::super::metrics::*;
+use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::mvcc::properties::RangeProperties;
-use crate::util::escape;
 
 pub struct Checker {
     max_size: u64,
@@ -354,11 +355,11 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
+    use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::raftstore::store::{
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
     };
-    use crate::storage::mvcc::properties::RangePropertiesCollectorFactory;
     use crate::storage::Key;
     use crate::util::config::ReadableSize;
     use crate::util::worker::Runnable;

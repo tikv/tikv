@@ -40,8 +40,8 @@ const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
 const PROP_TOTAL_SIZE: &str = "tikv.total_size";
 const PROP_SIZE_INDEX: &str = "tikv.size_index";
 const PROP_RANGE_INDEX: &str = "tikv.range_index";
-const PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
-const PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
+pub const DEFAULT_PROP_SIZE_INDEX_DISTANCE: u64 = 4 * 1024 * 1024;
+pub const DEFAULT_PROP_KEYS_INDEX_DISTANCE: u64 = 40 * 1024;
 
 fn get_entry_size(value: &[u8], entry_type: DBEntryType) -> std::result::Result<u64, ()> {
     match entry_type {
@@ -383,7 +383,7 @@ impl TablePropertiesCollector for SizePropertiesCollector {
         self.index_handle.size += size;
         self.index_handle.offset += size as u64;
         // Add the start key for convenience.
-        if self.last_key.is_empty() || self.index_handle.size >= PROP_SIZE_INDEX_DISTANCE {
+        if self.last_key.is_empty() || self.index_handle.size >= DEFAULT_PROP_SIZE_INDEX_DISTANCE {
             self.props
                 .index_handles
                 .insert(key.to_owned(), self.index_handle.clone());
@@ -602,15 +602,37 @@ impl From<SizeProperties> for RangeProperties {
     }
 }
 
-#[derive(Default)]
 pub struct RangePropertiesCollector {
     props: RangeProperties,
     last_offsets: RangeOffsets,
     last_key: Vec<u8>,
     cur_offsets: RangeOffsets,
+    prop_size_index_distance: u64,
+    prop_keys_index_distance: u64,
+}
+
+impl Default for RangePropertiesCollector {
+    fn default() -> Self {
+        RangePropertiesCollector {
+            props: RangeProperties::default(),
+            last_offsets: RangeOffsets::default(),
+            last_key: vec![],
+            cur_offsets: RangeOffsets::default(),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+        }
+    }
 }
 
 impl RangePropertiesCollector {
+    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64) -> Self {
+        RangePropertiesCollector {
+            prop_size_index_distance,
+            prop_keys_index_distance,
+            ..Default::default()
+        }
+    }
+
     fn size_in_last_range(&self) -> u64 {
         self.cur_offsets.size - self.last_offsets.size
     }
@@ -637,8 +659,8 @@ impl TablePropertiesCollector for RangePropertiesCollector {
         self.cur_offsets.keys += 1;
         // Add the start key for convenience.
         if self.last_key.is_empty()
-            || self.size_in_last_range() >= PROP_SIZE_INDEX_DISTANCE
-            || self.keys_in_last_range() >= PROP_KEYS_INDEX_DISTANCE
+            || self.size_in_last_range() >= self.prop_size_index_distance
+            || self.keys_in_last_range() >= self.prop_keys_index_distance
         {
             self.insert_new_point(key.to_owned());
         }
@@ -655,12 +677,26 @@ impl TablePropertiesCollector for RangePropertiesCollector {
     }
 }
 
-#[derive(Default)]
-pub struct RangePropertiesCollectorFactory {}
+pub struct RangePropertiesCollectorFactory {
+    pub prop_size_index_distance: u64,
+    pub prop_keys_index_distance: u64,
+}
+
+impl Default for RangePropertiesCollectorFactory {
+    fn default() -> Self {
+        RangePropertiesCollectorFactory {
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+        }
+    }
+}
 
 impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(RangePropertiesCollector::default())
+        Box::new(RangePropertiesCollector::new(
+            self.prop_size_index_distance,
+            self.prop_keys_index_distance,
+        ))
     }
 }
 
@@ -703,8 +739,8 @@ mod tests {
     use tempdir::TempDir;
     use test::Bencher;
 
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys;
-    use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
     use engine::rocks;
@@ -868,18 +904,18 @@ mod tests {
         let cases = [
             ("a", 0),
             // handle "a": size = 1, offset = 1,
-            ("b", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("c", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("d", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+            ("b", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
+            ("c", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
+            ("d", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("e", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
             // handle "e": size = DISTANCE + 4, offset = DISTANCE + 5
-            ("f", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("g", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("h", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+            ("f", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
+            ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
+            ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
             // handle "i": size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9
-            ("j", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("k", PROP_SIZE_INDEX_DISTANCE),
+            ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE),
         ];
         // handle "k": size = DISTANCE / 8 * 12 + 2, offset = DISTANCE / 8 * 29 + 11
 
@@ -900,21 +936,24 @@ mod tests {
             props.largest_key().unwrap(),
             cases[cases.len() - 1].0.as_bytes()
         );
-        assert_eq!(props.total_size, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+        assert_eq!(
+            props.total_size,
+            DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11
+        );
         let handles = &props.index_handles;
         assert_eq!(handles.len(), 4);
         let a = &handles[b"a".as_ref()];
         assert_eq!(a.size, 1);
         assert_eq!(a.offset, 1);
         let e = &handles[b"e".as_ref()];
-        assert_eq!(e.size, PROP_SIZE_INDEX_DISTANCE + 4);
-        assert_eq!(e.offset, PROP_SIZE_INDEX_DISTANCE + 5);
+        assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 4);
+        assert_eq!(e.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
         let i = &handles[b"i".as_ref()];
-        assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
-        assert_eq!(i.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
+        assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4);
+        assert_eq!(i.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
         let k = &handles[b"k".as_ref()];
-        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
-        assert_eq!(k.offset, PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
+        assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 12 + 2);
+        assert_eq!(k.offset, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 29 + 11);
 
         let cases = [
             (" ", "z", k.offset),
@@ -939,26 +978,26 @@ mod tests {
         let cases = [
             ("a", 0, 1),
             // handle "a": size(size = 1, offset = 1),keys(1,1)
-            ("b", PROP_SIZE_INDEX_DISTANCE / 8, 1),
-            ("c", PROP_SIZE_INDEX_DISTANCE / 4, 1),
-            ("d", PROP_SIZE_INDEX_DISTANCE / 2, 1),
-            ("e", PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("b", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("c", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("d", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("e", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
             // handle "e": size(size = DISTANCE + 4, offset = DISTANCE + 5),keys(4,5)
-            ("f", PROP_SIZE_INDEX_DISTANCE / 4, 1),
-            ("g", PROP_SIZE_INDEX_DISTANCE / 2, 1),
-            ("h", PROP_SIZE_INDEX_DISTANCE / 8, 1),
-            ("i", PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("f", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
+            ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8, 1),
+            ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4, 1),
             // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
-            ("j", PROP_SIZE_INDEX_DISTANCE / 2, 1),
-            ("k", PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
+            ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2, 1),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
-            ("l", 0, PROP_KEYS_INDEX_DISTANCE / 2),
-            ("m", 0, PROP_KEYS_INDEX_DISTANCE / 2),
-            //handle "m": keys = PROP_KEYS_INDEX_DISTANCE,offset = 11+PROP_KEYS_INDEX_DISTANCE
-            ("n", 1, PROP_KEYS_INDEX_DISTANCE),
-            //handle "n": keys = PROP_KEYS_INDEX_DISTANCE, offset = 11+2*PROP_KEYS_INDEX_DISTANCE
+            ("l", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
+            ("m", 0, DEFAULT_PROP_KEYS_INDEX_DISTANCE / 2),
+            //handle "m": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE,offset = 11+DEFAULT_PROP_KEYS_INDEX_DISTANCE
+            ("n", 1, DEFAULT_PROP_KEYS_INDEX_DISTANCE),
+            //handle "n": keys = DEFAULT_PROP_KEYS_INDEX_DISTANCE, offset = 11+2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
             ("o", 1, 1),
-            // handle　"o": keys = 1, offset = 12 + 2*PROP_KEYS_INDEX_DISTANCE
+            // handle　"o": keys = 1, offset = 12 + 2*DEFAULT_PROP_KEYS_INDEX_DISTANCE
         ];
 
         let mut collector = RangePropertiesCollector::default();
@@ -982,7 +1021,7 @@ mod tests {
         );
         assert_eq!(
             props.get_approximate_size_in_range(b"", b"k"),
-            PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
+            DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
         assert_eq!(props.get_approximate_keys_in_range(b"", b"k"), 11 as u64);
 
@@ -991,17 +1030,17 @@ mod tests {
         let a = &handles[b"a".as_ref()];
         assert_eq!(a.size, 1);
         let e = &handles[b"e".as_ref()];
-        assert_eq!(e.size, PROP_SIZE_INDEX_DISTANCE + 5);
+        assert_eq!(e.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE + 5);
         let i = &handles[b"i".as_ref()];
-        assert_eq!(i.size, PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
+        assert_eq!(i.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 17 + 9);
         let k = &handles[b"k".as_ref()];
-        assert_eq!(k.size, PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
+        assert_eq!(k.size, DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11);
         let m = &handles[b"m".as_ref()];
-        assert_eq!(m.keys, 11 + PROP_KEYS_INDEX_DISTANCE);
+        assert_eq!(m.keys, 11 + DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let n = &handles[b"n".as_ref()];
-        assert_eq!(n.keys, 11 + 2 * PROP_KEYS_INDEX_DISTANCE);
+        assert_eq!(n.keys, 11 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let o = &handles[b"o".as_ref()];
-        assert_eq!(o.keys, 12 + 2 * PROP_KEYS_INDEX_DISTANCE);
+        assert_eq!(o.keys, 12 + 2 * DEFAULT_PROP_KEYS_INDEX_DISTANCE);
         let empty = RangeOffsets::default();
         let cases = [
             (" ", "k", k, &empty),
@@ -1032,18 +1071,18 @@ mod tests {
         let cases = [
             ("a", 0),
             // handle "a": size(size = 1, offset = 1),keys(1,1)
-            ("b", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("c", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("d", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("e", PROP_SIZE_INDEX_DISTANCE / 8),
+            ("b", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
+            ("c", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
+            ("d", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("e", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
             // handle "e": size(size = DISTANCE + 4, offset = DISTANCE + 5),keys(4,5)
-            ("f", PROP_SIZE_INDEX_DISTANCE / 4),
-            ("g", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("h", PROP_SIZE_INDEX_DISTANCE / 8),
-            ("i", PROP_SIZE_INDEX_DISTANCE / 4),
+            ("f", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
+            ("g", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("h", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8),
+            ("i", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 4),
             // handle "i": size(size = DISTANCE / 8 * 9 + 4, offset = DISTANCE / 8 * 17 + 9),keys(4,5)
-            ("j", PROP_SIZE_INDEX_DISTANCE / 2),
-            ("k", PROP_SIZE_INDEX_DISTANCE / 2),
+            ("j", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
+            ("k", DEFAULT_PROP_SIZE_INDEX_DISTANCE / 2),
             // handle "k": size(size = DISTANCE + 2, offset = DISTANCE / 8 * 25 + 11),keys(2,11)
         ];
 
@@ -1075,11 +1114,11 @@ mod tests {
         );
         assert_eq!(
             props.get_approximate_size_in_range(b"e", b"i"),
-            PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4
+            DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 9 + 4
         );
         assert_eq!(
             props.get_approximate_size_in_range(b"", b"k"),
-            PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
+            DEFAULT_PROP_SIZE_INDEX_DISTANCE / 8 * 25 + 11
         );
     }
 }

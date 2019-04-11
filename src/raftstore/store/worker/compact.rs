@@ -17,7 +17,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::storage::mvcc::properties::get_range_entries_and_versions;
+use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 use crate::util::escape;
 use crate::util::worker::Runnable;
 use engine::rocks;
@@ -262,9 +262,9 @@ mod tests {
     use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
 
+    use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys::data_key;
-    use crate::storage::mvcc::properties::get_range_entries_and_versions;
-    use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
 

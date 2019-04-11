@@ -28,6 +28,12 @@ use sys_info;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::properties::{
+    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+};
+use crate::raftstore::coprocessor::properties::{
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+};
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
@@ -35,9 +41,6 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
-use crate::storage::mvcc::properties::{
-    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
-};
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use crate::util::config::{
     self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
@@ -157,6 +160,8 @@ macro_rules! cf_config {
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
             pub titan: TitanCfConfig,
+            pub prop_size_index_distance: u64,
+            pub prop_keys_index_distance: u64,
         }
     };
 }
@@ -356,6 +361,8 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }
@@ -364,7 +371,10 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(&self) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -415,6 +425,8 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -433,7 +445,10 @@ impl WriteCfConfig {
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -476,6 +491,8 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -530,6 +547,8 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -781,6 +800,8 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }

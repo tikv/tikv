@@ -13,7 +13,7 @@
 
 use std::cmp;
 
-use crate::storage::mvcc::properties::RangeProperties;
+use crate::raftstore::coprocessor::properties::RangeProperties;
 use crate::util::collections::HashSet;
 use engine::rocks::{CompactionJobInfo, EventListener};
 

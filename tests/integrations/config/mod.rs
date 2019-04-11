@@ -247,6 +247,8 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.982,
                 merge_small_file_threshold: ReadableSize::kb(21),
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -296,6 +298,8 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -345,6 +349,8 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -394,6 +400,8 @@ fn test_serde_custom_tikv_config() {
                 sample_ratio: 0.1,
                 merge_small_file_threshold: ReadableSize::mb(8),
             },
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
         titan: TitanDBConfig {
             enabled: true,
@@ -465,6 +473,8 @@ fn test_serde_custom_tikv_config() {
             soft_pending_compaction_bytes_limit: ReadableSize::gb(12),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(12),
             titan: TitanCfConfig::default(),
+            prop_size_index_distance: 4000000,
+            prop_keys_index_distance: 40000,
         },
     };
     value.storage = StorageConfig {
