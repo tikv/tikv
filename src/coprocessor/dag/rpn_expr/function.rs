@@ -76,7 +76,7 @@ impl Helper {
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -100,7 +100,7 @@ impl Helper {
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Option<Arg0>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -134,7 +134,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -194,7 +199,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -218,7 +228,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -243,7 +258,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -268,7 +288,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -297,7 +322,13 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+            &Option<Arg2>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 3);
 
