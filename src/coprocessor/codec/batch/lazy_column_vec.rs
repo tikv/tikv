@@ -194,8 +194,13 @@ impl LazyBatchColumnVec {
         for col in &self.columns {
             min_len = min_len.min(col.len());
         }
+        self.truncate(min_len);
+    }
+
+    /// Shortens the rows, keeping the first `len` rows and dropping the rest.
+    pub fn truncate(&mut self, len: usize) {
         for col in &mut self.columns {
-            col.truncate(min_len);
+            col.truncate(len);
         }
         self.assert_columns_equal_length();
     }
