@@ -78,6 +78,9 @@
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
 
+#[macro_use]
+extern crate quick_error;
+
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
@@ -102,3 +105,15 @@ pub use crate::imp::*;
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();
+
+pub use imp::AllocatorError;
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        AllocatorError(e: AllocatorError) {
+            from()
+            display("{}", e)
+        }
+    }
+}

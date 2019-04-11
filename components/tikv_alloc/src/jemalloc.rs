@@ -1,10 +1,10 @@
 // The implementation of this crate when jemalloc is turned on
 
-use crate::AllocStats;
-use jemalloc_ctl::{stats, Epoch as JeEpoch};
-use jemallocator::ffi::malloc_stats_print;
+use crate::{AllocStats, Error};
+use jemalloc_ctl::{epoch, stats};
+use jemalloc_sys::malloc_stats_print;
 use libc::{self, c_char, c_void};
-use std::{io, ptr, slice};
+use std::{ptr, slice};
 
 pub type Allocator = jemallocator::Jemalloc;
 pub const fn allocator() -> Allocator {
@@ -12,12 +12,13 @@ pub const fn allocator() -> Allocator {
 }
 
 pub use self::profiling::dump_prof;
+pub use jemalloc_ctl::Error as AllocatorError;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
     unsafe {
         malloc_stats_print(
-            write_cb,
+            Some(write_cb),
             &mut buf as *mut Vec<u8> as *mut c_void,
             ptr::null(),
         )
@@ -25,17 +26,17 @@ pub fn dump_stats() -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
+pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
     // Stats are cached. Need to advance epoch to refresh.
-    JeEpoch::new()?.advance()?;
+    epoch::advance()?;
 
     Ok(Some(vec![
-        ("allocated", stats::allocated()?),
-        ("active", stats::active()?),
-        ("metadata", stats::metadata()?),
-        ("resident", stats::resident()?),
-        ("mapped", stats::mapped()?),
-        ("retained", stats::retained()?),
+        ("allocated", stats::allocated::read()?),
+        ("active", stats::active::read()?),
+        ("metadata", stats::metadata::read()?),
+        ("resident", stats::resident::read()?),
+        ("mapped", stats::mapped::read()?),
+        ("retained", stats::retained::read()?),
     ]))
 }
 

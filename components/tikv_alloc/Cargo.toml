@@ -16,29 +16,34 @@ mem-profiling = ["jemallocator/profiling"]
 [dependencies]
 libc = "0.2"
 log = "0.3"
+quick-error = "1.2.2"
 
 [dev-dependencies]
 tempdir = "0.3"
 
-[dependencies.jemallocator]
-version = "0.1.9"
-optional = true
-features = ["unprefixed_malloc_on_supported_platforms"]
-
-# FIXME: shouldn't need to link to this crate, but the 'stats'
-# feature is missing in jemallocator.
+# FIXME: Shouldn't need to depend on the git repos but jemalloc-ctl 0.3
+# isn't published.
 #
-# https://github.com/gnzlbg/jemallocator/issues/112
-# https://github.com/tikv/tikv/issues/4406
+# https://github.com/gnzlbg/jemallocator/issues/113
+
+[dependencies.jemallocator]
+version = "0.3.0"
+optional = true
+features = ["stats", "unprefixed_malloc_on_supported_platforms"]
+git = "https://github.com/gnzlbg/jemallocator.git"
+rev = "522c032dc394524ae6b7a5b0661ba879bd960f7c"
 
 [dependencies.jemalloc-sys]
-version = "0.1.8"
+version = "0.3.0"
 optional = true
-features = ["stats"]
+git = "https://github.com/gnzlbg/jemallocator.git"
+rev = "522c032dc394524ae6b7a5b0661ba879bd960f7c"
 
 [dependencies.jemalloc-ctl]
-version = "0.2.0"
+version = "0.3.0"
 optional = true
+git = "https://github.com/gnzlbg/jemallocator.git"
+rev = "522c032dc394524ae6b7a5b0661ba879bd960f7c"
 
 [dependencies.tcmalloc]
 version = "0.3.0"
