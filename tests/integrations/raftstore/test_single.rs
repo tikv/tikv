@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use engine::{CfName, CF_DEFAULT, CF_WRITE};
 use test_raftstore::*;
 use tikv::util::config::*;
 
@@ -49,13 +50,9 @@ fn test_delete<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.run();
-
-    let cf = "default";
-
+fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
     for i in 1..1000 {
-        let (k, v) = (format!("key{}", i), format!("value{}", i));
+        let (k, v) = (format!("key{:08}", i), format!("value{}", i));
         let key = k.as_bytes();
         let value = v.as_bytes();
         cluster.must_put_cf(cf, key, value);
@@ -63,10 +60,11 @@ fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>) {
         assert_eq!(v, Some(value.to_vec()));
     }
 
-    cluster.must_delete_range_cf(cf, b"key1", b"key9999");
+    // Empty keys means the whole range.
+    cluster.must_delete_range_cf(cf, b"", b"");
 
     for i in 1..1000 {
-        let k = format!("key{}", i);
+        let k = format!("key{:08}", i);
         let key = k.as_bytes();
         assert!(cluster.get_cf(cf, key).is_none());
     }
@@ -118,9 +116,23 @@ fn test_node_delete() {
 }
 
 #[test]
-fn test_node_delete_range() {
+fn test_node_use_delete_range() {
     let mut cluster = new_node_cluster(0, 1);
-    test_delete_range(&mut cluster);
+    cluster.cfg.raft_store.use_delete_range = true;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
+}
+
+#[test]
+fn test_node_not_use_delete_range() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.cfg.raft_store.use_delete_range = false;
+    cluster.run();
+    test_delete_range(&mut cluster, CF_DEFAULT);
+    // Prefix bloom filter is always enabled in the Write CF.
+    test_delete_range(&mut cluster, CF_WRITE);
 }
 
 #[test]
@@ -139,12 +151,6 @@ fn test_server_put() {
 fn test_server_delete() {
     let mut cluster = new_server_cluster(0, 1);
     test_delete(&mut cluster);
-}
-
-#[test]
-fn test_server_delete_range() {
-    let mut cluster = new_server_cluster(0, 1);
-    test_delete_range(&mut cluster);
 }
 
 #[test]

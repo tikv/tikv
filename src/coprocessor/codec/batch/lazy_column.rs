@@ -42,6 +42,13 @@ impl std::fmt::Debug for LazyBatchColumn {
     }
 }
 
+impl From<VectorValue> for LazyBatchColumn {
+    #[inline]
+    fn from(vec: VectorValue) -> Self {
+        LazyBatchColumn::Decoded(vec)
+    }
+}
+
 impl Clone for LazyBatchColumn {
     #[inline]
     fn clone(&self) -> Self {

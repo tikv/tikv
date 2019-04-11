@@ -24,7 +24,7 @@ macro_rules! impl_specialize {
             /// Converts this reference container to a concrete type specialized reference
             /// container.
             #[inline]
-            pub fn $name(self) -> VectorLikeValueRefSpecialized<'a, Option<$ty>> {
+            pub fn $name(self) -> VectorLikeValueRefSpecialized<'a, $ty> {
                 match self {
                     VectorLikeValueRef::Vector(v) => {
                         VectorLikeValueRefSpecialized::Vector(v.as_ref())
@@ -36,7 +36,7 @@ macro_rules! impl_specialize {
             }
         }
 
-        impl<'a> From<VectorLikeValueRef<'a>> for VectorLikeValueRefSpecialized<'a, Option<$ty>> {
+        impl<'a> From<VectorLikeValueRef<'a>> for VectorLikeValueRefSpecialized<'a, $ty> {
             #[inline]
             fn from(v: VectorLikeValueRef<'a>) -> Self {
                 v.$name()
@@ -63,12 +63,12 @@ impl_specialize! { Json, specialize_as_json }
 /// this type so that repeated access over this type later won't pay for type checks.
 #[derive(Copy, Clone)]
 pub enum VectorLikeValueRefSpecialized<'a, T> {
-    Vector(&'a [T]),
-    Scalar(&'a T),
+    Vector(&'a [Option<T>]),
+    Scalar(&'a Option<T>),
 }
 
 impl<'a, T> Index<usize> for VectorLikeValueRefSpecialized<'a, T> {
-    type Output = T;
+    type Output = Option<T>;
 
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
