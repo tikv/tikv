@@ -16,7 +16,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use crate::grpc::EnvBuilder;
+use grpcio::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
 use kvproto::metapb;

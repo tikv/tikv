@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use crate::grpc::*;
+use grpcio::*;
 use futures::{Future, Stream};
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;

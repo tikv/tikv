@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::{Error as GrpcError, WriteFlags};
-use crate::grpc::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
+use grpcio::{Error as GrpcError, WriteFlags};
+use grpcio::{RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink};
 use engine::rocks::util::stats as rocksdb_stats;
 use engine::Engines;
 use fail;

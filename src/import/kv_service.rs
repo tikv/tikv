@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
+use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use futures::sync::mpsc;
 use futures::{Future, Stream};
 use futures_cpupool::{Builder, CpuPool};

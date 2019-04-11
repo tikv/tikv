@@ -20,7 +20,7 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::grpc::{
+use grpcio::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
 use crate::util::collections::{HashMap, HashMapEntry};

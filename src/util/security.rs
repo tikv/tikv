@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use engine::rocks::Env;
 
-use crate::grpc::{
+use grpcio::{
     Channel, ChannelBuilder, ChannelCredentialsBuilder, ServerBuilder, ServerCredentialsBuilder,
 };
 

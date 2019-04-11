@@ -64,7 +64,6 @@ extern crate more_asserts;
 extern crate vlog;
 #[cfg(test)]
 extern crate test;
-use grpcio as grpc;
 
 #[macro_use]
 pub mod util;

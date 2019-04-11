@@ -14,7 +14,7 @@
 use std::i32;
 
 use super::Result;
-use crate::grpc::CompressionAlgorithms;
+use grpcio::CompressionAlgorithms;
 
 use crate::util::collections::HashMap;
 use crate::util::config::{self, ReadableDuration, ReadableSize};

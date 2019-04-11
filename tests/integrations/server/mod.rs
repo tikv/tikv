@@ -16,7 +16,7 @@ mod raft_client;
 
 use std::sync::Arc;
 
-use crate::grpc::*;
+use grpcio::*;
 use futures::Future;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;

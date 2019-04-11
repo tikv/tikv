@@ -18,7 +18,7 @@ use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::grpc::{
+use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };

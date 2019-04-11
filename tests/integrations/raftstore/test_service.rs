@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
 
 use kvproto::coprocessor::*;

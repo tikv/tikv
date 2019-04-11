@@ -13,8 +13,6 @@
 
 #![feature(test)]
 
-use grpcio as grpc;
-
 extern crate test;
 
 #[macro_use(

@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
+use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use futures::sync::mpsc;

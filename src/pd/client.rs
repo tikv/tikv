@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
+use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
 use kvproto::metapb;

@@ -98,7 +98,6 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.4"
 crossbeam = "0.5"
 derive_more = "0.11.0"
@@ -121,6 +120,10 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
+
+[dependencies.grpcio]
+version = "0.4"
+features = [ "secure" ]
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::grpc::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
+use grpcio::{ChannelBuilder, EnvBuilder, Environment, Server as GrpcServer, ServerBuilder};
 use engine::Engines;
 use futures::{Future, Stream};
 use kvproto::debugpb_grpc::create_debug;

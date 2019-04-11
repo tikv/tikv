@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::grpc::{
+use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
