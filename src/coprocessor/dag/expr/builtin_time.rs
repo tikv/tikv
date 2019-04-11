@@ -322,49 +322,21 @@ impl ScalarFunc {
         Ok(None)
     }
 
-    fn period_to_month(period: u64) -> u64 {
-        if period == 0 {
-            return 0;
-        }
-        let (year, month) = (period / 100, period % 100);
-        if year < 70 {
-            year * 12 + month - 1 + 24000 // 2000*12
-        } else if year < 100 {
-            year * 12 + month - 1 + 22800 // 1900*12
-        } else {
-            year * 12 + month - 1
-        }
-    }
-
-    fn month_to_period(month: u64) -> u64 {
-        if month == 0 {
-            return 0;
-        }
-        let year = month / 12;
-        if year < 70 {
-            year * 100 + month % 12 + 1 + 200000 // 2000*100
-        } else if year < 100 {
-            year * 100 + month % 12 + 1 + 190000 // 1900*100
-        } else {
-            year * 100 + month % 12 + 1
-        }
-    }
-
     pub fn period_add(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p = try_opt!(self.children[0].eval_int(ctx, row));
         if p == 0 {
             return Ok(Some(0));
         }
         let n = try_opt!(self.children[1].eval_int(ctx, row));
-        let (month, _) = (i64::from(Self::period_to_month(p as u64) as i32)).overflowing_add(n);
-        Ok(Some(Self::month_to_period(u64::from(month as u32)) as i64))
+        let (month, _) = (i64::from(period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(month_to_period(u64::from(month as u32)) as i64))
     }
 
     pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let p1 = try_opt!(self.children[0].eval_int(ctx, row));
         let p2 = try_opt!(self.children[1].eval_int(ctx, row));
         Ok(Some(
-            Self::period_to_month(p1 as u64) as i64 - Self::period_to_month(p2 as u64) as i64,
+            period_to_month(p1 as u64) as i64 - period_to_month(p2 as u64) as i64,
         ))
     }
 
@@ -497,6 +469,36 @@ impl ScalarFunc {
         };
         let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
         Ok(Some(Cow::Owned(res)))
+    }
+}
+
+#[inline]
+fn period_to_month(period: u64) -> u64 {
+    if period == 0 {
+        return 0;
+    }
+    let (year, month) = (period / 100, period % 100);
+    if year < 70 {
+        (year + 2000) * 12 + month - 1
+    } else if year < 100 {
+        (year + 1900) * 12 + month - 1
+    } else {
+        year * 12 + month - 1
+    }
+}
+
+#[inline]
+fn month_to_period(month: u64) -> u64 {
+    if month == 0 {
+        return 0;
+    }
+    let year = month / 12;
+    if year < 70 {
+        (year + 2000) * 100 + month % 12 + 1
+    } else if year < 100 {
+        (year + 1900) * 100 + month % 12 + 1
+    } else {
+        year * 100 + month % 12 + 1
     }
 }
 
