@@ -22,6 +22,7 @@ use super::metrics::*;
 use prometheus::local::*;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
+
 pub struct TlsCop {
     pub local_copr_req_histogram_vec: RefCell<LocalHistogramVec>,
     pub local_outdated_req_wait_time: RefCell<LocalHistogramVec>,

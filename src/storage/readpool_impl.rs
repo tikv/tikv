@@ -48,7 +48,6 @@ thread_local! {
 pub struct ReadPoolImpl;
 
 impl ReadPoolImpl {
-    #[inline]
     pub fn build_read_pool(
         config: &readpool::Config,
         pd_sender: FutureScheduler<PdTask>,
