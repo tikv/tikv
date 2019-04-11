@@ -137,6 +137,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
+            | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
@@ -372,6 +373,7 @@ impl ScalarFunc {
             ScalarFuncSig::AddTimeDateTimeNull
             | ScalarFuncSig::AddTimeDurationNull
             | ScalarFuncSig::SubTimeDateTimeNull
+            | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::PI => (0, 0),
 
             // unimplement signature
@@ -464,10 +466,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDateStringDecimal
             | ScalarFuncSig::SubDateStringInt
             | ScalarFuncSig::SubDateStringString
-            | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
-            | ScalarFuncSig::SubTimeDurationNull
             | ScalarFuncSig::SubTimeStringNull
             | ScalarFuncSig::SysDateWithFsp
             | ScalarFuncSig::SysDateWithoutFsp
@@ -1039,6 +1039,8 @@ dispatch_call! {
         AddTimeDurationNull => add_time_duration_null,
 
         SubDurationAndDuration => sub_duration_and_duration,
+        SubDurationAndString => sub_duration_and_string,
+        SubTimeDurationNull => sub_time_duration_null,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1185,6 +1187,7 @@ mod tests {
                     ScalarFuncSig::SubDatetimeAndDuration,
                     ScalarFuncSig::SubDatetimeAndString,
                     ScalarFuncSig::SubDurationAndDuration,
+                    ScalarFuncSig::SubDurationAndString,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
                 ],
@@ -1439,6 +1442,7 @@ mod tests {
                     ScalarFuncSig::AddTimeDateTimeNull,
                     ScalarFuncSig::AddTimeDurationNull,
                     ScalarFuncSig::SubTimeDateTimeNull,
+                    ScalarFuncSig::SubTimeDurationNull,
                     ScalarFuncSig::PI,
                 ],
                 0,
@@ -1553,10 +1557,8 @@ mod tests {
             ScalarFuncSig::SubDateStringDecimal,
             ScalarFuncSig::SubDateStringInt,
             ScalarFuncSig::SubDateStringString,
-            ScalarFuncSig::SubDurationAndString,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
-            ScalarFuncSig::SubTimeDurationNull,
             ScalarFuncSig::SubTimeStringNull,
             ScalarFuncSig::SysDateWithFsp,
             ScalarFuncSig::SysDateWithoutFsp,
