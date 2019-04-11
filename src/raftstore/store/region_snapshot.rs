@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
 use std::cmp;
 use std::sync::Arc;
 
-use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use crate::storage::engine::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use crate::util::metrics::CRITICAL_ERROR;
 use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -111,7 +111,10 @@ impl RegionSnapshot {
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
-        util::get_region_properties_cf(&self.snap.get_db(), cf, self.get_region())
+        let start = keys::enc_start_key(&self.region);
+        let end = keys::enc_end_key(&self.region);
+        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        Ok(prop)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
@@ -133,14 +136,24 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -181,7 +194,7 @@ fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     iter_opt.set_upper_bound(upper_bound);
 }
 
-// we use rocksdb's style iterator, doesn't need to impl std iterator.
+// we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
         set_lower_bound(&mut iter_opt, &region);
@@ -333,17 +346,20 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use crate::storage::engine::Writable;
     use kvproto::metapb::{Peer, Region};
     use tempdir::TempDir;
 
-    use crate::raftstore::store::engine::*;
     use crate::raftstore::store::keys::*;
-    use crate::raftstore::store::{Engines, PeerStorage};
+    use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use crate::util::rocksdb_util::{self, compact_files_in_range};
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
     use crate::util::{escape, worker};
+    use engine::rocks;
+    use engine::rocks::util::compact_files_in_range;
+    use engine::rocks::Writable;
+    use engine::Engines;
+    use engine::*;
+    use engine::{ALL_CFS, CF_DEFAULT};
 
     use super::*;
 
@@ -353,11 +369,11 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
             Arc::new(
-                rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                     .unwrap(),
             ),
             Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             ),
         )
@@ -444,18 +460,10 @@ mod tests {
         r.set_end_key(b"key4".to_vec());
         let store = new_peer_storage(engines.clone(), &r);
 
-        let (key1, value1) = (b"key1", 2u64);
-        engines.kv.put_u64(&data_key(key1), value1).expect("");
-        let (key2, value2) = (b"key2", 2i64);
-        engines.kv.put_i64(&data_key(key2), value2).expect("");
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::new(&store);
-        let v1 = snap.get_u64(key1).expect("");
-        assert_eq!(v1, Some(value1));
-        let v2 = snap.get_i64(key2).expect("");
-        assert_eq!(v2, Some(value2));
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 

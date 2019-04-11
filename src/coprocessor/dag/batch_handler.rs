@@ -18,7 +18,7 @@ use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor};
+use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
@@ -69,13 +69,14 @@ impl BatchDAGHandler {
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
         ranges_len: usize,
+        executors_len: usize,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(ranges_len),
+            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
             metrics: ExecutorMetrics::default(),
         }
     }

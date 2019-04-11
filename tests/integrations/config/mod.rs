@@ -16,11 +16,10 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use slog::Level;
-use tikv::storage::engine::{
+
+use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use toml;
-
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -80,6 +79,7 @@ fn test_serde_custom_tikv_config() {
         end_point_stream_channel_size: 16,
         end_point_batch_row_limit: 64,
         end_point_stream_batch_row_limit: 4096,
+        end_point_enable_batch_if_possible: true,
         end_point_request_max_handle_duration: ReadableDuration::secs(12),
         snap_max_write_bytes_per_sec: ReadableSize::mb(10),
         snap_max_total_size: ReadableSize::gb(10),

@@ -11,18 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
 
 use crc::crc32::{self, Digest, Hasher32};
-
-pub fn read_all<P: AsRef<Path>>(path: P) -> io::Result<Vec<u8>> {
-    let mut f = File::open(path)?;
-    let mut content = Vec::new();
-    f.read_to_end(&mut content)?;
-    Ok(content)
-}
 
 pub fn get_file_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
     let meta = fs::metadata(path)?;
@@ -62,23 +55,6 @@ pub fn create_dir_if_not_exist<P: AsRef<Path>>(dir: P) -> io::Result<bool> {
         Err(ref e) if e.kind() == ErrorKind::AlreadyExists => Ok(false),
         Err(e) => Err(e),
     }
-}
-
-/// Copies the source file to a newly created file.
-pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
-    if !from.as_ref().is_file() {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "the source path is not an existing regular file",
-        ));
-    }
-
-    let mut reader = File::open(from)?;
-    let mut writer = File::create(to)?;
-
-    let res = io::copy(&mut reader, &mut writer)?;
-    writer.sync_all()?;
-    Ok(res)
 }
 
 const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
@@ -190,7 +166,7 @@ mod tests {
 
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
         let s: String = thread_rng().gen_ascii_chars().take(size).collect();
-        File::create(path).unwrap().write_all(s.as_bytes()).unwrap();
+        fs::write(path, s.as_bytes()).unwrap();
         let mut digest = Digest::new(crc32::IEEE);
         digest.write(s.as_bytes());
         digest.sum32()

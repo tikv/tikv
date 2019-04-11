@@ -301,8 +301,7 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use crate::raftstore::store::engine::IterOption;
-    use crate::storage::engine::{
+    use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
     use crate::storage::mvcc::Error as MvccError;
@@ -311,6 +310,7 @@ mod tests {
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use engine::IterOption;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";

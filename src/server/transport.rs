@@ -313,7 +313,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
-                    "channel is unavaliable, failed to schedule snapshot";
+                    "channel is unavailable, failed to schedule snapshot";
                     "to_addr" => addr
                 );
                 cb(Err(box_err!("failed to schedule snapshot")));

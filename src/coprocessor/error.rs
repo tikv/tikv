@@ -41,23 +41,23 @@ quick_error! {
         Eval(err: tipb::select::Error) {
             from()
             description("eval failed")
-            display("eval error {:?}", err)
+            display("Eval error: {}", err.get_msg())
         }
         Other(err: Box<dyn error::Error + Send + Sync>) {
             from()
             cause(err.as_ref())
             description(err.description())
-            display("unknown error {:?}", err)
+            display("{}", err)
         }
     }
 }
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl From<storage::engine::Error> for Error {
-    fn from(e: storage::engine::Error) -> Error {
+impl From<storage::kv::Error> for Error {
+    fn from(e: storage::kv::Error) -> Error {
         match e {
-            storage::engine::Error::Request(e) => Error::Region(e),
+            storage::kv::Error::Request(e) => Error::Region(e),
             _ => Error::Other(Box::new(e)),
         }
     }
