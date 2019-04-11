@@ -2040,7 +2040,6 @@ version = "0.0.1"
 dependencies = [
  "rand 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "slog 2.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "tikv 3.0.0-beta.1",
  "tikv_util 0.1.0",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

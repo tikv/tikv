@@ -5,7 +5,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tikv = { path = "../../" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 rand = "0.5"
