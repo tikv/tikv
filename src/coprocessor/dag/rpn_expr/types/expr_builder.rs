@@ -359,6 +359,7 @@ mod tests {
 
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::Result;
+    use crate::util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[derive(Debug, Clone, Copy)]
@@ -449,8 +450,6 @@ mod tests {
     #[test]
     #[allow(clippy::float_cmp)]
     fn test_append_rpn_nodes_recursively() {
-        use crate::util::codec::number::NumberEncoder;
-
         // Input:
         // FnD(a, FnA(FnC(b, c, d)), FnA(FnB(e, f))
         //
@@ -666,5 +665,79 @@ mod tests {
 
         // Finish
         assert!(it.next().is_none())
+    }
+
+    #[test]
+    fn test_max_columns_check() {
+        let mut vec = vec![];
+
+        // Col offset = 0. The minimum success max_columns is 1.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ColumnRef);
+        node.mut_val().encode_i64(0).unwrap();
+        assert!(
+            append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, 0).is_err()
+        );
+        for i in 1..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
+
+        // Col offset = 3. The minimum success max_columns is 4.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ColumnRef);
+        node.mut_val().encode_i64(3).unwrap();
+        for i in 0..=3 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_err()
+            );
+        }
+        for i in 4..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
+
+        // Col offset = 1, 2, 5. The minimum success max_columns is 6.
+        let mut node = Expr::new();
+        node.set_tp(ExprType::ScalarFunc);
+        node.set_sig(ScalarFuncSig::CastIntAsString); // FnC
+        node.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::LongLong);
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(1).unwrap();
+            n
+        });
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(2).unwrap();
+            n
+        });
+        node.mut_children().push({
+            let mut n = Expr::new();
+            n.set_tp(ExprType::ColumnRef);
+            n.mut_val().encode_i64(5).unwrap();
+            n
+        });
+        for i in 0..=5 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_err()
+            );
+        }
+        for i in 6..10 {
+            assert!(
+                append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
+                    .is_ok()
+            );
+        }
     }
 }
