@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
 //! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
@@ -48,7 +37,7 @@ use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use crate::util::time::{Duration, Instant};
+use tikv_util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;

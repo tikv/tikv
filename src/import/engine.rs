@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
 use std::fmt;
@@ -32,7 +21,6 @@ use crate::storage::is_short_value;
 use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
-use crate::util::config::MB;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
@@ -40,12 +28,13 @@ use engine::rocks::{
     WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
+use tikv_util::config::MB;
 
 use super::common::*;
 use super::Result;
 use crate::import::stream::SSTFile;
-use crate::util::security;
-use crate::util::security::SecurityConfig;
+use tikv_util::security;
+use tikv_util::security::SecurityConfig;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -387,8 +376,8 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
-    use crate::util::file::file_exists;
-    use crate::util::security::encrypted_env_from_cipher_file;
+    use tikv_util::file::file_exists;
+    use tikv_util::security::encrypted_env_from_cipher_file;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
