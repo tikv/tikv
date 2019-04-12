@@ -932,20 +932,16 @@ where
     fn notify(&self, id: usize) {
         let n = Arc::new(self.clone());
         let mut s = self.0.lock().unwrap();
-        if let Some(spawn) = s.as_mut() {
-            if let Ok(Async::NotReady) = spawn.poll_future_notify(&n, id) {
-                return;
-            }
-        } else {
-            return;
-        }
-        *s = None;
+        match s.as_mut().map(|spawn| spawn.poll_future_notify(&n, id)) {
+            Some(Ok(Async::NotReady)) | None => return,
+            _ => *s = None,
+        };
     }
 }
 
 fn poll_future_notify<F: Future<Item = (), Error = ()> + Send + 'static>(f: F) {
     let spawn = Arc::new(Mutex::new(Some(executor::spawn(f))));
-    let notify = BatchCommandsNotify(Arc::clone(&spawn));
+    let notify = BatchCommandsNotify(spawn);
     notify.notify(0);
 }
 
