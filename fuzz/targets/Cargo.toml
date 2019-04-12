@@ -10,5 +10,5 @@ path = "mod.rs"
 [dependencies]
 byteorder = "1"
 failure = "0.1"
-tikv = {path = "../.."}
 tikv_util = { path = "../../components/tikv_util" }
+tikv = {path = "../..", default-features = false}
