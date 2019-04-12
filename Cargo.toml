@@ -9,12 +9,13 @@ edition = "2018"
 publish = false
 
 [features]
-default = []
+default = ["tikv_alloc/default"]
+tcmalloc = ["tikv_alloc/tcmalloc"]
+jemalloc = ["tikv_alloc/jemalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
-no-jemalloc = ["tikv_alloc/no-jemalloc"]
 
 [lib]
 name = "tikv"
@@ -87,7 +88,7 @@ sys-info = "0.5.1"
 indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
 futures-cpupool = "0.1"
-tikv_alloc = { path = "components/tikv_alloc" }
+tikv_alloc = { path = "components/tikv_alloc", default-features = false }
 tokio-core = "0.1"
 tokio-timer = "0.2"
 tokio-executor = "0.1"

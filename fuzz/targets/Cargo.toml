@@ -9,4 +9,4 @@ path = "mod.rs"
 [dependencies]
 byteorder = "1"
 failure = "0.1"
-tikv = {path = "../.."}
+tikv = {path = "../..", default-features = false}
