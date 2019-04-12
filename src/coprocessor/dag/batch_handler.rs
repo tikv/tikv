@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -18,7 +7,7 @@ use protobuf::{Message, RepeatedField};
 use kvproto::coprocessor::Response;
 use tipb::select::{Chunk, SelectResponse};
 
-use super::batch_executor::interface::{BatchExecuteStatistics, BatchExecutor};
+use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::*;
@@ -69,13 +58,14 @@ impl BatchDAGHandler {
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
         ranges_len: usize,
+        executors_len: usize,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(ranges_len),
+            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
             metrics: ExecutorMetrics::default(),
         }
     }

@@ -1,22 +1,17 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::{keys, util, CasualMessage, CasualRouter};
-use crate::storage::engine::DB;
-use kvproto::pdpb::CheckPolicy;
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use crate::storage::mvcc::properties::get_range_entries_and_versions;
+use crate::storage::mvcc::properties::RangeProperties;
+use engine::rocks::DB;
+use engine::rocks::{self, Range};
+use engine::util;
+use engine::CF_WRITE;
+use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
 
+use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
@@ -122,7 +117,7 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     ) {
         let region = ctx.region();
         let region_id = region.get_id();
-        let region_keys = match util::get_region_approximate_keys(engine, region) {
+        let region_keys = match get_region_approximate_keys(engine, region) {
             Ok(keys) => keys,
             Err(e) => {
                 warn!(
@@ -177,27 +172,69 @@ impl<C: CasualRouter + Send> SplitCheckObserver for KeysCheckObserver<C> {
     }
 }
 
+/// Get the approximate number of keys in the range.
+pub fn get_region_approximate_keys(db: &DB, region: &Region) -> Result<u64> {
+    // try to get from RangeProperties first.
+    match get_region_approximate_keys_cf(db, CF_WRITE, region) {
+        Ok(v) => {
+            if v > 0 {
+                return Ok(v);
+            }
+        }
+        Err(e) => debug!(
+            "failed to get keys from RangeProperties";
+            "err" => ?e,
+        ),
+    }
+
+    let start = keys::enc_start_key(region);
+    let end = keys::enc_end_key(region);
+    let cf = box_try!(rocks::util::get_cf_handle(db, CF_WRITE));
+    let (_, keys) = get_range_entries_and_versions(db, cf, &start, &end).unwrap_or_default();
+    Ok(keys)
+}
+
+pub fn get_region_approximate_keys_cf(db: &DB, cfname: &str, region: &Region) -> Result<u64> {
+    let start_key = keys::enc_start_key(region);
+    let end_key = keys::enc_end_key(region);
+    let cf = box_try!(rocks::util::get_cf_handle(db, cfname));
+    let range = Range::new(&start_key, &end_key);
+    let (mut keys, _) = db.get_approximate_memtable_stats_cf(cf, &range);
+
+    let collection = box_try!(util::get_range_properties_cf(
+        db, cfname, &start_key, &end_key
+    ));
+    for (_, v) in &*collection {
+        let props = box_try!(RangeProperties::decode(v.user_collected_properties()));
+        keys += props.get_approximate_keys_in_range(&start_key, &end_key);
+    }
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::cmp;
-    use std::sync::{mpsc, Arc};
-
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable, DB};
+    use super::super::size::tests::must_split_at;
+    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
+    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
+    use crate::storage::mvcc::properties::{
+        MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+    };
+    use crate::storage::mvcc::{Write, WriteType};
+    use crate::storage::Key;
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::DB;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
     use kvproto::metapb::{Peer, Region};
     use kvproto::pdpb::CheckPolicy;
+    use std::cmp;
+    use std::sync::{mpsc, Arc};
+    use std::u64;
     use tempdir::TempDir;
+    use tikv_util::worker::Runnable;
 
-    use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::{Write, WriteType};
-    use crate::storage::{Key, ALL_CFS, CF_DEFAULT, CF_WRITE};
-    use crate::util::rocksdb_util::{
-        new_engine_opt, properties::RangePropertiesCollectorFactory, CFOptions,
-    };
-    use crate::util::worker::Runnable;
-
-    use crate::raftstore::coprocessor::{Config, CoprocessorHost};
-
-    use super::super::size::tests::must_split_at;
+    use super::*;
 
     fn put_data(engine: &DB, mut start_idx: u64, end_idx: u64, fill_short_value: bool) {
         let write_cf = engine.cf_handle(CF_WRITE).unwrap();
@@ -311,5 +348,40 @@ mod tests {
         drop(rx);
         // It should be safe even the result can't be sent back.
         runnable.run(SplitCheckTask::new(region, true, CheckPolicy::SCAN));
+    }
+
+    #[test]
+    fn test_region_approximate_keys() {
+        let path = TempDir::new("_test_region_approximate_keys").expect("");
+        let path_str = path.path().to_str().unwrap();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_level_zero_file_num_compaction_trigger(10);
+        let f = Box::new(MvccPropertiesCollectorFactory::default());
+        cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
+        let cfs_opts = LARGE_CFS
+            .iter()
+            .map(|cf| CFOptions::new(cf, cf_opts.clone()))
+            .collect();
+        let db = rocks::util::new_engine_opt(path_str, db_opts, cfs_opts).unwrap();
+
+        let cases = [("a", 1024), ("b", 2048), ("c", 4096)];
+        for &(key, vlen) in &cases {
+            let key = keys::data_key(Key::from_raw(key.as_bytes()).append_ts(2).as_encoded());
+            let write_v = Write::new(WriteType::Put, 0, None).to_bytes();
+            let write_cf = db.cf_handle(CF_WRITE).unwrap();
+            db.put_cf(write_cf, &key, &write_v).unwrap();
+            db.flush_cf(write_cf, true).unwrap();
+
+            let default_v = vec![0; vlen as usize];
+            let default_cf = db.cf_handle(CF_DEFAULT).unwrap();
+            db.put_cf(default_cf, &key, &default_v).unwrap();
+            db.flush_cf(default_cf, true).unwrap();
+        }
+
+        let mut region = Region::new();
+        region.mut_peers().push(Peer::new());
+        let range_keys = get_region_approximate_keys(&db, &region).unwrap();
+        assert_eq!(range_keys, cases.len() as u64);
     }
 }

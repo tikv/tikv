@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -32,24 +21,17 @@ pub enum RpnExpressionNode {
     },
 
     /// Represents a reference to a column in the columns specified in evaluation.
-    ColumnRef {
-        offset: usize,
-
-        // Although we can know `ColumnInfo` according to `offset` and columns info in scan
-        // executors, its type is `ColumnInfo` instead of `FieldType`.
-        // Maybe we can remove this field in future.
-        field_type: FieldType,
-    },
+    ColumnRef { offset: usize },
 }
 
 impl RpnExpressionNode {
     /// Gets the field type.
     #[inline]
-    pub fn field_type(&self) -> &FieldType {
+    pub fn field_type(&self) -> Option<&FieldType> {
         match self {
-            RpnExpressionNode::FnCall { ref field_type, .. } => field_type,
-            RpnExpressionNode::Constant { ref field_type, .. } => field_type,
-            RpnExpressionNode::ColumnRef { ref field_type, .. } => field_type,
+            RpnExpressionNode::FnCall { ref field_type, .. } => Some(field_type),
+            RpnExpressionNode::Constant { ref field_type, .. } => Some(field_type),
+            RpnExpressionNode::ColumnRef { .. } => None,
         }
     }
 
@@ -107,29 +89,10 @@ impl From<Vec<RpnExpressionNode>> for RpnExpression {
     }
 }
 
-#[cfg(test)]
-pub mod tests {
-    /// An RPN function for test. It accepts 1 int argument, returns the value in float.
-    #[derive(Debug, Clone, Copy)]
-    pub struct FnA;
-
-    impl_template_fn! { 1 arg @ FnA }
-
-    /// An RPN function for test. It accepts 2 float arguments, returns their sum in int.
-    #[derive(Debug, Clone, Copy)]
-    pub struct FnB;
-
-    impl_template_fn! { 2 arg @ FnB }
-
-    /// An RPN function for test. It accepts 3 int arguments, returns their sum in int.
-    #[derive(Debug, Clone, Copy)]
-    pub struct FnC;
-
-    impl_template_fn! { 3 arg @ FnC }
-
-    /// An RPN function for test. It accepts 3 float arguments, returns their sum in float.
-    #[derive(Debug, Clone, Copy)]
-    pub struct FnD;
-
-    impl_template_fn! { 3 arg @ FnD }
+impl AsRef<[RpnExpressionNode]> for RpnExpression {
+    fn as_ref(&self) -> &[RpnExpressionNode] {
+        self.0.as_ref()
+    }
 }
+
+// For `RpnExpression::eval`, see `expr_eval` file.

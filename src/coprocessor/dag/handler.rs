@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -63,6 +52,7 @@ impl DAGRequestHandler {
         store: S,
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
+        let executors_len = req.get_executors().len();
 
         let config = Arc::new(config);
         let out_most_executor = super::builder::DAGBuilder::build_batch(
@@ -71,12 +61,27 @@ impl DAGRequestHandler {
             ranges,
             config.clone(),
         )?;
+
+        // Check output offsets
+        let output_offsets = req.take_output_offsets();
+        let schema_len = out_most_executor.schema().len();
+        for offset in &output_offsets {
+            if (*offset as usize) >= schema_len {
+                return Err(box_err!(
+                    "Invalid output offset (schema has {} columns, access index {})",
+                    schema_len,
+                    offset
+                ));
+            }
+        }
+
         Ok(super::batch_handler::BatchDAGHandler::new(
             deadline,
             out_most_executor,
-            req.take_output_offsets(),
+            output_offsets,
             config,
             ranges_len,
+            executors_len,
         ))
     }
 

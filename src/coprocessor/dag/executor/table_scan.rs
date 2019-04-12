@@ -1,20 +1,9 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::collections::HashSet;
 use std::sync::Arc;
+use tikv_util::collections::HashSet;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
+use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
@@ -56,8 +45,8 @@ impl InnerExecutor for TableInnerExecutor {
     }
 
     #[inline]
-    fn scan_on(&self) -> ScanOn {
-        ScanOn::Table
+    fn scan_on(&self) -> super::super::scanner::ScanOn {
+        super::super::scanner::ScanOn::Table
     }
 
     #[inline]
@@ -98,11 +87,10 @@ mod tests {
     use crate::storage::SnapshotStore;
 
     use super::super::{
-        scanner::tests::{get_point_range, prepare_table_data, Data},
+        super::scanner::tests::{get_point_range, prepare_table_data, Data},
         tests::{get_range, TestStore},
         Executor,
     };
-    use super::*;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -156,7 +144,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         let row = table_scanner.next().unwrap().unwrap().take_origin();
         assert_eq!(row.handle, handle as i64);
@@ -192,7 +181,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap().take_origin();
@@ -227,7 +217,8 @@ mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
         let mut table_scanner =
-            TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true).unwrap();
+            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
+                .unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;

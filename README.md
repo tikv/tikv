@@ -186,7 +186,7 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 
 ## Communication
 
-Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT). Here is an excerpt:
+Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
 
 > In the interest of fostering an open and welcoming environment, we as
 contributors and maintainers pledge to making participation in our project and
