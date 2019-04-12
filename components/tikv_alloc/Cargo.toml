@@ -13,9 +13,6 @@ jemalloc = ["jemallocator", "jemalloc-sys", "jemalloc-ctl"]
 # certain profile functions will return nothing.
 mem-profiling = ["jemallocator/profiling"]
 
-# Don't build jemalloc; use the system allocator.
-no-jemalloc = []
-
 [dependencies]
 libc = "0.2"
 log = "0.3"
@@ -40,5 +37,9 @@ optional = true
 features = ["stats"]
 
 [dependencies.jemalloc-ctl]
+version = "0.2.0"
+optional = true
+
+[dependencies.tcmalloc]
 version = "0.2.0"
 optional = true
