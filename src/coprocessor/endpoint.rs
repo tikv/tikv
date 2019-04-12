@@ -415,14 +415,8 @@ impl<E: Engine> Endpoint<E> {
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
-            .map_err(|_| Error::Full)
-            .and_then(move |_| {
-                // Keep running stream producer
-                // cpu_future.forget();
-
-                // Returns the stream instead of a future
-                Ok(rx.then(|r| r.unwrap()))
-            })
+            .map_err(|_| Error::Full)?;
+        Ok(rx.then(|r| r.unwrap()))
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each result in a
