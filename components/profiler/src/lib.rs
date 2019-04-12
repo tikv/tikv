@@ -1,32 +1,24 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Profile a part of the code using CPU Profiler from gperftools or Callgrind.
+//! Supports Linux and MacOS.
 //!
 //! ## Requirements
 //!
-//! 1. Linux
+//! 1. gperftools
 //!
-//!    Other OS may also work however, not tested.
+//!    Linux:
 //!
-//! 2. gperftools
+//!      You can follow its [INSTALL manual](https://github.com/gperftools/gperftools/blob/master/INSTALL).
+//!      Roughly the instructions are the following:
 //!
-//!    You can follow its [INSTALL manual](https://github.com/gperftools/gperftools/blob/master/INSTALL).
-//!    Roughly the instructions are the following:
+//!      1. Download packages from [release](https://github.com/gperftools/gperftools/releases)
+//!      2. Run `./configure`
+//!      3. Run `make install`
 //!
-//!    1. Download packages from [release](https://github.com/gperftools/gperftools/releases)
-//!    2. Run `./configure`
-//!    3. Run `make install`
+//!    MacOS:
+//!
+//!      Simply `brew install gperftools`.
 //!
 //! ## Usage
 //!
@@ -50,18 +42,14 @@
 //!
 //! Also see `examples/prime.rs`.
 
-#[cfg(all(target_os = "linux", feature = "profiling"))]
-#[macro_use]
-extern crate lazy_static;
-
-#[cfg(all(target_os = "linux", feature = "profiling"))]
+#[cfg(all(unix, feature = "profiling"))]
 mod profiler_linux;
 
-#[cfg(all(target_os = "linux", feature = "profiling"))]
+#[cfg(all(unix, feature = "profiling"))]
 pub use profiler_linux::*;
 
-#[cfg(not(all(target_os = "linux", feature = "profiling")))]
+#[cfg(not(all(unix, feature = "profiling")))]
 mod profiler_dummy;
 
-#[cfg(not(all(target_os = "linux", feature = "profiling")))]
+#[cfg(not(all(unix, feature = "profiling")))]
 pub use profiler_dummy::*;

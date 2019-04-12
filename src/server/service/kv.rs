@@ -1,15 +1,5 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::iter::{self, FromIterator};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,11 +19,6 @@ use crate::storage::kv::Error as EngineError;
 use crate::storage::mvcc::{Error as MvccError, LockType, Write as MvccWrite, WriteType};
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
-use crate::util::collections::HashMap;
-use crate::util::future::{paired_future_callback, AndThenWith};
-use crate::util::mpsc::batch::{unbounded, BatchReceiver, Sender};
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
-use crate::util::worker::Scheduler;
 use futures::{future, Future, Sink, Stream};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
@@ -43,6 +28,11 @@ use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
 use protobuf::RepeatedField;
+use tikv_util::collections::HashMap;
+use tikv_util::future::{paired_future_callback, AndThenWith};
+use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::worker::Scheduler;
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";

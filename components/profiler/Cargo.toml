@@ -1,13 +1,18 @@
 [package]
 name = "profiler"
 version = "0.0.1"
+edition = "2018"
 publish = false
 
 [features]
-profiling = []
+profiling = ["lazy_static", "cpuprofiler", "callgrind", "valgrind_request"]
 
-[dependencies]
-lazy_static = "1.2.0"
-cpuprofiler = "0.0.3"
-callgrind = "1.1.0"
-valgrind_request = "1.1.0"
+[target.'cfg(unix)'.dependencies]
+lazy_static = { version = "1.2.0", optional = true }
+cpuprofiler = { version = "0.0.3", optional = true }
+callgrind = { version = "1.1.0", optional = true }
+valgrind_request = { version = "1.1.0", optional = true }
+
+[[example]]
+name = "prime"
+required-features = ["profiling"]
