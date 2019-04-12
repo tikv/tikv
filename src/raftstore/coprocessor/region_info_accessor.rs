@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -24,14 +13,12 @@ use super::{
 };
 use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
-use crate::util::collections::HashMap;
-use crate::util::escape;
-use crate::util::timer::Timer;
-use crate::util::worker::{
-    Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker,
-};
 use kvproto::metapb::Region;
 use raft::StateRole;
+use tikv_util::collections::HashMap;
+use tikv_util::escape;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to

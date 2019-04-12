@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::option::Option;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
@@ -25,8 +14,8 @@ use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::raftstore::{Error, Result};
-use crate::util::time::monotonic_raw_now;
-use crate::util::{escape, Either};
+use tikv_util::time::monotonic_raw_now;
+use tikv_util::{escape, Either};
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {
     region
@@ -619,7 +608,7 @@ mod tests {
     use time::Duration as TimeDuration;
 
     use crate::raftstore::store::peer_storage;
-    use crate::util::time::{monotonic_now, monotonic_raw_now};
+    use tikv_util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;
 

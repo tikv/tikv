@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
 extern crate clap;
@@ -65,8 +54,8 @@ use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
 use tikv::raftstore::store::keys;
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
-use tikv::util::security::{self, SecurityConfig, SecurityManager};
-use tikv::util::{escape, unescape};
+use tikv_util::security::{self, SecurityConfig, SecurityManager};
+use tikv_util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
 const METRICS_ROCKSDB_KV: &str = "rocksdb_kv";
