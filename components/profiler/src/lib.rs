@@ -42,6 +42,9 @@
 //!
 //! Also see `examples/prime.rs`.
 
+#[allow(unused_extern_crates)]
+extern crate tikv_alloc;
+
 #[cfg(all(unix, feature = "profiling"))]
 mod profiler_linux;
 

@@ -1350,6 +1350,7 @@ dependencies = [
  "callgrind 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "cpuprofiler 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tikv_alloc 0.1.0",
  "valgrind_request 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

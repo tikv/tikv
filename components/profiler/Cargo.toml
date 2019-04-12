@@ -7,6 +7,9 @@ publish = false
 [features]
 profiling = ["lazy_static", "cpuprofiler", "callgrind", "valgrind_request"]
 
+[dependencies]
+tikv_alloc = { path = "../tikv_alloc" }
+
 [target.'cfg(unix)'.dependencies]
 lazy_static = { version = "1.2.0", optional = true }
 cpuprofiler = { version = "0.0.3", optional = true }
