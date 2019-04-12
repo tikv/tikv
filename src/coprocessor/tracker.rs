@@ -220,7 +220,7 @@ impl Tracker {
                 .inc_by(self.total_perf_statistics.block_read_byte as i64);
         });
 
-        ReadPoolImpl::tls_collect_executor_metrics(
+        tls_collect_executor_metrics(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
             total_exec_metrics,
