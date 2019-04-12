@@ -3,8 +3,8 @@
 use kvproto::kvrpcpb;
 
 use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
-use crate::util::futurepool;
-use crate::util::time::{self, Duration, Instant};
+use tikv_util::futurepool;
+use tikv_util::time::{self, Duration, Instant};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::*;

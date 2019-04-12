@@ -3,7 +3,7 @@
 use prometheus::local::LocalHistogram;
 use std::sync::{Arc, Mutex};
 
-use crate::util::collections::HashSet;
+use tikv_util::collections::HashSet;
 
 use super::metrics::*;
 

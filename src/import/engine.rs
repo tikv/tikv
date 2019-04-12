@@ -21,7 +21,6 @@ use crate::storage::is_short_value;
 use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
-use crate::util::config::MB;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
@@ -29,12 +28,13 @@ use engine::rocks::{
     WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
+use tikv_util::config::MB;
 
 use super::common::*;
 use super::Result;
 use crate::import::stream::SSTFile;
-use crate::util::security;
-use crate::util::security::SecurityConfig;
+use tikv_util::security;
+use tikv_util::security::SecurityConfig;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -376,8 +376,8 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
-    use crate::util::file::file_exists;
-    use crate::util::security::encrypted_env_from_cipher_file;
+    use tikv_util::file::file_exists;
+    use tikv_util::security::encrypted_env_from_cipher_file;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();

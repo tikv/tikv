@@ -15,7 +15,7 @@ use tipb::select::DAGRequest;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
 use crate::storage::{self, Engine, SnapshotStore};
-use crate::util::Either;
+use tikv_util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
@@ -55,7 +55,7 @@ impl<E: Engine> Clone for Endpoint<E> {
     }
 }
 
-impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
+impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
@@ -197,7 +197,7 @@ impl<E: Engine> Endpoint<E> {
         engine: E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = crate::util::future::paired_future_callback();
+        let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
             .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
@@ -511,7 +511,7 @@ mod tests {
     use tipb::expression::Expr;
 
     use crate::storage::TestEngineBuilder;
-    use crate::util::worker::FutureWorker;
+    use tikv_util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn test_handle_time() {
-        use crate::util::config::ReadableDuration;
+        use tikv_util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: i64 = 500;

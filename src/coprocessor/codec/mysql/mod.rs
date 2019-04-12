@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use crate::util::escape;
+use tikv_util::escape;
 
 /// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
 pub const UNSPECIFIED_FSP: i8 = -1;

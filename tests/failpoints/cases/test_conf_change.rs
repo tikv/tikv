@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_destory_local_reader() {

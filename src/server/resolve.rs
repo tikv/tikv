@@ -8,8 +8,8 @@ use std::time::Instant;
 use kvproto::metapb;
 
 use crate::pd::PdClient;
-use crate::util::collections::HashMap;
-use crate::util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
 use super::Result;
@@ -145,10 +145,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::pd::{PdClient, PdFuture, RegionStat, Result};
-    use crate::util;
-    use crate::util::collections::HashMap;
     use kvproto::metapb;
     use kvproto::pdpb;
+    use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
@@ -177,7 +176,7 @@ mod tests {
             // The store address will be changed every millisecond.
             let mut store = self.store.clone();
             let mut sock = SocketAddr::from_str(store.get_address()).unwrap();
-            sock.set_port(util::time::duration_to_ms(self.start.elapsed()) as u16);
+            sock.set_port(tikv_util::time::duration_to_ms(self.start.elapsed()) as u16);
             store.set_address(format!("{}:{}", sock.ip(), sock.port()));
             Ok(store)
         }

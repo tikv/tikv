@@ -11,7 +11,7 @@ use fail;
 use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 #[test]
 fn test_overlap_cleanup() {

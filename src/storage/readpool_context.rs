@@ -7,9 +7,9 @@ use std::mem;
 use crate::pd;
 use crate::server::readpool;
 use crate::storage;
-use crate::util::collections::HashMap;
-use crate::util::futurepool;
-use crate::util::worker;
+use tikv_util::collections::HashMap;
+use tikv_util::futurepool;
+use tikv_util::worker;
 
 use super::metrics::*;
 

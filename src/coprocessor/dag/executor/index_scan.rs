@@ -123,7 +123,7 @@ pub mod tests {
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
+    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;
