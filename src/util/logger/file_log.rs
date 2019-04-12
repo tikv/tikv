@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use chrono::{DateTime, Duration, Utc};
 use std::fs::{self, File, OpenOptions};
@@ -26,16 +15,9 @@ fn rotation_file_path_with_timestamp(
     file_path: impl AsRef<Path>,
     timestamp: &DateTime<Utc>,
 ) -> PathBuf {
-    let file_path = file_path.as_ref();
-    let file_name = file_path
-        .file_name()
-        .and_then(|x| x.to_str())
-        .expect("Log file name was not valid.");
-    file_path.with_file_name(format!(
-        "{}.{}",
-        file_name,
-        timestamp.format("%Y-%m-%d-%H:%M:%S")
-    ))
+    let mut file_path = file_path.as_ref().as_os_str().to_os_string();
+    file_path.push(format!(".{}", timestamp.format("%Y-%m-%d-%H:%M:%S")));
+    file_path.into()
 }
 
 /// Opens log file with append mode. Creates a new log file if it doesn't exist.
@@ -57,13 +39,13 @@ pub struct RotatingFileLogger {
     rotation_timespan: Duration,
     next_rotation_time: DateTime<Utc>,
     file_path: PathBuf,
-    file: Option<File>,
+    file: File,
 }
 
 impl RotatingFileLogger {
     pub fn new(file_path: impl AsRef<Path>, rotation_timespan: Duration) -> io::Result<Self> {
         let file_path = file_path.as_ref().to_path_buf();
-        let file = Some(open_log_file(&file_path)?);
+        let file = open_log_file(&file_path)?;
         let file_attr = fs::metadata(&file_path)?;
         let file_modified_time = file_attr.modified().unwrap().into();
         let next_rotation_time = compute_rotation_time(&file_modified_time, rotation_timespan);
@@ -75,23 +57,21 @@ impl RotatingFileLogger {
         })
     }
 
-    /// Opens log file with append mode. Creates a new file if it doesn't exist.
-    fn open(&mut self) -> io::Result<()> {
-        self.file = Some(open_log_file(&self.file_path)?);
-        Ok(())
-    }
-
     fn should_rotate(&mut self) -> bool {
         Utc::now() > self.next_rotation_time
     }
 
     /// Rotates the current file and updates the next rotation time.
     fn rotate(&mut self) -> io::Result<()> {
-        self.close()?;
+        self.flush()?;
+
+        // Note: renaming files while they're open only works on Linux and macOS.
         let new_path = rotation_file_path_with_timestamp(&self.file_path, &Utc::now());
-        fs::rename(&self.file_path, &new_path)?;
+        fs::rename(&self.file_path, new_path)?;
+        let new_file = open_log_file(&self.file_path)?;
         self.update_rotation_time();
-        self.open()
+        self.file = new_file;
+        Ok(())
     }
 
     /// Updates the next rotation time.
@@ -100,31 +80,28 @@ impl RotatingFileLogger {
         self.next_rotation_time = compute_rotation_time(&now, self.rotation_timespan);
     }
 
-    /// Flushes and closes log file, without rotation.
-    fn close(&mut self) -> io::Result<()> {
-        assert!(self.file.is_some());
-        self.file.take().unwrap().flush()
+    /// Flushes the log file, without rotation.
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
     }
 }
 
 impl Write for RotatingFileLogger {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        assert!(self.file.is_some());
-        self.file.as_mut().unwrap().write(bytes)
+        self.file.write(bytes)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         if self.should_rotate() {
             self.rotate()?;
         };
-        assert!(self.file.is_some());
-        self.file.as_mut().unwrap().flush()
+        self.file.flush()
     }
 }
 
 impl Drop for RotatingFileLogger {
     fn drop(&mut self) {
-        self.close().unwrap()
+        let _ = self.file.flush();
     }
 }
 
@@ -179,26 +156,14 @@ mod tests {
     }
 
     #[test]
-    fn test_close_file_logger() {
+    fn test_failing_to_rotate_file_will_not_cause_panic() {
         let tmp_dir = TempDir::new("").unwrap();
-        let log_file = tmp_dir
-            .path()
-            .join("test_close_file_logger.log")
-            .to_str()
-            .unwrap()
-            .to_string();
-        let one_day = Duration::days(1);
-
-        let mut logger = RotatingFileLogger::new(&log_file, one_day).unwrap();
-        // Handles written amount returned.
-        let _ = logger.write(b"write before close").unwrap();
-        logger.flush().unwrap();
-        logger.close().unwrap();
-        assert!(::panic_hook::recover_safe(|| logger.write(b"write after close")).is_err());
-        assert!(::panic_hook::recover_safe(|| logger.flush()).is_err());
-        assert!(::panic_hook::recover_safe(|| logger.close()).is_err());
-        // Reopens file, otherwise `close()` will fail in assertion when `drop()`.
-        logger.open().unwrap();
+        let log_file = tmp_dir.path().join("test_rotating_file_logger.log");
+        let mut logger = RotatingFileLogger::new(&log_file, Duration::days(1)).unwrap();
+        // delete the log_file so rotation fails.
+        std::fs::remove_file(&log_file).unwrap();
+        logger.rotate().unwrap_err();
+        // dropping the logger still should not panic.
         drop(logger);
     }
 }
