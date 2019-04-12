@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // FIXME: Move to cop_datatype. Currently it refers some types in `crate::coprocessor::codec::mysql`
 // so that it is not possible to move.
@@ -74,12 +63,12 @@ where
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
-pub trait Evaluable: Clone {
+pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
     /// Borrows this concrete type from a `ScalarValue` in the same type.
-    fn borrow_scalar_value(v: &ScalarValue) -> &Self;
+    fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self>;
 
     /// Borrows a slice of this concrete type from a `VectorValue` in the same type.
-    fn borrow_vector_value(v: &VectorValue) -> &[Self];
+    fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>];
 
     /// Borrows a specialized reference from a `VectorLikeValueRef`. The specialized reference is
     /// also vector-like but contains the concrete type information, which doesn't need type
@@ -89,19 +78,19 @@ pub trait Evaluable: Clone {
     ) -> VectorLikeValueRefSpecialized<'_, Self>;
 
     /// Converts a vector of this concrete type into a `VectorValue` in the same type.
-    fn into_vector_value(vec: Vec<Self>) -> VectorValue;
+    fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue;
 }
 
 macro_rules! impl_evaluable_type {
-    ($ty:ty) => {
+    ($ty:tt) => {
         impl Evaluable for $ty {
             #[inline]
-            fn borrow_scalar_value(v: &ScalarValue) -> &Self {
+            fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
                 v.as_ref()
             }
 
             #[inline]
-            fn borrow_vector_value(v: &VectorValue) -> &[Self] {
+            fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
                 v.as_ref()
             }
 
@@ -113,17 +102,17 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn into_vector_value(vec: Vec<Self>) -> VectorValue {
+            fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
             }
         }
     };
 }
 
-impl_evaluable_type! { Option<Int> }
-impl_evaluable_type! { Option<Real> }
-impl_evaluable_type! { Option<Decimal> }
-impl_evaluable_type! { Option<Bytes> }
-impl_evaluable_type! { Option<DateTime> }
-impl_evaluable_type! { Option<Duration> }
-impl_evaluable_type! { Option<Json> }
+impl_evaluable_type! { Int }
+impl_evaluable_type! { Real }
+impl_evaluable_type! { Decimal }
+impl_evaluable_type! { Bytes }
+impl_evaluable_type! { DateTime }
+impl_evaluable_type! { Duration }
+impl_evaluable_type! { Json }
