@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -194,8 +183,13 @@ impl LazyBatchColumnVec {
         for col in &self.columns {
             min_len = min_len.min(col.len());
         }
+        self.truncate(min_len);
+    }
+
+    /// Shortens the rows, keeping the first `len` rows and dropping the rest.
+    pub fn truncate(&mut self, len: usize) {
         for col in &mut self.columns {
-            col.truncate(min_len);
+            col.truncate(len);
         }
         self.assert_columns_equal_length();
     }
