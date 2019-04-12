@@ -43,6 +43,7 @@ pub use self::kv::{
     TestEngineBuilder,
 };
 pub use self::mvcc::Scanner as StoreScanner;
+pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -662,12 +663,12 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
-            readpool_impl::tls_collect_command_count(CMD, priority);
+            tls_collect_command_count(CMD, priority);
             let command_duration = crate::util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                    tls_processing_read_observe_duration(CMD, || {
                         let mut statistics = Statistics::default();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -680,18 +681,18 @@ impl<E: Engine> Storage<E> {
                             // map storage::txn::Error -> storage::Error
                             .map_err(Error::from)
                             .map(|r| {
-                                readpool_impl::tls_collect_key_reads(CMD, 1);
+                                tls_collect_key_reads(CMD, 1);
                                 r
                             });
 
-                        readpool_impl::tls_collect_scan_count(CMD, &statistics);
-                        readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                         result
                     })
                 })
                 .then(move |r| {
-                    readpool_impl::tls_collect_command_duration(CMD, command_duration.elapsed());
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -714,12 +715,12 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
-            readpool_impl::tls_collect_command_count(CMD, priority);
+            tls_collect_command_count(CMD, priority);
             let command_duration = crate::util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                    tls_processing_read_observe_duration(CMD, || {
                         let mut statistics = Statistics::default();
                         let snap_store = SnapshotStore::new(
                             snapshot,
@@ -741,15 +742,15 @@ impl<E: Engine> Storage<E> {
                             })
                             .collect();
 
-                        readpool_impl::tls_collect_key_reads(CMD, kv_pairs.len());
-                        readpool_impl::tls_collect_scan_count(CMD, &statistics);
-                        readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                        tls_collect_key_reads(CMD, kv_pairs.len());
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                         Ok(kv_pairs)
                     })
                 })
                 .then(move |r| {
-                    readpool_impl::tls_collect_command_duration(CMD, command_duration.elapsed());
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -776,12 +777,12 @@ impl<E: Engine> Storage<E> {
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
-            readpool_impl::tls_collect_command_count(CMD, priority);
+            tls_collect_command_count(CMD, priority);
             let command_duration = crate::util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                    tls_processing_read_observe_duration(CMD, || {
                         let snap_store = SnapshotStore::new(
                             snapshot,
                             start_ts,
@@ -808,11 +809,11 @@ impl<E: Engine> Storage<E> {
                         let res = scanner.scan(limit);
 
                         let statistics = scanner.take_statistics();
-                        readpool_impl::tls_collect_scan_count(CMD, &statistics);
-                        readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
                         res.map_err(Error::from).map(|results| {
-                            readpool_impl::tls_collect_key_reads(CMD, results.len());
+                            tls_collect_key_reads(CMD, results.len());
                             results
                                 .into_iter()
                                 .map(|x| x.map_err(Error::from))
@@ -821,7 +822,7 @@ impl<E: Engine> Storage<E> {
                     })
                 })
                 .then(move |r| {
-                    readpool_impl::tls_collect_command_duration(CMD, command_duration.elapsed());
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -1060,7 +1061,7 @@ impl<E: Engine> Storage<E> {
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.spawn_handle(priority, move || {
-                readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                tls_processing_read_observe_duration(CMD, || {
                     let cf = match Self::rawkv_cf(&cf) {
                         Ok(x) => x,
                         Err(e) => return future::err(e),
@@ -1077,8 +1078,8 @@ impl<E: Engine> Storage<E> {
                                 let mut stats = Statistics::default();
                                 stats.data.flow_stats.read_keys = 1;
                                 stats.data.flow_stats.read_bytes = key_len + value.len();
-                                readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &stats);
-                                readpool_impl::tls_collect_key_reads(CMD, 1);
+                                tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                tls_collect_key_reads(CMD, 1);
                             }
                             r
                         });
@@ -1112,7 +1113,7 @@ impl<E: Engine> Storage<E> {
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.spawn_handle(priority, move || {
-                readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                tls_processing_read_observe_duration(CMD, || {
                     let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
                     let cf = match Self::rawkv_cf(&cf) {
                         Ok(x) => x,
@@ -1138,11 +1139,8 @@ impl<E: Engine> Storage<E> {
                         })
                         .collect();
 
-                    readpool_impl::tls_collect_key_reads(
-                        CMD,
-                        stats.data.flow_stats.read_keys as usize,
-                    );
-                    readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &stats);
+                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
 
                     timer.observe_duration();
                     future::ok(result)
@@ -1393,7 +1391,7 @@ impl<E: Engine> Storage<E> {
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.spawn_handle(priority, move || {
-                readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                tls_processing_read_observe_duration(CMD, || {
                     let end_key = end_key.map(Key::from_encoded);
 
                     let mut statistics = Statistics::default();
@@ -1421,12 +1419,9 @@ impl<E: Engine> Storage<E> {
                         .map_err(Error::from)
                     };
 
-                    readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    readpool_impl::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
-                    readpool_impl::tls_collect_scan_count(CMD, &statistics);
+                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
+                    tls_collect_scan_count(CMD, &statistics);
 
                     timer.observe_duration();
                     future::result(result)
@@ -1496,7 +1491,7 @@ impl<E: Engine> Storage<E> {
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
             let res = readpool.spawn_handle(priority, move || {
-                readpool_impl::tls_processing_read_observe_duration(CMD, || {
+                tls_processing_read_observe_duration(CMD, || {
                     let mut statistics = Statistics::default();
                     if !Self::check_key_ranges(&ranges, reverse) {
                         return future::result(Err(box_err!("Invalid KeyRanges")));
@@ -1545,13 +1540,10 @@ impl<E: Engine> Storage<E> {
                         result.extend(pairs.into_iter());
                     }
 
-                    readpool_impl::tls_collect_read_flow(ctx.get_region_id(), &statistics);
-                    readpool_impl::tls_collect_key_reads(
-                        CMD,
-                        statistics.write.flow_stats.read_keys as usize,
-                    );
+                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
 
-                    readpool_impl::tls_collect_scan_count(CMD, &statistics);
+                    tls_collect_scan_count(CMD, &statistics);
 
                     timer.observe_duration();
                     future::ok(result)
