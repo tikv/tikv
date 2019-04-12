@@ -13,11 +13,11 @@ pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
-use crate::util::escape;
-use crate::util::metrics::CRITICAL_ERROR;
-use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use std::error;
 use std::io;
+use tikv_util::escape;
+use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 quick_error! {
     #[derive(Debug)]
@@ -32,7 +32,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: crate::util::codec::Error) {
+        Codec(err: tikv_util::codec::Error) {
             from()
             cause(err)
             description(err.description())

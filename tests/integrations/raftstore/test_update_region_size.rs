@@ -5,7 +5,7 @@ use std::{thread, time};
 
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {

@@ -20,11 +20,11 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
-use crate::util::collections::HashMap;
-use crate::util::time::duration_to_sec;
-use crate::util::timer::Timer;
-use crate::util::worker::{Runnable, RunnableWithTimer};
 use engine::DB;
+use tikv_util::collections::HashMap;
+use tikv_util::time::duration_to_sec;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -582,9 +582,9 @@ mod tests {
 
     use crate::raftstore::store::util::Lease;
     use crate::raftstore::store::Callback;
-    use crate::util::time::monotonic_raw_now;
     use engine::rocks;
     use engine::ALL_CFS;
+    use tikv_util::time::monotonic_raw_now;
 
     use super::*;
 

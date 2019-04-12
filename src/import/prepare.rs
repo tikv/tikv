@@ -294,7 +294,7 @@ mod tests {
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
-    use crate::util::security::SecurityConfig;
+    use tikv_util::security::SecurityConfig;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {

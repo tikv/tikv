@@ -19,7 +19,7 @@ use protobuf::text_format::print_to_string;
 use crate::raftstore::store::msg::Callback;
 use crate::server::debug::{Debugger, Error};
 use crate::server::transport::RaftStoreRouter;
-use crate::util::metrics;
+use tikv_util::metrics;
 
 use tikv_alloc;
 

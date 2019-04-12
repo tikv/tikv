@@ -8,8 +8,8 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use crate::util::codec::number;
-use crate::util::collections::HashSet;
+use tikv_util::codec::number;
+use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
@@ -265,13 +265,13 @@ pub mod tests {
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
-    use crate::util::codec::number::NumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::{
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
     use protobuf::RepeatedField;
+    use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},

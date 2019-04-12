@@ -11,7 +11,7 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::{Error, Result};
-use crate::util::codec::number;
+use tikv_util::codec::number;
 
 /// Helper to build an `RpnExpression`.
 ///
@@ -317,7 +317,7 @@ mod tests {
 
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::Result;
-    use crate::util::codec::number::NumberEncoder;
+    use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[derive(Debug, Clone, Copy)]

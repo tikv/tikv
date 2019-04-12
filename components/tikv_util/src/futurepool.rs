@@ -14,9 +14,8 @@ use futures::Future;
 use futures_cpupool::{self as cpupool, CpuFuture, CpuPool};
 use prometheus::{IntCounter, IntCounterVec, IntGauge, IntGaugeVec};
 
-use crate::util;
-use crate::util::collections::HashMap;
-use crate::util::time::Instant;
+use crate::collections::HashMap;
+use crate::time::Instant;
 
 lazy_static! {
     pub static ref FUTUREPOOL_PENDING_TASK_VEC: IntGaugeVec = register_int_gauge_vec!(
@@ -147,8 +146,8 @@ impl<T: Context + 'static> Clone for FuturePool<T> {
     }
 }
 
-impl<T: Context + 'static> util::AssertSend for FuturePool<T> {}
-impl<T: Context + 'static> util::AssertSync for FuturePool<T> {}
+impl<T: Context + 'static> crate::AssertSend for FuturePool<T> {}
+impl<T: Context + 'static> crate::AssertSync for FuturePool<T> {}
 
 impl<T: Context + 'static> FuturePool<T> {
     pub fn new<F>(

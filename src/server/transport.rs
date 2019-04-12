@@ -16,10 +16,10 @@ use crate::raftstore::store::{
 use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
 use crate::server::Result;
-use crate::util::collections::HashSet;
-use crate::util::worker::Scheduler;
-use crate::util::HandyRwLock;
 use raft::SnapshotStatus;
+use tikv_util::collections::HashSet;
+use tikv_util::worker::Scheduler;
+use tikv_util::HandyRwLock;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {

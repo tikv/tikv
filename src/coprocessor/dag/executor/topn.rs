@@ -161,8 +161,8 @@ pub mod tests {
     use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::collections::HashMap;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;

@@ -8,7 +8,7 @@ use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
 use crate::storage::Store;
-use crate::util::collections::HashMap;
+use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -201,7 +201,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::coprocessor::codec::{datum, table};
-        use crate::util::codec::number;
+        use tikv_util::codec::number;
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;

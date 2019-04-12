@@ -3,9 +3,9 @@
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::coprocessor::codec::Datum;
-#[cfg(test)]
-use crate::util::codec::BytesSlice;
 use std::io::Write;
+#[cfg(test)]
+use tikv_util::codec::BytesSlice;
 use tipb::expression::FieldType;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.

@@ -10,8 +10,7 @@ use std::time::Duration;
 use futures::Future;
 use futures_cpupool::CpuFuture;
 
-use crate::util;
-use crate::util::futurepool::{self, FuturePool};
+use tikv_util::futurepool::{self, FuturePool};
 
 pub use self::config::Config;
 pub use self::priority::Priority;
@@ -31,8 +30,8 @@ pub struct ReadPool<T: futurepool::Context + 'static> {
     max_tasks_low: usize,
 }
 
-impl<T: futurepool::Context + 'static> util::AssertSend for ReadPool<T> {}
-impl<T: futurepool::Context + 'static> util::AssertSync for ReadPool<T> {}
+impl<T: futurepool::Context + 'static> tikv_util::AssertSend for ReadPool<T> {}
+impl<T: futurepool::Context + 'static> tikv_util::AssertSync for ReadPool<T> {}
 
 impl<T: futurepool::Context + 'static> Clone for ReadPool<T> {
     fn clone(&self) -> Self {

@@ -13,10 +13,10 @@ use tipb::schema::ColumnInfo;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
-use crate::util::collections::{HashMap, HashSet};
-use crate::util::escape;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -415,7 +415,7 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
-    use crate::util::collections::{HashMap, HashSet};
+    use tikv_util::collections::{HashMap, HashSet};
 
     use super::*;
 

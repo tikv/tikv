@@ -29,9 +29,9 @@ use tikv::server::{
     ServerTransport,
 };
 use tikv::storage::{self, RaftKv};
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 

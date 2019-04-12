@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 fn check_available<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);

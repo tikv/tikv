@@ -25,8 +25,8 @@ use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::kv::CompactionListener;
 use tikv::storage::Config as StorageConfig;
-use tikv::util::config::*;
-use tikv::util::escape;
+use tikv_util::config::*;
+use tikv_util::escape;
 
 use super::*;
 

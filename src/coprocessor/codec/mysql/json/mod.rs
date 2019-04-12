@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 
 use super::super::datum::Datum;
 use super::super::{Error, Result};
-use crate::util::is_even;
+use tikv_util::is_even;
 
 const ERR_CONVERT_FAILED: &str = "Can not covert from ";
 

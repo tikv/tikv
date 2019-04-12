@@ -1,15 +1,15 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::batch::{Fsm, FsmScheduler};
-use crate::util::collections::HashMap;
-use crate::util::mpsc;
-use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tikv_util::collections::HashMap;
+use tikv_util::mpsc;
+use tikv_util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
