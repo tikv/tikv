@@ -315,10 +315,7 @@ mod tests {
         spawn_future_without_wait(&pool, Duration::from_millis(1500));
         assert_eq!(pool.get_running_task_count(), 3);
 
-        thread::sleep(Duration::from_millis(700)); // f2 completed, f3 elapsed 700
-        assert_eq!(pool.get_running_task_count(), 2);
-
-        thread::sleep(Duration::from_millis(2000));
+        thread::sleep(Duration::from_millis(2700));
         assert_eq!(pool.get_running_task_count(), 0);
     }
 }
