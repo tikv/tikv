@@ -17,7 +17,7 @@ use kvproto::tikvpb_grpc::*;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 

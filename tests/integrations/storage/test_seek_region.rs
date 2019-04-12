@@ -7,8 +7,8 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::storage::kv::RegionInfoProvider;
-use tikv::util::collections::HashMap;
-use tikv::util::HandyRwLock;
+use tikv_util::collections::HashMap;
+use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(
     mut cluster: Cluster<T>,

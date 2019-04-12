@@ -14,8 +14,8 @@ use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
 #[test]

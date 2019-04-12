@@ -13,7 +13,7 @@ use kvproto::pdpb;
 
 use test_util;
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;

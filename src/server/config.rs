@@ -5,9 +5,9 @@ use std::i32;
 use super::Result;
 use crate::grpc::CompressionAlgorithms;
 
-use crate::util::collections::HashMap;
-use crate::util::config::{self, ReadableDuration, ReadableSize};
-use crate::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
+use tikv_util::collections::HashMap;
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
+use tikv_util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 
 pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::Config as StorageConfig;
@@ -259,7 +259,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::config::ReadableDuration;
+    use tikv_util::config::ReadableDuration;
 
     #[test]
     fn test_config_validate() {

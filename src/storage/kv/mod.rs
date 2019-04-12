@@ -669,11 +669,11 @@ pub mod tests {
     use super::SEEK_BOUND;
     use super::*;
     use crate::storage::{CfName, Key};
-    use crate::util::codec::bytes;
-    use crate::util::escape;
     use engine::IterOption;
     use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::codec::bytes;
+    use tikv_util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {

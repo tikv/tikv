@@ -9,10 +9,10 @@ use byteorder::{ByteOrder, NativeEndian};
 use hex::ToHex;
 
 use crate::storage::mvcc::{Lock, Write};
-use crate::util::codec;
-use crate::util::codec::bytes;
-use crate::util::codec::bytes::BytesEncoder;
-use crate::util::codec::number::{self, NumberEncoder};
+use tikv_util::codec;
+use tikv_util::codec::bytes;
+use tikv_util::codec::bytes::BytesEncoder;
+use tikv_util::codec::number::{self, NumberEncoder};
 /// Value type which is essentially raw bytes.
 pub type Value = Vec<u8>;
 

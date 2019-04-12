@@ -179,8 +179,8 @@ mod tests {
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
     use crate::coprocessor::dag::expr::EvalContext;
-    use crate::util::codec::number::*;
-    use crate::util::collections::HashMap;
+    use tikv_util::codec::number::*;
+    use tikv_util::collections::HashMap;
 
     use super::*;
 

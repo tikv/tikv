@@ -16,9 +16,9 @@ use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use crate::pd::{Config, PdFuture};
-use crate::util::security::SecurityManager;
-use crate::util::time::{duration_to_sec, time_now_sec};
-use crate::util::{Either, HandyRwLock};
+use tikv_util::security::SecurityManager;
+use tikv_util::time::{duration_to_sec, time_now_sec};
+use tikv_util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";

@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use raft::eraftpb::MessageType;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use test_raftstore::*;
 

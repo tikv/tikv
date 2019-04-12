@@ -10,7 +10,7 @@ use crate::grpc::{
 };
 use futures::{Future, Sink, Stream};
 use tikv::pd::Error as PdError;
-use tikv::util::security::*;
+use tikv_util::security::*;
 
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{self, Pd};

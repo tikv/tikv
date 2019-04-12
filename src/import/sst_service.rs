@@ -14,8 +14,8 @@ use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
-use crate::util::future::paired_future_callback;
-use crate::util::time::Instant;
+use tikv_util::future::paired_future_callback;
+use tikv_util::time::Instant;
 
 use super::import_mode::*;
 use super::metrics::*;

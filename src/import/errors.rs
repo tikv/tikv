@@ -13,7 +13,7 @@ use uuid::{ParseError, Uuid};
 
 use crate::pd::{Error as PdError, RegionInfo};
 use crate::raftstore::errors::Error as RaftStoreError;
-use crate::util::codec::Error as CodecError;
+use tikv_util::codec::Error as CodecError;
 
 quick_error! {
     #[derive(Debug)]

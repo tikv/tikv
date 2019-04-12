@@ -8,7 +8,6 @@ use std::io::{self, BufWriter};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::grpc;
 use chrono::{self, Duration};
 use log::{self, SetLoggerError};
 use slog::{self, Drain, Key, OwnedKVList, Record, KV};
@@ -54,7 +53,7 @@ where
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
-        grpc::redirect_log();
+        grpcio::redirect_log();
     }
 
     Ok(())

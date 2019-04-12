@@ -4,7 +4,7 @@ use std::error::Error;
 
 use sys_info;
 
-use crate::util::config::{self, ReadableSize};
+use tikv_util::config::{self, ReadableSize};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";

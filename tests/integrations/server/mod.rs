@@ -12,7 +12,7 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
 use kvproto::tikvpb_grpc::{create_tikv, Tikv};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {

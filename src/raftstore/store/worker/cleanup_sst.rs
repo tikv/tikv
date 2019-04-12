@@ -9,7 +9,7 @@ use crate::import::SSTImporter;
 use crate::pd::PdClient;
 use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::{StoreMsg, StoreRouter};
-use crate::util::worker::Runnable;
+use tikv_util::worker::Runnable;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SSTMeta> },

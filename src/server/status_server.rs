@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::Result;
-use crate::util::metrics::dump;
+use tikv_util::metrics::dump;
 
 pub struct StatusServer {
     thread_pool: ThreadPool,
