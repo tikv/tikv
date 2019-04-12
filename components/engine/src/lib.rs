@@ -232,7 +232,7 @@ impl IterOption {
         if let Some(u) = upper_bound {
             read_options.set_iterate_upper_bound(u);
         }
-        IterOption(read_options)
+        IterOption(read_options).use_total_order_seek()
     }
 
     #[inline]
@@ -280,8 +280,6 @@ impl IterOption {
 impl Default for IterOption {
     fn default() -> IterOption {
         IterOption::new(None, None, true)
-            .set_prefix_same_as_start(false)
-            .use_total_order_seek()
     }
 }
 
