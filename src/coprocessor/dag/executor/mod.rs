@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -19,8 +8,8 @@ use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use crate::util::codec::number;
-use crate::util::collections::HashSet;
+use tikv_util::codec::number;
+use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
@@ -33,7 +22,6 @@ mod aggregation;
 mod index_scan;
 mod limit;
 mod scan;
-pub mod scanner;
 mod selection;
 mod table_scan;
 mod topn;
@@ -46,7 +34,6 @@ pub use self::index_scan::IndexScanExecutor;
 pub use self::limit::LimitExecutor;
 pub use self::metrics::*;
 pub use self::scan::ScanExecutor;
-pub use self::scanner::{ScanOn, Scanner};
 pub use self::selection::SelectionExecutor;
 pub use self::table_scan::TableScanExecutor;
 pub use self::topn::TopNExecutor;
@@ -274,17 +261,17 @@ pub trait Executor {
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
-    use crate::storage::engine::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
+    use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
-    use crate::util::codec::number::NumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::{
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
     use protobuf::RepeatedField;
+    use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},

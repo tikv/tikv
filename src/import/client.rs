@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -19,16 +8,16 @@ use crate::grpc::{CallOption, Channel, ChannelBuilder, EnvBuilder, Environment, 
 use futures::future;
 use futures::{Async, Future, Poll, Stream};
 
+use engine::rocks::SequentialFile;
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb_grpc::*;
 
 use crate::pd::{Config as PdConfig, PdClient, RegionInfo, RpcClient};
-use crate::storage::engine::SequentialFile;
 use crate::storage::types::Key;
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::security::SecurityManager;
+use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::security::SecurityManager;
 
 use super::common::*;
 use super::{Error, Result};

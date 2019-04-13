@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
 use std::process;
@@ -19,8 +8,8 @@ use chrono;
 use clap::ArgMatches;
 
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv::util::collections::HashMap;
-use tikv::util::{self, logger};
+use tikv_util::collections::HashMap;
+use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.
 pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -28,7 +17,7 @@ pub static LOG_INITIALIZED: AtomicBool = AtomicBool::new(false);
 macro_rules! fatal {
     ($lvl:expr, $($arg:tt)+) => ({
         if LOG_INITIALIZED.load(Ordering::SeqCst) {
-            error!($lvl, $($arg)+);
+            crit!($lvl, $($arg)+);
         } else {
             eprintln!($lvl, $($arg)+);
         }
@@ -67,9 +56,9 @@ pub fn initial_logger(config: &TiKvConfig) {
 
 #[allow(dead_code)]
 pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
-    util::metrics::monitor_threads("tikv")
+    tikv_util::metrics::monitor_threads("tikv")
         .unwrap_or_else(|e| fatal!("failed to start monitor thread: {}", e));
-    util::metrics::monitor_allocator_stats("tikv")
+    tikv_util::metrics::monitor_allocator_stats("tikv")
         .unwrap_or_else(|e| fatal!("failed to monitor allocator stats: {}", e));
 
     if cfg.interval.as_secs() == 0 || cfg.address.is_empty() {
@@ -82,7 +71,7 @@ pub fn initial_metric(cfg: &MetricConfig, node_id: Option<u64>) {
     }
 
     info!("start prometheus client");
-    util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
+    tikv_util::metrics::run_prometheus(cfg.interval.0, &cfg.address, &push_job);
 }
 
 #[allow(dead_code)]

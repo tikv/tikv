@@ -1,18 +1,6 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util;
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -61,7 +49,7 @@ quick_error! {
             from()
             cause(err.as_ref())
             description(err.description())
-            display("unknown error {:?}", err)
+            display("{}", err)
         }
     }
 }
@@ -71,7 +59,9 @@ impl Error {
         if err.code() == ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
-        if ctx.cfg.strict_sql_mode && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt) {
+        if ctx.cfg.sql_mode.is_strict()
+            && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt)
+        {
             return Err(err);
         }
         ctx.warnings.append_warning(err);
@@ -133,7 +123,7 @@ impl Error {
     }
 
     pub fn unexpected_eof() -> Error {
-        util::codec::Error::unexpected_eof().into()
+        tikv_util::codec::Error::unexpected_eof().into()
     }
 
     pub fn invalid_time_format(val: &str) -> Error {
@@ -171,15 +161,15 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
-impl From<util::codec::Error> for Error {
-    fn from(err: util::codec::Error) -> Error {
+impl From<tikv_util::codec::Error> for Error {
+    fn from(err: tikv_util::codec::Error) -> Error {
         box_err!("codec:{:?}", err)
     }
 }
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        let uerr: util::codec::Error = err.into();
+        let uerr: tikv_util::codec::Error = err.into();
         uerr.into()
     }
 }
