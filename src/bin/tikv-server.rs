@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
@@ -64,10 +53,10 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::security::{self, SecurityManager};
-use tikv::util::time::Monitor;
-use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, check_environment_variables};
+use tikv_util::security::{self, SecurityManager};
+use tikv_util::time::Monitor;
+use tikv_util::worker::{Builder, FutureWorker};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 

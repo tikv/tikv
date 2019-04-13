@@ -1,22 +1,11 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
+use tikv_util::collections::HashSet;
 
 use crate::grpc::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
@@ -34,9 +23,9 @@ use kvproto::pdpb_grpc::PdClient;
 use tokio_timer::timer::Handle;
 
 use super::{Config, Error, PdFuture, Result, REQUEST_TIMEOUT};
-use crate::util::security::SecurityManager;
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
-use crate::util::{Either, HandyRwLock};
+use tikv_util::security::SecurityManager;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{Either, HandyRwLock};
 
 pub struct Inner {
     env: Arc<Environment>,
