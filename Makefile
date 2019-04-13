@@ -5,9 +5,9 @@ ENABLE_FEATURES ?=
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
 else ifeq ($(SYSTEM_ALLOC),1)
-# no feature needed for system allocator
+ENABLE_FEATURES += system-alloc
 else
-ENABLE_FEATURES += jemalloc
+# no feature needed for jemallocator
 endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
