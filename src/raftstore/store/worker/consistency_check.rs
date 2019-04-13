@@ -164,14 +164,14 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 mod tests {
     use super::*;
     use crate::raftstore::store::keys;
+    use crate::storage::engine::Writable;
     use crate::storage::CF_DEFAULT;
     use crate::util::rocksdb_util::new_engine;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
     use kvproto::metapb::*;
-    use kvproto::raft_serverpb::RegionLocalState;
+    use kvproto::raft_serverpb::*;
     use protobuf::Message;
-    use rocksdb::Writable;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempdir::TempDir;

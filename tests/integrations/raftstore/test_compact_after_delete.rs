@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocksdb::Range;
+use tikv::storage::engine::Range;
 
 use test_raftstore::*;
 use tikv::raftstore::store::keys::{data_key, DATA_MAX_KEY};

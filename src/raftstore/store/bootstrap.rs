@@ -18,10 +18,10 @@ use super::peer_storage::{
 };
 use super::util::{new_peer, Engines};
 use crate::raftstore::Result;
+use crate::storage::engine::{Writable, WriteBatch, DB};
 use crate::storage::CF_DEFAULT;
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-use rocksdb::{Writable, WriteBatch, DB};
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::new();
@@ -77,7 +77,7 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     raft_wb.put_msg(&keys::region_state_key(region.get_id()), &state)?;
     write_initial_apply_state(&raft_wb, region.get_id())?;
     write_initial_raft_state(&raft_wb, region.get_id())?;
-    engines.raft.write(raft_wb)?;
+    engines.raft.write(&raft_wb)?;
     engines.raft.sync_wal()?;
     Ok(())
 }
@@ -90,7 +90,7 @@ pub fn clear_prepare_bootstrap_cluster(engines: &Engines, region_id: u64) -> Res
     wb.delete(&keys::raft_state_key(region_id))?;
     wb.delete(&keys::region_state_key(region_id))?;
     wb.delete(&keys::apply_state_key(region_id))?;
-    engines.raft.write(wb)?;
+    engines.raft.write(&wb)?;
     engines.raft.sync_wal()?;
     Ok(())
 }
@@ -156,17 +156,10 @@ mod tests {
         assert!(clear_prepare_bootstrap_key(&engines).is_ok());
         assert!(clear_prepare_bootstrap_cluster(&engines, 1).is_ok());
         assert!(is_range_empty(
-            &engines.kv,
+            &engines.raft,
             CF_DEFAULT,
             &keys::region_meta_prefix(1),
             &keys::region_meta_prefix(2)
-        )
-        .unwrap());
-        assert!(is_range_empty(
-            &engines.raft,
-            CF_DEFAULT,
-            &keys::region_raft_prefix(1),
-            &keys::region_raft_prefix(2)
         )
         .unwrap());
     }

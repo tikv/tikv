@@ -15,8 +15,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use tikv::storage::engine::Writable;
+
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
-use rocksdb::Writable;
 
 use test_raftstore::*;
 use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
-use rocksdb::Writable;
+use tikv::storage::engine::Writable;
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;

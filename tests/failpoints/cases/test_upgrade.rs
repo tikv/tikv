@@ -17,7 +17,6 @@ use std::sync::{Arc, RwLock};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
-use rocksdb::{DBOptions, Writable, DB};
 use tempdir::TempDir;
 
 use test_raftstore::*;
@@ -26,6 +25,7 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::{
     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
+use tikv::storage::engine::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv::util::rocksdb_util;
 

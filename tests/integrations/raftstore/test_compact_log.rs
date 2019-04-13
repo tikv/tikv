@@ -12,7 +12,7 @@
 // limitations under the License.
 
 use protobuf;
-use rocksdb::DB;
+use tikv::storage::engine::DB;
 
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 

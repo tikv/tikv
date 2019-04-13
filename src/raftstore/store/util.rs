@@ -24,9 +24,9 @@ use kvproto::raft_cmdpb::{AdminCmdType, RaftCmdRequest};
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, ConfState, MessageType};
 use raft::INVALID_INDEX;
-use rocksdb::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use time::{Duration, Timespec};
 
+use crate::storage::engine::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::storage::{Key, CF_DEFAULT, CF_LOCK, CF_WRITE, LARGE_CFS};
 use crate::util::rocksdb_util::{
     self, properties::RangeProperties, stats::get_range_entries_and_versions,
@@ -186,7 +186,7 @@ pub fn delete_all_in_range_cf(
     use_delete_range: bool,
 ) -> Result<()> {
     let handle = rocksdb_util::get_cf_handle(db, cf)?;
-    let mut wb = WriteBatch::new();
+    let wb = WriteBatch::new();
     // Since CF_LOCK is usually small, so using traditional way to cleanup.
     if use_delete_range && cf != CF_LOCK {
         if cf == CF_WRITE {
@@ -204,8 +204,8 @@ pub fn delete_all_in_range_cf(
             if wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Can't use write_without_wal here.
                 // Otherwise it may cause dirty data when applying snapshot.
-                db.write(wb)?;
-                wb = WriteBatch::new();
+                db.write(&wb)?;
+                wb.clear();
             }
 
             if !it.next() {
@@ -215,7 +215,7 @@ pub fn delete_all_in_range_cf(
     }
 
     if wb.count() > 0 {
-        db.write(wb)?;
+        db.write(&wb)?;
     }
 
     Ok(())
@@ -979,10 +979,12 @@ impl<'a> fmt::Display for KeysInfoFormatter<'a> {
 mod tests {
     use std::{iter, process, thread};
 
+    use crate::storage::engine::{
+        ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB,
+    };
     use kvproto::metapb::{self, RegionEpoch};
     use kvproto::raft_cmdpb::AdminRequest;
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
-    use rocksdb::{ColumnFamilyOptions, DBOptions, SeekKey, Writable, WriteBatch, DB};
     use tempdir::TempDir;
     use time::Duration as TimeDuration;
 
@@ -1445,7 +1447,7 @@ mod tests {
                 wb.put_cf(handle, k, v).unwrap();
             }
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
         // Delete all in ["k2", "k4").
@@ -1544,7 +1546,7 @@ mod tests {
             let handle = get_cf_handle(&db, cf).unwrap();
             wb.put_cf(handle, k, v).unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         check_data(&db, &[cf], kvs.as_slice());
 
         // Delete all in ["k2", "k4").

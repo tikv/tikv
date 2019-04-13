@@ -28,12 +28,12 @@ use crate::raftstore::store::{
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
+use crate::storage::engine::DB;
 use crate::storage::{self, Config as StorageConfig, RaftKv, Storage};
 use crate::util::worker::{FutureWorker, Worker};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use protobuf::RepeatedField;
-use rocksdb::DB;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;

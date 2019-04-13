@@ -22,7 +22,6 @@ use std::u64;
 
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::WriteBatch;
 
 use crate::raftstore::store::engine::{Mutable, Snapshot};
 use crate::raftstore::store::peer_storage::{
@@ -34,6 +33,7 @@ use crate::raftstore::store::util::Engines;
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, Peekable, SnapEntry, SnapKey, SnapManager,
 };
+use crate::storage::engine::WriteBatch;
 use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use crate::util::time;
 use crate::util::timer::Timer;
@@ -342,7 +342,7 @@ impl SnapContext {
         let wb = WriteBatch::new();
         region_state.set_state(PeerState::Normal);
         box_try!(wb.put_msg(&region_key, &region_state));
-        self.engines.raft.write(wb).unwrap_or_else(|e| {
+        self.engines.raft.write(&wb).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -671,13 +671,13 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, SnapKey, SnapManager};
-    use crate::storage::{self, CF_DEFAULT};
+    use crate::storage::engine::{ColumnFamilyOptions, Writable, WriteBatch};
+    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_WRITE};
     use crate::util::rocksdb_util;
     use crate::util::time;
     use crate::util::timer::Timer;
     use crate::util::worker::Worker;
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
-    use rocksdb::{ColumnFamilyOptions, Writable, WriteBatch};
     use tempdir::TempDir;
 
     use super::Event;
@@ -765,11 +765,11 @@ mod tests {
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
         let kv_cfs_opts = vec![
-            rocksdb_util::CFOptions::new(storage::CF_DEFAULT, cf_opts.clone()),
-            rocksdb_util::CFOptions::new(storage::CF_WRITE, cf_opts.clone()),
-            rocksdb_util::CFOptions::new(storage::CF_LOCK, cf_opts.clone()),
+            rocksdb_util::CFOptions::new(CF_DEFAULT, cf_opts.clone()),
+            rocksdb_util::CFOptions::new(CF_WRITE, cf_opts.clone()),
+            rocksdb_util::CFOptions::new(CF_LOCK, cf_opts.clone()),
         ];
-        let raft_cfs_opt = rocksdb_util::CFOptions::new(storage::CF_DEFAULT, cf_opts.clone());
+        let raft_cfs_opt = rocksdb_util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
         let engines = get_test_db_for_regions(
             &temp_dir,
             None,
@@ -833,7 +833,7 @@ mod tests {
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg(&region_key, &region_state).unwrap();
-            engines.raft.write(wb).unwrap();
+            engines.raft.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
