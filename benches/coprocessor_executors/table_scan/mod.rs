@@ -11,8 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use tikv::storage::kv::RocksSnapshot;
-use tikv::storage::{FixtureStore, SnapshotStore};
+use crate::util::store::*;
 
 mod fixture;
 pub mod util;
@@ -186,24 +185,18 @@ impl std::fmt::Debug for Input {
     }
 }
 
-/// `MemStore` is a store provider that operates directly over a BTreeMap.
-type MemStore = FixtureStore;
-
-/// `DiskStore` is a store provider that operates over a disk-based RocksDB storage.
-type DiskStore = SnapshotStore<RocksSnapshot>;
-
 pub fn bench(c: &mut criterion::Criterion) {
     let inputs = vec![
         Input::new(util::NormalTableScanNext1Bencher::<MemStore>::new()),
-        Input::new(util::NormalTableScanNext1Bencher::<DiskStore>::new()),
+        Input::new(util::NormalTableScanNext1Bencher::<RocksStore>::new()),
         Input::new(util::NormalTableScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::NormalTableScanNext1024Bencher::<DiskStore>::new()),
+        Input::new(util::NormalTableScanNext1024Bencher::<RocksStore>::new()),
         Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::BatchTableScanNext1024Bencher::<DiskStore>::new()),
+        Input::new(util::BatchTableScanNext1024Bencher::<RocksStore>::new()),
         Input::new(util::TableScanDAGBencher::<MemStore>::new(false)),
-        Input::new(util::TableScanDAGBencher::<DiskStore>::new(false)),
+        Input::new(util::TableScanDAGBencher::<RocksStore>::new(false)),
         Input::new(util::TableScanDAGBencher::<MemStore>::new(true)),
-        Input::new(util::TableScanDAGBencher::<DiskStore>::new(true)),
+        Input::new(util::TableScanDAGBencher::<RocksStore>::new(true)),
     ];
 
     c.bench_function_over_inputs(

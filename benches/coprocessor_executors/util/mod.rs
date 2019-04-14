@@ -14,6 +14,7 @@
 pub mod aggr;
 pub mod bencher;
 pub mod fixture_executor;
+pub mod store;
 
 use criterion::black_box;
 

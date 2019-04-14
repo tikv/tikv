@@ -33,6 +33,7 @@ use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::bencher::Bencher;
+use crate::util::store::StoreDescriber;
 
 fn create_table_scan_executor<TargetTxnStore: TxnStore>(
     columns: &[ColumnInfo],
@@ -76,7 +77,7 @@ fn create_batch_table_scan_executor<TargetTxnStore: TxnStore>(
 }
 
 pub trait TableScanBencher {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> String;
 
     fn bench(
         &self,
@@ -102,8 +103,8 @@ impl<T: TxnStore + 'static> NormalTableScanNext1Bencher<T> {
 }
 
 impl<T: TxnStore + 'static> TableScanBencher for NormalTableScanNext1Bencher<T> {
-    fn name(&self) -> &'static str {
-        "normal/next=1"
+    fn name(&self) -> String {
+        format!("{}/normal/next=1", <T as StoreDescriber>::name())
     }
 
     fn bench(
@@ -137,8 +138,8 @@ impl<T: TxnStore + 'static> NormalTableScanNext1024Bencher<T> {
 }
 
 impl<T: TxnStore + 'static> TableScanBencher for NormalTableScanNext1024Bencher<T> {
-    fn name(&self) -> &'static str {
-        "normal/next=1024"
+    fn name(&self) -> String {
+        format!("{}/normal/next=1024", <T as StoreDescriber>::name())
     }
 
     fn bench(
@@ -172,8 +173,8 @@ impl<T: TxnStore + 'static> BatchTableScanNext1024Bencher<T> {
 }
 
 impl<T: TxnStore + 'static> TableScanBencher for BatchTableScanNext1024Bencher<T> {
-    fn name(&self) -> &'static str {
-        "batch/next=1024"
+    fn name(&self) -> String {
+        format!("{}/batch/next=1024", <T as StoreDescriber>::name())
     }
 
     fn bench(
@@ -209,12 +210,9 @@ impl<T: TxnStore + 'static> TableScanDAGBencher<T> {
 }
 
 impl<T: TxnStore + 'static> TableScanBencher for TableScanDAGBencher<T> {
-    fn name(&self) -> &'static str {
-        if self.batch {
-            "batch/with_dag"
-        } else {
-            "normal/with_dag"
-        }
+    fn name(&self) -> String {
+        let tag = if self.batch { "batch" } else { "normal" };
+        format!("{}/{}/with_dag", <T as StoreDescriber>::name(), tag)
     }
 
     fn bench(
