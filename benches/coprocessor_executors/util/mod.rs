@@ -24,10 +24,10 @@ use tipb::executor::Executor as PbExecutor;
 
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
-use tikv::storage::RocksEngine;
+use tikv::storage::{RocksEngine, Store as TxnStore};
 
 /// A simple helper function to build the DAG handler.
-pub fn build_dag_handler(
+pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     executors: &[PbExecutor],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
@@ -43,7 +43,7 @@ pub fn build_dag_handler(
     DAGRequestHandler::build(
         black_box(dag),
         black_box(ranges.to_vec()),
-        black_box(store.to_fixture_store()),
+        black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
         Deadline::from_now("", std::time::Duration::from_secs(10)),
         64,
         false,

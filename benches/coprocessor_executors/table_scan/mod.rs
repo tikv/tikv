@@ -11,13 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use tikv::storage::kv::RocksSnapshot;
+use tikv::storage::{FixtureStore, SnapshotStore};
+
 mod fixture;
-mod util;
+pub mod util;
 
 /// 1 interested column, which is PK (which is in the key)
 ///
 /// This kind of scanner is used in SQLs like SELECT COUNT(*).
-fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_two_columns();
     input.0.bench(
         b,
@@ -30,7 +33,7 @@ fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &BenchInput) 
 /// 1 interested column, at the front of each row. Each row contains 100 columns.
 ///
 /// This kind of scanner is used in SQLs like `SELECT COUNT(column)`.
-fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_multi_columns(100);
     input.0.bench(
         b,
@@ -41,7 +44,7 @@ fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &BenchInput) 
 }
 
 /// 2 interested columns, at the front of each row. Each row contains 100 columns.
-fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_multi_columns(100);
     input.0.bench(
         b,
@@ -55,7 +58,7 @@ fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &BenchI
 }
 
 /// 1 interested column, at the end of each row. Each row contains 100 columns.
-fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_multi_columns(100);
     input.0.bench(
         b,
@@ -67,7 +70,7 @@ fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &BenchInput) {
 
 /// 100 interested columns, all columns in the row are interested (i.e. there are totally 100
 /// columns in the row).
-fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_multi_columns(100);
     input.0.bench(
         b,
@@ -78,7 +81,7 @@ fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &BenchInput) {
 }
 
 /// 3 columns in the row and the last column is very long but only PK is interested.
-fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_long_column();
     input.0.bench(
         b,
@@ -89,7 +92,7 @@ fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &B
 }
 
 /// 3 columns in the row and the last column is very long but a short column is interested.
-fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_long_column();
     input.0.bench(
         b,
@@ -100,7 +103,7 @@ fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &BenchI
 }
 
 /// 3 columns in the row and the last column is very long and the long column is interested.
-fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_long_column();
     input.0.bench(
         b,
@@ -111,7 +114,7 @@ fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &BenchInp
 }
 
 /// 3 columns in the row and the last column is very long and the all columns are interested.
-fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_long_column();
     input.0.bench(
         b,
@@ -127,7 +130,7 @@ fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &BenchInpu
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 10 columns.
-fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_missing_column(10);
     input.0.bench(
         b,
@@ -139,7 +142,7 @@ fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &BenchInput)
 
 /// 1 interested column, but the column is missing from each row (i.e. it's default value is
 /// used instead). Each row contains totally 100 columns.
-fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_missing_column(100);
     input.0.bench(
         b,
@@ -150,7 +153,7 @@ fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &B
 }
 
 /// 1 interested column, which is PK. However the range given are point ranges.
-fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &BenchInput) {
+fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = fixture::table_with_two_columns();
 
     let mut ranges = vec![];
@@ -163,27 +166,44 @@ fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &BenchInput) 
         .bench(b, &[table["id"].as_column_info()], &ranges, &store);
 }
 
-struct BenchInput(Box<dyn util::TableScanBencher>);
+struct Input(Box<dyn util::TableScanBencher>);
 
-impl Clone for BenchInput {
-    fn clone(&self) -> Self {
-        BenchInput(self.0.box_clone())
+impl Input {
+    pub fn new<T: util::TableScanBencher + 'static>(b: T) -> Self {
+        Self(Box::new(b))
     }
 }
 
-impl std::fmt::Debug for BenchInput {
+impl Clone for Input {
+    fn clone(&self) -> Self {
+        Input(self.0.box_clone())
+    }
+}
+
+impl std::fmt::Debug for Input {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.name())
     }
 }
 
+/// `MemStore` is a store provider that operates directly over a BTreeMap.
+type MemStore = FixtureStore;
+
+/// `DiskStore` is a store provider that operates over a disk-based RocksDB storage.
+type DiskStore = SnapshotStore<RocksSnapshot>;
+
 pub fn bench(c: &mut criterion::Criterion) {
     let inputs = vec![
-        BenchInput(Box::new(util::NormalTableScanExecutorNext1Bencher)),
-        BenchInput(Box::new(util::NormalTableScanExecutorNext1024Bencher)),
-        BenchInput(Box::new(util::BatchTableScanExecutorNext1024Bencher)),
-        BenchInput(Box::new(util::TableScanExecutorDAGBencher { batch: false })),
-        BenchInput(Box::new(util::TableScanExecutorDAGBencher { batch: true })),
+        Input::new(util::NormalTableScanNext1Bencher::<MemStore>::new()),
+        Input::new(util::NormalTableScanNext1Bencher::<DiskStore>::new()),
+        Input::new(util::NormalTableScanNext1024Bencher::<MemStore>::new()),
+        Input::new(util::NormalTableScanNext1024Bencher::<DiskStore>::new()),
+        Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
+        Input::new(util::BatchTableScanNext1024Bencher::<DiskStore>::new()),
+        Input::new(util::TableScanDAGBencher::<MemStore>::new(false)),
+        Input::new(util::TableScanDAGBencher::<DiskStore>::new(false)),
+        Input::new(util::TableScanDAGBencher::<MemStore>::new(true)),
+        Input::new(util::TableScanDAGBencher::<DiskStore>::new(true)),
     ];
 
     c.bench_function_over_inputs(

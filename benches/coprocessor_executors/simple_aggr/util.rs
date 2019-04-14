@@ -44,7 +44,7 @@ impl SimpleAggrBencher for NormalSimpleAggrExecutorBencher {
 
     fn bench(&self, b: &mut criterion::Bencher, aggr_expr: &Expr, src_rows: usize) {
         // Next() for one time is enough for normal executor (because there is a loop inside).
-        crate::util::bencher::NormalExecutorNext1Bencher::new(|| {
+        crate::util::bencher::NormalNext1Bencher::new(|| {
             let mut meta = Aggregation::new();
             meta.mut_agg_func().push(aggr_expr.clone());
             let src = crate::util::fixture_executor::EncodedFixtureNormalExecutor::new(src_rows);
@@ -73,7 +73,7 @@ impl SimpleAggrBencher for BatchSimpleAggrExecutorBencher {
     }
 
     fn bench(&self, b: &mut criterion::Bencher, aggr_expr: &Expr, src_rows: usize) {
-        crate::util::bencher::BatchExecutorNext1024Bencher::new(|| {
+        crate::util::bencher::BatchNext1024Bencher::new(|| {
             let src = crate::util::fixture_executor::EncodedFixtureBatchExecutor::new(src_rows);
             BatchSimpleAggregationExecutor::new(
                 ExecSummaryCollectorDisabled,

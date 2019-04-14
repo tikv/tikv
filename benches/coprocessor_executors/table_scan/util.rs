@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use criterion::black_box;
@@ -29,22 +30,22 @@ use tikv::coprocessor::dag::batch::statistics::*;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::coprocessor::dag::executor::TableScanExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
-use tikv::storage::{FixtureStore, RocksEngine};
+use tikv::storage::{RocksEngine, Store as TxnStore};
 
 use crate::util::bencher::Bencher;
 
-fn create_table_scan_executor(
+fn create_table_scan_executor<TargetTxnStore: TxnStore>(
     columns: &[ColumnInfo],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
-) -> TableScanExecutor<FixtureStore> {
+) -> TableScanExecutor<TargetTxnStore> {
     let mut req = TableScan::new();
     req.set_columns(RepeatedField::from_slice(columns));
 
     let mut executor = TableScanExecutor::table_scan(
         black_box(req),
         black_box(ranges.to_vec()),
-        black_box(store.to_fixture_store()),
+        black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
         false,
     )
     .unwrap();
@@ -54,14 +55,14 @@ fn create_table_scan_executor(
     executor
 }
 
-fn create_batch_table_scan_executor(
+fn create_batch_table_scan_executor<TargetTxnStore: TxnStore>(
     columns: &[ColumnInfo],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
-) -> BatchTableScanExecutor<ExecSummaryCollectorDisabled, FixtureStore> {
+) -> BatchTableScanExecutor<ExecSummaryCollectorDisabled, TargetTxnStore> {
     let mut executor = BatchTableScanExecutor::new(
         ExecSummaryCollectorDisabled,
-        black_box(store.to_fixture_store()),
+        black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
         black_box(Arc::new(EvalConfig::default())),
         black_box(columns.to_vec()),
         black_box(ranges.to_vec()),
@@ -88,9 +89,19 @@ pub trait TableScanBencher {
     fn box_clone(&self) -> Box<dyn TableScanBencher>;
 }
 
-pub struct NormalTableScanExecutorNext1Bencher;
+pub struct NormalTableScanNext1Bencher<T: TxnStore + 'static> {
+    _phantom: PhantomData<T>,
+}
 
-impl TableScanBencher for NormalTableScanExecutorNext1Bencher {
+impl<T: TxnStore + 'static> NormalTableScanNext1Bencher<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: TxnStore + 'static> TableScanBencher for NormalTableScanNext1Bencher<T> {
     fn name(&self) -> &'static str {
         "normal/next=1"
     }
@@ -102,20 +113,30 @@ impl TableScanBencher for NormalTableScanExecutorNext1Bencher {
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::bencher::NormalExecutorNext1Bencher::new(|| {
-            create_table_scan_executor(columns, ranges, store)
+        crate::util::bencher::NormalNext1Bencher::new(|| {
+            create_table_scan_executor::<T>(columns, ranges, store)
         })
         .bench(b);
     }
 
     fn box_clone(&self) -> Box<dyn TableScanBencher> {
-        Box::new(Self)
+        Box::new(Self::new())
     }
 }
 
-pub struct NormalTableScanExecutorNext1024Bencher;
+pub struct NormalTableScanNext1024Bencher<T: TxnStore + 'static> {
+    _phantom: PhantomData<T>,
+}
 
-impl TableScanBencher for NormalTableScanExecutorNext1024Bencher {
+impl<T: TxnStore + 'static> NormalTableScanNext1024Bencher<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: TxnStore + 'static> TableScanBencher for NormalTableScanNext1024Bencher<T> {
     fn name(&self) -> &'static str {
         "normal/next=1024"
     }
@@ -127,20 +148,30 @@ impl TableScanBencher for NormalTableScanExecutorNext1024Bencher {
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::bencher::NormalExecutorNext1024Bencher::new(|| {
-            create_table_scan_executor(columns, ranges, store)
+        crate::util::bencher::NormalNext1024Bencher::new(|| {
+            create_table_scan_executor::<T>(columns, ranges, store)
         })
         .bench(b);
     }
 
     fn box_clone(&self) -> Box<dyn TableScanBencher> {
-        Box::new(Self)
+        Box::new(Self::new())
     }
 }
 
-pub struct BatchTableScanExecutorNext1024Bencher;
+pub struct BatchTableScanNext1024Bencher<T: TxnStore + 'static> {
+    _phantom: PhantomData<T>,
+}
 
-impl TableScanBencher for BatchTableScanExecutorNext1024Bencher {
+impl<T: TxnStore + 'static> BatchTableScanNext1024Bencher<T> {
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: TxnStore + 'static> TableScanBencher for BatchTableScanNext1024Bencher<T> {
     fn name(&self) -> &'static str {
         "batch/next=1024"
     }
@@ -152,23 +183,32 @@ impl TableScanBencher for BatchTableScanExecutorNext1024Bencher {
         ranges: &[KeyRange],
         store: &Store<RocksEngine>,
     ) {
-        crate::util::bencher::BatchExecutorNext1024Bencher::new(|| {
-            create_batch_table_scan_executor(columns, ranges, store)
+        crate::util::bencher::BatchNext1024Bencher::new(|| {
+            create_batch_table_scan_executor::<T>(columns, ranges, store)
         })
         .bench(b);
     }
 
     fn box_clone(&self) -> Box<dyn TableScanBencher> {
-        Box::new(Self)
+        Box::new(Self::new())
     }
 }
 
-#[derive(Clone)]
-pub struct TableScanExecutorDAGBencher {
+pub struct TableScanDAGBencher<T: TxnStore + 'static> {
     pub batch: bool,
+    _phantom: PhantomData<T>,
 }
 
-impl TableScanBencher for TableScanExecutorDAGBencher {
+impl<T: TxnStore + 'static> TableScanDAGBencher<T> {
+    pub fn new(batch: bool) -> Self {
+        Self {
+            batch,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: TxnStore + 'static> TableScanBencher for TableScanDAGBencher<T> {
     fn name(&self) -> &'static str {
         if self.batch {
             "batch/with_dag"
@@ -189,12 +229,12 @@ impl TableScanBencher for TableScanExecutorDAGBencher {
             exec.set_tp(ExecType::TypeTableScan);
             exec.mut_tbl_scan()
                 .set_columns(RepeatedField::from_slice(columns));
-            crate::util::build_dag_handler(&[exec], ranges, store, self.batch)
+            crate::util::build_dag_handler::<T>(&[exec], ranges, store, self.batch)
         })
         .bench(b);
     }
 
     fn box_clone(&self) -> Box<dyn TableScanBencher> {
-        Box::new(self.clone())
+        Box::new(Self::new(self.batch))
     }
 }

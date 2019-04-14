@@ -22,17 +22,17 @@ pub trait Bencher {
 }
 
 /// Invoke 1 next() of a normal executor.
-pub struct NormalExecutorNext1Bencher<E: Executor, F: FnMut() -> E> {
+pub struct NormalNext1Bencher<E: Executor, F: FnMut() -> E> {
     executor_builder: F,
 }
 
-impl<E: Executor, F: FnMut() -> E> NormalExecutorNext1Bencher<E, F> {
+impl<E: Executor, F: FnMut() -> E> NormalNext1Bencher<E, F> {
     pub fn new(executor_builder: F) -> Self {
         Self { executor_builder }
     }
 }
 
-impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1Bencher<E, F> {
+impl<E: Executor, F: FnMut() -> E> Bencher for NormalNext1Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
         b.iter_batched_ref(
             &mut self.executor_builder,
@@ -45,17 +45,17 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1Bencher<E, F> 
 }
 
 /// Invoke 1024 next() of a normal executor.
-pub struct NormalExecutorNext1024Bencher<E: Executor, F: FnMut() -> E> {
+pub struct NormalNext1024Bencher<E: Executor, F: FnMut() -> E> {
     executor_builder: F,
 }
 
-impl<E: Executor, F: FnMut() -> E> NormalExecutorNext1024Bencher<E, F> {
+impl<E: Executor, F: FnMut() -> E> NormalNext1024Bencher<E, F> {
     pub fn new(executor_builder: F) -> Self {
         Self { executor_builder }
     }
 }
 
-impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1024Bencher<E, F> {
+impl<E: Executor, F: FnMut() -> E> Bencher for NormalNext1024Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
         b.iter_batched_ref(
             &mut self.executor_builder,
@@ -71,17 +71,17 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalExecutorNext1024Bencher<E, 
 }
 
 /// Invoke 1 next_batch(1024) for a batch executor.
-pub struct BatchExecutorNext1024Bencher<E: BatchExecutor, F: FnMut() -> E> {
+pub struct BatchNext1024Bencher<E: BatchExecutor, F: FnMut() -> E> {
     executor_builder: F,
 }
 
-impl<E: BatchExecutor, F: FnMut() -> E> BatchExecutorNext1024Bencher<E, F> {
+impl<E: BatchExecutor, F: FnMut() -> E> BatchNext1024Bencher<E, F> {
     pub fn new(executor_builder: F) -> Self {
         Self { executor_builder }
     }
 }
 
-impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchExecutorNext1024Bencher<E, F> {
+impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
         b.iter_batched_ref(
             &mut self.executor_builder,

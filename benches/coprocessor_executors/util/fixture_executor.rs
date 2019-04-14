@@ -194,13 +194,11 @@ impl Executor for EncodedFixtureNormalExecutor {
 /// Benches the performance of the batch fixture executor itself. When using it as the source
 /// executor in other benchmarks, we need to take out these costs.
 fn bench_util_batch_fixture_executor_next_1024(b: &mut criterion::Bencher) {
-    super::bencher::BatchExecutorNext1024Bencher::new(|| EncodedFixtureBatchExecutor::new(5000))
-        .bench(b);
+    super::bencher::BatchNext1024Bencher::new(|| EncodedFixtureBatchExecutor::new(5000)).bench(b);
 }
 
 fn bench_util_normal_fixture_executor_next_1024(b: &mut criterion::Bencher) {
-    super::bencher::NormalExecutorNext1024Bencher::new(|| EncodedFixtureNormalExecutor::new(5000))
-        .bench(b);
+    super::bencher::NormalNext1024Bencher::new(|| EncodedFixtureNormalExecutor::new(5000)).bench(b);
 }
 
 /// Checks whether our test utilities themselves are fast enough.
