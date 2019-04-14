@@ -7,7 +7,6 @@
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
-extern crate prometheus;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
