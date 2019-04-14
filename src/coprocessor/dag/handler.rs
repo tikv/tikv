@@ -123,9 +123,6 @@ impl DAGRequestHandler {
         if req.has_sql_mode() {
             eval_cfg.set_sql_mode(req.get_sql_mode());
         }
-        if req.has_is_strict_sql_mode() {
-            eval_cfg.set_strict_sql_mode(req.get_is_strict_sql_mode());
-        }
 
         let mut is_batch = false;
         if enable_batch_if_possible && !is_streaming {
