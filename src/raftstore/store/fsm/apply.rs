@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 #[cfg(test)]
@@ -54,11 +43,11 @@ use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, wri
 use crate::raftstore::store::util::check_region_epoch;
 use crate::raftstore::store::{cmd_resp, keys, util, Config};
 use crate::raftstore::{Error, Result};
-use crate::util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
-use crate::util::time::{duration_to_sec, Instant, SlowTimer};
-use crate::util::worker::Scheduler;
-use crate::util::Either;
-use crate::util::{escape, MustConsumeVec};
+use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
+use tikv_util::worker::Scheduler;
+use tikv_util::Either;
+use tikv_util::{escape, MustConsumeVec};
 
 use super::metrics::*;
 use super::{
@@ -2885,7 +2874,7 @@ mod tests {
 
     use crate::import::test_helpers::*;
     use crate::raftstore::store::{Config, RegionTask};
-    use crate::util::worker::dummy_scheduler;
+    use tikv_util::worker::dummy_scheduler;
 
     use super::*;
 

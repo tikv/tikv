@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -37,8 +26,7 @@ use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
-use crate::util;
-use crate::util::worker::Scheduler;
+use tikv_util::worker::Scheduler;
 
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
@@ -145,7 +133,7 @@ impl EntryCache {
         // Cache either is empty or contains latest log. Hence we don't need to fetch log
         // from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
-        let (first, second) = util::slices_in_range(&self.cache, start_idx, end_idx);
+        let (first, second) = tikv_util::slices_in_range(&self.cache, start_idx, end_idx);
         ents.extend_from_slice(first);
         ents.extend_from_slice(second);
     }
@@ -1626,7 +1614,6 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use crate::util::worker::{Scheduler, Worker};
     use engine::rocks::util::new_engine;
     use engine::rocks::WriteBatch;
     use engine::Engines;
@@ -1642,6 +1629,7 @@ mod tests {
     use std::sync::*;
     use std::time::Duration;
     use tempdir::*;
+    use tikv_util::worker::{Scheduler, Worker};
 
     use super::*;
 

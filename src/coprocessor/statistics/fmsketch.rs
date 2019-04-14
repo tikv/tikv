@@ -1,19 +1,8 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::collections::HashSet;
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
+use tikv_util::collections::HashSet;
 use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number of distinct
@@ -71,8 +60,8 @@ mod tests {
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::Result;
-    use crate::util::as_slice;
     use std::iter::repeat;
+    use tikv_util::as_slice;
 
     struct TestData {
         samples: Vec<Datum>,

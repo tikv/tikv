@@ -1,23 +1,12 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 use time::{self, Tm};
 
 use super::super::Result;
@@ -341,7 +330,7 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 mod tests {
     use super::*;
     use crate::coprocessor::codec::mysql::MAX_FSP;
-    use crate::util::escape;
+    use tikv_util::escape;
 
     #[test]
     fn test_hours() {
