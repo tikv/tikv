@@ -11,7 +11,7 @@ use kvproto::pdpb::CheckPolicy;
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use crate::util::escape;
+use tikv_util::escape;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -225,12 +225,12 @@ mod tests {
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::config::ReadableSize;
-    use crate::util::worker::Runnable;
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::worker::Runnable;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};

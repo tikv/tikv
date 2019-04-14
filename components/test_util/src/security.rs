@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use tikv::util::security::SecurityConfig;
+use tikv_util::security::SecurityConfig;
 
 pub fn new_security_cfg() -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

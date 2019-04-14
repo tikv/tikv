@@ -9,9 +9,8 @@ pub use self::config::Config;
 pub use self::priority::Priority;
 
 use futures::Future;
+use tikv_util::future_pool::FuturePool;
 use tokio_threadpool::SpawnHandle;
-
-use crate::util::future_pool::FuturePool;
 
 type Result<T> = std::result::Result<T, Full>;
 
@@ -29,8 +28,8 @@ pub struct ReadPool {
     max_tasks_low: usize,
 }
 
-impl crate::util::AssertSend for ReadPool {}
-impl crate::util::AssertSync for ReadPool {}
+impl tikv_util::AssertSend for ReadPool {}
+impl tikv_util::AssertSync for ReadPool {}
 
 impl ReadPool {
     #[inline]

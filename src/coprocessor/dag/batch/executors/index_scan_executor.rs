@@ -163,8 +163,8 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::coprocessor::codec::{datum, table};
-        use crate::util::codec::number;
         use byteorder::{BigEndian, ReadBytesExt};
+        use tikv_util::codec::number;
 
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];

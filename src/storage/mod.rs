@@ -25,9 +25,8 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
-use crate::util;
-use crate::util::collections::HashMap;
-use crate::util::worker::{self, Builder, ScheduleError, Worker};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -639,7 +638,7 @@ impl<E: Engine> Storage<E> {
 
     /// Get a snapshot of `engine`.
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = util::future::paired_future_callback();
+        let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
         future::result(val)
@@ -664,7 +663,7 @@ impl<E: Engine> Storage<E> {
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
-            let command_duration = crate::util::time::Instant::now_coarse();
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
@@ -716,7 +715,7 @@ impl<E: Engine> Storage<E> {
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
-            let command_duration = crate::util::time::Instant::now_coarse();
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
@@ -778,7 +777,7 @@ impl<E: Engine> Storage<E> {
 
         let res = self.read_pool.spawn_handle(priority, move || {
             tls_collect_command_count(CMD, priority);
-            let command_duration = crate::util::time::Instant::now_coarse();
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
@@ -1699,9 +1698,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
+    use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);

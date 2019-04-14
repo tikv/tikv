@@ -52,10 +52,10 @@ use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::security::{self, SecurityManager};
-use tikv::util::time::Monitor;
-use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, check_environment_variables};
+use tikv_util::security::{self, SecurityManager};
+use tikv_util::time::Monitor;
+use tikv_util::worker::{Builder, FutureWorker};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 

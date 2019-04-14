@@ -27,7 +27,7 @@ use futures::{lazy, Future};
 use prometheus::*;
 use tokio_threadpool::{SpawnHandle, ThreadPool};
 
-use crate::util::time::Instant;
+use crate::time::Instant;
 
 const TICK_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -53,8 +53,8 @@ impl std::fmt::Debug for FuturePool {
     }
 }
 
-impl crate::util::AssertSend for FuturePool {}
-impl crate::util::AssertSync for FuturePool {}
+impl crate::AssertSend for FuturePool {}
+impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
     /// Gets current running task count.

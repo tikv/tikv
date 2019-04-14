@@ -36,11 +36,11 @@ use crate::storage::mvcc::properties::{MvccProperties, RangeProperties};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
-use crate::util::codec::bytes;
-use crate::util::collections::HashSet;
-use crate::util::config::ReadableSize;
-use crate::util::escape;
-use crate::util::worker::Worker;
+use tikv_util::codec::bytes;
+use tikv_util::collections::HashSet;
+use tikv_util::config::ReadableSize;
+use tikv_util::escape;
+use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;

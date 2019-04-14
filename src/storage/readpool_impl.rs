@@ -18,8 +18,8 @@ use prometheus::local::*;
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, ReadPool};
-use crate::util::collections::HashMap;
-use crate::util::worker::FutureScheduler;
+use tikv_util::collections::HashMap;
+use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 
@@ -114,7 +114,7 @@ pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
         m.borrow_mut()
             .local_sched_histogram_vec
             .with_label_values(&[cmd])
-            .observe(crate::util::time::duration_to_sec(duration))
+            .observe(tikv_util::time::duration_to_sec(duration))
     });
 }
 
@@ -134,7 +134,7 @@ where
     F: FnOnce() -> R,
 {
     TLS_STORAGE_METRICS.with(|m| {
-        let now = crate::util::time::Instant::now_coarse();
+        let now = tikv_util::time::Instant::now_coarse();
         let ret = f();
         m.borrow_mut()
             .local_sched_processing_read_histogram_vec

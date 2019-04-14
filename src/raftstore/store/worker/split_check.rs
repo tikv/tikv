@@ -17,7 +17,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
-use crate::util::worker::Runnable;
+use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 

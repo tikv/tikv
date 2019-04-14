@@ -15,8 +15,8 @@ use std::cell::RefCell;
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, ReadPool};
-use crate::util::collections::HashMap;
-use crate::util::worker::FutureScheduler;
+use tikv_util::collections::HashMap;
+use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
 use prometheus::local::*;

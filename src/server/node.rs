@@ -17,13 +17,13 @@ use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
 use crate::storage::{Config as StorageConfig, RaftKv, Storage};
-use crate::util::worker::{FutureWorker, Worker};
 use engine::rocks::DB;
 use engine::Engines;
 use engine::Peekable;
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use protobuf::RepeatedField;
+use tikv_util::worker::{FutureWorker, Worker};
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
 const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;

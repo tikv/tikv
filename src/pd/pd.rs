@@ -27,10 +27,10 @@ use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use crate::util::collections::HashMap;
-use crate::util::escape;
-use crate::util::time::time_now_sec;
-use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
+use tikv_util::collections::HashMap;
+use tikv_util::escape;
+use tikv_util::time::time_now_sec;
+use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {

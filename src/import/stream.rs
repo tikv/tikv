@@ -201,7 +201,7 @@ mod tests {
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
-    use crate::util::security::SecurityConfig;
+    use tikv_util::security::SecurityConfig;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();
