@@ -3,10 +3,11 @@
 use kvproto::kvrpcpb;
 
 use crate::storage::kv::{PerfStatisticsDelta, PerfStatisticsInstant};
-use tikv_util::futurepool;
+
 use tikv_util::time::{self, Duration, Instant};
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
+use crate::coprocessor::readpool_impl::*;
 use crate::coprocessor::*;
 
 // If handle time is larger than the lower bound, the query is considered as slow query.
@@ -14,10 +15,7 @@ const SLOW_QUERY_LOWER_BOUND: f64 = 1.0; // 1 second.
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrackerState {
-    /// The tracker is just created and not initialized. Initialize means `ctxd` is attached.
-    NotInitialized,
-
-    /// The tracker is initialized with a `ctxd` instance.
+    /// The tracker is initialized.
     Initialized,
 
     /// The tracker is notified that all items just began.
@@ -54,9 +52,6 @@ pub struct Tracker {
 
     // Request info, used to print slow log.
     pub req_ctx: ReqContext,
-
-    // Metrics collect target
-    ctxd: Option<futurepool::ContextDelegators<ReadPoolContext>>,
 }
 
 impl Tracker {
@@ -69,7 +64,7 @@ impl Tracker {
             item_begin_at: Instant::now_coarse(),
             perf_statistics_start: None,
 
-            current_stage: TrackerState::NotInitialized,
+            current_stage: TrackerState::Initialized,
             wait_time: Duration::default(),
             req_time: Duration::default(),
             item_process_time: Duration::default(),
@@ -78,20 +73,11 @@ impl Tracker {
             total_perf_statistics: PerfStatisticsDelta::default(),
 
             req_ctx,
-
-            ctxd: None,
         }
     }
 
-    /// Attach future pool's context delegators.
-    pub fn attach_ctxd(&mut self, ctxd: futurepool::ContextDelegators<ReadPoolContext>) {
-        assert!(self.current_stage == TrackerState::NotInitialized);
-        self.ctxd = Some(ctxd);
-        self.current_stage = TrackerState::Initialized;
-    }
-
     pub fn on_begin_all_items(&mut self) {
-        assert!(self.current_stage == TrackerState::Initialized);
+        assert_eq!(self.current_stage, TrackerState::Initialized);
         self.wait_time = Instant::now_coarse() - self.request_begin_at;
         self.current_stage = TrackerState::AllItemsBegan;
     }
@@ -107,7 +93,7 @@ impl Tracker {
     }
 
     pub fn on_finish_item(&mut self, some_exec_metrics: Option<ExecutorMetrics>) {
-        assert!(self.current_stage == TrackerState::ItemBegan);
+        assert_eq!(self.current_stage, TrackerState::ItemBegan);
         self.item_process_time = Instant::now_coarse() - self.item_begin_at;
         self.total_process_time += self.item_process_time;
         if let Some(mut exec_metrics) = some_exec_metrics {
@@ -124,7 +110,7 @@ impl Tracker {
     /// Get current item's ExecDetail according to previous collected metrics.
     /// TiDB asks for ExecDetail to be printed in its log.
     pub fn get_item_exec_details(&self) -> kvrpcpb::ExecDetails {
-        assert!(self.current_stage == TrackerState::ItemFinished);
+        assert_eq!(self.current_stage, TrackerState::ItemFinished);
         let is_slow_query = time::duration_to_sec(self.item_process_time) > SLOW_QUERY_LOWER_BOUND;
         let mut exec_details = kvrpcpb::ExecDetails::new();
         if self.req_ctx.context.get_handle_time() || is_slow_query {
@@ -180,57 +166,67 @@ impl Tracker {
 
         let total_exec_metrics =
             std::mem::replace(&mut self.total_exec_metrics, ExecutorMetrics::default());
-        let mut thread_ctx = self.ctxd.as_ref().unwrap().current_thread_context_mut();
-        thread_ctx
-            .basic_local_metrics
-            .req_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.req_time));
-        thread_ctx
-            .basic_local_metrics
-            .wait_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.wait_time));
-        thread_ctx
-            .basic_local_metrics
-            .handle_time
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(time::duration_to_sec(self.total_process_time));
-        thread_ctx
-            .basic_local_metrics
-            .scan_keys
-            .with_label_values(&[self.req_ctx.tag])
-            .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
-        thread_ctx.collect(
+
+        TLS_COP_METRICS.with(|m| {
+            let mut cop_metrics = m.borrow_mut();
+
+            // req time
+            cop_metrics
+                .local_copr_req_histogram_vec
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(time::duration_to_sec(self.req_time));
+
+            // wait time
+            cop_metrics
+                .local_copr_req_wait_time
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(time::duration_to_sec(self.wait_time));
+
+            // handle time
+            cop_metrics
+                .local_copr_req_handle_time
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(time::duration_to_sec(self.total_process_time));
+
+            // scan keys
+            cop_metrics
+                .local_copr_scan_keys
+                .with_label_values(&[self.req_ctx.tag])
+                .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
+
+            // rocksdb perf stats
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
+                .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
+                .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
+                .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "block_read_count"])
+                .inc_by(self.total_perf_statistics.block_read_count as i64);
+
+            cop_metrics
+                .local_copr_rocksdb_perf_counter
+                .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
+                .inc_by(self.total_perf_statistics.block_read_byte as i64);
+        });
+
+        tls_collect_executor_metrics(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
             total_exec_metrics,
         );
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
-            .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
-            .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_count"])
-            .inc_by(self.total_perf_statistics.block_read_count as i64);
-        thread_ctx
-            .basic_local_metrics
-            .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
-            .inc_by(self.total_perf_statistics.block_read_byte as i64);
+
         self.current_stage = TrackerState::Tracked;
     }
 }
