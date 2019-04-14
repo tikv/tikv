@@ -36,13 +36,6 @@ BIN_PATH = $(CURDIR)/bin
 GOROOT ?= $(DEPS_PATH)/go
 CARGO_TARGET_DIR ?= $(CURDIR)/target
 
-BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
-BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export TIKV_BUILD_TIME := $(shell date -u '+%Y-%m-%d %I:%M:%S')
-export TIKV_BUILD_GIT_HASH := $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export TIKV_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
-
 default: release
 
 .PHONY: all
