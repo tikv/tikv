@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::collections::Bound::Excluded;
@@ -47,11 +36,11 @@ use crate::storage::mvcc::properties::{MvccProperties, RangeProperties};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
-use crate::util::codec::bytes;
-use crate::util::collections::HashSet;
-use crate::util::config::ReadableSize;
-use crate::util::escape;
-use crate::util::worker::Worker;
+use tikv_util::codec::bytes;
+use tikv_util::collections::HashSet;
+use tikv_util::config::ReadableSize;
+use tikv_util::escape;
+use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;

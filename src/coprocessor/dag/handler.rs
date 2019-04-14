@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -17,7 +6,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
 use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
 
-use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::expr::{EvalConfig, SqlMode};
 use crate::coprocessor::*;
 use crate::storage::Store;
 
@@ -121,7 +110,7 @@ impl DAGRequestHandler {
             eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
         }
         if req.has_sql_mode() {
-            eval_cfg.set_sql_mode(req.get_sql_mode());
+            eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
 
         let mut is_batch = false;

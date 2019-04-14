@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 use std::{i64, mem, u64};
@@ -45,8 +34,24 @@ pub const FLAG_OVERFLOW_AS_WARNING: u64 = 1 << 6;
 // FLAG_DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
 pub const FLAG_DIVIDED_BY_ZERO_AS_WARNING: u64 = 1 << 8;
 
-pub const MODE_NO_ZERO_DATE_MODE: u64 = 25;
-pub const MODE_ERROR_FOR_DIVISION_BY_ZERO: u64 = 27;
+bitflags! {
+    /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
+    pub struct SqlMode: u64 {
+        const STRICT_TRANS_TABLES = 1 << 22;
+        const STRICT_ALL_TABLES = 1 << 23;
+        const NO_ZERO_IN_DATE = 1 << 24;
+        const NO_ZERO_DATE = 1 << 25;
+        const INVALID_DATES = 1 << 26;
+        const ERROR_FOR_DIVISION_BY_ZERO = 1 << 27;
+    }
+}
+
+impl SqlMode {
+    /// Returns if 'STRICT_TRANS_TABLES' or 'STRICT_ALL_TABLES' mode is set.
+    pub fn is_strict(self) -> bool {
+        self.contains(SqlMode::STRICT_TRANS_TABLES) || self.contains(SqlMode::STRICT_ALL_TABLES)
+    }
+}
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
@@ -65,9 +70,7 @@ pub struct EvalConfig {
     // TODO: max warning count is not really a EvalConfig. Instead it is a ExecutionConfig, because
     // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
-    pub sql_mode: u64,
-    /// if the session is in strict mode.
-    pub strict_sql_mode: bool,
+    pub sql_mode: SqlMode,
 }
 
 impl Default for EvalConfig {
@@ -89,8 +92,7 @@ impl EvalConfig {
             pad_char_to_full_length: false,
             divided_by_zero_as_warning: false,
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
-            sql_mode: 0,
-            strict_sql_mode: false,
+            sql_mode: SqlMode::empty(),
         }
     }
 
@@ -145,13 +147,8 @@ impl EvalConfig {
         self
     }
 
-    pub fn set_sql_mode(&mut self, new_value: u64) -> &mut Self {
+    pub fn set_sql_mode(&mut self, new_value: SqlMode) -> &mut Self {
         self.sql_mode = new_value;
-        self
-    }
-
-    pub fn set_strict_sql_mode(&mut self, new_value: bool) -> &mut Self {
-        self.strict_sql_mode = new_value;
         self
     }
 
@@ -184,16 +181,6 @@ impl EvalConfig {
             .set_in_select_stmt((flags & FLAG_IN_SELECT_STMT) > 0)
             .set_pad_char_to_full_length((flags & FLAG_PAD_CHAR_TO_FULL_LENGTH) > 0)
             .set_divided_by_zero_as_warning((flags & FLAG_DIVIDED_BY_ZERO_AS_WARNING) > 0)
-    }
-
-    /// detects if 'ERROR_FOR_DIVISION_BY_ZERO' mode is set in sql_mode
-    pub fn mode_error_for_division_by_zero(&self) -> bool {
-        self.sql_mode & MODE_ERROR_FOR_DIVISION_BY_ZERO == MODE_ERROR_FOR_DIVISION_BY_ZERO
-    }
-
-    /// detects if 'MODE_NO_ZERO_DATE_MODE' mode is set in sql_mode
-    pub fn mode_no_zero_date_mode(&self) -> bool {
-        self.sql_mode & MODE_NO_ZERO_DATE_MODE == MODE_NO_ZERO_DATE_MODE
     }
 
     pub fn new_eval_warnings(&self) -> EvalWarnings {
@@ -299,10 +286,14 @@ impl EvalContext {
 
     pub fn handle_division_by_zero(&mut self) -> Result<()> {
         if self.cfg.in_insert_stmt || self.cfg.in_update_or_delete_stmt {
-            if !self.cfg.mode_error_for_division_by_zero() {
+            if !self
+                .cfg
+                .sql_mode
+                .contains(SqlMode::ERROR_FOR_DIVISION_BY_ZERO)
+            {
                 return Ok(());
             }
-            if self.cfg.strict_sql_mode && !self.cfg.divided_by_zero_as_warning {
+            if self.cfg.sql_mode.is_strict() && !self.cfg.divided_by_zero_as_warning {
                 return Err(Error::division_by_zero());
             }
         }
@@ -315,7 +306,7 @@ impl EvalContext {
             return Err(err);
         }
         let cfg = &self.cfg;
-        if cfg.strict_sql_mode && (cfg.in_insert_stmt || cfg.in_update_or_delete_stmt) {
+        if cfg.sql_mode.is_strict() && (cfg.in_insert_stmt || cfg.in_update_or_delete_stmt) {
             Err(err)
         } else {
             self.warnings.append_warning(err);
@@ -394,43 +385,42 @@ mod tests {
     #[test]
     fn test_handle_division_by_zero() {
         let cases = vec![
-            //(flag,sql_mode,strict_sql_mode,is_ok,is_empty)
-            (0, 0, false, true, false), //warning
+            //(flag,sql_mode,is_ok,is_empty)
+            (0, SqlMode::empty(), true, false), //warning
             (
                 FLAG_IN_INSERT_STMT,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                false,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
             ), //warning
             (
                 FLAG_IN_UPDATE_OR_DELETE_STMT,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                false,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
             ), //warning
             (
                 FLAG_IN_UPDATE_OR_DELETE_STMT,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                true,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 true,
             ), //error
-            (FLAG_IN_UPDATE_OR_DELETE_STMT, 0, true, true, true), //ok
+            (
+                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                SqlMode::STRICT_ALL_TABLES,
+                true,
+                true,
+            ), //ok
             (
                 FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
-                MODE_ERROR_FOR_DIVISION_BY_ZERO,
-                true,
+                SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 false,
             ), //warning
         ];
-        for (flag, sql_mode, strict_sql_mode, is_ok, is_empty) in cases {
+        for (flag, sql_mode, is_ok, is_empty) in cases {
             let mut cfg = EvalConfig::new();
-            cfg.set_by_flags(flag)
-                .set_sql_mode(sql_mode)
-                .set_strict_sql_mode(strict_sql_mode);
+            cfg.set_by_flags(flag).set_sql_mode(sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_division_by_zero().is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
@@ -451,7 +441,10 @@ mod tests {
         for (flags, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
             let mut cfg = EvalConfig::new();
-            cfg.set_by_flags(flags).set_strict_sql_mode(strict_sql_mode);
+            cfg.set_by_flags(flags);
+            if strict_sql_mode {
+                cfg.sql_mode.insert(SqlMode::STRICT_ALL_TABLES);
+            }
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_invalid_time_error(err).is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
