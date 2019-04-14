@@ -1,5 +1,14 @@
 SHELL := /bin/bash
-ENABLE_FEATURES ?= default
+ENABLE_FEATURES ?=
+
+# Pick an allocator
+ifeq ($(TCMALLOC),1)
+ENABLE_FEATURES += tcmalloc
+else ifeq ($(SYSTEM_ALLOC),1)
+# no feature needed for system allocator
+else
+ENABLE_FEATURES += jemalloc
+endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
@@ -57,18 +66,18 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build --features "${ENABLE_FEATURES}"
+	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
 
 ctl:
-	cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 run:
-	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
-	cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
@@ -97,16 +106,16 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
 
 unset-override:
 	@# unset first in case of any previous overrides
@@ -133,7 +142,7 @@ clean:
 	cargo clean
 
 expression: format clippy
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
 
 
@@ -152,22 +161,27 @@ expression: format clippy
 #
 # They can be invoked as:
 #
-#     $ make x-build-dev-nopt      # An unoptimized build
-#                                  #   (fast build / slow run)
-#     $ make x-build-dev-opt       # A mostly-optimized dev profile
-#                                  #   (slower build / faster run)
-#     $ make x-build-prod          # A release build
-#                                  #   (slowest build / fastest run)
-#     $ make x-bench               # Run benches mostly-optimized
-#                                  #   (slower build / faster run)
-#     $ make x-test                # Run tests unoptimized
-#                                  #   (fast build / slow run)
+#     $ make x-build-dev-nopt-quick # An unoptimized build
+#                                   #   (fastest build / slow run)
+#                                   #   (no debug assertions or overflow checks)
+#     $ make x-build-dev-nopt       # An unoptimized build
+#                                   #   (fast build / slow run)
+#     $ make x-build-dev-opt        # A mostly-optimized dev profile
+#                                   #   (slower build / faster run)
+#     $ make x-build-prod           # A release build
+#                                   #   (slowest build / fastest run)
+#     $ make x-bench                # Run benches mostly-optimized
+#                                   #   (slower build / faster run)
+#     $ make x-test                 # Run tests unoptimized
+#                                   #   (fast build / slow run)
 #
-# The first three have aliases:
+# Use cases:
 #
-#     $ make x-build
-#     $ make x-build-opt
-#     $ make x-release
+#   testing with fastest turnaround       - dev-nopt-quick
+#   testing                               - dev-nopt-quick
+#   casual benchmarking                   - dev-opt
+#   benchmarking with full release config - prod
+#   building the release for publish      - prod
 #
 # The below rules all rely on using a .cargo/config file to override various
 # profiles. Within those config files we'll experiment with compile-time
@@ -188,6 +202,7 @@ expression: format clippy
 
 DEV_OPT_CONFIG=etc/cargo.config.dev-opt
 DEV_NOPT_CONFIG=etc/cargo.config.dev-nopt
+DEV_NOPT_QUICK_CONFIG=etc/cargo.config.dev-nopt-quick
 PROD_CONFIG=etc/cargo.config.prod
 TEST_CONFIG=etc/cargo.config.test
 BENCH_CONFIG=etc/cargo.config.bench
@@ -198,11 +213,11 @@ endif
 
 export X_CARGO_ARGS:=${CARGO_ARGS}
 
-x-build-dev-opt: export X_CARGO_CMD=build
-x-build-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
-x-build-dev-opt: export X_CARGO_RELEASE=1
-x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
-x-build-dev-opt:
+x-build-dev-nopt-quick: export X_CARGO_CMD=build
+x-build-dev-nopt-quick: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-nopt-quick: export X_CARGO_RELEASE=0
+x-build-dev-nopt-quick: export X_CARGO_CONFIG_FILE=${DEV_NOPT_QUICK_CONFIG}
+x-build-dev-nopt-quick:
 	bash scripts/run-cargo.sh
 
 x-build-dev-nopt: export X_CARGO_CMD=build
@@ -212,14 +227,53 @@ x-build-dev-nopt: export X_CARGO_CONFIG_FILE=${DEV_NOPT_CONFIG}
 x-build-dev-nopt:
 	bash scripts/run-cargo.sh
 
-# This is a profile for _actual releases_. Devs should almost never be using
-# this. It is a very slow build, and only a bit faster.
+x-build-dev-opt: export X_CARGO_CMD=build
+x-build-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-build-dev-opt: export X_CARGO_RELEASE=1
+x-build-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
+x-build-dev-opt:
+	bash scripts/run-cargo.sh
+
 x-build-prod: export X_CARGO_CMD=build
 x-build-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
 x-build-prod: export X_CARGO_RELEASE=1
 x-build-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
 x-build-prod:
 	bash scripts/run-cargo.sh
+
+# "run" commands for the above
+#
+# these need to be run with CARGO_ARGS="--bin tikv-server" etc
+
+x-run-dev-nopt-quick: export X_CARGO_CMD=run
+x-run-dev-nopt-quick: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-nopt-quick: export X_CARGO_RELEASE=0
+x-run-dev-nopt-quick: export X_CARGO_CONFIG_FILE=${DEV_NOPT_QUICK_CONFIG}
+x-run-dev-nopt-quick:
+	bash scripts/run-cargo.sh
+
+x-run-dev-nopt: export X_CARGO_CMD=run
+x-run-dev-nopt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-nopt: export X_CARGO_RELEASE=0
+x-run-dev-nopt: export X_CARGO_CONFIG_FILE=${DEV_NOPT_CONFIG}
+x-run-dev-nopt:
+	bash scripts/run-cargo.sh
+
+x-run-dev-opt: export X_CARGO_CMD=run
+x-run-dev-opt: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-dev-opt: export X_CARGO_RELEASE=1
+x-run-dev-opt: export X_CARGO_CONFIG_FILE=${DEV_OPT_CONFIG}
+x-run-dev-opt:
+	bash scripts/run-cargo.sh
+
+x-run-prod: export X_CARGO_CMD=run
+x-run-prod: export X_CARGO_FEATURES=${ENABLE_FEATURES}
+x-run-prod: export X_CARGO_RELEASE=1
+x-run-prod: export X_CARGO_CONFIG_FILE=${PROD_CONFIG}
+x-run-prod:
+	bash scripts/run-cargo.sh
+
+# bench and test targets
 
 x-test: export X_CARGO_CMD=test
 x-test: export X_CARGO_FEATURES=${ENABLE_FEATURES}
@@ -234,12 +288,6 @@ x-bench: export X_CARGO_RELEASE=0
 x-bench: export X_CARGO_CONFIG_FILE=${BENCH_CONFIG}
 x-bench:
 	bash etc/run-cargo.sh
-
-x-build: x-build-dev-nopt
-
-x-build-opt: x-build-dev-opt
-
-x-release: x-build-prod
 
 # Devs might want to use the config files but not the makefiles.
 # These are rules to put each config file in place.

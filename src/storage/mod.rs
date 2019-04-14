@@ -1,19 +1,8 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod config;
-pub mod engine;
 pub mod gc_worker;
+pub mod kv;
 mod metrics;
 pub mod mvcc;
 mod readpool_context;
@@ -28,17 +17,16 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
+use engine::rocks::DB;
+use engine::IterOption;
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::raftstore::store::engine::IterOption;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::engine::DB;
-use crate::util;
-use crate::util::collections::HashMap;
-use crate::util::worker::{self, Builder, ScheduleError, Worker};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -46,13 +34,13 @@ use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::kv::raftkv::RaftKv;
+pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
     Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
-pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
@@ -60,19 +48,11 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
-pub type CfName = &'static str;
-pub const CF_DEFAULT: CfName = "default";
-pub const CF_LOCK: CfName = "lock";
-pub const CF_WRITE: CfName = "write";
-pub const CF_RAFT: CfName = "raft";
-// Cfs that should be very large generally.
-pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -477,7 +457,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use crate::util::worker::FutureWorker;
+        use tikv_util::worker::FutureWorker;
 
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
@@ -665,13 +645,13 @@ impl<E: Engine> Storage<E> {
 
     /// Get a snapshot of `engine`.
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = util::future::paired_future_callback();
+        let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
         future::result(val)
             .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
-            // map storage::engine::Error -> storage::txn::Error -> storage::Error
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -945,23 +925,13 @@ impl<E: Engine> Storage<E> {
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
-            // operation, RocksDB will add start key to the prefix bloom, and the start key
-            // will go through function prefix_extractor. In our case the prefix_extractor
-            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
-            // length of start key is less than 8, we will encounter index out of range error.
-            let s = if *cf == CF_WRITE {
-                start_key.clone().append_ts(u64::MAX)
-            } else {
-                start_key.clone()
-            };
-            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
+            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
         }
 
         self.engine.async_write(
             &ctx,
             modifies,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -1114,7 +1084,7 @@ impl<E: Engine> Storage<E> {
                 let key_len = key.len();
                 let result = snapshot
                     .get_cf(cf, &Key::from_encoded(key))
-                    // map storage::engine::Error -> storage::Error
+                    // map storage::kv::Error -> storage::Error
                     .map_err(Error::from)
                     .map(|r| {
                         if let Some(ref value) = r {
@@ -1213,7 +1183,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -1241,7 +1211,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -1262,7 +1232,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -1285,14 +1255,14 @@ impl<E: Engine> Storage<E> {
             return Ok(());
         }
 
+        let cf = Self::rawkv_cf(&cf)?;
+        let start_key = Key::from_encoded(start_key);
+        let end_key = Key::from_encoded(end_key);
+
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(start_key),
-                Key::from_encoded(end_key),
-            )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -1320,7 +1290,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
@@ -1741,9 +1711,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
+    use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);

@@ -1,25 +1,14 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
-
-use crate::raftstore::store::engine::{Iterable, Peekable, Snapshot};
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::util::worker::Runnable;
 use kvproto::metapb::Region;
+
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use engine::{Iterable, Peekable, Snapshot};
+use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 use crate::raftstore::store::metrics::*;
@@ -164,17 +153,19 @@ impl<C: CasualRouter> Runnable<Task> for Runner<C> {
 mod tests {
     use super::*;
     use crate::raftstore::store::keys;
-    use crate::storage::engine::Writable;
-    use crate::storage::CF_DEFAULT;
-    use crate::util::rocksdb_util::new_engine;
     use byteorder::{BigEndian, WriteBytesExt};
     use crc::crc32::{self, Digest, Hasher32};
+    use engine::rocks::util::new_engine;
+    use engine::rocks::Writable;
+    use engine::Snapshot;
+    use engine::CF_DEFAULT;
     use kvproto::metapb::*;
     use kvproto::raft_serverpb::*;
     use protobuf::Message;
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
     use tempdir::TempDir;
+    use tikv_util::worker::Runnable;
 
     #[test]
     fn test_consistency_check() {

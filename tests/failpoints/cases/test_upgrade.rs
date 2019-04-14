@@ -1,33 +1,19 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
+use engine::rocks::{self, DBOptions, Writable};
+use engine::{Engines, Mutable, Peekable};
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DB};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::*;
 use raft::eraftpb::Entry;
 use tempdir::TempDir;
-
 use test_raftstore::*;
 use tikv::config::DbConfig;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::{
-    keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
-};
-use tikv::storage::engine::{DBOptions, Writable, DB};
-use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv::util::rocksdb_util;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -136,7 +122,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Create a raft engine.
     let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
     let raft_engine =
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+        rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
 
     // No need to upgrade an empty node.
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
@@ -156,7 +142,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     let all_cfs_v2 = &[CF_LOCK, CF_RAFT, CF_WRITE, CF_DEFAULT];
     // Create a v2 kv engine.
     let kv_engine =
-        rocksdb_util::new_engine(tmp_path_kv.to_str().unwrap(), None, all_cfs_v2, None).unwrap();
+        rocks::util::new_engine(tmp_path_kv.to_str().unwrap(), None, all_cfs_v2, None).unwrap();
 
     // For meta data in the default CF.
     //
@@ -299,7 +285,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Update upgraded engines.
     // Create a kv engine.
     let kv_engine =
-        rocksdb_util::new_engine(tmp_path_kv.to_str().unwrap(), None, ALL_CFS, None).unwrap();
+        rocks::util::new_engine(tmp_path_kv.to_str().unwrap(), None, ALL_CFS, None).unwrap();
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
     cluster.dbs[0] = engines.clone();
     cluster.paths[0] = tmp_dir;

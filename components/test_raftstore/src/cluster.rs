@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{self, Arc, RwLock};
@@ -17,24 +6,25 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use tempdir::TempDir;
-use tikv::storage::engine::DB;
-
 use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
+use tempdir::TempDir;
 
+use engine::rocks;
+use engine::rocks::DB;
+use engine::Engines;
+use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::storage::CF_DEFAULT;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, rocksdb_util, HandyRwLock};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -143,12 +133,12 @@ impl<T: Simulator> Cluster<T> {
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
             let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
@@ -179,8 +169,8 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocksdb_util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocksdb_util::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
+            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
         }
     }
 

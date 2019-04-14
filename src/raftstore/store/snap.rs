@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
@@ -24,6 +13,16 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use crc::crc32::{self, Digest, Hasher32};
+use engine::rocks::util::{
+    get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
+};
+use engine::rocks::Snapshot as DbSnapshot;
+use engine::rocks::{
+    self, CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+    Writable, WriteBatch, DB,
+};
+use engine::Iterable;
+use engine::{CfName, CF_LOCK};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
@@ -32,26 +31,16 @@ use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use crate::raftstore::errors::Error as RaftStoreError;
-use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use crate::storage::engine::{
-    CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter, Writable,
-    WriteBatch, DB,
-};
-use crate::storage::{CfName, CF_LOCK, DATA_CFS};
-use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use crate::util::collections::{HashMap, HashMapEntry as Entry};
-use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use crate::util::io_limiter::{IOLimiter, LimitWriter};
-use crate::util::rocksdb_util::{
-    self, get_fastest_supported_compression_type, prepare_sst_for_ingestion,
-    validate_sst_for_ingestion,
-};
-use crate::util::time::duration_to_sec;
-use crate::util::HandyRwLock;
+use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use tikv_util::collections::{HashMap, HashMapEntry as Entry};
+use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use tikv_util::io_limiter::{IOLimiter, LimitWriter};
+use tikv_util::time::duration_to_sec;
+use tikv_util::HandyRwLock;
 
 use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
@@ -60,7 +49,7 @@ use crate::raftstore::store::metrics::{
 use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
 
 /// CFs needs to be included in a snapshot.
-pub const SNAPSHOT_CFS: &[CfName] = DATA_CFS;
+pub const SNAPSHOT_CFS: &[CfName] = engine::DATA_CFS;
 
 pub const SNAPSHOT_VERSION: u64 = 2;
 
@@ -527,10 +516,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let size = get_file_size(&self.meta_file.path)?;
-        let mut file = File::open(&self.meta_file.path)?;
-        let mut buf = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut buf)?;
+        let buf = fs::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::new();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
@@ -742,7 +728,7 @@ impl Snap {
                     }
                     size += l;
                     key_count += 1;
-                    self.add_kv(key, value)?;
+                    box_try!(self.add_kv(key, value));
                     Ok(true)
                 })?;
                 (key_count, size)
@@ -796,8 +782,8 @@ impl Snap {
             snap.scan_cf(cf, start_key, end_key, false, |key, value| {
                 cf_key_count += 1;
                 cf_size += key.len() + value.len();
-                file.encode_compact_bytes(key)?;
-                file.encode_compact_bytes(value)?;
+                box_try!(file.encode_compact_bytes(key));
+                box_try!(file.encode_compact_bytes(value));
                 Ok(true)
             })?;
             if cf_key_count > 0 {
@@ -994,7 +980,7 @@ impl Snapshot for Snap {
             }
 
             check_abort(&options.abort)?;
-            let cf_handle = box_try!(rocksdb_util::get_cf_handle(&options.db, cf_file.cf));
+            let cf_handle = box_try!(rocks::util::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
@@ -1507,7 +1493,12 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::storage::engine::{DBOptions, Env, DB};
+    use engine::rocks;
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{DBOptions, Env, DB};
+    use engine::Engines;
+    use engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
@@ -1521,12 +1512,9 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
-    use crate::raftstore::store::{keys, Engines};
     use crate::raftstore::Result;
-    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use crate::util::rocksdb_util::{self, CFOptions};
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1556,7 +1544,7 @@ pub mod tests {
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.to_str().unwrap();
-        let db = rocksdb_util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         Ok(Arc::new(db))
     }
 
@@ -1565,11 +1553,12 @@ pub mod tests {
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
-        let db = rocksdb_util::new_engine(path.to_str().unwrap(), db_opt, ALL_CFS, cf_opts)?;
+        let p = path.to_str().unwrap();
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
-        for (i, name) in db.cf_names().into_iter().enumerate() {
-            let handle = rocksdb_util::get_cf_handle(&db, &name)?;
+        for (i, cf) in db.cf_names().into_iter().enumerate() {
+            let handle = rocks::util::get_cf_handle(&db, cf)?;
             let mut p = Peer::new();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
@@ -1829,7 +1818,7 @@ pub mod tests {
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK];
         let dst_db =
-            Arc::new(rocksdb_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
+            Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
             region: region.clone(),

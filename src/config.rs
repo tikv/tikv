@@ -1,26 +1,14 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::i32;
 use std::io::Error as IoError;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::usize;
 
-use crate::storage::engine::{
+use engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
     DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
@@ -35,21 +23,21 @@ use crate::raftstore::store::Config as RaftstoreConfig;
 use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_WRITE, DEFAULT_DATA_DIR,
-    DEFAULT_ROCKSDB_SUB_DIR,
+use crate::storage::config::DEFAULT_DATA_DIR;
+use crate::storage::mvcc::properties::{
+    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
 };
-use crate::util::config::{
-    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
-};
-use crate::util::rocksdb_util::{
-    db_exist,
-    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use engine::rocks::util::{
+    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use crate::util::security::SecurityConfig;
-use crate::util::time::duration_to_sec;
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::config::{
+    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
+};
+use tikv_util::security::SecurityConfig;
+use tikv_util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -728,7 +716,7 @@ impl DbConfig {
     // Build cf options for v2.x. which has a RAFT cf in kv engine.
     #[doc(hidden)]
     pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
-        use crate::storage::CF_RAFT;
+        use engine::CF_RAFT;
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -941,12 +929,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
-    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
+    use tikv_util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -1374,24 +1362,18 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
-    where
-        P: fmt::Debug,
-    {
-        fs::File::open(&path)
-            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                let c = ::toml::from_str(&s)?;
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {:?}, err {}",
-                    path, e
-                );
-            })
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        (|| -> Result<Self, Box<dyn Error>> {
+            let s = fs::read_to_string(&path)?;
+            Ok(::toml::from_str(&s)?)
+        })()
+        .unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                path.as_ref().display(),
+                e
+            );
+        })
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
