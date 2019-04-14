@@ -7,7 +7,7 @@ publish = false
 
 [features]
 default = []
-system-alloc=[]
+system-alloc = []
 
 # Build jemalloc's profiling features. Without this
 # certain profile functions will return nothing.
