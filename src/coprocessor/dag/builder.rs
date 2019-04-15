@@ -105,13 +105,13 @@ impl DAGBuilder {
             }
         }
 
-        for ex in executor_descriptors {
-            match ex.get_tp() {
+        for ed in executor_descriptors {
+            match ed.get_tp() {
                 ExecType::TypeLimit => {
                     executor = Box::new(BatchLimitExecutor::new(
-                        executor,
-                        ex.get_limit().get_limit() as usize,
                         ExecSummaryCollectorDisabled,
+                        executor,
+                        ed.get_limit().get_limit() as usize,
                     )?);
                 }
                 _ => {
