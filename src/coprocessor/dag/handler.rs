@@ -1,14 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use tipb::select::{Chunk, DAGRequest, SelectResponse, StreamResponse};
+use tipb::select::{Chunk, SelectResponse, StreamResponse};
 
-use crate::coprocessor::dag::expr::{EvalConfig, SqlMode};
 use crate::coprocessor::*;
-use crate::storage::Store;
 
 use super::executor::{Executor, ExecutorMetrics};
 
@@ -21,114 +17,17 @@ pub struct DAGRequestHandler {
 }
 
 impl DAGRequestHandler {
-    fn build_dag<S: Store + 'static>(
-        eval_cfg: EvalConfig,
-        mut req: DAGRequest,
-        ranges: Vec<KeyRange>,
-        store: S,
+    pub fn new(
         deadline: Deadline,
+        executor: Box<dyn Executor + Send>,
+        output_offsets: Vec<u32>,
         batch_row_limit: usize,
-    ) -> Result<Self> {
-        let executor = super::builder::DAGBuilder::build_normal(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            Arc::new(eval_cfg),
-            req.get_collect_range_counts(),
-        )?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             deadline,
             executor,
-            output_offsets: req.take_output_offsets(),
-            batch_row_limit,
-        })
-    }
-
-    fn build_batch_dag<S: Store + 'static>(
-        deadline: Deadline,
-        config: EvalConfig,
-        mut req: DAGRequest,
-        ranges: Vec<KeyRange>,
-        store: S,
-    ) -> Result<super::batch_handler::BatchDAGHandler> {
-        let ranges_len = ranges.len();
-        let executors_len = req.get_executors().len();
-
-        let config = Arc::new(config);
-        let out_most_executor = super::builder::DAGBuilder::build_batch(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            config.clone(),
-        )?;
-
-        // Check output offsets
-        let output_offsets = req.take_output_offsets();
-        let schema_len = out_most_executor.schema().len();
-        for offset in &output_offsets {
-            if (*offset as usize) >= schema_len {
-                return Err(box_err!(
-                    "Invalid output offset (schema has {} columns, access index {})",
-                    schema_len,
-                    offset
-                ));
-            }
-        }
-
-        Ok(super::batch_handler::BatchDAGHandler::new(
-            deadline,
-            out_most_executor,
             output_offsets,
-            config,
-            ranges_len,
-            executors_len,
-        ))
-    }
-
-    pub fn build<S: Store + 'static>(
-        req: DAGRequest,
-        ranges: Vec<KeyRange>,
-        store: S,
-        deadline: Deadline,
-        batch_row_limit: usize,
-        is_streaming: bool,
-        enable_batch_if_possible: bool,
-    ) -> Result<Box<dyn RequestHandler>> {
-        let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
-        // We respect time zone name first, then offset.
-        if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
-            box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
-        } else if req.has_time_zone_offset() {
-            box_try!(eval_cfg.set_time_zone_by_offset(req.get_time_zone_offset()));
-        } else {
-            // This should not be reachable. However we will not panic here in case
-            // of compatibility issues.
-        }
-        if req.has_max_warning_count() {
-            eval_cfg.set_max_warning_cnt(req.get_max_warning_count() as usize);
-        }
-        if req.has_sql_mode() {
-            eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
-        }
-
-        let mut is_batch = false;
-        if enable_batch_if_possible && !is_streaming {
-            let build_batch_result =
-                super::builder::DAGBuilder::check_build_batch(req.get_executors());
-            if let Err(e) = build_batch_result {
-                debug!("Coprocessor request cannot be batched"; "reason" => %e);
-            } else {
-                is_batch = true;
-            }
-        }
-
-        if is_batch {
-            Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
-        } else {
-            Ok(
-                Self::build_dag(eval_cfg, req, ranges, store, deadline, batch_row_limit)?
-                    .into_boxed(),
-            )
+            batch_row_limit,
         }
     }
 
