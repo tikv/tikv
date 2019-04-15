@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -19,6 +8,8 @@ use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
 
+use engine::rocks::{Snapshot, SyncSnapshot, WriteBatch, WriteOptions, DB};
+use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
@@ -30,28 +21,26 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::{self, Message};
 use raft::eraftpb::{self, ConfChangeType, EntryType, MessageType};
+use raft::{
+    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
+    NO_LIMIT,
+};
 use time::Timespec;
 
 use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::raftstore::store::engine::{Peekable, Snapshot, SyncSnapshot};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
-use crate::raftstore::store::{keys, Callback, Config, Engines, ReadResponse, RegionSnapshot};
+use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
-use crate::storage::engine::{WriteBatch, WriteOptions, DB};
-use crate::util::collections::HashMap;
-use crate::util::time::{duration_to_sec, monotonic_raw_now};
-use crate::util::worker::Scheduler;
-use crate::util::{escape, MustConsumeVec};
-use raft::{
-    self, Progress, ProgressState, RawNode, Ready, SnapshotStatus, StateRole, INVALID_INDEX,
-    NO_LIMIT,
-};
+use tikv_util::collections::HashMap;
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::worker::Scheduler;
+use tikv_util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -488,8 +477,8 @@ impl Peer {
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(ctx.cfg.sync_log);
-        ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
-        ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
+        ctx.engines.write_kv_opt(&kv_wb, &write_opts)?;
+        ctx.engines.write_raft_opt(&raft_wb, &write_opts)?;
 
         if self.get_store().is_initialized() && !keep_data {
             // If we meet panic when deleting data and raft log, the dirty data

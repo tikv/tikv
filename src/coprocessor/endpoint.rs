@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::time::Duration;
 
@@ -26,7 +15,7 @@ use tipb::select::DAGRequest;
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
 use crate::storage::{self, Engine, SnapshotStore};
-use crate::util::Either;
+use tikv_util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
@@ -42,7 +31,7 @@ pub struct Endpoint<E: Engine> {
     engine: E,
 
     /// The thread pool to run Coprocessor requests.
-    read_pool: ReadPool<ReadPoolContext>,
+    read_pool: ReadPool,
 
     /// The recursion limit when parsing Coprocessor Protobuf requests.
     recursion_limit: u32,
@@ -66,10 +55,10 @@ impl<E: Engine> Clone for Endpoint<E> {
     }
 }
 
-impl<E: Engine> crate::util::AssertSend for Endpoint<E> {}
+impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, engine: E, read_pool: ReadPool<ReadPoolContext>) -> Self {
+    pub fn new(cfg: &Config, engine: E, read_pool: ReadPool) -> Self {
         Self {
             engine,
             read_pool,
@@ -208,10 +197,10 @@ impl<E: Engine> Endpoint<E> {
         engine: E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = crate::util::future::paired_future_callback();
+        let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
         future::result(val)
-            .and_then(|_| future.map_err(|cancel| storage::engine::Error::Other(box_err!(cancel))))
+            .and_then(|_| future.map_err(|cancel| storage::kv::Error::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
             // map engine::Error -> coprocessor::Error
             .map_err(Error::from)
@@ -283,11 +272,10 @@ impl<E: Engine> Endpoint<E> {
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
-        let mut tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
-            .future_execute(priority, move |ctxd| {
-                tracker.attach_ctxd(ctxd);
+            .spawn_handle(priority, move || {
                 Self::handle_unary_request_impl(engine, tracker, handler_builder)
             })
             .map_err(|_| Error::Full)
@@ -419,25 +407,16 @@ impl<E: Engine> Endpoint<E> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
-        // Must be created befure `future_execute`, otherwise wait time is not tracked.
-        let mut tracker = Box::new(Tracker::new(req_ctx));
+        let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
-            .future_execute(priority, move |ctxd| {
-                tracker.attach_ctxd(ctxd);
-
+            .spawn(priority, move || {
                 Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
-            .map_err(|_| Error::Full)
-            .and_then(move |cpu_future| {
-                // Keep running stream producer
-                cpu_future.forget();
-
-                // Returns the stream instead of a future
-                Ok(rx.then(|r| r.unwrap()))
-            })
+            .map_err(|_| Error::Full)?;
+        Ok(rx.then(|r| r.unwrap()))
     }
 
     /// Parses and handles a stream request. Returns a stream that produce each result in a
@@ -522,7 +501,6 @@ mod tests {
     use tipb::expression::Expr;
 
     use crate::storage::TestEngineBuilder;
-    use crate::util::worker::FutureWorker;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
@@ -644,11 +622,8 @@ mod tests {
 
     #[test]
     fn test_outdated_request() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // a normal request
@@ -682,11 +657,8 @@ mod tests {
 
     #[test]
     fn test_stack_guard() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(
             &Config {
                 end_point_recursion_limit: 5,
@@ -722,11 +694,8 @@ mod tests {
 
     #[test]
     fn test_invalid_req_type() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let mut req = coppb::Request::new();
@@ -741,11 +710,8 @@ mod tests {
 
     #[test]
     fn test_invalid_req_body() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let mut req = coppb::Request::new();
@@ -761,17 +727,16 @@ mod tests {
 
     #[test]
     fn test_full() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let read_pool = readpool::Builder::from_config(&readpool::Config {
+            normal_concurrency: 1,
+            max_tasks_per_worker_normal: 2,
+            ..readpool::Config::default_for_test()
+        })
+        .name_prefix("cop-test-full")
+        .build();
+
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new(
-            "readpool",
-            &readpool::Config {
-                normal_concurrency: 1,
-                max_tasks_per_worker_normal: 2,
-                ..readpool::Config::default_for_test()
-            },
-            || ReadPoolContext::new(pd_worker.scheduler()),
-        );
+
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let (tx, rx) = mpsc::channel();
@@ -816,11 +781,8 @@ mod tests {
 
     #[test]
     fn test_error_unary_response() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let handler_builder = Box::new(|_, _: &_| {
@@ -837,11 +799,8 @@ mod tests {
 
     #[test]
     fn test_error_streaming_response() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // Fail immediately
@@ -884,11 +843,8 @@ mod tests {
 
     #[test]
     fn test_empty_streaming_response() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -905,11 +861,8 @@ mod tests {
 
     #[test]
     fn test_special_streaming_handlers() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // handler returns `finished == true` should not be called again.
@@ -994,11 +947,8 @@ mod tests {
 
     #[test]
     fn test_channel_size() {
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-            ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let read_pool = readpool::Builder::build_for_test();
         let cop = Endpoint::new(
             &Config {
                 end_point_stream_channel_size: 3,
@@ -1029,9 +979,10 @@ mod tests {
         assert!(counter.load(atomic::Ordering::SeqCst) < 14);
     }
 
+    //
     #[test]
     fn test_handle_time() {
-        use crate::util::config::ReadableDuration;
+        use tikv_util::config::ReadableDuration;
 
         /// Asserted that the snapshot can be retrieved in 500ms.
         const SNAPSHOT_DURATION_MS: i64 = 500;
@@ -1048,13 +999,11 @@ mod tests {
         const PAYLOAD_SMALL: i64 = 3000;
         const PAYLOAD_LARGE: i64 = 6000;
 
-        let pd_worker = FutureWorker::new("test-pd-worker");
+        let read_pool =
+            readpool::Builder::from_config(&readpool::Config::default_with_concurrency(1)).build();
+
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = ReadPool::new(
-            "readpool",
-            &readpool::Config::default_with_concurrency(1),
-            || ReadPoolContext::new(pd_worker.scheduler()),
-        );
+
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);

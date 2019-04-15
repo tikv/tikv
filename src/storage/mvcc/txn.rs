@@ -1,22 +1,11 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use crate::storage::engine::{Modify, ScanMode, Snapshot};
+use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
@@ -390,7 +379,7 @@ impl<S: Snapshot> MvccTxn<S> {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::engine::Engine;
+    use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};

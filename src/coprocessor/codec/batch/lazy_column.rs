@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
 
@@ -44,12 +33,19 @@ impl std::fmt::Debug for LazyBatchColumn {
             LazyBatchColumn::Raw(ref v) => {
                 let vec_display: Vec<_> = v
                     .iter()
-                    .map(|item| crate::util::escape(item.as_slice()))
+                    .map(|item| tikv_util::escape(item.as_slice()))
                     .collect();
                 f.debug_tuple("Raw").field(&vec_display).finish()
             }
             LazyBatchColumn::Decoded(ref v) => f.debug_tuple("Decoded").field(v).finish(),
         }
+    }
+}
+
+impl From<VectorValue> for LazyBatchColumn {
+    #[inline]
+    fn from(vec: VectorValue) -> Self {
+        LazyBatchColumn::Decoded(vec)
     }
 }
 

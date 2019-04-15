@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
@@ -19,7 +8,6 @@ use std::{thread, u64};
 use protobuf;
 use rand::Rng;
 use tempdir::TempDir;
-use tikv::storage::engine::{CompactionJobInfo, DB};
 
 use kvproto::metapb::{self, RegionEpoch};
 use kvproto::pdpb::{ChangePeer, Merge, RegionHeartbeatResponse, SplitRegion, TransferLeader};
@@ -28,15 +16,17 @@ use kvproto::raft_cmdpb::{AdminRequest, RaftCmdRequest, RaftCmdResponse, Request
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RegionLocalState};
 use raft::eraftpb::ConfChangeType;
 
+use engine::rocks::{CompactionJobInfo, DB};
+use engine::*;
 use tikv::config::*;
 use tikv::raftstore::store::fsm::RaftRouter;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::{Config as StorageConfig, ALL_CFS, CF_DEFAULT, CF_RAFT};
-use tikv::util::config::*;
-use tikv::util::escape;
-use tikv::util::rocksdb_util::{self, CompactionListener};
+use tikv::storage::kv::CompactionListener;
+use tikv::storage::Config as StorageConfig;
+use tikv_util::config::*;
+use tikv_util::escape;
 
 use super::*;
 
@@ -506,7 +496,7 @@ pub fn create_test_engine(
             ));
             let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(
+                rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
                     kv_db_opt,
                     kv_cfs_opt,
@@ -515,7 +505,7 @@ pub fn create_test_engine(
             );
             let raft_path = path.as_ref().unwrap().path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             Engines::new(engine, raft_engine)

@@ -81,11 +81,12 @@ pub trait ExecSummaryCollector: Send {
         Self: Sized;
 
     /// Returns an instance that will record elapsed duration and increase
-    /// the iterations counter. the instance should be later passed back to
+    /// the iterations counter. The instance should be later passed back to
     ///  `finish_next_batch` when processing of `next_batch` is completed.
     fn start_next_batch(&mut self) -> Self::DurationRecorder;
+
     // Increases the process time and produced rows counter.
-    // It's called when `next_batch` is completed.
+    // It should be called when `next_batch` is completed.
     fn finish_next_batch(&mut self, dr: Self::DurationRecorder, rows: usize);
 
     /// Takes and appends current execution summary into `target`.
@@ -100,7 +101,7 @@ pub struct ExecSummaryCollectorEnabled {
 }
 
 impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
-    type DurationRecorder = crate::util::time::Instant;
+    type DurationRecorder = tikv_util::time::Instant;
 
     #[inline]
     fn new(output_index: usize) -> ExecSummaryCollectorEnabled {
@@ -112,15 +113,14 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
 
     #[inline]
     fn start_next_batch(&mut self) -> Self::DurationRecorder {
-        let timer = crate::util::time::Instant::now_coarse();
         self.counts.num_iterations += 1;
-        timer
+        tikv_util::time::Instant::now_coarse()
     }
 
     #[inline]
     fn finish_next_batch(&mut self, dr: Self::DurationRecorder, rows: usize) {
         self.counts.num_produced_rows += rows;
-        let elapsed_time = crate::util::time::duration_to_ms(dr.elapsed()) as usize;
+        let elapsed_time = tikv_util::time::duration_to_ms(dr.elapsed()) as usize;
         self.counts.time_processed_ms += elapsed_time;
     }
 
