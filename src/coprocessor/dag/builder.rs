@@ -59,7 +59,6 @@ impl DAGBuilder {
         ranges: Vec<KeyRange>,
         config: Arc<EvalConfig>,
     ) -> Result<Box<dyn BatchExecutor>> {
-        // Shared in multiple executors, so wrap with Rc.
         let mut executor_descriptors = executor_descriptors.into_iter();
         let mut first_ed = executor_descriptors
             .next()
