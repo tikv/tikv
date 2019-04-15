@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -74,6 +63,7 @@ impl DAGBuilder {
                         }
                     }
                 }
+                ExecType::TypeLimit => {}
                 _ => {
                     debug!(
                         "Coprocessor request cannot be batched";
@@ -139,13 +129,22 @@ impl DAGBuilder {
             }
         }
 
-        // Currently we only support table scan executor. So if there are more
-        // executors, it is unexpected.
-        if executor_descriptors.next().is_some() {
-            return Err(Error::Other(box_err!(
-                "Unexpected non-first executor {:?}",
-                first_ed.get_tp()
-            )));
+        for ex in executor_descriptors {
+            match ex.get_tp() {
+                ExecType::TypeLimit => {
+                    executor = Box::new(BatchLimitExecutor::new(
+                        executor,
+                        ex.get_limit().get_limit() as usize,
+                        ExecSummaryCollectorDisabled,
+                    )?);
+                }
+                _ => {
+                    return Err(Error::Other(box_err!(
+                        "Unexpected non-first executor {:?}",
+                        first_ed.get_tp()
+                    )));
+                }
+            }
         }
 
         Ok(executor)

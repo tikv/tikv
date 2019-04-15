@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 
@@ -22,7 +11,7 @@ use kvproto::pdpb::CheckPolicy;
 use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use crate::util::escape;
+use tikv_util::escape;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -236,12 +225,12 @@ mod tests {
     use crate::coprocessor::codec::table::{TABLE_PREFIX, TABLE_PREFIX_KEY_LEN};
     use crate::raftstore::store::{CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::types::Key;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::config::ReadableSize;
-    use crate::util::worker::Runnable;
     use engine::rocks::util::new_engine;
     use engine::rocks::Writable;
     use engine::ALL_CFS;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::worker::Runnable;
 
     use super::*;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost};

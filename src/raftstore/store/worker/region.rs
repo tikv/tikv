@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
@@ -36,11 +25,11 @@ use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
 };
-use crate::util::escape;
-use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use crate::util::time;
-use crate::util::timer::Timer;
-use crate::util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::escape;
+use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use tikv_util::time;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -682,9 +671,6 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, SnapKey, SnapManager};
-    use crate::util::time;
-    use crate::util::timer::Timer;
-    use crate::util::worker::Worker;
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
     use engine::Engines;
@@ -692,6 +678,9 @@ mod tests {
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempdir::TempDir;
+    use tikv_util::time;
+    use tikv_util::timer::Timer;
+    use tikv_util::worker::Worker;
 
     use super::Event;
     use super::PendingDeleteRanges;

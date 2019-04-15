@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::boxed::FnBox;
 use std::cell::Cell;
@@ -695,11 +684,11 @@ pub mod tests {
     use super::SEEK_BOUND;
     use super::*;
     use crate::storage::{CfName, Key};
-    use crate::util::codec::bytes;
-    use crate::util::escape;
     use engine::IterOption;
     use engine::CF_DEFAULT;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::codec::bytes;
+    use tikv_util::escape;
     pub const TEST_ENGINE_CFS: &[CfName] = &["cf"];
 
     pub fn must_put<E: Engine>(engine: &E, key: &[u8], value: &[u8]) {
