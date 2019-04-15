@@ -98,7 +98,7 @@ zipf = "0.2.0"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
+grpcio = { version = "0.4", features = [ "openssl" ] }
 raft = "0.4"
 crossbeam = "0.5"
 derive_more = "0.11.0"
@@ -115,6 +115,8 @@ hyper = "0.12"
 tokio-threadpool = "0.1"
 vlog = "0.1.4"
 twoway = "0.2.0"
+openssl = "0.10.20"
+phf = { version = "0.7.24", features = ["macros"] }
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }

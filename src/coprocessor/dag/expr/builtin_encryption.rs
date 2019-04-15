@@ -13,6 +13,10 @@ use crypto::{
 use flate2::read::{ZlibDecoder, ZlibEncoder};
 use flate2::Compression;
 use hex;
+use openssl::nid::Nid;
+use openssl::symm::{decrypt, encrypt, Cipher};
+use phf::phf_set;
+use rand::Rng;
 use std::io::prelude::*;
 
 const SHA0: i64 = 0;
@@ -20,6 +24,62 @@ const SHA224: i64 = 224;
 const SHA256: i64 = 256;
 const SHA384: i64 = 384;
 const SHA512: i64 = 512;
+
+/// Numerical identifiers for an OpenSSL object supported in TiKV.
+const NID: phf::Set<i32> = phf_set! {
+    418i32, // aes-128-ecb
+    419i32, // aes-128-cbc
+    420i32, // aes-128-ofb128
+    421i32, // aes-128-cfb128
+    422i32, // aes-192-ecb
+    423i32, // aes-192-cbc
+    424i32, // aes-192-ofb128
+    425i32, // aes-192-cfb128
+    426i32, // aes-256-ecb
+    427i32, // aes-256-cbc
+    428i32, // aes-256-ofb128
+    429i32, // aes-256-cfb128
+    650i32, // aes-128-cfb1
+    651i32, // aes-192-cfb1
+    652i32, // aes-256-cfb1
+    653i32, // aes-128-cfb8
+    654i32, // aes-192-cfb8
+    655i32, // aes-256-cfb8
+};
+
+/// Generate a sequence of random bytes in length of `len`
+/// TODO: upgrade crate `rand` to 0.6+
+/// with `rand` 0.6+, the code can be written:
+/// ```compile_fail
+/// Standard.sample_iter(&mut thread_rng()).take(len).collect()
+/// ```
+fn random_bytes(len: usize) -> Vec<u8> {
+    let mut rng = rand::thread_rng();
+    (0..len).map(|_| rng.gen()).collect()
+}
+
+/// Create AES key from arbitrary length array `key`, padding to `key_size` (in bytes)
+/// For more detail:
+/// https://github.com/mysql/mysql-server/blob/e4924f36486f971f8a04252e01c803457a2c72f7/router/src/harness/src/my_aes_openssl.cc#L71
+fn aes_create_key(key: &[u8], key_size: usize) -> Vec<u8> {
+    key.iter()
+        .enumerate()
+        .fold(vec![0; key_size], |mut rkey, (i, x)| {
+            rkey[i & (key_size - 1)] ^= x;
+            rkey
+        })
+}
+
+/// Check is the `cipher` needs an IV,
+/// If it does, return Error if IV provided is too short or truncate it with cipher's IV's len.
+/// Otherwise, return None
+pub fn check_iv(iv: &[u8], cipher: Cipher) -> Result<Option<&[u8]>> {
+    match cipher.iv_len() {
+        Some(len) if iv.len() < len => Err(Error::overflow("iv's length", "iv is too short")),
+        Some(len) => Ok(Some(&iv[..len])),
+        _ => Ok(None),
+    }
+}
 
 impl ScalarFunc {
     pub fn md5<'a, 'b: 'a>(
@@ -164,10 +224,81 @@ impl ScalarFunc {
         }
         Ok(Some(i64::from(LittleEndian::read_u32(&input[0..4]))))
     }
+
+    pub fn random_bytes<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let len = try_opt!(self.children[0].eval_int(ctx, row));
+        if len < 1 || len > 1024 {
+            Err(Error::overflow("length", "random_bytes"))
+        } else {
+            Ok(Some(Cow::Owned(random_bytes(len as usize))))
+        }
+    }
+
+    pub fn aes_encrypt<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let plaintext = try_opt!(self.children[0].eval_string(ctx, row));
+        let key = try_opt!(self.children[1].eval_string(ctx, row));
+        let iv = try_opt!(self.children[2].eval_string(ctx, row));
+        let mode = try_opt!(self.children[3].eval_int(ctx, row)) as i32;
+
+        if !NID.contains(&mode) {
+            let nid = Nid::from_raw(mode);
+            return Err(Error::unsupported_encryption_mode(
+                &nid.long_name()
+                    .map(|name| name.to_string())
+                    .or_else::<(), _>(|_| Ok(format!("unknown OpenSSL Nid: {}", mode)))
+                    .unwrap(),
+            ));
+        }
+
+        let cipher = Cipher::from_nid(Nid::from_raw(mode)).unwrap();
+        let key = aes_create_key(&key, cipher.key_len());
+        let iv = check_iv(&iv, cipher)?;
+
+        Ok(encrypt(cipher, &key, iv, &plaintext).ok().map(Cow::Owned))
+    }
+
+    pub fn aes_decrypt<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &[Datum],
+    ) -> Result<Option<Cow<'a, [u8]>>> {
+        let plaintext = try_opt!(self.children[0].eval_string(ctx, row));
+        let key = try_opt!(self.children[1].eval_string(ctx, row));
+        let iv = try_opt!(self.children[2].eval_string(ctx, row));
+        let mode = try_opt!(self.children[3].eval_int(ctx, row)) as i32;
+
+        if !NID.contains(&mode) {
+            let nid = Nid::from_raw(mode);
+            return Err(Error::unsupported_encryption_mode(
+                &nid.long_name()
+                    .map(|name| name.to_string())
+                    .or_else::<(), _>(|_| Ok(format!("unknown OpenSSL Nid: {}", mode)))
+                    .unwrap(),
+            ));
+        }
+
+        let cipher = Cipher::from_nid(Nid::from_raw(mode)).unwrap();
+        let key = aes_create_key(&key, cipher.key_len());
+        let iv = check_iv(&iv, cipher)?;
+
+        Ok(decrypt(cipher, &key, iv, &plaintext).ok().map(Cow::Owned))
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::Result;
+    use super::random_bytes;
+    use super::NID;
+
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
@@ -357,6 +488,103 @@ mod tests {
             let s = Datum::Bytes(hex::decode(s.as_bytes().to_vec()).unwrap());
             let got = eval_func(ScalarFuncSig::UncompressedLength, &[s]).unwrap();
             assert_eq!(got, Datum::I64(exp));
+        }
+    }
+
+    // AES block size is 16 bytes
+    fn random_iv() -> Vec<u8> {
+        random_bytes(16)
+    }
+
+    // Generate 16 random bytes as part of key
+    fn random_key() -> Vec<u8> {
+        random_bytes(16)
+    }
+
+    fn aes_encrypt(text: &[u8], key: &[u8], iv: &[u8], mode: i32) -> Result<Option<Vec<u8>>> {
+        let text = Datum::from(text);
+        let key = Datum::from(key);
+        let iv = Datum::from(iv);
+        let mode = Datum::from(i64::from(mode));
+
+        eval_func(ScalarFuncSig::AesEncrypt, &[text, key, iv, mode]).map(|datum| match datum {
+            Datum::Bytes(bytes) => Some(bytes),
+            Datum::Null => None,
+            _ => panic!("expected type `Vec<u8>/Null`, found others"),
+        })
+    }
+
+    fn aes_decrypt(text: &[u8], key: &[u8], iv: &[u8], mode: i32) -> Result<Option<Vec<u8>>> {
+        let text = Datum::from(text);
+        let key = Datum::from(key);
+        let iv = Datum::from(iv);
+        let mode = Datum::from(i64::from(mode));
+
+        eval_func(ScalarFuncSig::AesDecrypt, &[text, key, iv, mode]).map(|datum| match datum {
+            Datum::Bytes(bytes) => Some(bytes),
+            Datum::Null => None,
+            _ => panic!("expected type `Vec<u8>/Null`, found others"),
+        })
+    }
+
+    #[test]
+    fn test_aes_encrypt_and_decrpyt() {
+        let cases = vec![
+            "How many roads must a man walk down before they call him a man?",
+            "Hey Mister Tambourine Man, play a song for me",
+            "La mer, qu'on voit danser le long des golfes clairs",
+            "I can eat glass, it doesn't hurt me.",
+        ];
+        for &mode in NID.iter() {
+            for &case in cases.iter() {
+                let key = random_key();
+                let iv = random_iv();
+                let ciphertext = aes_encrypt(case.as_bytes(), &key, &iv, mode)
+                    .unwrap()
+                    .unwrap();
+                let decrypted = aes_decrypt(&ciphertext, &key, &iv, mode).unwrap().unwrap();
+                assert_eq!(case, String::from_utf8(decrypted).unwrap());
+            }
+        }
+
+        // --------------------------------
+        const AES_128_CTR: i32 = 904;
+        const AES_128_CBC: i32 = 419;
+        let key = random_key();
+        let iv = random_iv();
+        let plaintext = "too young, too simple, sometimes naive";
+        // Fail because try to encrypt in an unsupported mode.
+        assert!(aes_encrypt(plaintext.as_bytes(), &key, &iv, AES_128_CTR).is_err());
+        // Fail because short IV.
+        assert!(aes_encrypt(plaintext.as_bytes(), &key, &random_bytes(8), AES_128_CBC).is_err());
+
+        for &mode in NID.iter() {
+            let result = aes_decrypt(b"", &key, &iv, mode);
+            // If the mode is block cipher mode(e.g cbc, ecb),
+            // the recovered plaintext should be NULL because invalid ciphertext
+            // Otherwise, it shold be empty string.
+            match result {
+                Ok(Some(bytes)) => assert!(bytes.is_empty()),
+                Ok(None) => (),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn test_random_bytes() {
+        let cases = vec![2, 4, 8, 16, 32];
+        for len in cases {
+            match eval_func(ScalarFuncSig::RandomBytes, &[Datum::from(len as i64)]) {
+                Ok(Datum::Bytes(bytes)) => assert_eq!(len, bytes.len()),
+                _ => panic!("expected type `Vec<u8>/Null`, found others"),
+            }
+        }
+
+        // Invaild length for `random_bytes`
+        let fail_cases = vec![0, 1025];
+        for len in fail_cases {
+            assert!(eval_func(ScalarFuncSig::RandomBytes, &[Datum::from(i64::from(len))]).is_err());
         }
     }
 }

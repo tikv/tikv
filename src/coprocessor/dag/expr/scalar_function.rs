@@ -285,7 +285,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
-            | ScalarFuncSig::ToDays => (1, 1),
+            | ScalarFuncSig::ToDays
+            | ScalarFuncSig::RandomBytes => (1, 1),
 
             ScalarFuncSig::IfInt
             | ScalarFuncSig::IfReal
@@ -309,6 +310,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Replace => (3, 3),
 
             ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
+
+            ScalarFuncSig::AesEncrypt | ScalarFuncSig::AesDecrypt => (4, 4),
 
             ScalarFuncSig::CoalesceDecimal
             | ScalarFuncSig::CoalesceDuration
@@ -376,8 +379,6 @@ impl ScalarFunc {
             | ScalarFuncSig::AddStringAndDuration
             | ScalarFuncSig::AddStringAndString
             | ScalarFuncSig::AddTimeStringNull
-            | ScalarFuncSig::AesDecrypt
-            | ScalarFuncSig::AesEncrypt
             | ScalarFuncSig::Char
             | ScalarFuncSig::ConnectionID
             | ScalarFuncSig::Convert
@@ -428,7 +429,6 @@ impl ScalarFunc {
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
@@ -963,6 +963,9 @@ dispatch_call! {
         MD5 => md5,
         SHA1 => sha1,
         SHA2 => sha2,
+        AesEncrypt => aes_encrypt,
+        AesDecrypt => aes_decrypt,
+        RandomBytes => random_bytes,
         Elt => elt,
         FromBase64 => from_base64,
         ToBase64 => to_base64,
@@ -1326,6 +1329,7 @@ mod tests {
                     ScalarFuncSig::Compress,
                     ScalarFuncSig::Uncompress,
                     ScalarFuncSig::UncompressedLength,
+                    ScalarFuncSig::RandomBytes,
                 ],
                 1,
                 1,
@@ -1354,6 +1358,11 @@ mod tests {
                 ],
                 3,
                 3,
+            ),
+            (
+                vec![ScalarFuncSig::AesEncrypt, ScalarFuncSig::AesDecrypt],
+                4,
+                4,
             ),
             (
                 vec![ScalarFuncSig::JsonArraySig, ScalarFuncSig::JsonObjectSig],
@@ -1465,8 +1474,6 @@ mod tests {
             ScalarFuncSig::AddStringAndDuration,
             ScalarFuncSig::AddStringAndString,
             ScalarFuncSig::AddTimeStringNull,
-            ScalarFuncSig::AesDecrypt,
-            ScalarFuncSig::AesEncrypt,
             ScalarFuncSig::Char,
             ScalarFuncSig::ConnectionID,
             ScalarFuncSig::Convert,
@@ -1517,7 +1524,6 @@ mod tests {
             ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::RandomBytes,
             ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,

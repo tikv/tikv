@@ -144,6 +144,11 @@ impl Error {
     pub fn zlib_data_corrupted() -> Error {
         Error::Eval("ZLIB: Input data corrupted".into(), ZLIB_DATA_CORRUPTED)
     }
+
+    pub fn unsupported_encryption_mode(mode: &str) -> Error {
+        let msg = format!("unsupported block encryption mode - {}", mode);
+        Error::Eval(msg, ERR_UNKNOWN)
+    }
 }
 
 impl Into<select::Error> for Error {
