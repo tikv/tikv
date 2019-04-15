@@ -7,12 +7,12 @@ use std::time::Duration;
 use std::{error, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
-use crate::util::metrics::CRITICAL_ERROR;
-use crate::util::{panic_when_unexpected_key_or_data,set_panic_mark};
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
@@ -626,7 +626,7 @@ impl<I: Iterator> Cursor<I> {
                     set_panic_mark();
                     panic!("Rocksdb error: {}", e);
                 }
-                return Err(Error::RocksDb(e.to_string()));
+                return Err(Error::from(e));
             }
             Ok(false)
         } else {
