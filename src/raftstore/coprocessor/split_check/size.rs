@@ -15,11 +15,11 @@ use tikv_util::escape;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
-use super::Host;
 use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
+use super::Host;
 
 pub struct Checker {
     max_size: u64,

@@ -13,8 +13,8 @@ use engine::DB;
 use tikv_util::escape;
 use tikv_util::worker::Runnable;
 
-use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 use super::metrics::COMPACT_RANGE_CF;
+use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
