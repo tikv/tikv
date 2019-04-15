@@ -24,9 +24,9 @@ pub trait SimpleAggrBencher {
 
 /// A bencher that will use normal stream aggregation executor without a group by to bench the
 /// giving aggregate expression.
-pub struct NormalSimpleAggrExecutorBencher;
+pub struct NormalBencher;
 
-impl SimpleAggrBencher for NormalSimpleAggrExecutorBencher {
+impl SimpleAggrBencher for NormalBencher {
     fn name(&self) -> &'static str {
         "normal"
     }
@@ -54,9 +54,9 @@ impl SimpleAggrBencher for NormalSimpleAggrExecutorBencher {
 
 /// A bencher that will use batch simple aggregation executor to bench the giving aggregate
 /// expression.
-pub struct BatchSimpleAggrExecutorBencher;
+pub struct BatchBencher;
 
-impl SimpleAggrBencher for BatchSimpleAggrExecutorBencher {
+impl SimpleAggrBencher for BatchBencher {
     fn name(&self) -> &'static str {
         "batch"
     }
