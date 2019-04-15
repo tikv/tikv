@@ -8,8 +8,6 @@ extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate prometheus;
-#[macro_use]
 extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
@@ -51,7 +49,7 @@ pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod futurepool;
+pub mod future_pool;
 pub mod io_limiter;
 #[macro_use]
 pub mod macros;
