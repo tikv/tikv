@@ -199,6 +199,11 @@ fn test_lease_unsafe_during_leader_transfers<T: Simulator>(cluster: &mut Cluster
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
     let last_index = state.get_last_index();
 
+    // Because we process read request in a local read thread, there is a
+    // short a interval that Peer can do local read but its delegate can not.
+    // The above read may tigger a read index, so we need to clear the detector
+    // before testing local read.
+    detector.ctx.wl().clear();
     // Check if the leader does a local read.
     must_read_on_peer(cluster, peer.clone(), region.clone(), key, b"v1");
     let state: RaftLocalState = engine.get_msg(&state_key).unwrap().unwrap();
