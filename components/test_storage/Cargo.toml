@@ -7,5 +7,5 @@ publish = false
 [dependencies]
 tikv = { path = "../../", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="pessimistic-lock" }
 futures = "0.1"

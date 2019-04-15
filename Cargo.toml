@@ -119,7 +119,7 @@ twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch="pessimistic-lock" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 

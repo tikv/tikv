@@ -185,8 +185,11 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
-        if lock.ts > ts || lock.lock_type == LockType::Lock {
-            // ignore lock when lock.ts > ts or lock's type is Lock
+        if lock.ts > ts
+            || lock.lock_type == LockType::Lock
+            || lock.lock_type == LockType::Pessimistic
+        {
+            // ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
             return Ok(ts);
         }
 

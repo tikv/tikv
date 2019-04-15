@@ -157,6 +157,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                         return Err(Error::WriteConflict {
                             start_ts: self.start_ts,
+                            for_update_ts: 0,
                             conflict_start_ts: write.start_ts,
                             conflict_commit_ts: commit,
                             key: key.to_raw()?,
@@ -183,10 +184,13 @@ impl<S: Snapshot> MvccTxn<S> {
                         ttl: lock.ttl,
                     });
                 }
-                // No need to overwrite the lock and data.
-                // If we use single delete, we can't put a key multiple times.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                return Ok(());
+                // If the lock is a pessimistic lock, we should continue and overwrite the lock.
+                if lock.lock_type != LockType::Pessimistic {
+                    // No need to overwrite the lock and data.
+                    // If we use single delete, we can't put a key multiple times.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                    return Ok(());
+                }
             }
         }
 
@@ -203,9 +207,70 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    pub fn pessimistic_lock(
+        &mut self,
+        key: Key,
+        primary: &[u8],
+        for_update_ts: u64,
+        options: &Options,
+    ) -> Result<()> {
+        if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
+            if commit >= self.start_ts {
+                if commit >= for_update_ts {
+                    MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
+                    return Err(Error::WriteConflict {
+                        start_ts: self.start_ts,
+                        for_update_ts,
+                        conflict_start_ts: write.start_ts,
+                        conflict_commit_ts: commit,
+                        key: key.to_raw()?,
+                        primary: primary.to_vec(),
+                    });
+                }
+            }
+        }
+
+        if let Some(lock) = self.reader.load_lock(&key)? {
+            if lock.ts != self.start_ts {
+                return Err(Error::KeyIsLocked {
+                    key: key.to_raw()?,
+                    primary: lock.primary,
+                    ts: lock.ts,
+                    ttl: lock.ttl,
+                });
+            }
+            MVCC_DUPLICATE_CMD_COUNTER_VEC.pessimistic_lock.inc();
+            return Ok(());
+        }
+
+        self.lock_key(
+            key,
+            LockType::Pessimistic,
+            primary.to_vec(),
+            options.lock_ttl,
+            None,
+        );
+
+        Ok(())
+    }
+
     pub fn commit(&mut self, key: Key, commit_ts: u64) -> Result<()> {
         let (lock_type, short_value) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
+                // A pessimistic lock cannot be committed.
+                if lock.lock_type == LockType::Pessimistic {
+                    error!(
+                        "trying to committing a pessimistic lock";
+                        "key" => %key,
+                        "start_ts" => self.start_ts,
+                        "commit_ts" => commit_ts,
+                    );
+                    return Err(Error::TxnLockNotFound {
+                        start_ts: self.start_ts,
+                        commit_ts,
+                        key: key.as_encoded().to_owned(),
+                    });
+                }
                 (lock.lock_type, lock.short_value.take())
             }
             _ => {
@@ -237,7 +302,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         };
         let write = Write::new(
-            WriteType::from_lock_type(lock_type),
+            WriteType::from_lock_type(lock_type).unwrap(),
             self.start_ts,
             short_value,
         );

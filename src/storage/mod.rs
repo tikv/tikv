@@ -95,6 +95,14 @@ pub enum Command {
         start_ts: u64,
         options: Options,
     },
+    PessimisticLock {
+        ctx: Context,
+        keys: Vec<Key>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        options: Options,
+    },
     Commit {
         ctx: Context,
         keys: Vec<Key>,
@@ -157,6 +165,20 @@ impl Display for Command {
                 "kv::command::prewrite mutations({}) @ {} | {:?}",
                 mutations.len(),
                 start_ts,
+                ctx
+            ),
+            Command::PessimisticLock {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::pessimisticlock keys({}) @ {},{} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -277,6 +299,7 @@ impl Command {
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Prewrite { .. } => "prewrite",
+            Command::PessimisticLock { .. } => "pessimistic_lock",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
@@ -292,6 +315,7 @@ impl Command {
     pub fn ts(&self) -> u64 {
         match *self {
             Command::Prewrite { start_ts, .. }
+            | Command::PessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
@@ -307,6 +331,7 @@ impl Command {
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
+            | Command::PessimisticLock { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
@@ -322,6 +347,7 @@ impl Command {
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Prewrite { ref mut ctx, .. }
+            | Command::PessimisticLock { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
@@ -349,6 +375,11 @@ impl Command {
                             bytes += key.as_encoded().len();
                         }
                     }
+                }
+            }
+            Command::PessimisticLock { ref keys, .. } => {
+                for k in keys {
+                    bytes += k.as_encoded().len();
                 }
             }
             Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
@@ -891,6 +922,36 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
+    pub fn async_pessimistic_lock(
+        &self,
+        ctx: Context,
+        keys: Vec<Key>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        options: Options,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        for k in &keys {
+            let size = k.as_encoded().len();
+            if size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let cmd = Command::PessimisticLock {
+            ctx,
+            keys,
+            primary,
+            start_ts,
+            for_update_ts,
+            options,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
         Ok(())
     }
 

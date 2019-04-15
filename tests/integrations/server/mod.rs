@@ -89,6 +89,11 @@ trait MockKvService {
     unary_call!(kv_get, GetRequest, GetResponse);
     unary_call!(kv_scan, ScanRequest, ScanResponse);
     unary_call!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
     unary_call!(kv_commit, CommitRequest, CommitResponse);
     unary_call!(kv_import, ImportRequest, ImportResponse);
     unary_call!(kv_cleanup, CleanupRequest, CleanupResponse);
@@ -143,6 +148,11 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     unary_call_dispatch!(kv_get, GetRequest, GetResponse);
     unary_call_dispatch!(kv_scan, ScanRequest, ScanResponse);
     unary_call_dispatch!(kv_prewrite, PrewriteRequest, PrewriteResponse);
+    unary_call_dispatch!(
+        kv_pessimistic_lock,
+        PessimisticLockRequest,
+        PessimisticLockResponse
+    );
     unary_call_dispatch!(kv_commit, CommitRequest, CommitResponse);
     unary_call_dispatch!(kv_import, ImportRequest, ImportResponse);
     unary_call_dispatch!(kv_cleanup, CleanupRequest, CleanupResponse);

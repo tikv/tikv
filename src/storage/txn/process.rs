@@ -483,6 +483,39 @@ fn process_write_impl<S: Snapshot>(
                 (pr, vec![], 0, ctx)
             }
         }
+        Command::PessimisticLock {
+            ctx,
+            keys,
+            primary,
+            start_ts,
+            for_update_ts,
+            options,
+            ..
+        } => {
+            let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+            let mut locks = vec![];
+            let rows = keys.len();
+            for k in keys {
+                match txn.pessimistic_lock(k, &primary, for_update_ts, &options) {
+                    Ok(_) => {}
+                    e @ Err(MvccError::KeyIsLocked { .. }) => {
+                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                    }
+                    Err(e) => return Err(Error::from(e)),
+                }
+            }
+
+            statistics.add(&txn.take_statistics());
+            if locks.is_empty() {
+                let pr = ProcessResult::MultiRes { results: vec![] };
+                let modifies = txn.into_modifies();
+                (pr, modifies, rows, ctx)
+            } else {
+                // Skip write stage if some keys are locked.
+                let pr = ProcessResult::MultiRes { results: locks };
+                (pr, vec![], 0, ctx)
+            }
+        }
         Command::Commit {
             ctx,
             keys,

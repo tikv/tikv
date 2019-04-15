@@ -23,8 +23,8 @@ pub enum CheckLockResult {
 /// committed version will be returned for primary key instead of leading to lock conflicts.
 #[inline]
 pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
-    if lock.ts > ts || lock.lock_type == LockType::Lock {
-        // Ignore lock when lock.ts > ts or lock's type is Lock
+    if lock.ts > ts || lock.lock_type == LockType::Lock || lock.lock_type == LockType::Pessimistic {
+        // Ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
         return Ok(CheckLockResult::NotLocked);
     }
 

@@ -145,6 +145,27 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn kv_pessimistic_lock(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: PessimisticLockRequest,
+        sink: UnarySink<PessimisticLockResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+        let future = future_pessimistic_lock(&self.storage, req)
+            .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("kv rpc failed";
+                    "request" => "kv_pessimistic_lock",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn kv_commit(
         &mut self,
         ctx: RpcContext<'_>,
@@ -1235,6 +1256,43 @@ fn future_prewrite<E: Engine>(
     })
 }
 
+fn future_pessimistic_lock<E: Engine>(
+    storage: &Storage<E>,
+    mut req: PessimisticLockRequest,
+) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
+    let keys = req
+        .take_mutations()
+        .into_iter()
+        .map(|x| match x.get_op() {
+            Op::PessimisticLock => Key::from_raw(x.get_key()),
+            _ => panic!("mismatch Op in pessimistic lock mutations"),
+        })
+        .collect();
+    let mut options = Options::default();
+    options.lock_ttl = req.get_lock_ttl();
+
+    let (cb, f) = paired_future_callback();
+    let res = storage.async_pessimistic_lock(
+        req.take_context(),
+        keys,
+        req.take_primary_lock(),
+        req.get_start_version(),
+        req.get_for_update_ts(),
+        options,
+        cb,
+    );
+
+    AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
+        let mut resp = PessimisticLockResponse::new();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            resp.set_errors(RepeatedField::from_vec(extract_key_errors(v)));
+        }
+        resp
+    })
+}
+
 fn future_commit<E: Engine>(
     storage: &Storage<E>,
     mut req: CommitRequest,
@@ -1756,6 +1814,7 @@ fn extract_mvcc_info(mvcc: storage::MvccInfo) -> MvccInfo {
             LockType::Put => Op::Put,
             LockType::Delete => Op::Del,
             LockType::Lock => Op::Lock,
+            LockType::Pessimistic => Op::PessimisticLock,
         };
         lock_info.set_field_type(op);
         lock_info.set_start_ts(lock.ts);
@@ -1829,6 +1888,7 @@ mod tests {
         let primary = b"primary".to_vec();
         let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
             start_ts,
+            for_update_ts: 0,
             conflict_start_ts,
             conflict_commit_ts,
             key: key.clone(),

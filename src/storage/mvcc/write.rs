@@ -21,11 +21,12 @@ const FLAG_LOCK: u8 = b'L';
 const FLAG_ROLLBACK: u8 = b'R';
 
 impl WriteType {
-    pub fn from_lock_type(tp: LockType) -> WriteType {
+    pub fn from_lock_type(tp: LockType) -> Option<WriteType> {
         match tp {
-            LockType::Put => WriteType::Put,
-            LockType::Delete => WriteType::Delete,
-            LockType::Lock => WriteType::Lock,
+            LockType::Put => Some(WriteType::Put),
+            LockType::Delete => Some(WriteType::Delete),
+            LockType::Lock => Some(WriteType::Lock),
+            LockType::Pessimistic => None,
         }
     }
 
@@ -125,7 +126,7 @@ mod tests {
         ];
         for (i, (lock_type, write_type, flag)) in tests.drain(..).enumerate() {
             if lock_type.is_some() {
-                let wt = WriteType::from_lock_type(lock_type.unwrap());
+                let wt = WriteType::from_lock_type(lock_type.unwrap()).unwrap();
                 assert_eq!(
                     wt, write_type,
                     "#{}, expect from_lock_type({:?}) returns {:?}, but got {:?}",

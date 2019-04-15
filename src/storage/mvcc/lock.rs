@@ -12,11 +12,13 @@ pub enum LockType {
     Put,
     Delete,
     Lock,
+    Pessimistic,
 }
 
 const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
+const FLAG_PESSIMISTIC: u8 = b'S';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
@@ -32,6 +34,7 @@ impl LockType {
             FLAG_PUT => Some(LockType::Put),
             FLAG_DELETE => Some(LockType::Delete),
             FLAG_LOCK => Some(LockType::Lock),
+            FLAG_PESSIMISTIC => Some(LockType::Pessimistic),
             _ => None,
         }
     }
@@ -41,6 +44,7 @@ impl LockType {
             LockType::Put => FLAG_PUT,
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
+            LockType::Pessimistic => FLAG_PESSIMISTIC,
         }
     }
 }

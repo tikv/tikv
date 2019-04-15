@@ -1118,6 +1118,7 @@ impl MvccInfoIterator {
                 LockType::Put => lock_info.set_field_type(Op::Put),
                 LockType::Delete => lock_info.set_field_type(Op::Del),
                 LockType::Lock => lock_info.set_field_type(Op::Lock),
+                LockType::Pessimistic => lock_info.set_field_type(Op::PessimisticLock),
             }
             lock_info.set_start_ts(lock.ts);
             lock_info.set_primary(lock.primary);
