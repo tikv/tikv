@@ -5,12 +5,11 @@ use super::*;
 use kvproto::kvrpcpb::Context;
 
 use tikv::coprocessor::codec::Datum;
-use tikv::coprocessor::{Endpoint, ReadPoolContext};
-use tikv::server::readpool::{self, ReadPool};
+use tikv::coprocessor::Endpoint;
+use tikv::server::readpool;
 use tikv::server::Config;
 use tikv::storage::kv::RocksEngine;
 use tikv::storage::{Engine, TestEngineBuilder};
-use tikv::util::worker::FutureWorker;
 
 #[derive(Clone)]
 pub struct ProductTable(Table);
@@ -54,15 +53,7 @@ pub fn init_data_with_engine_and_commit<E: Engine>(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
 ) -> (Store<E>, Endpoint<E>) {
-    init_data_with_details(
-        ctx,
-        engine,
-        tbl,
-        vals,
-        commit,
-        &Config::default(),
-        &readpool::Config::default_for_test(),
-    )
+    init_data_with_details(ctx, engine, tbl, vals, commit, &Config::default())
 }
 
 pub fn init_data_with_details<E: Engine>(
@@ -72,7 +63,6 @@ pub fn init_data_with_details<E: Engine>(
     vals: &[(i64, Option<&str>, i64)],
     commit: bool,
     cfg: &Config,
-    read_pool_cfg: &readpool::Config,
 ) -> (Store<E>, Endpoint<E>) {
     let mut store = Store::from_engine(engine);
 
@@ -88,10 +78,8 @@ pub fn init_data_with_details<E: Engine>(
     if commit {
         store.commit_with_ctx(ctx);
     }
-    let pd_worker = FutureWorker::new("test-pd-worker");
-    let pool = ReadPool::new("readpool", read_pool_cfg, || {
-        ReadPoolContext::new(pd_worker.scheduler())
-    });
+
+    let pool = readpool::Builder::build_for_test();
     let cop = Endpoint::new(cfg, store.get_engine(), pool);
     (store, cop)
 }

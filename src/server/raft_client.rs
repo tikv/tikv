@@ -12,16 +12,16 @@ use super::{Config, Result};
 use crate::grpc::{
     ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
 };
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::mpsc::batch::{self, Sender as BatchSender};
-use crate::util::security::SecurityManager;
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
+use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::mpsc::batch::{self, Sender as BatchSender};
+use tikv_util::security::SecurityManager;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;

@@ -13,8 +13,8 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use engine::Peekable;
 use test_raftstore::*;
 use tikv::raftstore::store::keys;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 // A helper function for testing the lease reads and lease renewing.
 // The leader keeps a record of its leader lease, and uses the system's

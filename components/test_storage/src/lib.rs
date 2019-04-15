@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
-extern crate tikv;
+extern crate tikv_util;
 
 mod assert_storage;
 mod sync_storage;

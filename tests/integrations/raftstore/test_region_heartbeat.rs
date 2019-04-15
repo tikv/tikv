@@ -6,8 +6,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use test_raftstore::*;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn wait_down_peers<T: Simulator>(cluster: &Cluster<T>, count: u64, peer: Option<u64>) {
     let mut peers = cluster.get_down_peers();

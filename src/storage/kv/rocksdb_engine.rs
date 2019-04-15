@@ -17,8 +17,8 @@ use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
 use crate::storage::{Key, Value};
-use crate::util::escape;
-use crate::util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::escape;
+use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,

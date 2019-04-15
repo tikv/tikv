@@ -9,7 +9,7 @@ use super::*;
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
-use crate::util::codec::{bytes, number};
+use tikv_util::codec::{bytes, number};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -52,26 +52,24 @@ impl Clone for VectorValue {
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
-            VectorValue::Int(ref vec) => {
-                VectorValue::Int(crate::util::vec_clone_with_capacity(vec))
-            }
+            VectorValue::Int(ref vec) => VectorValue::Int(tikv_util::vec_clone_with_capacity(vec)),
             VectorValue::Real(ref vec) => {
-                VectorValue::Real(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::Real(tikv_util::vec_clone_with_capacity(vec))
             }
             VectorValue::Decimal(ref vec) => {
-                VectorValue::Decimal(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::Decimal(tikv_util::vec_clone_with_capacity(vec))
             }
             VectorValue::Bytes(ref vec) => {
-                VectorValue::Bytes(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::Bytes(tikv_util::vec_clone_with_capacity(vec))
             }
             VectorValue::DateTime(ref vec) => {
-                VectorValue::DateTime(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::DateTime(tikv_util::vec_clone_with_capacity(vec))
             }
             VectorValue::Duration(ref vec) => {
-                VectorValue::Duration(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::Duration(tikv_util::vec_clone_with_capacity(vec))
             }
             VectorValue::Json(ref vec) => {
-                VectorValue::Json(crate::util::vec_clone_with_capacity(vec))
+                VectorValue::Json(tikv_util::vec_clone_with_capacity(vec))
             }
         }
     }
@@ -525,8 +523,8 @@ impl VectorValue {
     ) -> Result<()> {
         use crate::coprocessor::codec::mysql::DecimalEncoder;
         use crate::coprocessor::codec::mysql::JsonEncoder;
-        use crate::util::codec::bytes::BytesEncoder;
-        use crate::util::codec::number::NumberEncoder;
+        use tikv_util::codec::bytes::BytesEncoder;
+        use tikv_util::codec::number::NumberEncoder;
 
         match self {
             VectorValue::Int(ref vec) => {

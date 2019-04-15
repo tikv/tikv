@@ -83,7 +83,6 @@ backtrace = "0.2.3"
 clap = "2.32"
 url = "1.5"
 regex = "1.0"
-fnv = "1.0"
 sys-info = "0.5.1"
 indexmap = { version = "1.0", features = ["serde-1"] }
 futures = "0.1"
@@ -113,7 +112,7 @@ smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = "0.12"
-tokio-threadpool = "0.1"
+tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
@@ -122,6 +121,7 @@ tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
+tikv_util = { path = "components/tikv_util" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -139,9 +139,9 @@ test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
 test_coprocessor = { path = "components/test_coprocessor" }
-# See https://japaric.github.io/criterion.rs/book/user_guide/known_limitations.html
-# critcmp is known to support 0.2.5
-criterion = { version = "=0.2.5", features=['real_blackbox'] }
+# See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
+# of `real_blackbox` feature.
+criterion = { version = "0.2.11", features=['real_blackbox'] }
 arrow = "0.10.0"
 
 [target.'cfg(unix)'.dependencies]
@@ -165,6 +165,7 @@ members = [
   "components/panic_hook",
   "components/cop_datatype",
   "components/log_wrappers",
+  "components/tikv_util",
 ]
 
 [profile.dev]

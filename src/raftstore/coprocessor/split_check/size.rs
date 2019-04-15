@@ -11,15 +11,15 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tikv_util::escape;
 
 use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::util::escape;
 
+use super::Host;
 use super::super::error::Result;
 use super::super::metrics::*;
 use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
-use super::Host;
 
 pub struct Checker {
     max_size: u64,
@@ -350,8 +350,6 @@ pub mod tests {
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
     };
     use crate::storage::Key;
-    use crate::util::config::ReadableSize;
-    use crate::util::worker::Runnable;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
@@ -362,6 +360,8 @@ pub mod tests {
     use std::sync::Arc;
     use std::{iter, u64};
     use tempdir::TempDir;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::worker::Runnable;
 
     use super::*;
 

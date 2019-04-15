@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::time::{monotonic_raw_now, Instant};
+use crate::time::{monotonic_raw_now, Instant};
 use std::cmp::{Ord, Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::sync::{mpsc, Arc};
@@ -202,7 +202,7 @@ fn start_global_steady_timer() -> SteadyTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
+    use crate::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer};
     use futures::Future;
     use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc::{self, Sender};

@@ -6,14 +6,14 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
-use crate::util::escape;
-use crate::util::worker::Runnable;
 use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::CF_WRITE;
 use engine::DB;
+use tikv_util::escape;
+use tikv_util::worker::Runnable;
 
+use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 use super::metrics::COMPACT_RANGE_CF;
 
 type Key = Vec<u8>;

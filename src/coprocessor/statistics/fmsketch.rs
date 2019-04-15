@@ -1,8 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::collections::HashSet;
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
+use tikv_util::collections::HashSet;
 use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number of distinct
@@ -60,8 +60,8 @@ mod tests {
     use crate::coprocessor::codec::datum;
     use crate::coprocessor::codec::datum::Datum;
     use crate::coprocessor::codec::Result;
-    use crate::util::as_slice;
     use std::iter::repeat;
+    use tikv_util::as_slice;
 
     struct TestData {
         samples: Vec<Datum>,

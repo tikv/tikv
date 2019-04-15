@@ -7,7 +7,7 @@ use tikv::storage::kv::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use super::*;
 

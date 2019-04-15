@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::Either;
+use crate::Either;
 use futures::sync::oneshot;
 use futures::{Async, Future, IntoFuture, Poll};
 use std::boxed;

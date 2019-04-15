@@ -9,13 +9,13 @@ use crossbeam::TrySendError;
 use protobuf::{ProtobufError, RepeatedField};
 
 use crate::pd;
-use crate::util::codec;
 use kvproto::{errorpb, metapb};
 use raft;
+use tikv_util::codec;
 
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
-use crate::util::escape;
+use tikv_util::escape;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 

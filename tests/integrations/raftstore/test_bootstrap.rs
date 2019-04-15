@@ -16,7 +16,7 @@ use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully

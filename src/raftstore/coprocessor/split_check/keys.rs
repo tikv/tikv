@@ -220,7 +220,6 @@ mod tests {
     use crate::raftstore::store::{keys, CasualMessage, SplitCheckRunner, SplitCheckTask};
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::Key;
-    use crate::util::worker::Runnable;
     use engine::rocks;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
@@ -232,6 +231,7 @@ mod tests {
     use std::sync::{mpsc, Arc};
     use std::u64;
     use tempdir::TempDir;
+    use tikv_util::worker::Runnable;
 
     use super::*;
 

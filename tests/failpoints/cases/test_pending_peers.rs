@@ -7,7 +7,7 @@ use std::time::*;
 use fail;
 
 use test_raftstore::*;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 #[test]
 fn test_pending_peers() {

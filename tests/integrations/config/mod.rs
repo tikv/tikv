@@ -17,8 +17,8 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
-use tikv::util::config::{CompressionType, ReadableDuration, ReadableSize};
-use tikv::util::security::SecurityConfig;
+use tikv_util::config::{CompressionType, ReadableDuration, ReadableSize};
+use tikv_util::security::SecurityConfig;
 
 #[test]
 fn test_toml_serde() {

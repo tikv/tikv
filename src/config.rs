@@ -31,16 +31,16 @@ use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use crate::util::config::{
-    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
-};
-use crate::util::security::SecurityConfig;
-use crate::util::time::duration_to_sec;
 use engine::rocks::util::{
     db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv_util::config::{
+    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
+};
+use tikv_util::security::SecurityConfig;
+use tikv_util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -942,12 +942,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
-    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
+    use tikv_util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where

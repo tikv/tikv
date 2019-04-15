@@ -14,7 +14,7 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 #[macro_use]
-extern crate tikv;
+extern crate tikv_util;
 
 mod cluster;
 mod node;

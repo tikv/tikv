@@ -56,7 +56,7 @@ pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
 
-// A copy of `tikv::util::escape`.
+// A copy of `tikv_util::escape`.
 // TODO: remove it once util becomes a component.
 fn escape(data: &[u8]) -> String {
     let mut escaped = Vec::with_capacity(data.len() * 4);
