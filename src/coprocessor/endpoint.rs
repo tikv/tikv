@@ -128,7 +128,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.context.get_isolation_level(),
                         !req_ctx.context.get_not_fill_cache(),
                     );
-                    dag::DAGRequestHandler::build(
+                    dag::DAGBuilder::build(
                         dag,
                         ranges,
                         store,
