@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
+use crate::storage::{FixtureStore, Store};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -23,6 +24,20 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
         super::util::ranges_iter::PointRangeConditional,
     >,
 );
+
+impl
+    BatchIndexScanExecutor<
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+    }
+}
 
 impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(
