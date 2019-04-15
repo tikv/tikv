@@ -3,7 +3,7 @@
 #![feature(specialization)]
 #![feature(repeat_generic_slice)]
 
-// mod integrated;
+mod integrated;
 mod simple_aggr;
 mod table_scan;
 mod util;
@@ -14,7 +14,7 @@ fn main() {
     util::fixture_executor::bench(&mut c);
     table_scan::bench(&mut c);
     simple_aggr::bench(&mut c);
-    // integrated::bench(&mut c);
+    integrated::bench(&mut c);
 
     c.final_summary();
 }

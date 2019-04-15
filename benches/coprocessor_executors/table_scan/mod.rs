@@ -2,7 +2,7 @@
 
 use crate::util::store::*;
 
-mod fixture;
+pub mod fixture;
 pub mod util;
 
 /// 1 interested column, which is PK (which is in the key)
@@ -175,18 +175,23 @@ impl std::fmt::Debug for Input {
 }
 
 pub fn bench(c: &mut criterion::Criterion) {
-    let inputs = vec![
-        Input::new(util::NormalTableScanNext1Bencher::<MemStore>::new()),
-        Input::new(util::NormalTableScanNext1Bencher::<RocksStore>::new()),
+    let mut inputs = vec![
         Input::new(util::NormalTableScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::NormalTableScanNext1024Bencher::<RocksStore>::new()),
         Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
-        Input::new(util::BatchTableScanNext1024Bencher::<RocksStore>::new()),
-        Input::new(util::TableScanDAGBencher::<MemStore>::new(false)),
-        Input::new(util::TableScanDAGBencher::<RocksStore>::new(false)),
-        Input::new(util::TableScanDAGBencher::<MemStore>::new(true)),
-        Input::new(util::TableScanDAGBencher::<RocksStore>::new(true)),
     ];
+    if crate::util::use_full_payload() {
+        let mut additional_inputs = vec![
+            Input::new(util::NormalTableScanNext1024Bencher::<RocksStore>::new()),
+            Input::new(util::BatchTableScanNext1024Bencher::<RocksStore>::new()),
+            Input::new(util::NormalTableScanNext1Bencher::<MemStore>::new()),
+            Input::new(util::NormalTableScanNext1Bencher::<RocksStore>::new()),
+            Input::new(util::TableScanDAGBencher::<MemStore>::new(false)),
+            Input::new(util::TableScanDAGBencher::<RocksStore>::new(false)),
+            Input::new(util::TableScanDAGBencher::<MemStore>::new(true)),
+            Input::new(util::TableScanDAGBencher::<RocksStore>::new(true)),
+        ];
+        inputs.append(&mut additional_inputs);
+    }
 
     c.bench_function_over_inputs(
         "table_scan_primary_key",

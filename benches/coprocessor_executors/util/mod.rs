@@ -2,6 +2,7 @@
 
 pub mod aggr;
 pub mod bencher;
+pub mod executor_descriptor;
 pub mod fixture_executor;
 pub mod store;
 
@@ -15,6 +16,16 @@ use tipb::executor::Executor as PbExecutor;
 use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
+
+/// Whether or not env variable TIKV_BENCH_FULL_PAYLOAD = 1, indicating using full payload to
+/// run benchmarks.
+pub fn use_full_payload() -> bool {
+    if let Ok(s) = std::env::var("TIKV_BENCH_FULL_PAYLOAD") {
+        s == "1"
+    } else {
+        false
+    }
+}
 
 /// A simple helper function to build the DAG handler.
 pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
