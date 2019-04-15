@@ -17,10 +17,6 @@ TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNC
 
 With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
 
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF). If you are a
-company that wants to help shape the evolution of cloud native technologies, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF
-[announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
-
 TiKV has the following key features:
 
 - **Geo-Replication**
