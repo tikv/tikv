@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 /// Data to be flowed between parent and child executors at once during `collect_statistics()`
 /// invocation.
@@ -105,7 +94,7 @@ pub struct ExecSummaryCollectorEnabled {
 }
 
 impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
-    type DurationRecorder = crate::util::time::Instant;
+    type DurationRecorder = tikv_util::time::Instant;
 
     #[inline]
     fn new(output_index: usize) -> ExecSummaryCollectorEnabled {
@@ -117,12 +106,12 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
 
     #[inline]
     fn start_record_duration(&self) -> Self::DurationRecorder {
-        crate::util::time::Instant::now_coarse()
+        tikv_util::time::Instant::now_coarse()
     }
 
     #[inline]
     fn inc_elapsed_duration(&mut self, dr: Self::DurationRecorder) {
-        let elapsed_time = crate::util::time::duration_to_ms(dr.elapsed()) as usize;
+        let elapsed_time = tikv_util::time::duration_to_ms(dr.elapsed()) as usize;
         self.counts.time_processed_ms += elapsed_time;
     }
 

@@ -1,24 +1,14 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
+use crate::storage::{FixtureStore, Store};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -34,6 +24,20 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
         super::util::ranges_iter::PointRangeConditional,
     >,
 );
+
+impl
+    BatchIndexScanExecutor<
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+    }
+}
 
 impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(
@@ -174,8 +178,8 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::coprocessor::codec::{datum, table};
-        use crate::util::codec::number;
         use byteorder::{BigEndian, ReadBytesExt};
+        use tikv_util::codec::number;
 
         // The payload part of the key
         let mut key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];

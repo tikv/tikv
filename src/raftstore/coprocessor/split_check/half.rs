@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ops::Bound::Excluded;
 
@@ -21,7 +10,7 @@ use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::properties::RangeProperties;
-use crate::util::config::ReadableSize;
+use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
@@ -192,9 +181,9 @@ mod tests {
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
     };
     use crate::storage::Key;
-    use crate::util::config::ReadableSize;
-    use crate::util::escape;
-    use crate::util::worker::Runnable;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::escape;
+    use tikv_util::worker::Runnable;
 
     use super::super::size::tests::must_split_at;
     use super::*;
