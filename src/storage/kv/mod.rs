@@ -630,7 +630,7 @@ impl<I: Iterator> Cursor<I> {
                     set_panic_mark();
                     panic!("Rocksdb error: {}", e);
                 }
-                return Err(Error::from(e));
+                return Err(e);
             }
             Ok(false)
         } else {
