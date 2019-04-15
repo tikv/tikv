@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,7 +9,7 @@ use std::time::{Duration, Instant};
 use kvproto::metapb::*;
 
 use crate::pd::RegionInfo;
-use crate::util::rocksdb_util::properties::SizeProperties;
+use crate::storage::mvcc::properties::SizeProperties;
 
 use super::client::*;
 use super::common::*;
@@ -299,13 +288,13 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use crate::storage::engine::Writable;
+    use engine::rocks::Writable;
     use tempdir::TempDir;
     use uuid::Uuid;
 
     use crate::config::DbConfig;
     use crate::storage::types::Key;
-    use crate::util::security::SecurityConfig;
+    use tikv_util::security::SecurityConfig;
 
     fn new_encoded_key(k: &[u8]) -> Vec<u8> {
         if k.is_empty() {
