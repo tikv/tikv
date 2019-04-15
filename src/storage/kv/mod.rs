@@ -618,6 +618,10 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
+    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
+    // (1) We reached the end of the data. In this case, status() is OK();
+    // (2) there is an error. In this case status() is not OK().
+    // So check status when iterator is invalidated.
     pub fn valid(&self) -> Result<bool> {
         if !self.iter.valid() {
             if let Err(e) = self.iter.status() {
