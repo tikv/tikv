@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -18,26 +7,31 @@ use crate::coprocessor::Result;
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
-pub struct BatchLimitExecutor<Src: BatchExecutor, C: ExecSummaryCollector> {
+pub struct BatchLimitExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
+    summary_collector: C,
     src: Src,
     remaining_rows: usize,
-    summary_collector: C,
 }
 
-impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchLimitExecutor<Src, C> {
-    pub fn new(src: Src, limit: usize, summary_collector: C) -> Result<Self> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchLimitExecutor<C, Src> {
+    pub fn new(summary_collector: C, src: Src, limit: usize) -> Result<Self> {
         if limit == 0 {
             return Err(box_err!("limit should not be zero"));
         }
         Ok(Self {
+            summary_collector,
             src,
             remaining_rows: limit,
-            summary_collector,
         })
     }
 }
 
-impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitExecutor<Src, C> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<C, Src> {
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.src.schema()
+    }
+
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.start_record_duration();
@@ -62,11 +56,6 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitEx
         self.src.collect_statistics(destination);
         self.summary_collector
             .collect_into(&mut destination.summary_per_executor)
-    }
-
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        self.src.schema()
     }
 }
 

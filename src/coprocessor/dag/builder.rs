@@ -119,12 +119,6 @@ impl DAGBuilder {
             summary_slot_index += 1;
 
             let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
-                ExecType::TypeTableScan | ExecType::TypeIndexScan => {
-                    return Err(Error::Other(box_err!(
-                        "Unexpected non-first executor {:?}",
-                        ed.get_tp()
-                    )));
-                }
                 ExecType::TypeSelection => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
 
@@ -147,6 +141,15 @@ impl DAGBuilder {
                         config.clone(),
                         executor,
                         ed.mut_aggregation().take_agg_func().into_vec(),
+                    )?)
+                }
+                ExecType::TypeLimit => {
+                    COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+
+                    Box::new(BatchLimitExecutor::new(
+                        C::new(summary_slot_index),
+                        executor,
+                        ed.get_limit().get_limit() as usize,
                     )?)
                 }
                 _ => {
