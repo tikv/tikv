@@ -34,14 +34,14 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     store: &Store<RocksEngine>,
     enable_batch: bool,
 ) -> Box<dyn RequestHandler> {
-    use tikv::coprocessor::dag::DAGRequestHandler;
+    use tikv::coprocessor::dag::builder::DAGBuilder;
     use tikv::coprocessor::Deadline;
     use tipb::select::DAGRequest;
 
     let mut dag = DAGRequest::new();
     dag.set_executors(RepeatedField::from_vec(executors.to_vec()));
 
-    DAGRequestHandler::build(
+    DAGBuilder::build(
         black_box(dag),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
