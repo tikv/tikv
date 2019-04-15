@@ -53,6 +53,7 @@ impl std::fmt::Debug for Input {
 
 pub fn bench(c: &mut criterion::Criterion) {
     let mut inputs = vec![];
+
     let src_rows_options = if crate::util::use_full_payload() {
         vec![1, 10, 1024, 5000]
     } else {
