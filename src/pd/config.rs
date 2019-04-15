@@ -12,6 +12,7 @@
 // limitations under the License.
 
 use std::error::Error;
+use crate::util::config::ReadableDuration;
 
 /// The configuration for a PD Client.
 ///
@@ -28,10 +29,10 @@ pub struct Config {
     /// The interval at which to retry a PD connection initialization.
     ///
     /// Default is 300ms. Setting this to 0 disables retry.
-    pub retry_interval: u64,
+    pub retry_interval: ReadableDuration,
     /// The maximum number of times to retry a PD connection initialization.
     ///
-    /// Default is `None`, which is infinity.
+    /// Default is 10.
     pub retry_max_count: Option<usize>,
     /// If the client observes the same error message on retry, it can repeat the message only
     /// every `n` times.
@@ -44,8 +45,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             endpoints: Default::default(),
-            retry_interval: 300,
-            retry_max_count: Default::default(),
+            retry_interval: ReadableDuration::millis(300),
+            retry_max_count: Some(10),
             retry_log_every: 10,
         }
     }

@@ -48,7 +48,7 @@ impl RpcClient {
                 .build(),
         );
 
-        if cfg.retry_interval == 0 {
+        if cfg.retry_interval.0.as_millis() == 0 {
             let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
 
             Ok(RpcClient {
@@ -90,7 +90,7 @@ impl RpcClient {
                                 **cached = format!("{}", e);
                             }
                         }
-                        thread::sleep(Duration::from_millis(cfg.retry_interval));
+                        thread::sleep(cfg.retry_interval.0);
                     }
                 }
             }
