@@ -766,8 +766,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let status = self.fsm.peer.raft_group.status();
             let recent_active = status
                 .progress
+                .unwrap()
                 .iter()
-                .chain(status.learner_progress.iter())
                 .all(|(id, p)| *id == self.fsm.peer.peer_id() || p.recent_active);
             if recent_active {
                 self.fsm.group_state.become_ordered();
@@ -2696,8 +2696,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 let status = self.fsm.peer.raft_group.status();
                 let recent_active = status
                     .progress
+                    .unwrap()
                     .iter()
-                    .chain(status.learner_progress.iter())
                     .any(|(id, p)| *id != self.fsm.peer.peer_id() && p.recent_active);
                 if recent_active {
                     self.fsm.group_state.become_chaos();
