@@ -305,7 +305,7 @@ impl DAGBuilder {
             let build_batch_result =
                 super::builder::DAGBuilder::check_build_batch(req.get_executors());
             if let Err(e) = build_batch_result {
-                info!("Coprocessor request cannot be batched"; "reason" => %e);
+                debug!("Coprocessor request cannot be batched"; "reason" => %e);
             } else {
                 is_batch = true;
             }
