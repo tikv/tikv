@@ -1807,7 +1807,7 @@ fn extract_key_errors(res: storage::Result<Vec<storage::Result<()>>>) -> Vec<Key
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time};
+    use std::thread;
 
     use futures::sync::oneshot;
 
@@ -1846,10 +1846,12 @@ mod tests {
     #[test]
     fn test_poll_future_notify_with_slow_source() {
         let (tx, rx) = oneshot::channel::<usize>();
+        let (signal_tx, signal_rx) = oneshot::channel();
+
         thread::Builder::new()
             .name("source".to_owned())
             .spawn(move || {
-                thread::sleep(time::Duration::from_secs(3));
+                let _ = signal_rx.wait().unwrap();
                 tx.send(100).unwrap();
             })
             .unwrap();
@@ -1862,21 +1864,24 @@ mod tests {
             })
             .map_err(|_| ()),
         );
+        signal_tx.send(()).unwrap();
         assert_eq!(rx1.wait().unwrap(), 200);
     }
 
     #[test]
     fn test_poll_future_notify_with_slow_poller() {
         let (tx, rx) = oneshot::channel::<usize>();
+        let (signal_tx, signal_rx) = oneshot::channel();
         thread::Builder::new()
             .name("source".to_owned())
             .spawn(move || {
                 tx.send(100).unwrap();
+                signal_tx.send(()).unwrap();
             })
             .unwrap();
 
         let (tx1, rx1) = oneshot::channel::<usize>();
-        thread::sleep(time::Duration::from_secs(3));
+        let _ = signal_rx.wait().unwrap();
         poll_future_notify(
             rx.map(move |i| {
                 assert_ne!(thread::current().name(), Some("source"));
