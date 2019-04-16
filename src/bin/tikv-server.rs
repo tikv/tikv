@@ -52,18 +52,7 @@ use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::security::{self, SecurityManager};
 use tikv_util::time::Monitor;
 use tikv_util::worker::{Builder, FutureWorker};
-use tikv_util::{self as tikv_util, check_environment_variables};
-
-fn pre_start(cfg: &TiKvConfig) {
-    // Before any startup, check system configuration and environment variables.
-    util::server::check_system_config(&cfg);
-    check_environment_variables();
-
-    if cfg.panic_when_unexpected_key_or_data {
-        info!("panic-when-unexpected-key-or-data is on");
-        tikv_util::set_panic_when_unexpected_key_or_data(true);
-    }
-}
+use tikv_util;
 
 fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
@@ -457,7 +446,7 @@ fn main() {
 
     config.write_into_metrics();
     // Do some prepare works before start.
-    pre_start(&config);
+    util::server::pre_start(&config);
 
     let security_mgr = Arc::new(
         SecurityManager::new(&config.security)
