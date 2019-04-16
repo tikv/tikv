@@ -219,8 +219,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
 
-        let timer = self.summary_collector.start_record_duration();
-        self.summary_collector.inc_iterations();
+        let timer = self.summary_collector.on_start_batch();
 
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
@@ -238,8 +237,8 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Ok(false) => {}
         };
 
-        self.summary_collector.inc_produced_rows(data.rows_len());
-        self.summary_collector.inc_elapsed_duration(timer);
+        self.summary_collector
+            .on_finish_batch(timer, data.rows_len());
 
         BatchExecuteResult {
             data,
