@@ -675,7 +675,10 @@ impl_as_slice! { DateTime, as_date_time_slice }
 impl_as_slice! { Duration, as_duration_slice }
 impl_as_slice! { Json, as_json_slice }
 
+/// Additional `VectorValue` methods available via generics. These methods supports different
+/// concrete types but have same names and should be specified via the generic parameter type.
 pub trait VectorValueExt<T: Evaluable> {
+    /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);
 }
 
