@@ -31,7 +31,7 @@ use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
@@ -216,6 +216,12 @@ impl RecentAddedPeer {
         self.id == id
             && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
     }
+}
+
+#[derive(Default)]
+pub struct CheckTickResult {
+    leader: bool,
+    up_to_date: bool,
 }
 
 /// A struct that stores the state to wait for `PrepareMerge` apply result.
@@ -523,27 +529,46 @@ impl Peer {
         self.get_store().region()
     }
 
-    pub fn uptodate(&self) -> bool {
-        if self.is_leader() {
-            let status = self.raft_group.status();
-            let last_index = self.raft_group.raft.raft_log.last_index();
-            let progresses = status.progress.unwrap().iter();
-            for (&id, progress) in progresses {
-                if id == self.peer.get_id() {
-                    continue;
-                }
-                if !progress.recent_active {
-                    continue;
-                }
-                if progress.matched != last_index {
-                    return false;
-                }
+    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+        let mut res = CheckTickResult::default();
+        if !self.is_leader()
+            || self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks
+        {
+            return res;
+        }
+        res.leader = true;
+        let status = self.raft_group.status();
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        for (id, pr) in status.progress.unwrap().iter() {
+            if *id == self.peer.get_id() || !pr.recent_active {
+                continue;
             }
-            self.get_store().applied_index() == last_index
+            if pr.matched != last_index {
+                return res;
+            }
+        }
+        res.up_to_date = self.get_store().applied_index() == last_index;
+        res
+    }
+
+    pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
+        if res.leader {
+            res.up_to_date && self.is_leader()
         } else {
-            self.raft_group.raft.leader_id != raft::INVALID_ID
+            state != GroupState::Chaos
+                && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
         }
+    }
+
+    pub fn ping(&mut self) {
+        let mut msg = raft::eraftpb::Message::new();
+        msg.set_commit(self.raft_group.raft.raft_log.committed);
+        msg.set_to(self.peer_id());
+        msg.set_msg_type(raft::eraftpb::MessageType::MsgHeartbeat);
+        msg.set_from(self.leader_id());
+        msg.set_term(self.raft_group.raft.term);
+        let _ = self.raft_group.step(msg);
     }
 
     /// Set the region of a peer.

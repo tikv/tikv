@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Peekable, Snapshot as EngineSnapshot};
@@ -24,12 +26,9 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raft::Ready;
-use raft::{self, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT};
+use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
+use raft::{Ready, StateRole};
 use rand::Rng;
-
-use crate::pd::{PdClient, PdTask};
-use crate::raftstore::{Error, Result};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -67,60 +66,8 @@ pub struct DestroyPeerJob {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GroupState {
     Ordered,
-    Idle,
-    Inactive,
-    LeaderAbsence,
-    FollowerChaos,
-    PartialOrdered,
-}
-
-impl GroupState {
-    #[inline]
-    fn become_chaos(&mut self) {
-        *self = GroupState::FollowerChaos;
-    }
-
-    fn become_partial_ordered(&mut self) {
-        assert!(self.is_inactive());
-        *self = GroupState::PartialOrdered;
-    }
-
-    #[inline]
-    fn become_leader_absence(&mut self) {
-        *self = GroupState::LeaderAbsence;
-    }
-
-    #[inline]
-    fn become_ordered(&mut self) {
-        *self = match self {
-            GroupState::FollowerChaos => GroupState::PartialOrdered,
-            _ => GroupState::Ordered,
-        };
-    }
-
-    #[inline]
-    fn become_inactive(&mut self) {
-        assert!(!self.is_out_of_order());
-        *self = match self {
-            GroupState::Ordered => GroupState::Idle,
-            _ => GroupState::Inactive,
-        };
-    }
-
-    #[inline]
-    fn is_out_of_order(self) -> bool {
-        match self {
-            GroupState::FollowerChaos | GroupState::PartialOrdered | GroupState::LeaderAbsence => {
-                true
-            }
-            _ => false,
-        }
-    }
-
-    #[inline]
-    fn is_inactive(self) -> bool {
-        self == GroupState::Inactive
-    }
+    Chaos,
+    Indle,
 }
 
 pub struct PeerFsm {
@@ -577,7 +524,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::Unreachable { to_peer_id, .. } => {
                 self.fsm.peer.raft_group.report_unreachable(to_peer_id);
                 if to_peer_id == self.fsm.peer.leader_id() {
-                    self.fsm.group_state.become_leader_absence();
+                    self.fsm.group_state = GroupState::Chaos;
                     self.register_raft_base_tick();
                 }
             }
@@ -586,7 +533,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 {
                     self.fsm.peer.raft_group.report_unreachable(peer_id);
                     if peer_id == self.fsm.peer.leader_id() {
-                        self.fsm.group_state.become_leader_absence();
+                        self.fsm.group_state = GroupState::Chaos;
                         self.register_raft_base_tick();
                     }
                 }
@@ -759,46 +706,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_base_tick();
             return;
         }
-        if self.fsm.group_state.is_out_of_order()
-            && self.fsm.peer.raft_group.raft.election_elapsed + 1
-                == self.ctx.cfg.raft_election_timeout_ticks
-        {
-            let status = self.fsm.peer.raft_group.status();
-            let recent_active = status
-                .progress
-                .unwrap()
-                .iter()
-                .all(|(id, p)| *id == self.fsm.peer.peer_id() || p.recent_active);
-            if recent_active {
-                self.fsm.group_state.become_ordered();
-            }
-        }
-        if let Some(t) = self.fsm.last_base_tick.take() {
-            let missing_ticks = self.ctx.timer.now().duration_since(t).as_millis()
-                / self.ctx.cfg.raft_base_tick_interval.0.as_millis();
-            for _ in 0..cmp::min(
-                missing_ticks,
-                self.ctx.cfg.raft_election_timeout_ticks as u128,
-            ) {
-                if self.fsm.peer.raft_group.tick() {
-                    self.fsm.has_ready = true;
-                }
-            }
-        } else {
-            if self.fsm.peer.raft_group.tick() {
-                self.fsm.has_ready = true;
-            }
+        let res = self.fsm.peer.check_before_tick(&self.ctx.cfg);
+        if self.fsm.peer.raft_group.tick() {
+            self.fsm.has_ready = true;
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
-
-        if !self.fsm.group_state.is_out_of_order() && self.fsm.peer.uptodate() {
-            self.fsm.group_state.become_inactive();
-        }
-        if !self.fsm.group_state.is_inactive() {
+        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
             self.register_raft_base_tick();
         } else {
-            self.fsm.last_base_tick = Some(self.ctx.timer.now());
+            self.fsm.group_state = GroupState::Indle;
         }
     }
 
@@ -856,23 +773,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return Ok(());
         }
 
-        if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
-            self.fsm.group_state.become_ordered();
-            self.register_raft_base_tick();
-        }
-
-        let wake_up_msg = msg.get_message().get_msg_type() == MessageType::MsgRequestVote
-            || msg.get_message().get_msg_type() == MessageType::MsgRequestPreVote
-            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow;
-        if wake_up_msg {
-            if self.fsm.peer.is_leader() {
-                self.fsm.group_state.become_chaos();
-            } else {
-                self.fsm.group_state.become_leader_absence();
-            }
-            self.register_raft_base_tick();
-        }
-
         if msg.get_is_tombstone() {
             // we receive a message tells us to remove ourself.
             self.handle_gc_peer_msg(&msg);
@@ -898,6 +798,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
             self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
             return Ok(());
+        }
+
+        if util::is_vote_msg(&msg.get_message())
+            || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
+        {
+            self.fsm.group_state = GroupState::Chaos;
+            self.register_raft_base_tick();
+        } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
+            self.fsm.group_state = GroupState::Ordered;
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
@@ -2246,7 +2155,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.is_leader() {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
-            self.fsm.group_state.become_leader_absence();
+            self.fsm.group_state = GroupState::Chaos;
             self.register_raft_base_tick();
             return Err(Error::NotLeader(region_id, leader));
         }
@@ -2326,7 +2235,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         bind_term(&mut resp, term);
         if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
-            self.fsm.group_state.become_ordered();
             self.register_raft_base_tick();
         }
 
@@ -2690,27 +2598,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state.is_inactive() {
-            if self.fsm.peer.is_leader() {
-                self.fsm.last_base_tick = None;
-                let status = self.fsm.peer.raft_group.status();
-                let recent_active = status
-                    .progress
-                    .unwrap()
-                    .iter()
-                    .any(|(id, p)| *id != self.fsm.peer.peer_id() && p.recent_active);
-                if recent_active {
-                    self.fsm.group_state.become_chaos();
-                } else {
-                    self.fsm.group_state.become_partial_ordered();
-                }
-                self.register_raft_base_tick();
-            } else {
-                self.fsm.group_state.become_leader_absence();
-            }
+        if self.fsm.group_state == GroupState::Indle
+            && self.fsm.peer.leader_id() != raft::INVALID_ID
+        {
+            self.fsm.peer.ping();
+            self.fsm.has_ready = true;
             return;
-        } else if self.fsm.group_state.is_out_of_order() {
-            self.register_raft_base_tick();
+        } else if self.fsm.group_state == GroupState::Ordered {
+            return;
         }
 
         // If this peer detects the leader is missing for a long long time,
