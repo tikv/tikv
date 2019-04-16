@@ -70,6 +70,7 @@ extern crate tikv_util;
 extern crate test;
 use grpcio as grpc;
 
+pub mod binutil;
 pub mod config;
 pub mod coprocessor;
 pub mod import;
@@ -77,6 +78,5 @@ pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
-pub mod binutil;
 
 pub use crate::storage::Storage;
