@@ -1901,7 +1901,7 @@ mod tests {
 
             // test with overflow as warning
             let mut ctx =
-                EvalContext::new(Arc::new(EvalConfig::from_flag(FLAG_OVERFLOW_AS_WARNING)));
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
