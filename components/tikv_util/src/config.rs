@@ -689,7 +689,7 @@ mod check_kernel {
     }
 
     /// `check_kernel_params` checks kernel parameters, following are checked so far:
-    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
     ///

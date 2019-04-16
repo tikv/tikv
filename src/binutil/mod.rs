@@ -1,3 +1,4 @@
+pub mod server;
 #[macro_use]
 pub mod setup;
 pub mod signal_handler;

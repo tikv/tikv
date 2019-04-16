@@ -8,7 +8,6 @@
     slog_kv,
     slog_crit,
     slog_error,
-    slog_warn,
     slog_info,
     slog_log,
     slog_record,
@@ -55,41 +54,9 @@ use tikv_util::time::Monitor;
 use tikv_util::worker::{Builder, FutureWorker};
 use tikv_util::{self as tikv_util, check_environment_variables};
 
-const RESERVED_OPEN_FDS: u64 = 1000;
-
-fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
-        fatal!("{}", e);
-    }
-
-    for e in tikv_util::config::check_kernel() {
-        warn!(
-            "check-kernel";
-            "err" => %e
-        );
-    }
-
-    // Check RocksDB data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!(
-            "rocksdb check data dir";
-            "err" => %e
-        );
-    }
-    // Check raft data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!(
-            "raft check data dir";
-            "err" => %e
-        );
-    }
-}
-
 fn pre_start(cfg: &TiKvConfig) {
     // Before any startup, check system configuration and environment variables.
-    check_system_config(&cfg);
+    util::server::check_system_config(&cfg);
     check_environment_variables();
 
     if cfg.panic_when_unexpected_key_or_data {
