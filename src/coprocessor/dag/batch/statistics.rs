@@ -71,7 +71,7 @@ pub trait ExecSummaryCollector: Send {
 
     /// Returns an instance that will record elapsed duration and increase
     /// the iterations counter. The instance should be later passed back to
-    ///  `on_finish_batch` when processing of `next_batch` is completed.
+    /// `on_finish_batch` when processing of `next_batch` is completed.
     fn on_start_batch(&mut self) -> Self::DurationRecorder;
 
     // Increases the process time and produced rows counter.
