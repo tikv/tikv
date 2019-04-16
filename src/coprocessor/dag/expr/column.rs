@@ -89,7 +89,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::col_expr;
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, Flag};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(

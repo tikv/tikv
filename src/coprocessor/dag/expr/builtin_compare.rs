@@ -474,7 +474,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression, SqlMode};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression, Flag, SqlMode};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};
