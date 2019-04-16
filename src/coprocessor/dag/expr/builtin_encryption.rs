@@ -48,14 +48,11 @@ const NID: phf::Set<i32> = phf_set! {
 };
 
 /// Generate a sequence of random bytes in length of `len`
-/// TODO: upgrade crate `rand` to 0.6+
-/// with `rand` 0.6+, the code can be written:
-/// ```compile_fail
-/// Standard.sample_iter(&mut thread_rng()).take(len).collect()
-/// ```
 fn random_bytes(len: usize) -> Vec<u8> {
     let mut rng = rand::thread_rng();
-    (0..len).map(|_| rng.gen()).collect()
+    let mut bytes = vec![0; len];
+    rng.fill_bytes(&mut bytes);
+    bytes
 }
 
 /// Create AES key from arbitrary length array `key`, padding to `key_size` (in bytes)
