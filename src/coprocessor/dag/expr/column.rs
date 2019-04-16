@@ -105,9 +105,9 @@ mod tests {
     #[test]
     fn test_with_pad_char_to_full_length() {
         let mut ctx = EvalContext::default();
-        let mut pad_char_ctx_cfg = EvalConfig::default();
-        pad_char_ctx_cfg.pad_char_to_full_length = true;
-        let mut pad_char_ctx = EvalContext::new(Arc::new(pad_char_ctx_cfg));
+        let mut cfg = EvalConfig::default();
+        cfg.set_flag(Flag::PAD_CHAR_TO_FULL_LENGTH);
+        let mut pad_char_ctx = EvalContext::new(Arc::new(cfg));
 
         let mut c = col_expr(0);
         let mut field_tp = FieldType::new();

@@ -57,6 +57,9 @@ impl SqlMode {
     }
 }
 
+impl Flag {
+}
+
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
 #[derive(Clone, Debug)]
@@ -331,7 +334,7 @@ mod tests {
     fn test_handle_division_by_zero() {
         let cases = vec![
             //(flag,sql_mode,is_ok,is_empty)
-            (0, SqlMode::empty(), true, false), //warning
+            (Flag::empty(), SqlMode::empty(), true, false), //warning
             (
                 Flag::IN_INSERT_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
@@ -365,7 +368,7 @@ mod tests {
         ];
         for (flag, sql_mode, is_ok, is_empty) in cases {
             let mut cfg = EvalConfig::new();
-            cfg.set_by_flags(flag).set_sql_mode(sql_mode);
+            cfg.set_flag(flag).set_sql_mode(sql_mode);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             assert_eq!(ctx.handle_division_by_zero().is_ok(), is_ok);
             assert_eq!(ctx.take_warnings().warnings.is_empty(), is_empty);
@@ -375,18 +378,18 @@ mod tests {
     #[test]
     fn test_handle_invalid_time_error() {
         let cases = vec![
-            //(flags,strict_sql_mode,is_ok,is_empty)
-            (0, false, true, false),                             //warning
-            (0, true, true, false),                              //warning
+            //(flag,strict_sql_mode,is_ok,is_empty)
+            (Flag::empty(), false, true, false),                             //warning
+            (Flag::empty(), true, true, false),                              //warning
             (Flag::IN_INSERT_STMT, false, true, false),           //warning
             (Flag::IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
             (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
             (Flag::IN_INSERT_STMT, true, false, true),            //error
         ];
-        for (flags, strict_sql_mode, is_ok, is_empty) in cases {
+        for (flag, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
             let mut cfg = EvalConfig::new();
-            cfg.set_by_flags(flags);
+            cfg.set_flag(flag);
             if strict_sql_mode {
                 cfg.sql_mode.insert(SqlMode::STRICT_ALL_TABLES);
             }
