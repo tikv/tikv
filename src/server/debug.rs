@@ -13,7 +13,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
-use engine::{self, BoundKeyBuilder, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{self, KeyBuilder, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
@@ -429,8 +429,8 @@ impl Debugger {
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(
-            Some(BoundKeyBuilder::from_vec(from.clone())),
-            Some(BoundKeyBuilder::from_vec(to)),
+            Some(KeyBuilder::from_vec(from.clone())),
+            Some(KeyBuilder::from_vec(to)),
             false,
         )
         .build_read_opts();
@@ -841,8 +841,8 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(BoundKeyBuilder::from_vec(from.clone())),
-                Some(BoundKeyBuilder::from_vec(to)),
+                Some(KeyBuilder::from_vec(from.clone())),
+                Some(KeyBuilder::from_vec(to)),
                 false,
             )
             .build_read_opts();
@@ -1106,7 +1106,7 @@ impl MvccInfoIterator {
             let to = if to.is_empty() {
                 None
             } else {
-                Some(BoundKeyBuilder::from_vec(to.to_vec()))
+                Some(KeyBuilder::from_vec(to.to_vec()))
             };
             let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));

@@ -2,7 +2,7 @@
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use engine::{
-    self, BoundKeyBuilder, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot,
+    self, KeyBuilder, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot,
 };
 use kvproto::metapb::Region;
 use std::sync::Arc;
@@ -61,8 +61,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = BoundKeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
-        let end = BoundKeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
@@ -79,8 +79,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = BoundKeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
-        let end = BoundKeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
@@ -480,8 +480,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| BoundKeyBuilder::from_vec(v.to_vec())),
-                upper_bound.map(|v| BoundKeyBuilder::from_vec(v.to_vec())),
+                lower_bound.map(|v| KeyBuilder::from_vec(v.to_vec())),
+                upper_bound.map(|v| KeyBuilder::from_vec(v.to_vec())),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -636,7 +636,7 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(
             None,
-            Some(BoundKeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len())),
+            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len())),
             true,
         ));
         assert!(iter.seek_to_first());

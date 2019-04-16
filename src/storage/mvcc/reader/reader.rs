@@ -7,7 +7,7 @@ use crate::storage::mvcc::properties::MvccProperties;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
-use engine::{BoundKeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{KeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
@@ -302,13 +302,13 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn gen_iter_opt(&self) -> IterOption {
         let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = BoundKeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
             Some(builder)
         } else {
             None
         };
         let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = BoundKeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
             Some(builder)
         } else {
             None

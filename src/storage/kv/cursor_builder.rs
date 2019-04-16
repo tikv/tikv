@@ -3,7 +3,7 @@
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
-use engine::{BoundKeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{KeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {
@@ -73,13 +73,13 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = BoundKeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
             Some(builder)
         } else {
             None
         };
         let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = BoundKeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
             Some(builder)
         } else {
             None

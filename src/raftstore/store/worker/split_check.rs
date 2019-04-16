@@ -7,7 +7,7 @@ use std::mem;
 use std::sync::Arc;
 
 use engine::rocks::DBIterator;
-use engine::{BoundKeyBuilder, IterOption, Iterable, DB};
+use engine::{KeyBuilder, IterOption, Iterable, DB};
 use engine::{CfName, CF_WRITE, LARGE_CFS};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
@@ -82,8 +82,8 @@ impl<'a> MergedIterator<'a> {
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
             let iter_opt = IterOption::new(
-                Some(BoundKeyBuilder::from_vec(start_key.to_vec())),
-                Some(BoundKeyBuilder::from_vec(end_key.to_vec())),
+                Some(KeyBuilder::from_vec(start_key.to_vec())),
+                Some(KeyBuilder::from_vec(end_key.to_vec())),
                 fill_cache,
             );
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
