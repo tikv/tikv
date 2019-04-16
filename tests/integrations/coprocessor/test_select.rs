@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
 use std::i64;
@@ -25,10 +14,9 @@ use tipb::select::Chunk;
 use test_coprocessor::*;
 use test_storage::*;
 use tikv::coprocessor::codec::{datum, Datum};
-use tikv::server::readpool;
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
-use tikv::util::codec::number::*;
+use tikv_util::codec::number::*;
 
 const FLAG_IGNORE_TRUNCATE: u64 = 1;
 const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
@@ -80,15 +68,7 @@ fn test_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = batch_row_limit;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     // for dag selection
@@ -121,15 +101,7 @@ fn test_stream_batch_row_limit() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_stream_batch_row_limit = stream_row_limit;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     let req = DAGSelect::from(&product).build();
@@ -214,15 +186,7 @@ fn test_scan_detail() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let mut cfg = Config::default();
         cfg.end_point_batch_row_limit = 50;
-        init_data_with_details(
-            Context::new(),
-            engine,
-            &product,
-            &data,
-            true,
-            &cfg,
-            &readpool::Config::default_for_test(),
-        )
+        init_data_with_details(Context::new(), engine, &product, &data, true, &cfg)
     };
 
     let reqs = vec![

@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
 use std::collections::Bound::{Included, Unbounded};
@@ -21,12 +10,12 @@ use std::u64;
 use crate::raftstore::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::{Error, Result};
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory,
     TitanBlobIndex, UserCollectedProperties, DB,
 };
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::{Error, Result};
 
 const PROP_NUM_ERRORS: &str = "tikv.num_errors";
 const PROP_MIN_TS: &str = "tikv.min_ts";

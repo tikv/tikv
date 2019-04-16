@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
@@ -22,7 +11,7 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::Result;
+use crate::coprocessor::{Error, Result};
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -205,6 +194,18 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type
 }
 
+/// Checks whether the given columns info are supported.
+pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
+    use cop_datatype::EvalType;
+    use cop_datatype::FieldTypeAccessor;
+    use std::convert::TryFrom;
+
+    for column in columns_info {
+        EvalType::try_from(column.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+    }
+    Ok(())
+}
+
 impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
     for ScanExecutor<C, S, I, P>
 {
@@ -218,8 +219,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         assert!(!self.is_ended);
         assert!(expect_rows > 0);
 
-        let timer = self.summary_collector.start_record_duration();
-        self.summary_collector.inc_iterations();
+        let timer = self.summary_collector.on_start_batch();
 
         let mut data = self.imp.build_column_vec(expect_rows);
         let is_drained = self.fill_column_vec(expect_rows, &mut data);
@@ -237,8 +237,8 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Ok(false) => {}
         };
 
-        self.summary_collector.inc_produced_rows(data.rows_len());
-        self.summary_collector.inc_elapsed_duration(timer);
+        self.summary_collector
+            .on_finish_batch(timer, data.rows_len());
 
         BatchExecuteResult {
             data,

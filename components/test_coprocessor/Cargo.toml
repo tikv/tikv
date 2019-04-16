@@ -5,7 +5,8 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tikv = { path = "../../" }
+tikv_util = { path = "../tikv_util" }
+tikv = { path = "../../", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "~2.0"
