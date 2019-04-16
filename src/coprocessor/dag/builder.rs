@@ -29,52 +29,27 @@ use crate::coprocessor::*;
 pub struct DAGBuilder;
 
 impl DAGBuilder {
-    /// Given a list of executor descriptors and returns whether all executor descriptors can
+    /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn can_build_batch(exec_descriptors: &[executor::Executor]) -> bool {
-        use cop_datatype::EvalType;
-        use cop_datatype::FieldTypeAccessor;
-        use std::convert::TryFrom;
-
+    pub fn check_build_batch(exec_descriptors: &[executor::Executor]) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchTableScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    for column in descriptor.get_columns() {
-                        let eval_type = EvalType::try_from(column.tp());
-                        if eval_type.is_err() {
-                            debug!(
-                                "Coprocessor request cannot be batched";
-                                "unsupported_column_tp" => ?column.tp(),
-                            );
-                            return false;
-                        }
-                    }
+                    BatchIndexScanExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {
-                    debug!(
-                        "Coprocessor request cannot be batched";
-                        "unsupported_executor_tp" => ?ed.get_tp(),
-                    );
-                    return false;
+                    return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
                 }
             }
         }
-        true
+
+        Ok(())
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
@@ -324,9 +299,16 @@ impl DAGBuilder {
             eval_cfg.set_sql_mode(SqlMode::from_bits_truncate(req.get_sql_mode()));
         }
 
-        let is_batch = enable_batch_if_possible
-            && !is_streaming
-            && super::builder::DAGBuilder::can_build_batch(req.get_executors());
+        let mut is_batch = false;
+        if enable_batch_if_possible && !is_streaming {
+            let build_batch_result =
+                super::builder::DAGBuilder::check_build_batch(req.get_executors());
+            if let Err(e) = build_batch_result {
+                debug!("Coprocessor request cannot be batched"; "reason" => %e);
+            } else {
+                is_batch = true;
+            }
+        }
 
         if is_batch {
             Ok(Self::build_batch_dag(deadline, eval_cfg, req, ranges, store)?.into_boxed())
