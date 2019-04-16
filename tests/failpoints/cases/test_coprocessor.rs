@@ -72,7 +72,7 @@ fn test_readpool_full() {
     let (_, endpoint) = init_with_data(&product, &[]);
     let req = DAGSelect::from(&product).build();
 
-    fail::cfg("read_pool_execute_full", "return()").unwrap();
+    fail::cfg("read_pool_spawn_full", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
 
     assert!(resp.get_region_error().has_server_is_busy());

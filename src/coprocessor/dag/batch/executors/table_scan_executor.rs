@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
+use crate::storage::{FixtureStore, Store};
 use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
@@ -24,6 +25,20 @@ pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
         super::util::ranges_iter::PointRangeEnable,
     >,
 );
+
+impl
+    BatchTableScanExecutor<
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &TableScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
+    }
+}
 
 impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     pub fn new(
