@@ -240,6 +240,24 @@ pub mod tests {
         write(engine, &ctx, txn.into_modifies());
     }
 
+    pub fn must_prewrite_put_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.prewrite(
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            pk,
+            &Options::default(),
+        )
+        .unwrap_err();
+    }
+
     pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
@@ -269,6 +287,38 @@ pub mod tests {
         assert!(txn
             .prewrite(Mutation::Lock(Key::from_raw(key)), pk, &Options::default())
             .is_err());
+    }
+
+    pub fn must_pessimistic_lock<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
+            .unwrap();
+        let modifies = txn.into_modifies();
+        if !modifies.is_empty() {
+            engine.write(&ctx, modifies).unwrap();
+        }
+    }
+
+    pub fn must_pessimistic_lock_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        txn.pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
+            .unwrap_err();
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
@@ -323,6 +373,15 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
+        assert_ne!(lock.lock_type, LockType::Pessimistic);
+    }
+
+    pub fn must_pessimistic_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+        let snapshot = engine.snapshot(&Context::new()).unwrap();
+        let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
+        let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
+        assert_eq!(lock.ts, start_ts);
+        assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 
     pub fn must_unlocked<E: Engine>(engine: &E, key: &[u8]) {

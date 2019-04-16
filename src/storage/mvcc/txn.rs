@@ -147,13 +147,35 @@ impl<S: Snapshot> MvccTxn<S> {
         };
 
         {
+            let mut has_pessimistic_lock = false;
+            if let Some(lock) = self.reader.load_lock(&key)? {
+                if lock.ts != self.start_ts {
+                    return Err(Error::KeyIsLocked {
+                        key: key.to_raw()?,
+                        primary: lock.primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                    });
+                }
+                // If the lock is a pessimistic lock, we should continue and overwrite the lock.
+                if lock.lock_type != LockType::Pessimistic {
+                    // No need to overwrite the lock and data.
+                    // If we use single delete, we can't put a key multiple times.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                    return Ok(());
+                } else {
+                    has_pessimistic_lock = true;
+                }
+            }
+
             if !options.skip_constraint_check {
                 if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
                     // Abort on writes after our start timestamp ...
                     // If exists a commit version whose commit timestamp is larger than or equal to
                     // current start timestamp, we should abort current prewrite, even if the commit
                     // type is Rollback.
-                    if commit >= self.start_ts {
+                    // If the key is pessimistic locked, the prewrite must be able to continue.
+                    if !has_pessimistic_lock && commit >= self.start_ts {
                         MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                         return Err(Error::WriteConflict {
                             start_ts: self.start_ts,
@@ -172,24 +194,6 @@ impl<S: Snapshot> MvccTxn<S> {
                             return Err(Error::AlreadyExist { key: key.to_raw()? });
                         }
                     }
-                }
-            }
-            // ... or locks at any timestamp.
-            if let Some(lock) = self.reader.load_lock(&key)? {
-                if lock.ts != self.start_ts {
-                    return Err(Error::KeyIsLocked {
-                        key: key.to_raw()?,
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
-                }
-                // If the lock is a pessimistic lock, we should continue and overwrite the lock.
-                if lock.lock_type != LockType::Pessimistic {
-                    // No need to overwrite the lock and data.
-                    // If we use single delete, we can't put a key multiple times.
-                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                    return Ok(());
                 }
             }
         }
@@ -215,21 +219,38 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) -> Result<()> {
         if let Some((commit, write)) = self.reader.seek_write(&key, u64::max_value())? {
-            if commit >= self.start_ts {
-                if commit >= for_update_ts {
-                    MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
-                    return Err(Error::WriteConflict {
-                        start_ts: self.start_ts,
-                        for_update_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit,
-                        key: key.to_raw()?,
-                        primary: primary.to_vec(),
-                    });
+            if commit >= for_update_ts {
+                MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
+                return Err(Error::WriteConflict {
+                    start_ts: self.start_ts,
+                    for_update_ts,
+                    conflict_start_ts: write.start_ts,
+                    conflict_commit_ts: commit,
+                    key: key.to_raw()?,
+                    primary: primary.to_vec(),
+                });
+            }
+
+            // Handle rollback.
+            // If `commit` we seek is already before `start_ts`, the rollback must not exist.
+            if commit > self.start_ts {
+                if let Some((commit, write)) = self.reader.seek_write(&key, self.start_ts)? {
+                    if commit == self.start_ts && write.write_type == WriteType::Rollback {
+                        MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
+                        return Err(Error::WriteConflict {
+                            start_ts: self.start_ts,
+                            for_update_ts,
+                            conflict_start_ts: write.start_ts,
+                            conflict_commit_ts: commit,
+                            key: key.to_raw()?,
+                            primary: primary.to_vec(),
+                        });
+                    }
                 }
             }
         }
 
+        // TODO: Should we return error if the key is locked by prewrite?
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
@@ -1038,5 +1059,55 @@ mod tests {
         );
 
         assert_eq!(reader.seek_ts(3).unwrap().unwrap(), Key::from_raw(&[2]));
+    }
+
+    #[test]
+    fn test_pessimistic_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        must_pessimistic_lock(&engine, k, k, 1, 1);
+        must_pessimistic_locked(&engine, k, 1);
+        must_prewrite_put(&engine, k, v, k, 1);
+        must_locked(&engine, k, 1);
+        must_commit(&engine, k, 1, 10);
+        must_unlocked(&engine, k);
+
+        // Check conflict with `for_update_ts`.
+        must_pessimistic_lock_err(&engine, k, k, 3, 4);
+        must_unlocked(&engine, k);
+        must_pessimistic_lock(&engine, k, k, 3, 11);
+        must_pessimistic_locked(&engine, k, 3);
+        must_commit_err(&engine, k, 3, 20);
+        // The prewrite should success even there is a newer commit record.
+        must_prewrite_delete(&engine, k, k, 3);
+        must_commit(&engine, k, 3, 20);
+
+        must_pessimistic_lock(&engine, k, k, 21, 21);
+        must_pessimistic_locked(&engine, k, 21);
+        // Duplicated
+        must_pessimistic_lock(&engine, k, k, 21, 21);
+        // Conflicted
+        must_pessimistic_lock_err(&engine, k, k, 22, 22);
+        must_prewrite_put_err(&engine, k, v, k, 23);
+        must_rollback(&engine, k, 21);
+        must_get_rollback_ts(&engine, k, 21);
+        // Rolled back
+        must_pessimistic_lock_err(&engine, k, k, 21, 21);
+        must_unlocked(&engine, k);
+
+        must_prewrite_delete(&engine, k, k, 25);
+        must_locked(&engine, k, 25);
+        must_pessimistic_lock_err(&engine, k, k, 24, 24);
+        must_pessimistic_lock(&engine, k, k, 25, 25);
+        must_locked(&engine, k, 25);
+        must_commit(&engine, k, 25, 30);
+        must_unlocked(&engine, k);
+
+        must_rollback(&engine, k, 27);
+        // Rolled back before commit_ts
+        must_pessimistic_lock_err(&engine, k, k, 27, 32);
     }
 }

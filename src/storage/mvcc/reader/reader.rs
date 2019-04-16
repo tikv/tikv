@@ -249,6 +249,7 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
+    // TODO: Check this logic
     pub fn get_txn_commit_info(
         &mut self,
         key: &Key,
