@@ -22,7 +22,7 @@ use crate::rocks::{
 
 use self::engine_metrics::{
     ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::{ALL_CFS, CF_DEFAULT};
 
@@ -332,6 +332,11 @@ pub fn get_engine_compression_ratio_at_level(
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
+}
+
+/// Gets the number of immutable mem-table of given column family.
+pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
 /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
