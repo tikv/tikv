@@ -40,7 +40,7 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchLimitExecutor<Src, C> {
 impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitExecutor<Src, C> {
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        let timer = self.summary_collector.start_next_batch();
+        let timer = self.summary_collector.start_batch();
 
         let mut result = self.src.next_batch(expect_rows);
         if result.data.rows_len() < self.remaining_rows {
@@ -52,7 +52,7 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitEx
         }
 
         self.summary_collector
-            .finish_next_batch(timer, result.data.rows_len());
+            .finish_batch(timer, result.data.rows_len());
 
         result
     }

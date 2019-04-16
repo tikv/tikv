@@ -82,12 +82,12 @@ pub trait ExecSummaryCollector: Send {
 
     /// Returns an instance that will record elapsed duration and increase
     /// the iterations counter. The instance should be later passed back to
-    ///  `finish_next_batch` when processing of `next_batch` is completed.
-    fn start_next_batch(&mut self) -> Self::DurationRecorder;
+    ///  `finish_batch` when processing of `next_batch` is completed.
+    fn start_batch(&mut self) -> Self::DurationRecorder;
 
     // Increases the process time and produced rows counter.
     // It should be called when `next_batch` is completed.
-    fn finish_next_batch(&mut self, dr: Self::DurationRecorder, rows: usize);
+    fn finish_batch(&mut self, dr: Self::DurationRecorder, rows: usize);
 
     /// Takes and appends current execution summary into `target`.
     fn collect_into(&mut self, target: &mut [Option<ExecSummary>]);
@@ -112,13 +112,13 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
     }
 
     #[inline]
-    fn start_next_batch(&mut self) -> Self::DurationRecorder {
+    fn start_batch(&mut self) -> Self::DurationRecorder {
         self.counts.num_iterations += 1;
         tikv_util::time::Instant::now_coarse()
     }
 
     #[inline]
-    fn finish_next_batch(&mut self, dr: Self::DurationRecorder, rows: usize) {
+    fn finish_batch(&mut self, dr: Self::DurationRecorder, rows: usize) {
         self.counts.num_produced_rows += rows;
         let elapsed_time = tikv_util::time::duration_to_ms(dr.elapsed()) as usize;
         self.counts.time_processed_ms += elapsed_time;
@@ -147,10 +147,10 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
     }
 
     #[inline]
-    fn start_next_batch(&mut self) -> Self::DurationRecorder {}
+    fn start_batch(&mut self) -> Self::DurationRecorder {}
 
     #[inline]
-    fn finish_next_batch(&mut self, _dr: Self::DurationRecorder, _rows: usize) {}
+    fn finish_batch(&mut self, _dr: Self::DurationRecorder, _rows: usize) {}
 
     #[inline]
     fn collect_into(&mut self, _target: &mut [Option<ExecSummary>]) {}
