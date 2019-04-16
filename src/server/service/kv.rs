@@ -1851,7 +1851,7 @@ mod tests {
         thread::Builder::new()
             .name("source".to_owned())
             .spawn(move || {
-                let _ = signal_rx.wait().unwrap();
+                signal_rx.wait().unwrap();
                 tx.send(100).unwrap();
             })
             .unwrap();
@@ -1881,7 +1881,7 @@ mod tests {
             .unwrap();
 
         let (tx1, rx1) = oneshot::channel::<usize>();
-        let _ = signal_rx.wait().unwrap();
+        signal_rx.wait().unwrap();
         poll_future_notify(
             rx.map(move |i| {
                 assert_ne!(thread::current().name(), Some("source"));
