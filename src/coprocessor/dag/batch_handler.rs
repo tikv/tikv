@@ -105,6 +105,10 @@ impl RequestHandler for BatchDAGHandler {
 
             // Notice that rows_len == 0 doesn't mean that it is drained.
             if result.data.rows_len() > 0 {
+                assert_eq!(
+                    result.data.columns_len(),
+                    self.out_most_executor.schema().len()
+                );
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
