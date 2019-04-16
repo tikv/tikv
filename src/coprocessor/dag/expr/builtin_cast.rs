@@ -41,7 +41,7 @@ impl ScalarFunc {
         };
 
         if overflow {
-            if !ctx.cfg.overflow_as_warning {
+            if !ctx.cfg.flags.is_overflow_as_warning() {
                 return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
             ctx.warnings
@@ -1972,7 +1972,7 @@ mod tests {
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
-            cfg.set_overflow_as_warning(true).set_in_select_stmt(true);
+            cfg.set_by_flags(Flags::FLAG_OVERFLOW_AS_WARNING | Flags::FLAG_IN_SELECT_STMT);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();

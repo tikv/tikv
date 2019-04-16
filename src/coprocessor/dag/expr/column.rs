@@ -44,7 +44,7 @@ impl Column {
             return Ok(Some(Cow::Owned(s)));
         }
 
-        if !ctx.cfg.pad_char_to_full_length || self.field_type.tp() != FieldTypeTp::String {
+        if !ctx.cfg.flags.is_pad_char_to_full_length() || self.field_type.tp() != FieldTypeTp::String {
             return row[self.offset].as_string();
         }
 

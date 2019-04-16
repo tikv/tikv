@@ -60,7 +60,7 @@ impl Error {
             return Err(err);
         }
         if ctx.cfg.sql_mode.is_strict()
-            && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt)
+            && (ctx.cfg.flags.is_in_insert_stmt() || ctx.cfg.flags.is_in_update_or_delete_stmt())
         {
             return Err(err);
         }
