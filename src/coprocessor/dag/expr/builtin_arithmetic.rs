@@ -1097,19 +1097,19 @@ mod tests {
             //(flag,sql_mode,is_ok,has_warning)
             (0, SqlMode::empty(), true, true), //warning
             (
-                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 false,
             ), //error
             (
-                FLAG_IN_UPDATE_OR_DELETE_STMT,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::STRICT_ALL_TABLES,
                 true,
                 false,
             ), //ok
             (
-                FLAG_IN_UPDATE_OR_DELETE_STMT | FLAG_DIVIDED_BY_ZERO_AS_WARNING,
+                Flag::IN_UPDATE_OR_DELETE_STMT | Flag::DIVIDED_BY_ZERO_AS_WARNING,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 true,

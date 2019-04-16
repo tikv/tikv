@@ -18,9 +18,6 @@ use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
 
-const FLAG_IGNORE_TRUNCATE: u64 = 1;
-const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
-
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
     let res = iter.any(|x| datum::decode(&mut x.get_rows_data()).unwrap().len() != datum_limit);
@@ -1284,7 +1281,7 @@ fn test_handle_truncate() {
         // Ignore truncate error.
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_IGNORE_TRUNCATE]);
+            .build_with(Context::new(), &[Flag::IGNORE_TRUNCATE]);
         let resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(resp.get_warnings().is_empty());
@@ -1292,7 +1289,7 @@ fn test_handle_truncate() {
         // truncate as warning
         let req = DAGSelect::from(&product)
             .where_expr(cond.clone())
-            .build_with(Context::new(), &[FLAG_TRUNCATE_AS_WARNING]);
+            .build_with(Context::new(), &[Flag::TRUNCATE_AS_WARNING]);
         let mut resp = handle_select(&endpoint, req);
         assert!(!resp.has_error());
         assert!(!resp.get_warnings().is_empty());

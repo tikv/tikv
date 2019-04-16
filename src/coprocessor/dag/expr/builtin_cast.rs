@@ -12,6 +12,7 @@ use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_flo
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
+use crate::coprocessor::dag::expr::Flag;
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -41,7 +42,7 @@ impl ScalarFunc {
         };
 
         if overflow {
-            if !ctx.cfg.flags.is_overflow_as_warning() {
+            if !ctx.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
                 return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
             ctx.warnings
@@ -730,7 +731,7 @@ mod tests {
         self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
     };
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::ctx::Flag;
     use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
@@ -842,7 +843,7 @@ mod tests {
             assert!(res.is_none());
         }
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         let cases = vec![
             (
                 ScalarFuncSig::CastDecimalAsInt,
@@ -1900,7 +1901,7 @@ mod tests {
 
             // test with overflow as warning
             let mut ctx =
-                EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+                EvalContext::new(Arc::new(EvalConfig::from_flag(FLAG_OVERFLOW_AS_WARNING)));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
@@ -1972,7 +1973,7 @@ mod tests {
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
-            cfg.set_by_flags(Flags::FLAG_OVERFLOW_AS_WARNING | Flags::FLAG_IN_SELECT_STMT);
+            cfg.set_flag(Flag::OVERFLOW_AS_WARNING | Flag::IN_SELECT_STMT);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
@@ -2000,7 +2001,7 @@ mod tests {
     //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
 
     //     // test with overflow as warning
-    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
     //     let e = Expression::build(&ctx, ex.clone()).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());

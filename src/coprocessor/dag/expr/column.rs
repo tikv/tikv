@@ -9,6 +9,7 @@ use cop_datatype::FieldTypeTp;
 use super::{Column, EvalContext, Result};
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::coprocessor::codec::Datum;
+use crate::coprocessor::dag::expr::Flag;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -44,7 +45,7 @@ impl Column {
             return Ok(Some(Cow::Owned(s)));
         }
 
-        if !ctx.cfg.flags.is_pad_char_to_full_length() || self.field_type.tp() != FieldTypeTp::String {
+        if !ctx.cfg.flag.contains(Flag::PAD_CHAR_TO_FULL_LENGTH) || self.field_type.tp() != FieldTypeTp::String {
             return row[self.offset].as_string();
         }
 

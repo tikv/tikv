@@ -23,65 +23,30 @@ bitflags! {
 bitflags! {
     /// Flags are used by `DAGRequest.flags` to handle execution mode, like how to handle
     /// truncate error.
-    pub struct Flags: u64 {
-        /// `FLAG_IGNORE_TRUNCATE` indicates if truncate error should be ignored.
+    pub struct Flag: u64 {
+        /// `IGNORE_TRUNCATE` indicates if truncate error should be ignored.
         /// Read-only statements should ignore truncate error, write statements should not ignore
         /// truncate error.
-        const FLAG_IGNORE_TRUNCATE = 1;
-        /// `FLAG_TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
-        /// This flag only matters if `FLAG_IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
+        const IGNORE_TRUNCATE = 1;
+        /// `TRUNCATE_AS_WARNING` indicates if truncate error should be returned as warning.
+        /// This flag only matters if `IGNORE_TRUNCATE` is not set, in strict sql mode, truncate error
         /// should be returned as error, in non-strict sql mode, truncate error should be saved as warning.
-        const FLAG_TRUNCATE_AS_WARNING = 1 << 1;
-        // `FLAG_PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
-        const FLAG_PAD_CHAR_TO_FULL_LENGTH = 1 << 2;
-        /// `FLAG_IN_INSERT_STMT` indicates if this is a INSERT statement.
-        const FLAG_IN_INSERT_STMT = 1 << 3;
-        /// `FLAG_IN_UPDATE_OR_DELETE_STMT` indicates if this is a UPDATE statement or a DELETE statement.
-        const FLAG_IN_UPDATE_OR_DELETE_STMT = 1 << 4;
-        /// `FLAG_IN_SELECT_STMT` indicates if this is a SELECT statement.
-        const FLAG_IN_SELECT_STMT = 1 << 5;
-        /// `FLAG_OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
+        const TRUNCATE_AS_WARNING = 1 << 1;
+        /// `PAD_CHAR_TO_FULL_LENGTH` indicates if sql_mode 'PAD_CHAR_TO_FULL_LENGTH' is set.
+        const PAD_CHAR_TO_FULL_LENGTH = 1 << 2;
+        /// `IN_INSERT_STMT` indicates if this is a INSERT statement.
+        const IN_INSERT_STMT = 1 << 3;
+        /// `IN_UPDATE_OR_DELETE_STMT` indicates if this is a UPDATE statement or a DELETE statement.
+        const IN_UPDATE_OR_DELETE_STMT = 1 << 4;
+        /// `IN_SELECT_STMT` indicates if this is a SELECT statement.
+        const IN_SELECT_STMT = 1 << 5;
+        /// `OVERFLOW_AS_WARNING` indicates if overflow error should be returned as warning.
         /// In strict sql mode, overflow error should be returned as error,
         /// in non-strict sql mode, overflow error should be saved as warning.
-        const FLAG_OVERFLOW_AS_WARNING = 1 << 6;
+        const OVERFLOW_AS_WARNING = 1 << 6;
 
-        // FLAG_DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
-        const FLAG_DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
-    }
-}
-
-impl Flags {
-    /// Returns if 'FLAG_IGNORE_TRUNCATE' mode is set.
-    pub fn is_ignore_truncate(self) -> bool {
-        self.contains(Flags::FLAG_IGNORE_TRUNCATE)
-    }
-    /// Returns if 'FLAG_TRUNCATE_AS_WARNING' mode is set.
-    pub fn is_truncate_as_warning(self) -> bool {
-        self.contains(Flags::FLAG_TRUNCATE_AS_WARNING)
-    }
-    /// Returns if 'FLAG_PAD_CHAR_TO_FULL_LENGTH' mode is set.
-    pub fn is_pad_char_to_full_length(self) -> bool {
-        self.contains(Flags::FLAG_PAD_CHAR_TO_FULL_LENGTH)
-    }
-    /// Returns if 'FLAG_IN_INSERT_STMT' mode is set.
-    pub fn is_in_insert_stmt(self) -> bool {
-        self.contains(Flags::FLAG_IN_INSERT_STMT)
-    }
-    /// Returns if 'FLAG_IN_UPDATE_OR_DELETE_STMT' mode is set.
-    pub fn is_in_update_or_delete_stmt(self) -> bool {
-        self.contains(Flags::FLAG_IN_UPDATE_OR_DELETE_STMT)
-    }
-    /// Returns if 'FLAG_IN_SELECT_STMT' mode is set.
-    pub fn is_in_select_stmt(self) -> bool {
-        self.contains(Flags::FLAG_IN_SELECT_STMT)
-    }
-    /// Returns if 'FLAG_OVERFLOW_AS_WARNING' mode is set.
-    pub fn is_overflow_as_warning(self) -> bool {
-        self.contains(Flags::FLAG_OVERFLOW_AS_WARNING)
-    }
-    /// Returns if 'FLAG_DIVIDED_BY_ZERO_AS_WARNING' mode is set.
-    pub fn is_divided_by_zero_as_warning(self) -> bool {
-        self.contains(Flags::FLAG_DIVIDED_BY_ZERO_AS_WARNING)
+        /// DIVIDED_BY_ZERO_AS_WARNING indicates if DividedByZero should be returned as warning.
+        const DIVIDED_BY_ZERO_AS_WARNING = 1 << 8;
     }
 }
 
@@ -98,7 +63,7 @@ const DEFAULT_MAX_WARNING_CNT: usize = 64;
 pub struct EvalConfig {
     /// timezone to use when parse/calculate time.
     pub tz: Tz,
-    pub flags: Flags,
+    pub flag: Flag,
     // TODO: max warning count is not really a EvalConfig. Instead it is a ExecutionConfig, because
     // warning is a executor stuff instead of a evaluation stuff.
     pub max_warning_cnt: usize,
@@ -115,15 +80,15 @@ impl EvalConfig {
     pub fn new() -> Self {
         Self {
             tz: Tz::utc(),
-            flags: Flags::empty(),
+            flag: Flag::empty(),
             max_warning_cnt: DEFAULT_MAX_WARNING_CNT,
             sql_mode: SqlMode::empty(),
         }
     }
 
-    pub fn from_flags(flags: Flags) -> Self {
+    pub fn from_flag(flag: Flag) -> Self {
         let mut config = Self::new();
-        config.set_by_flags(flags);
+        config.set_flag(flag);
         config
     }
 
@@ -157,8 +122,8 @@ impl EvalConfig {
         }
     }
 
-    pub fn set_by_flags(&mut self, new_value: Flags) -> &mut Self {
-        self.flags = new_value;
+    pub fn set_flag(&mut self, new_value: Flag) -> &mut Self {
+        self.flag = new_value;
         self
     }
 
@@ -169,7 +134,7 @@ impl EvalConfig {
     #[cfg(test)]
     pub fn default_for_test() -> EvalConfig {
         let mut config = EvalConfig::new();
-        config.set_by_flags(Flags::FLAG_IGNORE_TRUNCATE);
+        config.set_flag(Flag::IGNORE_TRUNCATE);
         config
     }
 }
@@ -242,10 +207,10 @@ impl EvalContext {
     }
 
     pub fn handle_truncate_err(&mut self, err: Error) -> Result<()> {
-        if self.cfg.flags.is_ignore_truncate() {
+        if self.cfg.flag.contains(Flag::IGNORE_TRUNCATE) {
             return Ok(());
         }
-        if self.cfg.flags.is_truncate_as_warning() {
+        if self.cfg.flag.contains(Flag::TRUNCATE_AS_WARNING) {
             self.warnings.append_warning(err);
             return Ok(());
         }
@@ -255,7 +220,7 @@ impl EvalContext {
     /// handle_overflow treats ErrOverflow as warnings or returns the error
     /// based on the cfg.handle_overflow state.
     pub fn handle_overflow(&mut self, err: Error) -> Result<()> {
-        if self.cfg.flags.is_overflow_as_warning() {
+        if self.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
             self.warnings.append_warning(err);
             Ok(())
         } else {
@@ -264,7 +229,7 @@ impl EvalContext {
     }
 
     pub fn handle_division_by_zero(&mut self) -> Result<()> {
-        if self.cfg.flags.is_in_insert_stmt() || self.cfg.flags.is_in_update_or_delete_stmt() {
+        if self.cfg.flag.contains(Flag::IN_INSERT_STMT) || self.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT) {
             if !self
                 .cfg
                 .sql_mode
@@ -272,7 +237,7 @@ impl EvalContext {
             {
                 return Ok(());
             }
-            if self.cfg.sql_mode.is_strict() && !self.cfg.flags.is_divided_by_zero_as_warning() {
+            if self.cfg.sql_mode.is_strict() && !self.cfg.flag.contains(Flag::DIVIDED_BY_ZERO_AS_WARNING) {
                 return Err(Error::division_by_zero());
             }
         }
@@ -286,7 +251,7 @@ impl EvalContext {
         }
         let cfg = &self.cfg;
         if cfg.sql_mode.is_strict() && 
-            (cfg.flags.is_in_insert_stmt() || cfg.flags.is_in_update_or_delete_stmt()) {
+            (cfg.flag.contains(Flag::IN_INSERT_STMT) || cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)) {
             Err(err)
         } else {
             self.warnings.append_warning(err);
@@ -300,7 +265,7 @@ impl EvalContext {
         orig_err: Error,
         negative: bool,
     ) -> Result<i64> {
-        if !self.cfg.flags.is_in_select_stmt() || !self.cfg.flags.is_overflow_as_warning() {
+        if !self.cfg.flag.contains(Flag::IN_SELECT_STMT) || !self.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
             return Err(orig_err);
         }
         let orig_str = String::from_utf8_lossy(bytes);
@@ -341,7 +306,7 @@ mod tests {
         assert!(ctx.take_warnings().warnings.is_empty());
 
         // ignore_truncate = false, truncate_as_warning = true
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_TRUNCATE_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING)));
         assert!(ctx.handle_truncate(false).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(!ctx.take_warnings().warnings.is_empty());
@@ -349,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_max_warning_cnt() {
-        let eval_cfg = Arc::new(EvalConfig::from_flags(FLAG_TRUNCATE_AS_WARNING));
+        let eval_cfg = Arc::new(EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING));
         let mut ctx = EvalContext::new(Arc::clone(&eval_cfg));
         assert!(ctx.handle_truncate(true).is_ok());
         assert!(ctx.handle_truncate(true).is_ok());
@@ -368,31 +333,31 @@ mod tests {
             //(flag,sql_mode,is_ok,is_empty)
             (0, SqlMode::empty(), true, false), //warning
             (
-                Flags::FLAG_IN_INSERT_STMT,
+                Flag::IN_INSERT_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
             ), //warning
             (
-                Flags::FLAG_IN_UPDATE_OR_DELETE_STMT,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO,
                 true,
                 false,
             ), //warning
             (
-                Flags::FLAG_IN_UPDATE_OR_DELETE_STMT,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 false,
                 true,
             ), //error
             (
-                Flags::FLAG_IN_UPDATE_OR_DELETE_STMT,
+                Flag::IN_UPDATE_OR_DELETE_STMT,
                 SqlMode::STRICT_ALL_TABLES,
                 true,
                 true,
             ), //ok
             (
-                Flags::FLAG_IN_UPDATE_OR_DELETE_STMT | Flags::FLAG_DIVIDED_BY_ZERO_AS_WARNING,
+                Flag::IN_UPDATE_OR_DELETE_STMT | Flag::DIVIDED_BY_ZERO_AS_WARNING,
                 SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES,
                 true,
                 false,
@@ -413,10 +378,10 @@ mod tests {
             //(flags,strict_sql_mode,is_ok,is_empty)
             (0, false, true, false),                             //warning
             (0, true, true, false),                              //warning
-            (Flags::FLAG_IN_INSERT_STMT, false, true, false),           //warning
-            (Flags::FLAG_IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
-            (Flags::FLAG_IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
-            (Flags::FLAG_IN_INSERT_STMT, true, false, true),            //error
+            (Flag::IN_INSERT_STMT, false, true, false),           //warning
+            (Flag::IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
+            (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
+            (Flag::IN_INSERT_STMT, true, false, true),            //error
         ];
         for (flags, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");

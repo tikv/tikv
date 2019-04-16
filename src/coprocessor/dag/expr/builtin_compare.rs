@@ -941,7 +941,7 @@ mod tests {
         {
             let mut eval_config = EvalConfig::new();
             eval_config
-                .set_by_flags(Flags::FLAG_IN_INSERT_STMT)
+                .set_flag(Flag::IN_INSERT_STMT)
                 .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![

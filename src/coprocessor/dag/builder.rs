@@ -15,7 +15,7 @@ use super::executor::{
     TopNExecutor,
 };
 use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
-use crate::coprocessor::dag::expr::{EvalConfig, SqlMode, Flags};
+use crate::coprocessor::dag::expr::{EvalConfig, SqlMode, Flag};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
@@ -282,7 +282,7 @@ impl DAGBuilder {
         is_streaming: bool,
         enable_batch_if_possible: bool,
     ) -> Result<Box<dyn RequestHandler>> {
-        let mut eval_cfg = EvalConfig::from_flags(Flags::from_bits_truncate(req.get_flags()));
+        let mut eval_cfg = EvalConfig::from_flag(Flag::from_bits_truncate(req.get_flags()));
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
             box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));
