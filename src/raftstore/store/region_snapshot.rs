@@ -480,8 +480,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| KeyBuilder::from_vec(v.to_vec())),
-                upper_bound.map(|v| KeyBuilder::from_vec(v.to_vec())),
+                lower_bound.map(|v| KeyBuilder::from_slice(v, DATA_KEY_PREFIX.len())),
+                upper_bound.map(|v| KeyBuilder::from_slice(v, DATA_KEY_PREFIX.len())),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
