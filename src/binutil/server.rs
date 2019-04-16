@@ -2,17 +2,19 @@
 
 use super::setup::*;
 use super::signal_handler;
-use crate::config::TiKvConfig;
+use crate::binutil::setup::initial_logger;
+use crate::config::{check_and_persist_critical_config, TiKvConfig};
 use crate::coprocessor;
 use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
-use crate::pd::RpcClient;
+use crate::pd::{PdClient, RpcClient};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use crate::raftstore::store::fsm;
 use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use crate::server::resolve;
 use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
+use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
 use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
@@ -27,6 +29,7 @@ use std::time::Duration;
 use std::usize;
 use tikv_util::check_environment_variables;
 use tikv_util::security::{self, SecurityManager};
+use tikv_util::time::Monitor;
 use tikv_util::worker::{Builder, FutureWorker};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
@@ -339,4 +342,53 @@ pub fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc
             "err" => ?e
         );
     }
+}
+
+pub fn run_tikv(mut config: TiKvConfig) {
+    if let Err(e) = check_and_persist_critical_config(&config) {
+        fatal!("critical config check failed: {}", e);
+    }
+
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    initial_logger(&config);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
+
+    // Print version information.
+    super::log_tikv_info();
+
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e.description());
+    }
+    info!(
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
+    );
+
+    config.write_into_metrics();
+    // Do some prepare works before start.
+    pre_start(&config);
+
+    let security_mgr = Arc::new(
+        SecurityManager::new(&config.security)
+            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
+    );
+    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
+    let cluster_id = pd_client
+        .get_cluster_id()
+        .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+    if cluster_id == DEFAULT_CLUSTER_ID {
+        fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
+    }
+    config.server.cluster_id = cluster_id;
+    info!(
+        "connect to PD cluster";
+        "cluster_id" => cluster_id
+    );
+
+    let _m = Monitor::default();
+    run_raft_server(pd_client, &config, security_mgr);
 }

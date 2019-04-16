@@ -3,39 +3,18 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-#[macro_use(
-    slog_kv,
-    slog_crit,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
-
 use std::process;
-use std::sync::Arc;
 
 use clap::{crate_authors, crate_version, App, Arg};
-
-use tikv::binutil as util;
-use tikv::binutil::setup::{initial_logger, overwrite_config_with_cmd_args};
-use tikv::config::{check_and_persist_critical_config, TiKvConfig};
-use tikv::fatal;
-use tikv::pd::{PdClient, RpcClient};
-use tikv::server::DEFAULT_CLUSTER_ID;
-use tikv_util::security::SecurityManager;
-use tikv_util::time::Monitor;
+use tikv::binutil::{self, server, setup};
+use tikv::config::TiKvConfig;
 
 fn main() {
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
         .version(crate_version!())
-        .long_version(util::tikv_version_info().as_ref())
+        .long_version(binutil::tikv_version_info().as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
@@ -160,52 +139,7 @@ fn main() {
         .value_of("config")
         .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));
 
-    overwrite_config_with_cmd_args(&mut config, &matches);
+    setup::overwrite_config_with_cmd_args(&mut config, &matches);
 
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-    tikv_util::set_panic_hook(false, &config.storage.data_dir);
-
-    // Print version information.
-    util::log_tikv_info();
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
-    }
-    info!(
-        "using config";
-        "config" => serde_json::to_string(&config).unwrap(),
-    );
-
-    config.write_into_metrics();
-    // Do some prepare works before start.
-    util::server::pre_start(&config);
-
-    let security_mgr = Arc::new(
-        SecurityManager::new(&config.security)
-            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
-    );
-    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
-        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
-    let cluster_id = pd_client
-        .get_cluster_id()
-        .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
-    if cluster_id == DEFAULT_CLUSTER_ID {
-        fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
-    }
-    config.server.cluster_id = cluster_id;
-    info!(
-        "connect to PD cluster";
-        "cluster_id" => cluster_id
-    );
-
-    let _m = Monitor::default();
-    util::server::run_raft_server(pd_client, &config, security_mgr);
+    server::run_tikv(config);
 }
