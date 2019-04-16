@@ -249,7 +249,6 @@ impl<S: Snapshot> MvccReader<S> {
         }
     }
 
-    // TODO: Check this logic
     pub fn get_txn_commit_info(
         &mut self,
         key: &Key,
@@ -535,6 +534,14 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn pessimistic_lock(&mut self, k: Key, pk: &[u8], start_ts: u64, for_update_ts: u64) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            txn.pessimistic_lock(k, pk, for_update_ts, &Options::default())
+                .unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -858,5 +865,52 @@ mod tests {
         let write = reader.get_write(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
         assert_eq!(write.start_ts, 10);
+    }
+
+    fn must_get(engine: &RegionEngine, key: &[u8], ts: u64, value: &[u8]) {
+        let snap = RegionSnapshot::from_raw(Arc::clone(&engine.db), engine.region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        assert_eq!(reader.get(&Key::from_raw(key), ts).unwrap().unwrap(), value);
+    }
+
+    fn must_get_err(engine: &RegionEngine, key: &[u8], ts: u64) {
+        let snap = RegionSnapshot::from_raw(Arc::clone(&engine.db), engine.region.clone());
+        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
+        reader.get(&Key::from_raw(key), ts).unwrap_err();
+    }
+
+    #[test]
+    fn test_read_with_pessimistic_lock() {
+        let path = TempDir::new("_test_storage_mvcc_reader_read_with_pessimistic_lock").expect("");
+        let path = path.path().to_str().unwrap();
+        let region = make_region(1, vec![], vec![]);
+        let db = open_db(path, true);
+        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
+
+        let key = b"k1";
+        let mutation = Mutation::Put((Key::from_raw(key), b"v1".to_vec()));
+        engine.prewrite(mutation, key, 1);
+        engine.commit(key, 1, 100);
+
+        engine.pessimistic_lock(Key::from_raw(key), key, 10, 101);
+
+        // Pessimistic lock doesn't block reads.
+        must_get(&engine, key, 102, b"v1");
+
+        let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
+        engine.prewrite(mutation, key, 10);
+        must_get_err(&engine, key, 102);
+
+        engine.commit(key, 10, 120);
+        must_get(&engine, key, 102, b"v1");
+        must_get(&engine, key, 121, b"v2");
+        engine.pessimistic_lock(Key::from_raw(key), key, 110, 123);
+        must_get(&engine, key, 124, b"v2");
+        must_get(&engine, key, 108, b"v1");
+
+        let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
+        engine.prewrite(mutation, key, 110);
+        must_get(&engine, key, 108, b"v1");
+        must_get_err(&engine, key, 112);
     }
 }

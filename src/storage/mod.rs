@@ -1911,8 +1911,7 @@ mod tests {
                 1,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
-                    }
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => {}
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )

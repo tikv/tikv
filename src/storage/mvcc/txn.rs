@@ -1109,5 +1109,26 @@ mod tests {
         must_rollback(&engine, k, 27);
         // Rolled back before commit_ts
         must_pessimistic_lock_err(&engine, k, k, 27, 32);
+
+        // start_ts and commit_ts interlacing
+        for start_ts in &[40, 50, 60] {
+            let for_update_ts = start_ts + 48;
+            let commit_ts = start_ts + 50;
+            must_pessimistic_lock(&engine, k, k, *start_ts, for_update_ts);
+            must_prewrite_put(&engine, k, v, k, *start_ts);
+            must_commit(&engine, k, *start_ts, commit_ts);
+        }
+
+        must_rollback(&engine, k, 70);
+
+        // Now the data should be like: (start_ts -> commit_ts)
+        // 40 -> 90
+        // 50 -> 100
+        // 60 -> 110
+        // 70 -> rollback
+        must_get_commit_ts(&engine, k, 40, 90);
+        must_get_commit_ts(&engine, k, 50, 100);
+        must_get_commit_ts(&engine, k, 60, 110);
+        must_get_rollback_ts(&engine, k, 70);
     }
 }
