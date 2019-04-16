@@ -17,6 +17,7 @@ use tikv::coprocessor::codec::{datum, Datum};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
+use crate::coprocessor::dag::expr::Flag;
 
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
