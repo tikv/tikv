@@ -772,6 +772,10 @@ impl Peer {
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
 
+        if status.progress.is_none() {
+            return pending_peers;
+        }
+
         let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
