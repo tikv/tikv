@@ -13,7 +13,7 @@ use engine::rocks::{
     CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
     SeekKey, Writable, WriteBatch, WriteOptions, DB,
 };
-use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{self, BoundKeyBuilder, Engines, IterOption, Iterable, Mutable, Peekable};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
@@ -278,9 +278,9 @@ impl Debugger {
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start);
+        read_opt.set_iterate_lower_bound(start.to_vec());
         if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end);
+            read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
         if !iter.seek_to_first() {
@@ -428,7 +428,12 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+        let readopts = IterOption::new(
+            Some(BoundKeyBuilder::from_vec(from.clone())),
+            Some(BoundKeyBuilder::from_vec(to)),
+            false,
+        )
+        .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
@@ -835,7 +840,12 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let readopts = IterOption::new(
+                Some(BoundKeyBuilder::from_vec(from.clone())),
+                Some(BoundKeyBuilder::from_vec(to)),
+                false,
+            )
+            .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::Start);
@@ -1093,8 +1103,12 @@ impl MvccInfoIterator {
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() { None } else { Some(to) };
-            let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
+            let to = if to.is_empty() {
+                None
+            } else {
+                Some(BoundKeyBuilder::from_vec(to.to_vec()))
+            };
+            let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));

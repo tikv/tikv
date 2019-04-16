@@ -26,6 +26,7 @@ extern crate tikv_alloc;
 
 use std::sync::Arc;
 use std::{error, result};
+use std::{ptr, slice};
 
 pub mod rocks;
 pub mod util;
@@ -44,6 +45,7 @@ pub const CF_RAFT: CfName = "raft";
 pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub const DATA_KEY_PREFIX_LEN: usize = 1;
 
 // A copy of `tikv_util::escape`.
 // TODO: remove it once util becomes a component.
@@ -211,9 +213,69 @@ enum SeekMode {
     Prefix,
 }
 
+pub struct BoundKeyBuilder {
+    buf: Vec<u8>,
+    start: usize,
+}
+
+impl BoundKeyBuilder {
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        Self { buf: vec, start: 0 }
+    }
+
+    pub fn from_slice(s: &[u8], start: usize) -> Self {
+        let mut buf = Vec::with_capacity(s.len() + start);
+        unsafe {
+            buf.set_len(start);
+            buf.extend_from_slice(s);
+        }
+        Self { buf, start }
+    }
+
+    pub fn add_key_prefix(&mut self, prefix: &[u8]) {
+        assert!(self.start >= prefix.len());
+        unsafe {
+            ptr::copy(
+                prefix.as_ptr(),
+                self.buf.as_mut_ptr().add(self.start - prefix.len()),
+                prefix.len(),
+            );
+            self.start -= prefix.len();
+        }
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        unsafe { self.buf.as_ptr().add(self.start) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len() - self.start
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
+    }
+
+    pub fn build(self) -> Vec<u8> {
+        if self.start == 0 {
+            self.buf
+        } else {
+            let mut res = Vec::with_capacity(self.len());
+            unsafe {
+                res.extend_from_slice(slice::from_raw_parts(self.as_ptr(), self.len()));
+            }
+            res
+        }
+    }
+}
+
 pub struct IterOption {
-    lower_bound: Option<Vec<u8>>,
-    upper_bound: Option<Vec<u8>>,
+    lower_bound: Option<BoundKeyBuilder>,
+    upper_bound: Option<BoundKeyBuilder>,
     prefix_same_as_start: bool,
     fill_cache: bool,
     seek_mode: SeekMode,
@@ -221,8 +283,8 @@ pub struct IterOption {
 
 impl IterOption {
     pub fn new(
-        lower_bound: Option<Vec<u8>>,
-        upper_bound: Option<Vec<u8>>,
+        lower_bound: Option<BoundKeyBuilder>,
+        upper_bound: Option<BoundKeyBuilder>,
         fill_cache: bool,
     ) -> IterOption {
         IterOption {
@@ -234,44 +296,63 @@ impl IterOption {
         }
     }
 
-    #[inline]
     pub fn use_prefix_seek(mut self) -> IterOption {
         self.seek_mode = SeekMode::Prefix;
         self
     }
 
-    #[inline]
     pub fn total_order_seek_used(&self) -> bool {
         self.seek_mode == SeekMode::TotalOrder
     }
 
-    #[inline]
+    pub fn fill_cache(&mut self, v: bool) {
+        self.fill_cache = v;
+    }
+
     pub fn lower_bound(&self) -> Option<&[u8]> {
         self.lower_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
-    pub fn set_lower_bound(&mut self, bound: Vec<u8>) {
-        self.lower_bound = Some(bound);
+    pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
+        let builder = BoundKeyBuilder::from_slice(bound, reserved_prefix_len);
+        self.lower_bound = Some(builder);
     }
 
-    #[inline]
+    pub fn set_vec_lower_bound(&mut self, bound: Vec<u8>) {
+        self.lower_bound = Some(BoundKeyBuilder::from_vec(bound));
+    }
+
+    pub fn add_lower_bound_prefix(&mut self, prefix: &[u8]) {
+        if let Some(ref mut builder) = self.lower_bound {
+            builder.add_key_prefix(prefix);
+        }
+    }
+
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
-    pub fn set_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(bound);
+    pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
+        let builder = BoundKeyBuilder::from_slice(bound, reserved_prefix_len);
+        self.upper_bound = Some(builder);
     }
 
-    #[inline]
+    pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>) {
+        self.upper_bound = Some(BoundKeyBuilder::from_vec(bound));
+    }
+
+    pub fn add_upper_bound_prefix(&mut self, prefix: &[u8]) {
+        if let Some(ref mut builder) = self.upper_bound {
+            builder.add_key_prefix(prefix);
+        }
+    }
+
     pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
         self.prefix_same_as_start = enable;
         self
     }
 
-    pub fn build_read_opts(&self) -> ReadOptions {
+    pub fn build_read_opts(self) -> ReadOptions {
         let mut opts = ReadOptions::new();
         opts.fill_cache(self.fill_cache);
         if self.total_order_seek_used() {
@@ -279,11 +360,11 @@ impl IterOption {
         } else if self.prefix_same_as_start {
             opts.set_prefix_same_as_start(true);
         }
-        if let Some(ref key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key);
+        if let Some(builder) = self.lower_bound {
+            opts.set_iterate_lower_bound(builder.build());
         }
-        if let Some(ref key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key);
+        if let Some(builder) = self.upper_bound {
+            opts.set_iterate_upper_bound(builder.build());
         }
         opts
     }
@@ -311,8 +392,9 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = BoundKeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
+        let end = BoundKeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
 
@@ -328,8 +410,9 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = BoundKeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
+        let end = BoundKeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
 

@@ -7,7 +7,7 @@ use crate::storage::mvcc::properties::MvccProperties;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
-use engine::IterOption;
+use engine::{BoundKeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
@@ -270,11 +270,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -283,11 +279,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -298,17 +290,30 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                true,
-            );
+            let mut iter_opt = self.gen_iter_opt();
+            iter_opt.fill_cache(true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
         Ok(())
+    }
+
+    fn gen_iter_opt(&self) -> IterOption {
+        let l_bound = if let Some(ref b) = self.lower_bound {
+            let builder = BoundKeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            Some(builder)
+        } else {
+            None
+        };
+        let u_bound = if let Some(ref b) = self.upper_bound {
+            let builder = BoundKeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            Some(builder)
+        } else {
+            None
+        };
+        IterOption::new(l_bound, u_bound, true)
     }
 
     // Return the first committed key which start_ts equals to ts

@@ -310,14 +310,14 @@ pub mod tests {
 
         // lower bound > upper bound, seek() returns false.
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a7".to_vec());
-        iter_op.set_upper_bound(b"a3".to_vec());
+        iter_op.set_lower_bound(b"a7", 0);
+        iter_op.set_upper_bound(b"a3", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a3".to_vec());
-        iter_op.set_upper_bound(b"a7".to_vec());
+        iter_op.set_lower_bound(b"a3", 0);
+        iter_op.set_upper_bound(b"a7", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());

@@ -6,8 +6,8 @@ use crate::rocks;
 use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::{CF_LOCK, CF_RAFT, CF_WRITE};
 
+use super::{BoundKeyBuilder, IterOption, Iterable, DATA_KEY_PREFIX_LEN};
 use super::{Error, Result};
-use super::{IterOption, Iterable};
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -73,7 +73,9 @@ pub fn delete_all_in_range_cf(
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
     } else {
-        let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
+        let start = BoundKeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
+        let end = BoundKeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let iter_opt = IterOption::new(Some(start), Some(end), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
         while it.valid() {

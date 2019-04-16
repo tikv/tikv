@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
-use engine::{IterOption, Iterable};
+use engine::{BoundKeyBuilder, IterOption, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -172,7 +172,11 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(Some(start_key), Some(end_key), false);
+    let iter_opt = IterOption::new(
+        Some(BoundKeyBuilder::from_vec(start_key)),
+        Some(BoundKeyBuilder::from_vec(end_key)),
+        false,
+    );
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
