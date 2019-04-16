@@ -6,8 +6,8 @@ use crate::rocks;
 use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
 use crate::{CF_LOCK, CF_RAFT, CF_WRITE};
 
-use super::{KeyBuilder, IterOption, Iterable, DATA_KEY_PREFIX_LEN};
 use super::{Error, Result};
+use super::{IterOption, Iterable, KeyBuilder, DATA_KEY_PREFIX_LEN};
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(

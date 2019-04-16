@@ -2,7 +2,7 @@
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
 use engine::{
-    self, KeyBuilder, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot,
+    self, IterOption, KeyBuilder, Peekable, Result as EngineResult, Snapshot, SyncSnapshot,
 };
 use kvproto::metapb::Region;
 use std::sync::Arc;

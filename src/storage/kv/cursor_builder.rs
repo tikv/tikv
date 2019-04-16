@@ -3,7 +3,7 @@
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
-use engine::{KeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{IterOption, KeyBuilder, DATA_KEY_PREFIX_LEN};
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {

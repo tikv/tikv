@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
-use engine::{KeyBuilder, IterOption, Iterable};
+use engine::{IterOption, Iterable, KeyBuilder};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 

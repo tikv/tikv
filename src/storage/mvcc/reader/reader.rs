@@ -7,7 +7,7 @@ use crate::storage::mvcc::properties::MvccProperties;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
-use engine::{KeyBuilder, IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{IterOption, KeyBuilder, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 

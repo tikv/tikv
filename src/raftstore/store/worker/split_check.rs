@@ -7,8 +7,8 @@ use std::mem;
 use std::sync::Arc;
 
 use engine::rocks::DBIterator;
-use engine::{KeyBuilder, IterOption, Iterable, DB};
 use engine::{CfName, CF_WRITE, LARGE_CFS};
+use engine::{IterOption, Iterable, KeyBuilder, DB};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
