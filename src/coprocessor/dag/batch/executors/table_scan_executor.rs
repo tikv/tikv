@@ -205,6 +205,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             }
         }
 
+        assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
     }
 
