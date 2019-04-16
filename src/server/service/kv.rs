@@ -51,8 +51,6 @@ pub struct Service<T: RaftStoreRouter + 'static, E: Engine> {
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
 
-    // A futures::Executor used to collect responses for batch_commands interface.
-    collect_pool: tokio_threadpool::Sender,
     thread_load: Arc<ThreadLoad>,
 }
 
@@ -63,7 +61,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
         cop: Endpoint<E>,
         ch: T,
         snap_scheduler: Scheduler<SnapTask>,
-        collect_pool: tokio_threadpool::Sender,
         thread_load: Arc<ThreadLoad>,
     ) -> Self {
         Service {
@@ -71,7 +68,6 @@ impl<T: RaftStoreRouter + 'static, E: Engine> Service<T, E> {
             cop,
             ch,
             snap_scheduler,
-            collect_pool,
             thread_load,
         }
     }
