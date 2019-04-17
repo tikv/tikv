@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+use engine::rocks::util::config::CompressionType;
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -17,7 +18,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
-use tikv_util::config::{CompressionType, ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
 #[test]
