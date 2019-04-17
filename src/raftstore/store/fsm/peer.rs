@@ -73,7 +73,7 @@ pub enum GroupState {
 pub struct PeerFsm {
     peer: Peer,
     tick_registry: PeerTicks,
-    last_base_tick: Option<Instant>,
+    missing_ticks: usize,
     group_state: GroupState,
     stopped: bool,
     has_ready: bool,
@@ -134,7 +134,7 @@ impl PeerFsm {
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
                 tick_registry: PeerTicks::empty(),
-                last_base_tick: None,
+                missing_ticks: 0,
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
@@ -171,7 +171,7 @@ impl PeerFsm {
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
                 tick_registry: PeerTicks::empty(),
-                last_base_tick: None,
+                missing_ticks: 0,
                 group_state: GroupState::Ordered,
                 stopped: false,
                 has_ready: false,
@@ -570,7 +570,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Update leader lease when the Raft state changes.
         if let Some(ref ss) = ready.ss {
             if StateRole::Leader == ss.raft_state {
-                self.fsm.last_base_tick = None;
+                self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
                 self.register_pd_heartbeat_tick();
             }
@@ -702,11 +702,26 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
-            self.fsm.last_base_tick = None;
+            self.fsm.missing_ticks = 0;
             self.register_raft_base_tick();
             return;
         }
+
+        if self.fsm.group_state == GroupState::Indle {
+            self.fsm.missing_ticks += 1;
+            if self.fsm.missing_ticks < self.ctx.cfg.raft_election_timeout_ticks - 1 {
+                self.register_raft_base_tick();
+            }
+            return;
+        }
         let res = self.fsm.peer.check_before_tick(&self.ctx.cfg);
+        if self.fsm.missing_ticks > 0 {
+            for _ in 0..self.fsm.missing_ticks {
+                if self.fsm.peer.raft_group.tick() {
+                    self.fsm.has_ready = true;
+                }
+            }
+        }
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
@@ -716,6 +731,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_base_tick();
         } else {
             self.fsm.group_state = GroupState::Indle;
+            if !self.fsm.peer.is_leader() {
+                self.register_raft_base_tick();
+            }
         }
     }
 
@@ -804,9 +822,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
             self.fsm.group_state = GroupState::Chaos;
+            self.fsm.missing_ticks = 0;
             self.register_raft_base_tick();
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.fsm.group_state = GroupState::Ordered;
+            self.fsm.missing_ticks = 0;
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
@@ -2235,6 +2255,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         bind_term(&mut resp, term);
         if self.fsm.peer.propose(self.ctx, cb, msg, resp) {
             self.fsm.has_ready = true;
+            self.fsm.group_state = GroupState::Ordered;
             self.register_raft_base_tick();
         }
 
