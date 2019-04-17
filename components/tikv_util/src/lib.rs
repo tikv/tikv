@@ -50,7 +50,6 @@ pub mod config;
 pub mod file;
 pub mod future;
 pub mod future_pool;
-pub mod io_limiter;
 #[macro_use]
 pub mod macros;
 pub mod logger;
