@@ -57,8 +57,6 @@ impl SqlMode {
     }
 }
 
-impl Flag {}
-
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
 #[derive(Clone, Debug)]
