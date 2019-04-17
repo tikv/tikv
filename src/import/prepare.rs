@@ -1,6 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -14,13 +13,39 @@ use crate::storage::mvcc::properties::SizeProperties;
 use super::client::*;
 use super::common::*;
 use super::engine::*;
+use super::metrics::*;
 use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 3;
 const RETRY_INTERVAL_SECS: u64 = 1;
 
-const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 125;
-const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 8;
+const SPLIT_WAIT_MAX_RETRY_TIMES: u64 = 64;
+const SPLIT_WAIT_INTERVAL_MILLIS: u64 = 8;
+const SPLIT_MAX_WAIT_INTERVAL_MILLIS: u64 = 1000;
+const SCATTER_WAIT_MAX_RETRY_TIMES: u64 = 128;
+const SCATTER_WAIT_INTERVAL_MILLIS: u64 = 50;
+const SCATTER_MAX_WAIT_INTERVAL_MILLIS: u64 = 5000;
+
+macro_rules! exec_with_retry {
+    ($tag:expr, $func:expr, $times:expr, $interval:expr, $max_duration:expr) => {
+        let start = Instant::now();
+        let mut interval = $interval;
+        for i in 0..$times {
+            if $func {
+                if i > 0 {
+                    debug!(concat!("waited between ", $tag); "retry times" => %i, "takes" => ?start.elapsed());
+                }
+                break;
+            } else if i == $times - 1 {
+                warn!(concat!($tag, " still failed after exhausting all retries"));
+            } else {
+                // Exponential back-off with max wait duration
+                interval = (2 * interval).min($max_duration);
+                thread::sleep(Duration::from_millis(interval));
+            }
+        }
+    };
+}
 
 /// PrepareJob is responsible for improving cluster data balance
 ///
@@ -61,17 +86,11 @@ impl<Client: ImportClient> PrepareJob<Client> {
             }
         };
 
-        let num_prepares = self.prepare(&props);
+        IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(1.0);
+        let prepares = self.prepare(&props);
+        IMPORT_EACH_PHASE.with_label_values(&["prepare"]).set(0.0);
 
-        // PD needs some time to scatter regions. But we don't know how much
-        // time it should take, so we just calculate an approximate duration.
-        let wait_duration = Duration::from_millis(num_prepares as u64 * 100);
-        let wait_duration = cmp::min(wait_duration, self.cfg.max_prepare_duration.0);
-        info!(
-            "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "waits" => ?wait_duration,
-        );
-        thread::sleep(wait_duration);
-
+        let num_prepares = prepares?;
         info!(
             "prepare"; "tag" => %self.tag, "ranges" => %num_prepares, "takes" => ?start.elapsed(),
         );
@@ -85,10 +104,11 @@ impl<Client: ImportClient> PrepareJob<Client> {
         ))
     }
 
-    fn prepare(&self, props: &SizeProperties) -> usize {
+    fn prepare(&self, props: &SizeProperties) -> Result<usize> {
         let split_size = self.cfg.region_split_size.0 as usize;
         let mut ctx = RangeContext::new(Arc::clone(&self.client), split_size);
 
+        let mut wait_scatter_regions = vec![];
         let mut num_prepares = 0;
         let mut start = Vec::new();
         for (k, v) in props.index_handles.iter() {
@@ -98,7 +118,7 @@ impl<Client: ImportClient> PrepareJob<Client> {
             }
 
             let range = RangeInfo::new(&start, k, ctx.raw_size());
-            if let Ok(true) = self.run_prepare_job(range) {
+            if let Ok(true) = self.run_prepare_range_job(range, &mut wait_scatter_regions) {
                 num_prepares += 1;
             }
 
@@ -106,14 +126,31 @@ impl<Client: ImportClient> PrepareJob<Client> {
             ctx.reset(k);
         }
 
-        num_prepares
+        // We need to wait all regions for scattering finished.
+        let start = Instant::now();
+        while let Some(region_id) = wait_scatter_regions.pop() {
+            exec_with_retry!(
+                "scatter",
+                self.client.is_scatter_region_finished(region_id)?,
+                SCATTER_WAIT_MAX_RETRY_TIMES,
+                SCATTER_WAIT_INTERVAL_MILLIS,
+                SCATTER_MAX_WAIT_INTERVAL_MILLIS
+            );
+        }
+        info!("scatter all regions finished"; "tag" => %self.tag, "takes" => ?start.elapsed());
+
+        Ok(num_prepares)
     }
 
-    fn run_prepare_job(&self, range: RangeInfo) -> Result<bool> {
+    fn run_prepare_range_job(
+        &self,
+        range: RangeInfo,
+        wait_scatter_regions: &mut Vec<u64>,
+    ) -> Result<bool> {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         let tag = format!("[PrepareRangeJob {}:{}]", self.engine.uuid(), id);
         let job = PrepareRangeJob::new(tag, range, Arc::clone(&self.client));
-        job.run()
+        job.run(wait_scatter_regions)
     }
 }
 
@@ -130,7 +167,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         PrepareRangeJob { tag, range, client }
     }
 
-    fn run(&self) -> Result<bool> {
+    fn run(&self, wait_scatter_regions: &mut Vec<u64>) -> Result<bool> {
         let start = Instant::now();
         info!("start"; "tag" => %self.tag, "range" => ?self.range);
 
@@ -148,7 +185,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
             };
 
             for _ in 0..MAX_RETRY_TIMES {
-                match self.prepare(region) {
+                match self.prepare(region, wait_scatter_regions) {
                     Ok(v) => {
                         info!("prepare"; "tag" => %self.tag, "takes" => ?start.elapsed());
                         return Ok(v);
@@ -166,7 +203,7 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
         Err(Error::PrepareRangeJobFailed(self.tag.clone()))
     }
 
-    fn prepare(&self, mut region: RegionInfo) -> Result<bool> {
+    fn prepare(&self, mut region: RegionInfo, wait_scatter_regions: &mut Vec<u64>) -> Result<bool> {
         if !self.need_split(&region) {
             return Ok(false);
         }
@@ -177,19 +214,16 @@ impl<Client: ImportClient> PrepareRangeJob<Client> {
                 // that PD cannot create scatter operator for the new split
                 // region because it doesn't have the meta data of the new split
                 // region.
-                for i in 0..SCATTER_WAIT_MAX_RETRY_TIMES {
-                    if self.client.has_region_id(new_region.region.id)? {
-                        if i > 0 {
-                            debug!("waited between split and scatter"; "retry times" => %i);
-                        }
-                        break;
-                    } else if i == SCATTER_WAIT_MAX_RETRY_TIMES - 1 {
-                        warn!("split region still failed after exhausting all retries");
-                    } else {
-                        thread::sleep(Duration::from_millis(SCATTER_WAIT_INTERVAL_MILLIS));
-                    }
-                }
+                exec_with_retry!(
+                    "split",
+                    self.client.has_region_id(new_region.region.id)?,
+                    SPLIT_WAIT_MAX_RETRY_TIMES,
+                    SPLIT_WAIT_INTERVAL_MILLIS,
+                    SPLIT_MAX_WAIT_INTERVAL_MILLIS
+                );
                 self.scatter_region(&new_region)?;
+                wait_scatter_regions.push(new_region.region.id);
+
                 Ok(true)
             }
             Err(Error::NotLeader(new_leader)) => {
