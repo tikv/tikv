@@ -300,6 +300,7 @@ mod tests {
     use crate::coprocessor::dag::expr::tests::{datum_expr, eval_func, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use hex;
+    use openssl;
     use tipb::expression::ScalarFuncSig;
 
     #[test]
@@ -526,6 +527,7 @@ mod tests {
 
     #[test]
     fn test_aes_encrypt_and_decrpyt() {
+        openssl::init();
         let cases = vec![
             "How many roads must a man walk down before they call him a man?",
             "Hey Mister Tambourine Man, play a song for me",
