@@ -636,6 +636,7 @@ name = "fuzz-targets"
 version = "0.0.1"
 dependencies = [
  "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "codec 0.0.1",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "tikv 3.0.0-beta.1",
  "tikv_util 0.1.0",

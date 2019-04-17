@@ -11,4 +11,5 @@ path = "mod.rs"
 byteorder = "1"
 failure = "0.1"
 tikv_util = { path = "../../components/tikv_util" }
-tikv = {path = "../..", default-features = false}
+tikv = { path = "../..", default-features = false }
+codec = { path = "../../components/codec" }
