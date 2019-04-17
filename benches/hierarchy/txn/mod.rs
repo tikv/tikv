@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
 use tikv::storage::kv::Engine;
@@ -13,7 +13,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched_ref(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
                 KvGenerator::new(config.key_length, config.value_length)
@@ -32,6 +32,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
@@ -39,7 +40,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched_ref(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
@@ -67,6 +68,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 
