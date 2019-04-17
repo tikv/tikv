@@ -3,6 +3,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
@@ -11,12 +12,9 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::{Error, Result};
-use tikv_util::codec::number;
 
 /// Helper to build an `RpnExpression`.
-///
-/// TODO: Deprecate it in Coprocessor V2 DAG interface.
-pub struct RpnExpressionBuilder;
+pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
@@ -86,6 +84,50 @@ impl RpnExpressionBuilder {
             max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
+    }
+
+    /// Creates a new builder instance.
+    ///
+    /// Only used in tests. Normal logic should use `build_from_expr_tree`.
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[cfg(test)]
+    pub fn push_fn_call(
+        mut self,
+        func: impl RpnFunction,
+        field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func: Box::new(func),
+            field_type: field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn push_constant(mut self, value: ScalarValue, field_type: impl Into<FieldType>) -> Self {
+        let node = RpnExpressionNode::Constant {
+            value,
+            field_type: field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn push_column_ref(mut self, offset: usize) -> Self {
+        let node = RpnExpressionNode::ColumnRef { offset };
+        self.0.push(node);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn build(self) -> RpnExpression {
+        RpnExpression::from(self.0)
     }
 }
 
