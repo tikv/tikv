@@ -22,7 +22,7 @@ use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
-const STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS: u64 = 1000;
+const STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS: u64 = 20000;
 
 /// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
