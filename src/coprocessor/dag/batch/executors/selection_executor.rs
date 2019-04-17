@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -18,6 +7,7 @@ use tipb::expression::Expr;
 use tipb::expression::FieldType;
 
 use super::super::interface::*;
+use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::{Error, Result};
@@ -30,12 +20,7 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
-impl
-    BatchSelectionExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
-        Box<dyn BatchExecutor>,
-    >
-{
+impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
@@ -46,6 +31,18 @@ impl
             })?;
         }
         Ok(())
+    }
+}
+
+impl<Src: BatchExecutor> BatchSelectionExecutor<ExecSummaryCollectorDisabled, Src> {
+    #[cfg(test)]
+    pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
+        Self {
+            summary_collector: ExecSummaryCollectorDisabled,
+            context: EvalContext::default(),
+            src,
+            conditions,
+        }
     }
 }
 
@@ -72,6 +69,51 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
             conditions,
         })
     }
+
+    #[inline]
+    fn handle_next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+        let mut src_result = self.src.next_batch(expect_rows);
+
+        // We don't care whether there are errors during the `next_batch()` in the src executor.
+
+        let rows_len = src_result.data.rows_len();
+        if rows_len > 0 {
+            let mut base_retain_map = vec![true; rows_len];
+            let mut head_retain_map = vec![false; rows_len];
+
+            for condition in &self.conditions {
+                let r = condition.eval_as_mysql_bools(
+                    &mut self.context,
+                    rows_len,
+                    self.src.schema(),
+                    &mut src_result.data,
+                    head_retain_map.as_mut_slice(),
+                );
+                if let Err(e) = r {
+                    // TODO: We should not return error when it comes from unused rows.
+                    // When there are errors *during filtering*, let's reset data to empty because
+                    // the data is not filtered at all in this case.
+                    src_result.is_drained = src_result.is_drained.and(Err(e));
+                    src_result.data.truncate(0);
+                    return src_result;
+                }
+                for i in 0..rows_len {
+                    base_retain_map[i] &= head_retain_map[i];
+                }
+            }
+
+            // TODO: When there are many conditions, it would be better to filter column each time.
+
+            src_result
+                .data
+                .retain_rows_by_index(|idx| base_retain_map[idx]);
+        }
+
+        // Only append warnings when there is no error during filtering because we clear the data
+        // when there are errors.
+        src_result.warnings.merge(&mut self.context.warnings);
+        src_result
+    }
 }
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<C, Src> {
@@ -83,42 +125,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
 
     #[inline]
     fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        self.summary_collector.inc_iterations();
-        let timer = self.summary_collector.start_record_duration();
-
-        let mut result = self.src.next_batch(expect_rows);
-
-        let rows_len = result.data.rows_len();
-        if rows_len > 0 {
-            let mut base_retain_map = vec![true; rows_len];
-            let mut head_retain_map = vec![false; rows_len];
-
-            for condition in &self.conditions {
-                let r = condition.eval_as_mysql_bools(
-                    &mut self.context,
-                    rows_len,
-                    self.src.schema(),
-                    &mut result.data,
-                    head_retain_map.as_mut_slice(),
-                );
-                if let Err(e) = r {
-                    // TODO: We should not return error when it comes from unused rows.
-                    result.is_drained = result.is_drained.and(Err(e));
-                    // TODO: timer is not collected.
-                    return result;
-                }
-                for i in 0..rows_len {
-                    base_retain_map[i] &= head_retain_map[i];
-                }
-            }
-
-            result.data.retain_rows_by_index(|idx| base_retain_map[idx]);
-            self.summary_collector.inc_produced_rows(rows_len);
-        }
-
-        self.summary_collector.inc_elapsed_duration(timer);
-
-        result.warnings.merge(&mut self.context.warnings);
+        let timer = self.summary_collector.on_start_batch();
+        let result = self.handle_next_batch(expect_rows);
+        self.summary_collector
+            .on_finish_batch(timer, result.data.rows_len());
         result
     }
 
@@ -127,5 +137,77 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
         self.src.collect_statistics(destination);
         self.summary_collector
             .collect_into(&mut destination.summary_per_executor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::builder::FieldTypeBuilder;
+    use cop_datatype::FieldTypeTp;
+
+    use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::expr::EvalWarnings;
+    use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
+    use crate::coprocessor::dag::rpn_expr::RpnFunction;
+
+    #[test]
+    fn test_filter_empty() {
+        #[derive(Debug, Clone, Copy)]
+        struct FnFoo;
+
+        impl RpnFunction for FnFoo {
+            fn name(&self) -> &'static str {
+                "FnFoo"
+            }
+
+            fn args_len(&self) -> usize {
+                0
+            }
+
+            fn eval(
+                &self,
+                _rows: usize,
+                _context: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+            ) -> Result<VectorValue> {
+                // This function should never be called because we filter no rows
+                unreachable!()
+            }
+        }
+
+        let src_exec = MockExecutor::new(
+            vec![],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        );
+
+        let mut exec = BatchSelectionExecutor::new_for_test(
+            src_exec,
+            vec![RpnExpressionBuilder::new()
+                .push_fn_call(FnFoo, FieldTypeBuilder::new().tp(FieldTypeTp::LongLong))
+                .build()],
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.is_drained.unwrap());
     }
 }

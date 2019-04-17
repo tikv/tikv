@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is more even more simpler
 //! than stream aggregation.
@@ -342,14 +331,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        self.summary_collector.inc_iterations();
-        let timer = self.summary_collector.start_record_duration();
-
+        let timer = self.summary_collector.on_start_batch();
         let result = self.handle_next_batch();
 
-        self.summary_collector.inc_elapsed_duration(timer);
-
-        match result {
+        let ret = match result {
             Err(e) => {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
@@ -369,7 +354,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
             }
             Ok(Some(data)) => {
                 // When there is no error and aggregate finished, we return it as data.
-                self.summary_collector.inc_produced_rows(data.rows_len());
                 self.is_ended = true;
                 BatchExecuteResult {
                     data,
@@ -377,7 +361,11 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
                     is_drained: Ok(true),
                 }
             }
-        }
+        };
+
+        self.summary_collector
+            .on_finish_batch(timer, ret.data.rows_len());
+        ret
     }
 
     #[inline]
