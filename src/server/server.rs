@@ -95,7 +95,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             cop,
             raft_router.clone(),
             snap_worker.scheduler(),
-            stats_pool.sender().clone(),
             Arc::clone(&thread_load),
         );
 
