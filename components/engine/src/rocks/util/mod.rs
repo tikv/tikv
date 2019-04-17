@@ -15,6 +15,10 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
 use crate::rocks::load_latest_options;
 use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
@@ -22,19 +26,12 @@ use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-
-use self::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
-use crate::{ALL_CFS, CF_DEFAULT};
+use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
 use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
-
-use super::{Error, Result};
 
 /// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
