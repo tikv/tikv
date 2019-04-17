@@ -58,15 +58,6 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 ///
 /// If the max open file descriptor limit is not high enough to support
 /// the main database and the raft database.
-///
-/// # See also
-///
-/// See the `check_*` functions in `tikv_util::config`:
-///
-/// - [`tikv_util::config::check_max_open_fs`](../../tikv_util/config/fn.check_max_open_fds.html
-/// - [`tikv_util::config::check_kernel`](../../tikv_util/config/fn.check_kernel.html
-/// - [`tikv_util::config::check_data_dir`](../../tikv_util/config/fn.check_data_dir.html
-///
 pub fn pre_start(cfg: &TiKvConfig) {
     // Before any startup, check system configuration and environment variables.
     check_system_config(&cfg);
