@@ -15,7 +15,7 @@ use super::executor::{
     TopNExecutor,
 };
 use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
-use crate::coprocessor::dag::expr::{EvalConfig, SqlMode, Flag};
+use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 

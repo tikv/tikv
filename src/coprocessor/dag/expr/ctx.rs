@@ -57,8 +57,7 @@ impl SqlMode {
     }
 }
 
-impl Flag {
-}
+impl Flag {}
 
 const DEFAULT_MAX_WARNING_CNT: usize = 64;
 
@@ -232,7 +231,9 @@ impl EvalContext {
     }
 
     pub fn handle_division_by_zero(&mut self) -> Result<()> {
-        if self.cfg.flag.contains(Flag::IN_INSERT_STMT) || self.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT) {
+        if self.cfg.flag.contains(Flag::IN_INSERT_STMT)
+            || self.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)
+        {
             if !self
                 .cfg
                 .sql_mode
@@ -240,7 +241,9 @@ impl EvalContext {
             {
                 return Ok(());
             }
-            if self.cfg.sql_mode.is_strict() && !self.cfg.flag.contains(Flag::DIVIDED_BY_ZERO_AS_WARNING) {
+            if self.cfg.sql_mode.is_strict()
+                && !self.cfg.flag.contains(Flag::DIVIDED_BY_ZERO_AS_WARNING)
+            {
                 return Err(Error::division_by_zero());
             }
         }
@@ -253,8 +256,10 @@ impl EvalContext {
             return Err(err);
         }
         let cfg = &self.cfg;
-        if cfg.sql_mode.is_strict() && 
-            (cfg.flag.contains(Flag::IN_INSERT_STMT) || cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT)) {
+        if cfg.sql_mode.is_strict()
+            && (cfg.flag.contains(Flag::IN_INSERT_STMT)
+                || cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT))
+        {
             Err(err)
         } else {
             self.warnings.append_warning(err);
@@ -268,7 +273,9 @@ impl EvalContext {
         orig_err: Error,
         negative: bool,
     ) -> Result<i64> {
-        if !self.cfg.flag.contains(Flag::IN_SELECT_STMT) || !self.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
+        if !self.cfg.flag.contains(Flag::IN_SELECT_STMT)
+            || !self.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING)
+        {
             return Err(orig_err);
         }
         let orig_str = String::from_utf8_lossy(bytes);
@@ -379,12 +386,12 @@ mod tests {
     fn test_handle_invalid_time_error() {
         let cases = vec![
             //(flag,strict_sql_mode,is_ok,is_empty)
-            (Flag::empty(), false, true, false),                             //warning
-            (Flag::empty(), true, true, false),                              //warning
-            (Flag::IN_INSERT_STMT, false, true, false),           //warning
+            (Flag::empty(), false, true, false),        //warning
+            (Flag::empty(), true, true, false),         //warning
+            (Flag::IN_INSERT_STMT, false, true, false), //warning
             (Flag::IN_UPDATE_OR_DELETE_STMT, false, true, false), //warning
-            (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true),  //error
-            (Flag::IN_INSERT_STMT, true, false, true),            //error
+            (Flag::IN_UPDATE_OR_DELETE_STMT, true, false, true), //error
+            (Flag::IN_INSERT_STMT, true, false, true),  //error
         ];
         for (flag, strict_sql_mode, is_ok, is_empty) in cases {
             let err = Error::invalid_time_format("");
