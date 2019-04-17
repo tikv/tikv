@@ -21,11 +21,14 @@ extern crate prometheus;
 extern crate lazy_static;
 #[macro_use]
 extern crate quick_error;
+#[macro_use]
+extern crate serde_derive;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
 use std::sync::Arc;
 use std::{error, result};
+use tikv_util::escape;
 
 pub mod rocks;
 pub mod util;
@@ -44,34 +47,6 @@ pub const CF_RAFT: CfName = "raft";
 pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
 pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
 pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
-
-// A copy of `tikv_util::escape`.
-// TODO: remove it once util becomes a component.
-fn escape(data: &[u8]) -> String {
-    let mut escaped = Vec::with_capacity(data.len() * 4);
-    for &c in data {
-        match c {
-            b'\n' => escaped.extend_from_slice(br"\n"),
-            b'\r' => escaped.extend_from_slice(br"\r"),
-            b'\t' => escaped.extend_from_slice(br"\t"),
-            b'"' => escaped.extend_from_slice(b"\\\""),
-            b'\\' => escaped.extend_from_slice(br"\\"),
-            _ => {
-                if c >= 0x20 && c < 0x7f {
-                    // c is printable
-                    escaped.push(c);
-                } else {
-                    escaped.push(b'\\');
-                    escaped.push(b'0' + (c >> 6));
-                    escaped.push(b'0' + ((c >> 3) & 7));
-                    escaped.push(b'0' + (c & 7));
-                }
-            }
-        }
-    }
-    escaped.shrink_to_fit();
-    unsafe { String::from_utf8_unchecked(escaped) }
-}
 
 quick_error! {
     #[derive(Debug)]

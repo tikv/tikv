@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod config;
 pub mod engine_metrics;
 mod event_listener;
+pub mod io_limiter;
 pub mod metrics_flusher;
+pub mod security;
 pub mod stats;
 
 use std::cmp;
@@ -25,6 +28,7 @@ use self::engine_metrics::{
     ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
 };
 use crate::{ALL_CFS, CF_DEFAULT};
+use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
@@ -47,32 +51,6 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
     let res = io::copy(&mut reader, &mut writer)?;
     writer.sync_all()?;
     Ok(res)
-}
-
-/// Calculates the given file's CRC32 checksum.
-// This is a copy of `util::calc_crc32`.
-// TODO: remove it once util becomes a component.
-fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
-    use crc::crc32::{self, Digest, Hasher32};
-    use std::fs::OpenOptions;
-    use std::io::Read;
-    const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
-
-    let mut digest = Digest::new(crc32::IEEE);
-    let mut f = OpenOptions::new().read(true).open(path)?;
-    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
-    loop {
-        match f.read(&mut buf[..]) {
-            Ok(0) => {
-                return Ok(digest.sum32());
-            }
-            Ok(n) => {
-                digest.write(&buf[..n]);
-            }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
 }
 
 // Zlib and bzip2 are too slow.
