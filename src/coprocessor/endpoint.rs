@@ -19,6 +19,7 @@ use tikv_util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
+use crate::coprocessor::readpool_impl::with_tls_engine_any;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 
@@ -194,7 +195,7 @@ impl<E: Engine> Endpoint<E> {
 
     #[inline]
     fn async_snapshot(
-        engine: E,
+        engine: &E,
         ctx: &kvrpcpb::Context,
     ) -> impl Future<Item = E::Snap, Error = Error> {
         let (callback, future) = tikv_util::future::paired_future_callback();
@@ -213,7 +214,6 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     // TODO: Convert to use async / await.
     fn handle_unary_request_impl(
-        engine: E,
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
@@ -221,8 +221,11 @@ impl<E: Engine> Endpoint<E> {
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
             .and_then(move |_| {
-                Self::async_snapshot(engine, &tracker.req_ctx.context)
-                    .map(|snapshot| (tracker, snapshot))
+                with_tls_engine_any(|engine_any| {
+                    let engine = engine_any.downcast_ref().unwrap();
+                    Self::async_snapshot(engine, &tracker.req_ctx.context)
+                        .map(|snapshot| (tracker, snapshot))
+                })
             })
             .and_then(move |(tracker, snapshot)| {
                 // When snapshot is retrieved, deadline may exceed.
@@ -269,14 +272,13 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
-        let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn_handle(priority, move || {
-                Self::handle_unary_request_impl(engine, tracker, handler_builder)
+                Self::handle_unary_request_impl(tracker, handler_builder)
             })
             .map_err(|_| Error::Full)
     }
@@ -308,7 +310,6 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
-        engine: E,
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
@@ -318,8 +319,11 @@ impl<E: Engine> Endpoint<E> {
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check_if_exceeded())
                 .and_then(move |_| {
-                    Self::async_snapshot(engine, &tracker.req_ctx.context)
-                        .map(|snapshot| (tracker, snapshot))
+                    with_tls_engine_any(|engine_any| {
+                        let engine = engine_any.downcast_ref().unwrap();
+                        Self::async_snapshot(engine, &tracker.req_ctx.context)
+                            .map(|snapshot| (tracker, snapshot))
+                    })
                 })
                 .and_then(move |(tracker, snapshot)| {
                     // When snapshot is retrieved, deadline may exceed.
@@ -405,13 +409,12 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
-        let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn(priority, move || {
-                Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
+                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })

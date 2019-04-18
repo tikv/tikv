@@ -1,9 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::any::Any;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, ReadPool};
+use crate::storage::Engine;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
@@ -53,18 +56,27 @@ thread_local! {
                 HashMap::default(),
         }
     );
+
+    static TLS_ENGINE_ANY: RefCell<Option<Box<dyn Any>>> = RefCell::new(None);
 }
 
-pub fn build_read_pool(
+pub fn build_read_pool<E: Engine>(
     config: &readpool::Config,
     pd_sender: FutureScheduler<PdTask>,
+    engine: E,
     name_prefix: &str,
 ) -> ReadPool {
     let pd_sender2 = pd_sender.clone();
+    let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(config)
         .name_prefix(name_prefix)
         .on_tick(move || tls_flush(&pd_sender))
+        .after_start(move || {
+            TLS_ENGINE_ANY.with(|e| {
+                *e.borrow_mut() = Some(Box::new(engine.lock().unwrap().clone()));
+            })
+        })
         .before_stop(move || tls_flush(&pd_sender2))
         .build()
 }
@@ -135,4 +147,12 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statis
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
     });
+}
+
+#[inline]
+pub fn with_tls_engine_any<F, R>(f: F) -> R
+where
+    F: FnOnce(&dyn Any) -> R,
+{
+    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref().unwrap()))
 }
