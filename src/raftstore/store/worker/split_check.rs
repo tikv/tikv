@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use engine::rocks::DBIterator;
 use engine::{CfName, CF_WRITE, LARGE_CFS};
-use engine::{IterOption, Iterable, KeyBuilder, DB};
+use engine::{IterOption, Iterable, DB};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
@@ -17,6 +17,7 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
+use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Runnable;
 
 use super::metrics::*;

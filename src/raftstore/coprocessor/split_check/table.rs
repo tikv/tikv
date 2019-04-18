@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use engine::rocks::{SeekKey, DB};
 use engine::CF_WRITE;
-use engine::{IterOption, Iterable, KeyBuilder};
+use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
@@ -12,6 +12,7 @@ use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
 use tikv_util::escape;
+use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,

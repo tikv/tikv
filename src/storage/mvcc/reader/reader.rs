@@ -7,9 +7,10 @@ use crate::storage::mvcc::properties::MvccProperties;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
-use engine::{IterOption, KeyBuilder, DATA_KEY_PREFIX_LEN};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
+use tikv_util::keybuilder::KeyBuilder;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 

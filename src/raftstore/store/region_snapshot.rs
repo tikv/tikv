@@ -1,15 +1,14 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use engine::{
-    self, IterOption, KeyBuilder, Peekable, Result as EngineResult, Snapshot, SyncSnapshot,
-};
+use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -166,7 +165,7 @@ pub struct RegionIterator {
 fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
-        iter_opt.add_lower_bound_prefix(keys::DATA_PREFIX_KEY);
+        iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
             iter_opt.set_vec_lower_bound(region_start_key);
         }
@@ -178,7 +177,7 @@ fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
 fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
-        iter_opt.add_upper_bound_prefix(keys::DATA_PREFIX_KEY);
+        iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
             iter_opt.set_vec_upper_bound(region_end_key);
         }
