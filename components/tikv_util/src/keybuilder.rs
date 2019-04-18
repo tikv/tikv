@@ -150,6 +150,15 @@ mod tests {
         let res = key_builder.build();
         assert_eq!(res, b"key2-suffix".to_vec());
 
+        // from_vec vec has enough memory.
+        let mut vec = Vec::with_capacity(key2.len() + prefix.len() + suffix.len());
+        vec.extend_from_slice(key2);
+        let mut key_builder = KeyBuilder::from_vec(vec, prefix.len(), suffix.len());
+        key_builder.set_prefix(prefix);
+        key_builder.append(suffix);
+        let res = key_builder.build();
+        assert_eq!(res, b"prefix-key2-suffix".to_vec());
+
         // from_slice
         let key3 = b"key3";
         let mut key_builder = KeyBuilder::from_slice(key3, prefix.len(), suffix.len());
