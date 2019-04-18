@@ -39,6 +39,7 @@ use fs2::FileExt;
 
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
@@ -47,13 +48,12 @@ use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
 use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
-use tikv::server::readpool::ReadPool;
 use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv_util::security::{self, SecurityManager};
+use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::{Builder, FutureWorker};
 use tikv_util::{self as tikv_util, check_environment_variables};
@@ -147,7 +147,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create encrypted env from cipher file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
-        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
+        match encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
                 "failed to create encrypted env from cipher file, err {:?}",
                 e
@@ -195,10 +195,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
 
-    let storage_read_pool =
-        ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-            storage::ReadPoolContext::new(pd_sender.clone())
-        });
+    let storage_read_pool = storage::readpool_impl::build_read_pool(
+        &cfg.readpool.storage.build_config(),
+        pd_sender.clone(),
+        "storage-read",
+    );
+
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,
@@ -227,9 +229,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
-    let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-        coprocessor::ReadPoolContext::new(pd_sender.clone())
-    });
+    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+        &cfg.readpool.coprocessor.build_config(),
+        pd_sender.clone(),
+        "cop",
+    );
     let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,

@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 /// Data to be flowed between parent and child executors at once during `collect_statistics()`
 /// invocation.
@@ -80,18 +69,14 @@ pub trait ExecSummaryCollector: Send {
     where
         Self: Sized;
 
-    /// Returns an instance that will record elapsed duration. The instance should be later
-    /// passed back to `inc_elapsed_duration` when processing is complete.
-    fn start_record_duration(&self) -> Self::DurationRecorder;
+    /// Returns an instance that will record elapsed duration and increase
+    /// the iterations counter. The instance should be later passed back to
+    /// `on_finish_batch` when processing of `next_batch` is completed.
+    fn on_start_batch(&mut self) -> Self::DurationRecorder;
 
-    /// Increases processed time.
-    fn inc_elapsed_duration(&mut self, dr: Self::DurationRecorder);
-
-    /// Increases produced rows counter.
-    fn inc_produced_rows(&mut self, rows: usize);
-
-    /// Increases iterations counter.
-    fn inc_iterations(&mut self);
+    // Increases the process time and produced rows counter.
+    // It should be called when `next_batch` is completed.
+    fn on_finish_batch(&mut self, dr: Self::DurationRecorder, rows: usize);
 
     /// Takes and appends current execution summary into `target`.
     fn collect_into(&mut self, target: &mut [Option<ExecSummary>]);
@@ -116,24 +101,16 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
     }
 
     #[inline]
-    fn start_record_duration(&self) -> Self::DurationRecorder {
+    fn on_start_batch(&mut self) -> Self::DurationRecorder {
+        self.counts.num_iterations += 1;
         tikv_util::time::Instant::now_coarse()
     }
 
     #[inline]
-    fn inc_elapsed_duration(&mut self, dr: Self::DurationRecorder) {
+    fn on_finish_batch(&mut self, dr: Self::DurationRecorder, rows: usize) {
+        self.counts.num_produced_rows += rows;
         let elapsed_time = tikv_util::time::duration_to_ms(dr.elapsed()) as usize;
         self.counts.time_processed_ms += elapsed_time;
-    }
-
-    #[inline]
-    fn inc_produced_rows(&mut self, rows: usize) {
-        self.counts.num_produced_rows += rows;
-    }
-
-    #[inline]
-    fn inc_iterations(&mut self) {
-        self.counts.num_iterations += 1;
     }
 
     #[inline]
@@ -159,16 +136,10 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
     }
 
     #[inline]
-    fn start_record_duration(&self) -> Self::DurationRecorder {}
+    fn on_start_batch(&mut self) -> Self::DurationRecorder {}
 
     #[inline]
-    fn inc_elapsed_duration(&mut self, _dr: Self::DurationRecorder) {}
-
-    #[inline]
-    fn inc_produced_rows(&mut self, _rows: usize) {}
-
-    #[inline]
-    fn inc_iterations(&mut self) {}
+    fn on_finish_batch(&mut self, _dr: Self::DurationRecorder, _rows: usize) {}
 
     #[inline]
     fn collect_into(&mut self, _target: &mut [Option<ExecSummary>]) {}

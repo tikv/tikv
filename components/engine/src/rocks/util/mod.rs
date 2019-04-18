@@ -1,8 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod config;
 pub mod engine_metrics;
 mod event_listener;
+pub mod io_limiter;
 pub mod metrics_flusher;
+pub mod security;
 pub mod stats;
 
 use std::cmp;
@@ -12,6 +15,10 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use self::engine_metrics::{
+    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
+    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE, ROCKSDB_TOTAL_SST_FILES_SIZE,
+};
 use crate::rocks::load_latest_options;
 use crate::rocks::set_external_sst_file_global_seq_no;
 use crate::rocks::supported_compression;
@@ -19,18 +26,12 @@ use crate::rocks::{
     CColumnFamilyDescriptor, ColumnFamilyOptions, CompactOptions, CompactionOptions,
     DBCompressionType, DBOptions, Env, Range, SliceTransform, DB,
 };
-
-use self::engine_metrics::{
-    ROCKSDB_COMPRESSION_RATIO_AT_LEVEL, ROCKSDB_CUR_SIZE_ALL_MEM_TABLES,
-    ROCKSDB_NUM_FILES_AT_LEVEL, ROCKSDB_TOTAL_SST_FILES_SIZE,
-};
-use crate::{ALL_CFS, CF_DEFAULT};
+use crate::{Error, Result, ALL_CFS, CF_DEFAULT};
+use tikv_util::file::calc_crc32;
 
 pub use self::event_listener::EventListener;
 pub use self::metrics_flusher::MetricsFlusher;
 pub use crate::rocks::CFHandle;
-
-use super::{Error, Result};
 
 /// Copies the source file to a newly created file.
 pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<u64> {
@@ -47,32 +48,6 @@ pub fn copy_and_sync<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Resu
     let res = io::copy(&mut reader, &mut writer)?;
     writer.sync_all()?;
     Ok(res)
-}
-
-/// Calculates the given file's CRC32 checksum.
-// This is a copy of `util::calc_crc32`.
-// TODO: remove it once util becomes a component.
-fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
-    use crc::crc32::{self, Digest, Hasher32};
-    use std::fs::OpenOptions;
-    use std::io::Read;
-    const DIGEST_BUFFER_SIZE: usize = 1024 * 1024;
-
-    let mut digest = Digest::new(crc32::IEEE);
-    let mut f = OpenOptions::new().read(true).open(path)?;
-    let mut buf = vec![0; DIGEST_BUFFER_SIZE];
-    loop {
-        match f.read(&mut buf[..]) {
-            Ok(0) => {
-                return Ok(digest.sum32());
-            }
-            Ok(n) => {
-                digest.write(&buf[..n]);
-            }
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(err) => return Err(err),
-        }
-    }
 }
 
 // Zlib and bzip2 are too slow.
@@ -332,6 +307,11 @@ pub fn get_engine_compression_ratio_at_level(
 pub fn get_cf_num_files_at_level(engine: &DB, handle: &CFHandle, level: usize) -> Option<u64> {
     let prop = format!("{}{}", ROCKSDB_NUM_FILES_AT_LEVEL, level);
     engine.get_property_int_cf(handle, &prop)
+}
+
+/// Gets the number of immutable mem-table of given column family.
+pub fn get_num_immutable_mem_table(engine: &DB, handle: &CFHandle) -> Option<u64> {
+    engine.get_property_int_cf(handle, ROCKSDB_NUM_IMMUTABLE_MEM_TABLE)
 }
 
 /// Checks whether any column family sets `disable_auto_compactions` to `True` or not.
