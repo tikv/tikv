@@ -76,4 +76,17 @@ lazy_static! {
         exponential_buckets(1024.0, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref IMPORT_EACH_PHASE: GaugeVec = register_gauge_vec!(
+        "tikv_import_each_phase",
+        "Import each phase duration of importer",
+        &["phase"]
+    )
+    .unwrap();
+    pub static ref IMPORT_STORE_SAPCE_NOT_ENOUGH_COUNTER: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_import_wait_store_available_count",
+            "Counter of wait store available",
+            &["store_id"]
+        )
+        .unwrap();
 }
