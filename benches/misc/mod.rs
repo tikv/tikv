@@ -10,6 +10,7 @@ mod serialization;
 mod storage;
 mod util;
 mod writebatch;
+mod keybuilder;
 
 #[bench]
 fn _bench_check_requirement(_: &mut test::Bencher) {
