@@ -18,6 +18,7 @@ pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
+pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -955,6 +956,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                     .set(v as i64);
             }
         }
+
+        // Num immutable mem-table
+        if let Some(v) = rocks::util::get_num_immutable_mem_table(engine, handle) {
+            STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
     }
 
     // For snapshot
@@ -1225,6 +1233,12 @@ lazy_static! {
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
+    ).unwrap();
+
+    pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_immutable_mem_table",
+        "Number of immutable mem-table",
+        &["db", "cf"]
     ).unwrap();
 
     pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(

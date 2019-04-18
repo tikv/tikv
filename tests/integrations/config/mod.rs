@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use slog::Level;
 
+use engine::rocks::util::config::CompressionType;
 use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
@@ -17,7 +18,7 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
-use tikv_util::config::{CompressionType, ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
 #[test]
@@ -499,6 +500,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
         max_open_engines: 2,
+        min_available_ratio: 0.05,
     };
     value.panic_when_unexpected_key_or_data = true;
 
