@@ -13,7 +13,7 @@ use super::{BenchConfig, EngineFactory, DEFAULT_ITERATIONS};
 fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);
@@ -35,7 +35,7 @@ fn storage_raw_get<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Ben
 fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);
@@ -64,7 +64,7 @@ fn storage_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Be
 fn storage_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchConfig<F>) {
     let engine = config.engine_factory.build();
     let store = SyncTestStorageBuilder::from_engine(engine).build().unwrap();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let kvs = KvGenerator::new(config.key_length, config.value_length)
                 .generate(DEFAULT_ITERATIONS);

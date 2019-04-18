@@ -13,7 +13,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &Bench
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
                 config.key_length,
@@ -42,7 +42,7 @@ fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCo
     let ctx = Context::new();
     let snapshot = engine.snapshot(&ctx).unwrap();
     let option = Options::default();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let mut txn = MvccTxn::new(snapshot.clone(), 1, true).unwrap();
 
@@ -89,7 +89,7 @@ fn mvcc_reader_load_lock<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config
     .map(|(k, _)| Key::from_raw(&k))
     .collect();
 
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             (snapshot, &test_keys)
@@ -117,7 +117,7 @@ fn mvcc_reader_seek_write<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::default();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let test_keys: Vec<Key> = KvGenerator::with_seed(

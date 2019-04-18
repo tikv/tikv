@@ -14,7 +14,7 @@ fn bench_engine_put<E: Engine, F: EngineFactory<E>>(
 ) {
     let engine = config.engine_factory.build();
     let ctx = Context::new();
-    bencher.iter_batched_ref(
+    bencher.iter_batched(
         || {
             let test_kvs: Vec<(Key, Value)> = KvGenerator::with_seed(
                 config.key_length,
@@ -62,7 +62,7 @@ fn bench_engine_get<E: Engine, F: EngineFactory<E>>(
     .map(|(key, _)| Key::from_raw(&key))
     .collect();
 
-    bencher.iter_batched_ref(
+    bencher.iter_batched(
         || {
             let snap = engine.snapshot(&ctx).unwrap();
             (snap, &test_kvs)

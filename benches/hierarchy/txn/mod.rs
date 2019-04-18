@@ -13,7 +13,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
                 KvGenerator::new(config.key_length, config.value_length)
@@ -40,7 +40,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_batched_ref(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
