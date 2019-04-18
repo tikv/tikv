@@ -67,17 +67,17 @@ impl BatchExecutor for EncodedFixtureBatchExecutor {
 
     /// Each `next_batch()` takes about 30us.
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         use tikv::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
         use tikv::coprocessor::dag::expr::EvalWarnings;
 
         let mut columns = Vec::with_capacity(3);
         for column_index in 0..3 {
-            let mut column = LazyBatchColumn::raw_with_capacity(expect_rows);
-            if self.data[column_index].len() > expect_rows {
+            let mut column = LazyBatchColumn::raw_with_capacity(scan_rows);
+            if self.data[column_index].len() > scan_rows {
                 column
                     .mut_raw()
-                    .extend(self.data[column_index].drain(..expect_rows));
+                    .extend(self.data[column_index].drain(..scan_rows));
             } else {
                 column.mut_raw().append(&mut self.data[column_index]);
             }

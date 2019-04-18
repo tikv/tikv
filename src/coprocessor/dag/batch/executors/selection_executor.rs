@@ -71,8 +71,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
     }
 
     #[inline]
-    fn handle_next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        let mut src_result = self.src.next_batch(expect_rows);
+    fn handle_next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let mut src_result = self.src.next_batch(scan_rows);
 
         // We don't care whether there are errors during the `next_batch()` in the src executor.
 
@@ -124,9 +124,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_batch();
-        let result = self.handle_next_batch(expect_rows);
+        let result = self.handle_next_batch(scan_rows);
         self.summary_collector
             .on_finish_batch(timer, result.data.rows_len());
         result
@@ -155,7 +155,7 @@ mod tests {
     use crate::coprocessor::dag::rpn_expr::RpnFunction;
 
     #[test]
-    fn test_filter_empty() {
+    fn test_empty_rows() {
         #[derive(Debug, Clone, Copy)]
         struct FnFoo;
 
@@ -201,6 +201,9 @@ mod tests {
                 .push_fn_call(FnFoo, FieldTypeBuilder::new().tp(FieldTypeTp::LongLong))
                 .build()],
         );
+
+        // When source executor returns empty rows, selection executor should process correctly.
+        // No errors should be generated and the predicate function should not be called.
 
         let r = exec.next_batch(1);
         assert_eq!(r.data.rows_len(), 0);

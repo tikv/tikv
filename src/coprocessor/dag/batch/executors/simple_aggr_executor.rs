@@ -328,7 +328,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, _expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
         let timer = self.summary_collector.on_start_batch();
