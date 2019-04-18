@@ -610,6 +610,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             has_snapshot = true;
+            self.register_raft_base_tick();
         }
         if is_merging && has_snapshot {
             // After applying a snapshot, merge is rollbacked implicitly.
@@ -730,6 +731,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
             self.register_raft_base_tick();
         } else {
+            info!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
             self.fsm.group_state = GroupState::Indle;
             if !self.fsm.peer.is_leader() {
                 self.register_raft_base_tick();
@@ -835,6 +837,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
+            self.register_raft_base_tick();
         }
 
         self.fsm.has_ready = true;

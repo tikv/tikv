@@ -218,7 +218,7 @@ impl RecentAddedPeer {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct CheckTickResult {
     leader: bool,
     up_to_date: bool,
@@ -531,12 +531,13 @@ impl Peer {
 
     pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
         let mut res = CheckTickResult::default();
-        if !self.is_leader()
-            || self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks
-        {
+        if !self.is_leader() {
             return res;
         }
         res.leader = true;
+        if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
+            return res;
+        }
         let status = self.raft_group.status();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
