@@ -2,8 +2,8 @@
 
 use rand::{thread_rng, Rng};
 use test::Bencher;
-use tikv_util::keybuilder::KeyBuilder;
 use tikv::raftstore::store::keys;
+use tikv_util::keybuilder::KeyBuilder;
 
 #[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
