@@ -20,8 +20,22 @@ impl KeyBuilder {
         }
     }
 
-    pub fn from_vec(vec: Vec<u8>, reserved_prefix_len: usize, reserved_suffix_len: usize) -> Self {
-        let buf = if reserved_prefix_len == 0 && vec.capacity() >= vec.len() + reserved_suffix_len {
+    pub fn from_vec(
+        mut vec: Vec<u8>,
+        reserved_prefix_len: usize,
+        reserved_suffix_len: usize,
+    ) -> Self {
+        let buf = if vec.capacity() >= vec.len() + reserved_prefix_len + reserved_suffix_len {
+            if reserved_prefix_len > 0 {
+                unsafe {
+                    ptr::copy(
+                        vec.as_ptr(),
+                        vec.as_mut_ptr().add(reserved_prefix_len),
+                        vec.len(),
+                    );
+                    vec.set_len(vec.len() + reserved_prefix_len);
+                }
+            }
             vec
         } else {
             let mut res = Vec::with_capacity(vec.len() + reserved_prefix_len + reserved_suffix_len);
