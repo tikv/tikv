@@ -173,8 +173,8 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let mut last_key = None;
 
     let iter_opt = IterOption::new(
-        Some(KeyBuilder::from_vec(start_key, 0)),
-        Some(KeyBuilder::from_vec(end_key, 0)),
+        Some(KeyBuilder::from_vec(start_key, 0, 0)),
+        Some(KeyBuilder::from_vec(end_key, 0, 0)),
         false,
     );
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));

@@ -429,8 +429,8 @@ impl Debugger {
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
         let readopts = IterOption::new(
-            Some(KeyBuilder::from_vec(from.clone(), 0)),
-            Some(KeyBuilder::from_vec(to, 0)),
+            Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+            Some(KeyBuilder::from_vec(to, 0, 0)),
             false,
         )
         .build_read_opts();
@@ -841,8 +841,8 @@ impl MvccChecker {
             let from = start_key.clone();
             let to = end_key.clone();
             let readopts = IterOption::new(
-                Some(KeyBuilder::from_vec(from.clone(), 0)),
-                Some(KeyBuilder::from_vec(to, 0)),
+                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(to, 0, 0)),
                 false,
             )
             .build_read_opts();
@@ -1106,7 +1106,7 @@ impl MvccInfoIterator {
             let to = if to.is_empty() {
                 None
             } else {
-                Some(KeyBuilder::from_vec(to.to_vec(), 0))
+                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
             };
             let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));

@@ -302,13 +302,13 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn gen_iter_opt(&self) -> IterOption {
         let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
             Some(builder)
         } else {
             None
         };
         let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
             Some(builder)
         } else {
             None

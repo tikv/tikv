@@ -73,13 +73,13 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
         let l_bound = if let Some(ref b) = self.lower_bound {
-            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN, 0);
             Some(builder)
         } else {
             None
         };
         let u_bound = if let Some(ref b) = self.upper_bound {
-            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN);
+            let builder = KeyBuilder::from_slice(b.as_encoded(), DATA_KEY_PREFIX_LEN, 0);
             Some(builder)
         } else {
             None

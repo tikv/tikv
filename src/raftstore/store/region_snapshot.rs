@@ -61,8 +61,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
@@ -79,8 +79,8 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len());
-        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len());
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
@@ -480,8 +480,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len())),
-                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len())),
+                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -636,7 +636,7 @@ mod tests {
         let snap = RegionSnapshot::new(&store);
         let mut iter = snap.iter(IterOption::new(
             None,
-            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len())),
+            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
             true,
         ));
         assert!(iter.seek_to_first());

@@ -24,9 +24,9 @@ extern crate quick_error;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+use std::ptr;
 use std::sync::Arc;
 use std::{error, result};
-use std::{ptr, slice};
 
 pub mod rocks;
 pub mod util;
@@ -231,13 +231,15 @@ impl KeyBuilder {
         }
     }
 
-    pub fn from_vec(vec: Vec<u8>, reserved_prefix_len: usize) -> Self {
-        let buf = if reserved_prefix_len == 0 {
+    pub fn from_vec(vec: Vec<u8>, reserved_prefix_len: usize, reserved_suffix_len: usize) -> Self {
+        let buf = if reserved_prefix_len == 0 && vec.capacity() >= vec.len() + reserved_suffix_len {
             vec
         } else {
-            let mut res = Vec::with_capacity(vec.len() + reserved_prefix_len);
-            unsafe {
-                res.set_len(reserved_prefix_len);
+            let mut res = Vec::with_capacity(vec.len() + reserved_prefix_len + reserved_suffix_len);
+            if reserved_prefix_len > 0 {
+                unsafe {
+                    res.set_len(reserved_prefix_len);
+                }
             }
             res.extend_from_slice(vec.as_slice());
             res
@@ -248,8 +250,8 @@ impl KeyBuilder {
         }
     }
 
-    pub fn from_slice(s: &[u8], reserved_prefix_len: usize) -> Self {
-        let mut buf = Vec::with_capacity(s.len() + reserved_prefix_len);
+    pub fn from_slice(s: &[u8], reserved_prefix_len: usize, reserved_suffix_len: usize) -> Self {
+        let mut buf = Vec::with_capacity(s.len() + reserved_prefix_len + reserved_suffix_len);
         if reserved_prefix_len > 0 {
             unsafe {
                 buf.set_len(reserved_prefix_len);
@@ -262,10 +264,10 @@ impl KeyBuilder {
         }
     }
 
-    pub fn add_key_prefix(&mut self, prefix: &[u8]) {
+    pub fn set_prefix(&mut self, prefix: &[u8]) {
         assert!(self.start == prefix.len());
         unsafe {
-            ptr::copy(prefix.as_ptr(), self.buf.as_mut_ptr(), prefix.len());
+            ptr::copy_nonoverlapping(prefix.as_ptr(), self.buf.as_mut_ptr(), prefix.len());
             self.start = 0;
         }
     }
@@ -288,18 +290,21 @@ impl KeyBuilder {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
+        &self.buf.as_slice()[self.start..]
     }
 
-    pub fn build(self) -> Vec<u8> {
+    pub fn build(mut self) -> Vec<u8> {
         if self.start == 0 {
             self.buf
         } else {
-            let mut res = Vec::with_capacity(self.len());
             unsafe {
-                res.extend_from_slice(slice::from_raw_parts(self.as_ptr(), self.len()));
+                ptr::copy(
+                    self.buf.as_ptr().add(self.start),
+                    self.buf.as_mut_ptr(),
+                    self.buf.len(),
+                );
             }
-            res
+            self.buf
         }
     }
 }
@@ -345,17 +350,17 @@ impl IterOption {
     }
 
     pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
-        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len);
+        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.lower_bound = Some(builder);
     }
 
     pub fn set_vec_lower_bound(&mut self, bound: Vec<u8>) {
-        self.lower_bound = Some(KeyBuilder::from_vec(bound, 0));
+        self.lower_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
     }
 
     pub fn add_lower_bound_prefix(&mut self, prefix: &[u8]) {
         if let Some(ref mut builder) = self.lower_bound {
-            builder.add_key_prefix(prefix);
+            builder.set_prefix(prefix);
         }
     }
 
@@ -364,17 +369,17 @@ impl IterOption {
     }
 
     pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
-        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len);
+        let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.upper_bound = Some(builder);
     }
 
     pub fn set_vec_upper_bound(&mut self, bound: Vec<u8>) {
-        self.upper_bound = Some(KeyBuilder::from_vec(bound, 0));
+        self.upper_bound = Some(KeyBuilder::from_vec(bound, 0, 0));
     }
 
     pub fn add_upper_bound_prefix(&mut self, prefix: &[u8]) {
         if let Some(ref mut builder) = self.upper_bound {
-            builder.add_key_prefix(prefix);
+            builder.set_prefix(prefix);
         }
     }
 
@@ -423,8 +428,8 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
-        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         scan_impl(self.new_iterator(iter_opt), start_key, f)
     }
@@ -441,8 +446,8 @@ pub trait Iterable {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
-        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         scan_impl(self.new_iterator_cf(cf, iter_opt)?, start_key, f)
     }
@@ -515,27 +520,35 @@ mod tests {
             KeyBuilder::new(key1.len() + prefix.len() + suffix.len(), prefix.len());
         key_builder.append(key1);
         key_builder.append(suffix);
-        key_builder.add_key_prefix(prefix);
+        key_builder.set_prefix(prefix);
         assert_eq!(key_builder.len(), key1.len() + prefix.len() + suffix.len());
         let res = key_builder.build();
         assert_eq!(res, b"prefix-key1-suffix".to_vec());
 
         // from_vec
         let key2 = b"key2";
-        let mut key_builder = KeyBuilder::from_vec(key2.to_vec(), prefix.len());
+        let mut key_builder = KeyBuilder::from_vec(key2.to_vec(), prefix.len(), suffix.len());
         assert_eq!(key_builder.len(), key2.len());
-        key_builder.add_key_prefix(prefix);
+        key_builder.set_prefix(prefix);
         assert_eq!(key_builder.len(), key2.len() + prefix.len());
+        key_builder.append(suffix);
         let res = key_builder.build();
-        assert_eq!(res, b"prefix-key2".to_vec());
+        assert_eq!(res, b"prefix-key2-suffix".to_vec());
+
+        // from_vec but not set prefix
+        let mut key_builder = KeyBuilder::from_vec(key2.to_vec(), prefix.len(), suffix.len());
+        key_builder.append(suffix);
+        let res = key_builder.build();
+        assert_eq!(res, b"key2-suffix".to_vec());
 
         // from_slice
         let key3 = b"key3";
-        let mut key_builder = KeyBuilder::from_slice(key3, prefix.len());
+        let mut key_builder = KeyBuilder::from_slice(key3, prefix.len(), suffix.len());
         assert_eq!(key_builder.len(), key3.len());
-        key_builder.add_key_prefix(prefix);
+        key_builder.set_prefix(prefix);
         assert_eq!(key_builder.len(), key3.len() + prefix.len());
+        key_builder.append(suffix);
         let res = key_builder.build();
-        assert_eq!(res, b"prefix-key3".to_vec());
+        assert_eq!(res, b"prefix-key3-suffix".to_vec());
     }
 }

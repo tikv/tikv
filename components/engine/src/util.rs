@@ -73,8 +73,8 @@ pub fn delete_all_in_range_cf(
             wb.delete_range_cf(handle, start_key, end_key)?;
         }
     } else {
-        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN);
-        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN);
+        let start = KeyBuilder::from_slice(start_key, DATA_KEY_PREFIX_LEN, 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_KEY_PREFIX_LEN, 0);
         let iter_opt = IterOption::new(Some(start), Some(end), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
