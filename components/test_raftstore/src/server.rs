@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
 
@@ -16,7 +16,7 @@ use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, SnapManager};
+use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::readpool;
@@ -35,6 +35,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
 type SimulateServerTransport =
@@ -119,24 +120,24 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        // Create localreader.
-        let local_reader = Worker::new("test-local-reader");
-        let local_ch = local_reader.scheduler();
-
-        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+        let raft_router = ServerRaftStoreRouter::new(router.clone());
         let sim_router = SimulateTransport::new(raft_router);
+
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let raft_engine = RaftKv::new(sim_router.clone(), reader);
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = readpool::Builder::build_for_test();
         let store = create_raft_storage(
-            sim_router.clone(),
+            raft_engine.clone(),
             &cfg.storage,
             storage_read_pool,
             None,
             None,
         )?;
-        self.storages.insert(node_id, store.get_engine());
+        self.storages.insert(node_id, raft_engine.clone());
 
         // Create import service.
         let importer = {
@@ -156,7 +157,7 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool = readpool::Builder::build_for_test();
-        let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&server_cfg, raft_engine, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
@@ -211,7 +212,7 @@ impl Simulator for ServerCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            local_reader,
+            store_meta,
             coprocessor_host,
             importer,
         )?;

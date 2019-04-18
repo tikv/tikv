@@ -3,6 +3,7 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use prometheus::local::*;
@@ -53,11 +54,7 @@ pub fn build_read_pool<E: Engine>(
     Builder::from_config(config)
         .name_prefix(name_prefix)
         .on_tick(move || tls_flush(&pd_sender))
-        .after_start(move || {
-            TLS_ENGINE_ANY.with(|e| {
-                *e.borrow_mut() = Some(Box::new(engine.lock().unwrap().clone()));
-            })
-        })
+        .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
         .before_stop(move || tls_flush(&pd_sender2))
         .build()
 }
@@ -176,5 +173,12 @@ pub fn with_tls_engine_any<F, R>(f: F) -> R
 where
     F: FnOnce(&dyn Any) -> R,
 {
-    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref().unwrap()))
+    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref().unwrap().as_ref()))
+}
+
+#[inline]
+pub fn set_tls_engine_any<E: Engine>(engine: E) {
+    TLS_ENGINE_ANY.with(|e| {
+        e.replace(Some(Box::new(engine)));
+    });
 }

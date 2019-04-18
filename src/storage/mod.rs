@@ -15,6 +15,7 @@ use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
+use std::thread;
 use std::u64;
 
 use engine::rocks::DB;
@@ -457,7 +458,10 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
+        let engine = Arc::new(Mutex::new(self.engine.clone()));
+        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
+            .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
+            .build();
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -783,7 +787,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = engine_any.downcast_ref().unwrap();
+                let engine: &E = engine_any.downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {

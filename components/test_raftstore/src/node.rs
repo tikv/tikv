@@ -25,6 +25,7 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -164,10 +165,6 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
 
-        // Create localreader.
-        let local_reader = Worker::new("test-local-reader");
-        let local_ch = local_reader.scheduler();
-
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
             system,
@@ -211,7 +208,7 @@ impl Simulator for NodeCluster {
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            local_reader,
+            Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP))),
             coprocessor_host,
             importer,
         )?;
@@ -239,7 +236,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+        let router = ServerRaftStoreRouter::new(router.clone());
         self.trans
             .core
             .lock()

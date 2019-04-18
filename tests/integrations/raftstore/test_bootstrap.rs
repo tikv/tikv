@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tempdir::TempDir;
 
@@ -14,6 +14,7 @@ use engine::*;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
+use tikv::raftstore::store::fsm::store::StoreMeta;
 use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
 use tikv_util::worker::{FutureWorker, Worker};
@@ -54,7 +55,6 @@ fn test_node_bootstrap_with_prepared_data() {
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
     let snap_mgr = SnapManager::new(tmp_mgr.path().to_str().unwrap(), Some(node.get_router()));
     let pd_worker = FutureWorker::new("test-pd-worker");
-    let local_reader = Worker::new("test-local-reader");
 
     // assume there is a node has bootstrapped the cluster and add region in pd successfully
     bootstrap_with_first_region(Arc::clone(&pd_client)).unwrap();
@@ -87,7 +87,7 @@ fn test_node_bootstrap_with_prepared_data() {
         simulate_trans,
         snap_mgr,
         pd_worker,
-        local_reader,
+        Arc::new(Mutex::new(StoreMeta::new(0))),
         coprocessor_host,
         importer,
     )
