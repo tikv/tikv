@@ -1002,7 +1002,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#263b82e81a90d0f9c6162b921f16610af58d195a"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#f1e3ae36ff7f32c6197cbcf6322181a4799db2ec"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1734,7 +1734,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#263b82e81a90d0f9c6162b921f16610af58d195a"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#f1e3ae36ff7f32c6197cbcf6322181a4799db2ec"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
