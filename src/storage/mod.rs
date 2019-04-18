@@ -1311,7 +1311,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1352,7 +1352,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {

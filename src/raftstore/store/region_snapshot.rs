@@ -1,7 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
+use engine::{
+    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
+    SyncSnapshot,
+};
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
@@ -309,6 +312,14 @@ impl RegionIterator {
     #[inline]
     pub fn valid(&self) -> bool {
         self.valid
+    }
+
+    #[inline]
+    pub fn status(&self) -> Result<()> {
+        self.iter
+            .status()
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
     }
 
     #[inline]

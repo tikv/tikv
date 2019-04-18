@@ -193,6 +193,11 @@ impl Iterator for BTreeEngineIterator {
         self.valid
     }
 
+    #[inline]
+    fn status(&self) -> EngineResult<()> {
+        Ok(())
+    }
+
     fn key(&self) -> &[u8] {
         assert!(self.valid());
         self.cur_key.as_ref().unwrap().as_encoded()
