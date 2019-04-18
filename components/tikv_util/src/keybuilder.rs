@@ -87,11 +87,13 @@ impl KeyBuilder {
             self.buf
         } else {
             unsafe {
+                let len = self.len();
                 ptr::copy(
                     self.buf.as_ptr().add(self.start),
                     self.buf.as_mut_ptr(),
-                    self.buf.len(),
+                    len,
                 );
+                self.buf.set_len(len);
             }
             self.buf
         }
