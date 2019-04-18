@@ -185,14 +185,16 @@ impl<T: TxnStore + 'static> TableScanBencher for BatchTableScanNext1024Bencher<T
 }
 
 pub struct TableScanDAGBencher<T: TxnStore + 'static> {
-    pub batch: bool,
+    batch: bool,
+    display_table_rows: usize,
     _phantom: PhantomData<T>,
 }
 
 impl<T: TxnStore + 'static> TableScanDAGBencher<T> {
-    pub fn new(batch: bool) -> Self {
+    pub fn new(batch: bool, display_table_rows: usize) -> Self {
         Self {
             batch,
+            display_table_rows,
             _phantom: PhantomData,
         }
     }
@@ -201,7 +203,12 @@ impl<T: TxnStore + 'static> TableScanDAGBencher<T> {
 impl<T: TxnStore + 'static> TableScanBencher for TableScanDAGBencher<T> {
     fn name(&self) -> String {
         let tag = if self.batch { "batch" } else { "normal" };
-        format!("{}/{}/with_dag", <T as StoreDescriber>::name(), tag)
+        format!(
+            "{}/{}/with_dag/rows={}",
+            <T as StoreDescriber>::name(),
+            tag,
+            self.display_table_rows
+        )
     }
 
     fn bench(
@@ -222,6 +229,6 @@ impl<T: TxnStore + 'static> TableScanBencher for TableScanDAGBencher<T> {
     }
 
     fn box_clone(&self) -> Box<dyn TableScanBencher> {
-        Box::new(Self::new(self.batch))
+        Box::new(Self::new(self.batch, self.display_table_rows))
     }
 }
