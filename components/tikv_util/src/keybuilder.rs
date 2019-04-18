@@ -25,7 +25,7 @@ impl KeyBuilder {
         reserved_prefix_len: usize,
         reserved_suffix_len: usize,
     ) -> Self {
-        let buf = if vec.capacity() >= vec.len() + reserved_prefix_len + reserved_suffix_len {
+        if vec.capacity() >= vec.len() + reserved_prefix_len + reserved_suffix_len {
             if reserved_prefix_len > 0 {
                 unsafe {
                     ptr::copy(
@@ -36,20 +36,12 @@ impl KeyBuilder {
                     vec.set_len(vec.len() + reserved_prefix_len);
                 }
             }
-            vec
-        } else {
-            let mut res = Vec::with_capacity(vec.len() + reserved_prefix_len + reserved_suffix_len);
-            if reserved_prefix_len > 0 {
-                unsafe {
-                    res.set_len(reserved_prefix_len);
-                }
+            Self {
+                buf: vec,
+                start: reserved_prefix_len,
             }
-            res.extend_from_slice(vec.as_slice());
-            res
-        };
-        Self {
-            buf,
-            start: reserved_prefix_len,
+        } else {
+            Self::from_slice(vec.as_slice(), reserved_prefix_len, reserved_suffix_len)
         }
     }
 
