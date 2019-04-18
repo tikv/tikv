@@ -4,7 +4,7 @@ use std::io::{Result, Write};
 use std::option::Option;
 use std::sync::Arc;
 
-use engine::rocks::RateLimiter;
+use crate::rocks::RateLimiter;
 
 const PRIORITY_HIGH: u8 = 1;
 const REFILL_PERIOD: i64 = 100 * 1000;

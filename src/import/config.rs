@@ -17,6 +17,7 @@ pub struct Config {
     pub region_split_size: ReadableSize,
     pub stream_channel_window: usize,
     pub max_open_engines: usize,
+    pub min_available_ratio: f64,
 }
 
 impl Default for Config {
@@ -30,6 +31,7 @@ impl Default for Config {
             region_split_size: ReadableSize::mb(512),
             stream_channel_window: 128,
             max_open_engines: 8,
+            min_available_ratio: 0.05,
         }
     }
 }
@@ -53,6 +55,9 @@ impl Config {
         }
         if self.max_open_engines == 0 {
             return Err("import.max_open_engines can not be 0".into());
+        }
+        if self.min_available_ratio < 0.0 {
+            return Err("import.min_available_ratio can not less than 0.02".into());
         }
         Ok(())
     }

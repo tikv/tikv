@@ -35,10 +35,10 @@ use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
+use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use tikv_util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
