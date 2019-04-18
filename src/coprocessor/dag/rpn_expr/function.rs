@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // TODO
 #![allow(dead_code)]
@@ -76,7 +65,7 @@ impl Helper {
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -100,7 +89,7 @@ impl Helper {
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Option<Arg0>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -134,7 +123,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -194,7 +188,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -218,7 +217,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -243,7 +247,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -268,7 +277,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -297,7 +311,13 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+            &Option<Arg2>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 3);
 

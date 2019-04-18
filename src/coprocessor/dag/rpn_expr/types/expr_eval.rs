@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -266,7 +255,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_scalar());
@@ -394,7 +383,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 4, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -444,7 +433,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -560,7 +549,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
@@ -1060,7 +1049,7 @@ mod tests {
         }];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1117,7 +1106,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1165,7 +1154,7 @@ mod tests {
         ];
         let exp = RpnExpression::from(rpn_nodes);
         let mut ctx = EvalContext::default();
-        let mut columns = LazyBatchColumnVec::from(vec![]);
+        let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
         });
@@ -1178,7 +1167,7 @@ mod tests {
         use tipb::expression::ScalarFuncSig;
         use tipb::expression::{Expr, ExprType};
 
-        use crate::util::codec::number::NumberEncoder;
+        use tikv_util::codec::number::NumberEncoder;
 
         // We will build an expression tree from:
         //      FnD(
@@ -1342,8 +1331,9 @@ mod tests {
         node_fn_d.mut_children().push(node_fn_a);
 
         // Build RPN expression from this expression tree.
-        let exp = RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper)
-            .unwrap();
+        let exp =
+            RpnExpressionBuilder::build_from_expr_tree_with_fn_mapper(node_fn_d, fn_mapper, 2)
+                .unwrap();
 
         let mut columns = LazyBatchColumnVec::from(vec![
             {

@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -35,14 +24,36 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
     }
 }
 
-impl LazyBatchColumnVec {
-    /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns
-    /// and each of them reserves capacity according to `rows_capacity`.
+impl From<Vec<VectorValue>> for LazyBatchColumnVec {
     #[inline]
-    pub fn raw(columns_count: usize, rows_capacity: usize) -> Self {
+    fn from(columns: Vec<VectorValue>) -> Self {
+        LazyBatchColumnVec {
+            columns: columns
+                .into_iter()
+                .map(|v| LazyBatchColumn::from(v))
+                .collect(),
+        }
+    }
+}
+
+impl LazyBatchColumnVec {
+    /// Creates a new empty `LazyBatchColumnVec`, which does not have columns and rows.
+    ///
+    /// Because column numbers won't change, it means constructed instance will be always empty.
+    #[inline]
+    pub fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+        }
+    }
+
+    /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns.
+    #[inline]
+    #[cfg(test)]
+    pub fn with_raw_columns(columns_count: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
         for _ in 0..columns_count {
-            let column = LazyBatchColumn::raw_with_capacity(rows_capacity);
+            let column = LazyBatchColumn::raw_with_capacity(0);
             columns.push(column);
         }
         Self { columns }
@@ -114,15 +125,6 @@ impl LazyBatchColumnVec {
         }
     }
 
-    /// Returns the number of rows this container can hold without reallocating.
-    #[inline]
-    pub fn rows_capacity(&self) -> usize {
-        if self.columns.is_empty() {
-            return 0;
-        }
-        self.columns[0].capacity()
-    }
-
     /// Retains only the rows specified by the predicate, which accepts index only.
     ///
     /// In other words, remove all rows such that `f(row_index)` returns `false`.
@@ -181,8 +183,13 @@ impl LazyBatchColumnVec {
         for col in &self.columns {
             min_len = min_len.min(col.len());
         }
+        self.truncate(min_len);
+    }
+
+    /// Shortens the rows, keeping the first `len` rows and dropping the rest.
+    pub fn truncate(&mut self, len: usize) {
         for col in &mut self.columns {
-            col.truncate(min_len);
+            col.truncate(len);
         }
         self.assert_columns_equal_length();
     }
@@ -287,7 +294,7 @@ mod tests {
             ];
 
             // Empty LazyBatchColumnVec
-            let mut columns = LazyBatchColumnVec::raw(3, 1);
+            let mut columns = LazyBatchColumnVec::with_raw_columns(3);
             assert_eq!(columns.rows_len(), 0);
             assert_eq!(columns.columns_len(), 3);
 
@@ -363,18 +370,15 @@ mod tests {
             },
         ];
 
-        let mut columns = LazyBatchColumnVec::raw(2, 3);
+        let mut columns = LazyBatchColumnVec::with_raw_columns(2);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
-        assert_eq!(columns.rows_capacity(), 3);
         columns.retain_rows_by_index(|_| true);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
-        assert_eq!(columns.rows_capacity(), 3);
         columns.retain_rows_by_index(|_| false);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
-        assert_eq!(columns.rows_capacity(), 3);
 
         push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(1.3)], false);
         push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::Null], false);
@@ -388,7 +392,6 @@ mod tests {
 
         assert_eq!(columns.rows_len(), 3);
         assert_eq!(columns.columns_len(), 2);
-        assert!(columns.rows_capacity() > 3);
         {
             let mut column0 = columns[0].clone();
             assert!(column0.is_raw());

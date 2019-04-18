@@ -1,19 +1,8 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
-use super::{Executor, ExecutorMetrics, Row, ScanOn, Scanner};
+use super::{Executor, ExecutorMetrics, Row};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::{Error, Result};
 use crate::storage::{Key, Store};
@@ -33,7 +22,7 @@ pub trait InnerExecutor {
     fn is_point(&self, range: &KeyRange) -> bool;
 
     // indicate which scan it will perform, Table or Index, this will pass to Scanner.
-    fn scan_on(&self) -> ScanOn;
+    fn scan_on(&self) -> super::super::scanner::ScanOn;
 
     // indicate whether the scan is a key only scan.
     fn key_only(&self) -> bool;
@@ -46,7 +35,7 @@ pub struct ScanExecutor<S: Store, T: InnerExecutor> {
     key_ranges: Peekable<IntoIter<KeyRange>>,
     current_range: Option<KeyRange>,
     scan_range: KeyRange,
-    scanner: Option<Scanner<S>>,
+    scanner: Option<super::super::scanner::Scanner<S>>,
     columns: Arc<Vec<ColumnInfo>>,
     inner: T,
     counts: Option<Vec<i64>>,
@@ -115,8 +104,8 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
         }
     }
 
-    fn new_scanner(&self, range: KeyRange) -> Result<Scanner<S>> {
-        Scanner::new(
+    fn new_scanner(&self, range: KeyRange) -> Result<super::super::scanner::Scanner<S>> {
+        super::super::Scanner::new(
             &self.store,
             self.inner.scan_on(),
             self.desc,
@@ -172,7 +161,7 @@ impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
             scanner.collect_statistics_into(&mut metrics.cf_stats);
         }
         if self.first_collect {
-            if self.inner.scan_on() == ScanOn::Table {
+            if self.inner.scan_on() == super::super::ScanOn::Table {
                 metrics.executor_count.table_scan += 1;
             } else {
                 metrics.executor_count.index_scan += 1;

@@ -1,26 +1,15 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
 use slog::Level;
-use tikv::storage::engine::{
+
+use engine::rocks::util::config::CompressionType;
+use engine::rocks::{
     CompactionPriority, DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode,
 };
-use toml;
-
 use tikv::config::*;
 use tikv::import::Config as ImportConfig;
 use tikv::pd::Config as PdConfig;
@@ -29,8 +18,8 @@ use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
 use tikv::storage::Config as StorageConfig;
-use tikv::util::config::{CompressionType, ReadableDuration, ReadableSize};
-use tikv::util::security::SecurityConfig;
+use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::security::SecurityConfig;
 
 #[test]
 fn test_toml_serde() {
@@ -501,6 +490,7 @@ fn test_serde_custom_tikv_config() {
         region_split_size: ReadableSize::mb(123),
         stream_channel_window: 123,
         max_open_engines: 2,
+        min_available_ratio: 0.05,
     };
     value.panic_when_unexpected_key_or_data = true;
 

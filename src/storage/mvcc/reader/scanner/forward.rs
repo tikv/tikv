@@ -1,24 +1,14 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 
+use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::engine::SEEK_BOUND;
+use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value, CF_DEFAULT};
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
 use super::util::CheckLockResult;
 use super::ScannerConfig;
@@ -252,7 +242,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
         if needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
-            // reallocation happends in `append_ts`.
+            // reallocation happens in `append_ts`.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
             if !self.write_cursor.valid() {
@@ -353,7 +343,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         // We have not found another user key for now, so we directly `seek()`.
         // After that, we must pointing to another key, or out of bound.
         // `current_user_key` must have reserved space here, so its clone has reserved space too.
-        // So no reallocation happends in `append_ts`.
+        // So no reallocation happens in `append_ts`.
         self.write_cursor.internal_seek(
             &current_user_key.clone().append_ts(0),
             &mut self.statistics.write,
