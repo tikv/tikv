@@ -595,7 +595,7 @@ mod tests {
         );
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_two_arg(
@@ -625,7 +625,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Date, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
@@ -703,7 +703,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
@@ -777,7 +777,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MonthName, Datum::Null);
         //  test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
@@ -840,7 +840,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::DayOfMonth, Datum::Null);
         //  test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
             .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
@@ -969,7 +969,7 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Year, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT);
         cfg.set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(

@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
+use crate::storage::{FixtureStore, Store};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -24,6 +25,20 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
     >,
 );
 
+impl
+    BatchIndexScanExecutor<
+        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+    }
+}
+
 impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     pub fn new(
         summary_collector: C,
@@ -34,27 +49,29 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
         desc: bool,
         unique: bool,
     ) -> Result<Self> {
-        // Note: `unique = true` doesn't completely mean that it is a unique index scan. Instead it
-        // just means that we can use point-get for this index. In the following scenarios `unique`
-        // will be `false`:
+        // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
+        // it just means that we can use point-get for this index. In the following scenarios
+        // `unique` will be `false`:
         // - scan from a non-unique index
         // - scan from a unique index with like: where unique-index like xxx
-
-        // Note: Unlike table scan executor, the accepted `columns_info` of index scan executor is
+        //
+        // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan executor is
         // strictly stipulated. The order of columns in the schema must be the same as index data
         // stored and if PK handle is needed it must be placed as the last one.
-
-        let mut schema = Vec::with_capacity(columns_info.len());
-        let mut columns_len_without_handle = 0;
-        let mut decode_handle = false;
-        for ci in &columns_info {
-            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
-            if ci.get_pk_handle() {
-                decode_handle = true;
-            } else {
-                columns_len_without_handle += 1;
-            }
-        }
+        //
+        // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
+        // real). We accept this kind of request for compatibility considerations, but will be
+        // forbidden soon.
+        let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
+        let schema: Vec<_> = columns_info
+            .iter()
+            .map(|ci| super::util::scan_executor::field_type_from_column_info(&ci))
+            .collect();
+        let columns_len_without_handle = if decode_handle {
+            schema.len() - 1
+        } else {
+            schema.len()
+        };
 
         let imp = IndexScanExecutorImpl {
             context: EvalContext::new(config),
@@ -153,6 +170,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
             ));
         }
 
+        assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
     }
 

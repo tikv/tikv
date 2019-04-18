@@ -15,7 +15,7 @@ pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as Date
 
 // Dynamic eval types.
 pub use self::scalar::ScalarValue;
-pub use self::vector::VectorValue;
+pub use self::vector::{VectorValue, VectorValueExt};
 pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
 use crate::coprocessor::dag::expr::EvalContext;
