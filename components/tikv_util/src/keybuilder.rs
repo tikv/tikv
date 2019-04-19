@@ -68,7 +68,6 @@ impl KeyBuilder {
     }
 
     pub fn append(&mut self, content: &[u8]) {
-        assert!(content.len() <= self.buf.capacity() - self.buf.len());
         self.buf.extend_from_slice(content);
     }
 
