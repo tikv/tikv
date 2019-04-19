@@ -9,10 +9,10 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::store::keys;
-use crate::storage::mvcc::properties::RangeProperties;
 use tikv_util::config::ReadableSize;
 
 use super::super::error::Result;
+use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
@@ -176,10 +176,10 @@ mod tests {
     use kvproto::pdpb::CheckPolicy;
     use tempdir::TempDir;
 
-    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
-    use crate::storage::mvcc::properties::{
+    use crate::raftstore::coprocessor::properties::{
         RangePropertiesCollectorFactory, SizePropertiesCollectorFactory,
     };
+    use crate::raftstore::store::{keys, SplitCheckRunner, SplitCheckTask};
     use crate::storage::Key;
     use tikv_util::config::ReadableSize;
     use tikv_util::escape;

@@ -95,7 +95,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             cop,
             raft_router.clone(),
             snap_worker.scheduler(),
-            stats_pool.sender().clone(),
             Arc::clone(&thread_load),
         );
 
@@ -240,12 +239,12 @@ mod tests {
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
-    use crate::server::readpool::{self, ReadPool};
+    use crate::server::readpool;
     use crate::storage::TestStorageBuilder;
+
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
-    use tikv_util::worker::FutureWorker;
 
     #[derive(Clone)]
     struct MockResolver {
@@ -321,12 +320,7 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let pd_worker = FutureWorker::new("test-pd-worker");
-        let cop_read_pool = ReadPool::new(
-            "cop-readpool",
-            &readpool::Config::default_for_test(),
-            || coprocessor::ReadPoolContext::new(pd_worker.scheduler()),
-        );
+        let cop_read_pool = readpool::Builder::build_for_test();
         let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));
