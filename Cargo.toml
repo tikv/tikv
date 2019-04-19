@@ -9,7 +9,8 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["tikv_alloc/default"]
+default = ["jemalloc"]
+jemalloc = ["tikv_alloc/jemalloc"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 system-alloc = ["tikv_alloc/system-alloc"]
 portable = ["engine/portable"]

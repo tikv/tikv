@@ -82,21 +82,12 @@
 #[macro_use]
 extern crate log;
 
-#[cfg(all(
-    unix,
-    not(fuzzing),
-    any(feature = "system-alloc", feature = "tcmalloc")
-))]
+#[cfg(all(unix, not(fuzzing), not(feature = "jemalloc")))]
 mod default;
 
 pub type AllocStats = Vec<(&'static str, usize)>;
 
-// Allocators
-#[cfg(not(all(
-    unix,
-    not(fuzzing),
-    any(feature = "system-alloc", feature = "tcmalloc")
-)))]
+#[cfg(all(unix, not(fuzzing), feature = "jemalloc"))]
 #[path = "jemalloc.rs"]
 mod imp;
 #[cfg(all(unix, not(fuzzing), feature = "tcmalloc"))]
