@@ -16,9 +16,9 @@ use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
 
 use crate::config::DbConfig;
+use crate::raftstore::coprocessor::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::raftstore::store::keys;
 use crate::storage::is_short_value;
-use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
@@ -33,7 +33,7 @@ use tikv_util::config::MB;
 use super::common::*;
 use super::Result;
 use crate::import::stream::SSTFile;
-use tikv_util::security;
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use tikv_util::security::SecurityConfig;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
@@ -226,7 +226,7 @@ impl SSTWriter {
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));
-            env = security::encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
+            env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
         let uuid = Uuid::new_v4().to_string();
 
@@ -376,8 +376,8 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
+    use engine::rocks::util::security::encrypted_env_from_cipher_file;
     use tikv_util::file::file_exists;
-    use tikv_util::security::encrypted_env_from_cipher_file;
 
     fn new_engine() -> (TempDir, Engine) {
         let dir = TempDir::new("test_import_engine").unwrap();
