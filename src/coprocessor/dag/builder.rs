@@ -15,7 +15,7 @@ use super::executor::{
     TopNExecutor,
 };
 use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
-use crate::coprocessor::dag::expr::{EvalConfig, SqlMode};
+use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
 
@@ -105,13 +105,13 @@ impl DAGBuilder {
             }
         }
 
-        for ex in executor_descriptors {
-            match ex.get_tp() {
+        for ed in executor_descriptors {
+            match ed.get_tp() {
                 ExecType::TypeLimit => {
                     executor = Box::new(BatchLimitExecutor::new(
-                        executor,
-                        ex.get_limit().get_limit() as usize,
                         ExecSummaryCollectorDisabled,
+                        executor,
+                        ed.get_limit().get_limit() as usize,
                     )?);
                 }
                 _ => {
@@ -282,7 +282,7 @@ impl DAGBuilder {
         is_streaming: bool,
         enable_batch_if_possible: bool,
     ) -> Result<Box<dyn RequestHandler>> {
-        let mut eval_cfg = EvalConfig::from_flags(req.get_flags());
+        let mut eval_cfg = EvalConfig::from_flag(Flag::from_bits_truncate(req.get_flags()));
         // We respect time zone name first, then offset.
         if req.has_time_zone_name() && !req.get_time_zone_name().is_empty() {
             box_try!(eval_cfg.set_time_zone_by_name(req.get_time_zone_name()));

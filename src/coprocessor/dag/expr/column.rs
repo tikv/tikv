@@ -9,6 +9,7 @@ use cop_datatype::FieldTypeTp;
 use super::{Column, EvalContext, Result};
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::coprocessor::codec::Datum;
+use crate::coprocessor::dag::expr::Flag;
 
 impl Column {
     pub fn eval(&self, row: &[Datum]) -> Datum {
@@ -44,7 +45,9 @@ impl Column {
             return Ok(Some(Cow::Owned(s)));
         }
 
-        if !ctx.cfg.pad_char_to_full_length || self.field_type.tp() != FieldTypeTp::String {
+        if !ctx.cfg.flag.contains(Flag::PAD_CHAR_TO_FULL_LENGTH)
+            || self.field_type.tp() != FieldTypeTp::String
+        {
             return row[self.offset].as_string();
         }
 
@@ -88,7 +91,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::col_expr;
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, Flag};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(
@@ -104,9 +107,9 @@ mod tests {
     #[test]
     fn test_with_pad_char_to_full_length() {
         let mut ctx = EvalContext::default();
-        let mut pad_char_ctx_cfg = EvalConfig::default();
-        pad_char_ctx_cfg.pad_char_to_full_length = true;
-        let mut pad_char_ctx = EvalContext::new(Arc::new(pad_char_ctx_cfg));
+        let mut cfg = EvalConfig::default();
+        cfg.set_flag(Flag::PAD_CHAR_TO_FULL_LENGTH);
+        let mut pad_char_ctx = EvalContext::new(Arc::new(cfg));
 
         let mut c = col_expr(0);
         let mut field_tp = FieldType::new();
