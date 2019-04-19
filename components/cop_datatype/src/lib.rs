@@ -11,6 +11,7 @@ extern crate failure;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
+pub mod builder;
 mod def;
 mod error;
 
