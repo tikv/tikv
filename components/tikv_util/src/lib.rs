@@ -52,6 +52,7 @@ pub mod future;
 pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
