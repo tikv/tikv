@@ -67,7 +67,9 @@ struct RocksEngineCore {
 impl Drop for RocksEngineCore {
     fn drop(&mut self) {
         if let Some(h) = self.worker.stop() {
-            h.join().unwrap();
+            if let Err(e) = h.join() {
+                safe_panic!("RocksEngineCore engine thread panicked: {:?}", e);
+            }
         }
     }
 }

@@ -448,7 +448,7 @@ impl<T> DerefMut for MustConsumeVec<T> {
 impl<T> Drop for MustConsumeVec<T> {
     fn drop(&mut self) {
         if !self.is_empty() {
-            panic!("resource leak detected: {}.", self.tag);
+            safe_panic!("resource leak detected: {}.", self.tag);
         }
     }
 }
@@ -744,5 +744,17 @@ mod tests {
         assert!(is_zero_duration(&Duration::new(0, 0)));
         assert!(!is_zero_duration(&Duration::new(1, 0)));
         assert!(!is_zero_duration(&Duration::new(0, 1)));
+    }
+
+    #[test]
+    fn test_must_consume_vec_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let mut v = MustConsumeVec::new("test");
+            v.push(2);
+            panic!("Panic with MustConsumeVec non-empty");
+            // It would abort if there was a double-panic in dtor, thus
+            // the test would fail.
+        });
+        res.unwrap_err();
     }
 }

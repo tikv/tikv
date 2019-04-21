@@ -171,6 +171,29 @@ macro_rules! try_opt_or {
     }};
 }
 
+/// It checks whether the current thread is unwinding because of panic. If it is,
+/// log an error message instead of causing double panic.
+#[macro_export]
+macro_rules! safe_panic {
+    () => ({
+        safe_panic!("explicit panic")
+    });
+    ($msg:expr) => ({
+        if std::thread::panicking() {
+            error!(concat!($msg, ", double panic prevented"))
+        } else {
+            panic!($msg)
+        }
+    });
+    ($fmt:expr, $($args:tt)+) => ({
+        if std::thread::panicking() {
+            error!(concat!($fmt, ", double panic prevented"), $($args)+)
+        } else {
+            panic!($fmt, $($args)+)
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -183,5 +206,22 @@ mod tests {
             format!("{}", e),
             format!("[{}:{}]: hi", file_name, line_number + 1)
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_safe_panic() {
+        struct S;
+        impl Drop for S {
+            fn drop(&mut self) {
+                safe_panic!("safe panic on drop");
+            }
+        }
+
+        let res = panic_hook::recover_safe(|| {
+            let _s = S;
+            panic!("first panic");
+        });
+        res.unwrap_err();
     }
 }

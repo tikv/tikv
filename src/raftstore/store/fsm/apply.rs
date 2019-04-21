@@ -81,9 +81,10 @@ impl PendingCmd {
 impl Drop for PendingCmd {
     fn drop(&mut self) {
         if self.cb.is_some() {
-            panic!(
+            safe_panic!(
                 "callback of pending command at [index: {}, term: {}] is leak",
-                self.index, self.term
+                self.index,
+                self.term
             );
         }
     }
@@ -3811,5 +3812,23 @@ mod tests {
         checker.check(b"k3", b"k31", 1, &[3, 5, 7], false);
         checker.check(b"k31", b"k32", 24, &[25, 26, 27], true);
         checker.check(b"k32", b"k4", 28, &[29, 30, 31], true);
+    }
+
+    #[test]
+    fn pending_cmd_leak() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+        });
+        res.unwrap_err();
+    }
+
+    #[test]
+    fn pending_cmd_leak_dtor_not_abort() {
+        let res = panic_hook::recover_safe(|| {
+            let _cmd = PendingCmd::new(1, 1, Callback::None);
+            panic!("Don't abort");
+            // It would abort and fail if there was a double-panic in PendingCmd dtor.
+        });
+        res.unwrap_err();
     }
 }
