@@ -231,6 +231,12 @@ mod tests {
         fn report_batch_split(&self, _: Vec<metapb::Region>) -> PdFuture<()> {
             unimplemented!();
         }
+        fn get_store_stats(&self, _: u64) -> Result<pdpb::StoreStats> {
+            unimplemented!()
+        }
+        fn get_operator(&self, _: u64) -> Result<pdpb::GetOperatorResponse> {
+            unimplemented!()
+        }
     }
 
     fn new_store(addr: &str, state: metapb::StoreState) -> metapb::Store {

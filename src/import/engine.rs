@@ -15,17 +15,20 @@ use std::cmp;
 use std::fmt;
 use std::i32;
 use std::io::Read;
+use std::mem::uninitialized;
 use std::ops::Deref;
-use std::path::{Path, MAIN_SEPARATOR};
+use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::Arc;
 
+use crc::crc32::{self, Hasher32};
 use uuid::Uuid;
 
 use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
 use rocksdb::{
     BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, ReadOptions, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
+    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    WriteBatch as RawBatch, DB,
 };
 
 use config::DbConfig;
@@ -39,6 +42,7 @@ use util::rocksdb::{new_engine_opt, CFOptions};
 
 use super::common::*;
 use super::Result;
+use import::stream::SSTFile;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -125,30 +129,85 @@ impl fmt::Debug for Engine {
     }
 }
 
-pub struct SSTInfo {
-    pub data: Vec<u8>,
-    pub range: Range,
-    pub cf_name: String,
+pub struct LazySSTInfo {
+    env: Arc<Env>,
+    file_path: PathBuf,
+    pub(crate) file_size: u64,
+    pub(crate) range: Range,
+    pub(crate) cf_name: &'static str,
 }
 
-impl SSTInfo {
-    pub fn new(env: Arc<Env>, info: ExternalSstFileInfo, cf_name: &str) -> Result<SSTInfo> {
-        let mut data = Vec::new();
-        let path = info.file_path();
-        let mut f = env.new_sequential_file(path.to_str().unwrap(), EnvOptions::new())?;
-        f.read_to_end(&mut data)?;
-        assert_eq!(data.len(), info.file_size() as usize);
+impl fmt::Debug for LazySSTInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LazySSTInfo")
+            .field("file_path", &self.file_path)
+            .field("file_size", &self.file_size)
+            .field("range", &self.range)
+            .field("cf_name", &self.cf_name)
+            .finish()
+    }
+}
 
+impl LazySSTInfo {
+    fn new(env: Arc<Env>, info: ExternalSstFileInfo, cf_name: &'static str) -> Self {
         // This range doesn't contain the data prefix, like the region range.
         let mut range = Range::new();
         range.set_start(keys::origin_key(info.smallest_key()).to_owned());
         range.set_end(keys::origin_key(info.largest_key()).to_owned());
 
-        Ok(SSTInfo {
-            data,
+        Self {
+            env,
+            file_path: info.file_path(),
+            file_size: info.file_size(),
             range,
-            cf_name: cf_name.to_owned(),
-        })
+            cf_name,
+        }
+    }
+
+    pub fn open(&self) -> Result<SequentialFile> {
+        Ok(self
+            .env
+            .new_sequential_file(self.file_path.to_str().unwrap(), EnvOptions::new())?)
+    }
+
+    pub(crate) fn into_sst_file(self) -> Result<SSTFile> {
+        let mut seq_file = self.open()?;
+        let mut buf: [u8; 65536] = unsafe { uninitialized() };
+
+        // TODO: If we can compute the CRC simultaneously with upload, we don't
+        // need to open() and read() the file twice.
+        let mut digest = crc32::Digest::new(crc32::IEEE);
+        let mut length = 0u64;
+        loop {
+            let size = seq_file.read(&mut buf)?;
+            if size == 0 {
+                break;
+            }
+            digest.write(&buf[..size]);
+            length += size as u64;
+        }
+
+        let mut meta = SSTMeta::new();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+        meta.set_range(self.range.clone());
+        meta.set_crc32(digest.sum32());
+        meta.set_length(length);
+        meta.set_cf_name(self.cf_name.to_owned());
+
+        Ok(SSTFile { meta, info: self })
+    }
+}
+
+impl Drop for LazySSTInfo {
+    fn drop(&mut self) {
+        match self.env.delete_file(self.file_path.to_str().unwrap()) {
+            Ok(()) => {
+                info!("cleanup SST [{:?}]", self.file_path);
+            }
+            Err(err) => {
+                warn!("cleanup SST failed [{:?}] err {}", self.file_path, err);
+            }
+        }
     }
 }
 
@@ -201,15 +260,15 @@ impl SSTWriter {
         Ok(())
     }
 
-    pub fn finish(&mut self) -> Result<Vec<SSTInfo>> {
-        let mut infos = Vec::new();
+    pub fn finish(&mut self) -> Result<Vec<LazySSTInfo>> {
+        let mut infos = Vec::with_capacity(2);
         if self.default_entries > 0 {
             let info = self.default.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_DEFAULT)?);
+            infos.push(LazySSTInfo::new(Arc::clone(&self.env), info, CF_DEFAULT));
         }
         if self.write_entries > 0 {
             let info = self.write.finish()?;
-            infos.push(SSTInfo::new(Arc::clone(&self.env), info, CF_WRITE)?);
+            infos.push(LazySSTInfo::new(Arc::clone(&self.env), info, CF_WRITE));
         }
         Ok(infos)
     }
@@ -289,7 +348,7 @@ mod tests {
     use kvproto::metapb::{Peer, Region};
     use rocksdb::IngestExternalFileOptions;
     use std::fs::File;
-    use std::io::Write;
+    use std::io;
     use tempdir::TempDir;
 
     use raftstore::store::RegionSnapshot;
@@ -375,7 +434,11 @@ mod tests {
 
             // Write the data to a file and ingest it to the engine.
             let path = Path::new(db.path()).join("test.sst");
-            File::create(&path).unwrap().write_all(&info.data).unwrap();
+            {
+                let mut src = info.open().unwrap();
+                let mut dest = File::create(&path).unwrap();
+                io::copy(&mut src, &mut dest).unwrap();
+            }
             let mut opts = IngestExternalFileOptions::new();
             opts.move_files(true);
             let handle = db.cf_handle(cf_name).unwrap();

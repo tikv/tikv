@@ -60,11 +60,12 @@ impl ImportKv for ImportKVService {
     ) {
         let label = "switch_mode";
         let timer = Instant::now_coarse();
+        let min_available_ratio = self.cfg.min_available_ratio;
 
         ctx.spawn(
             self.threads
                 .spawn_fn(move || {
-                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    let client = Client::new(req.get_pd_addr(), 1, min_available_ratio)?;
                     match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
                             info!("switch cluster {:?}", req.get_request());
@@ -240,6 +241,7 @@ impl ImportKv for ImportKVService {
     ) {
         let label = "compact_cluster";
         let timer = Instant::now_coarse();
+        let min_available_ratio = self.cfg.min_available_ratio;
 
         let mut compact = req.get_request().clone();
         if compact.has_range() {
@@ -257,7 +259,7 @@ impl ImportKv for ImportKVService {
         ctx.spawn(
             self.threads
                 .spawn_fn(move || {
-                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    let client = Client::new(req.get_pd_addr(), 1, min_available_ratio)?;
                     match client.compact_cluster(&compact) {
                         Ok(_) => {
                             info!("compact cluster {:?}", compact);
