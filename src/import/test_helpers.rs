@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
 use std::path::Path;
@@ -24,8 +13,8 @@ use uuid::Uuid;
 
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
-use crate::util::collections::HashMap;
 use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
+use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::common::*;
@@ -164,5 +153,13 @@ impl ImportClient for MockClient {
     fn has_region_id(&self, region_id: u64) -> Result<bool> {
         let regions = self.regions.lock().unwrap();
         Ok(regions.contains_key(&region_id))
+    }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
+        Ok(true)
     }
 }

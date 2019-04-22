@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
@@ -20,6 +9,7 @@ use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
+use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
@@ -28,8 +18,8 @@ use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
 use crate::storage::{Key, Value};
-use crate::util::escape;
-use crate::util::worker::{Runnable, Scheduler, Worker};
+use tikv_util::escape;
+use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::{
     Callback, CbContext, Cursor, Engine, Error, Iterator as EngineIterator, Modify, Result,
@@ -331,6 +321,12 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
 
     fn valid(&self) -> bool {
         DBIterator::valid(self)
+    }
+
+    fn status(&self) -> Result<()> {
+        DBIterator::status(self)
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {

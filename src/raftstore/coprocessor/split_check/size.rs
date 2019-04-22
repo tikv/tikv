@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::Bound::Excluded;
 use std::mem;
@@ -22,14 +11,15 @@ use engine::{util, Range};
 use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
+use tikv_util::escape;
+
+use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
 
 use super::super::error::Result;
 use super::super::metrics::*;
+use super::super::properties::RangeProperties;
 use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
 use super::Host;
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
-use crate::storage::mvcc::properties::RangeProperties;
-use crate::util::escape;
 
 pub struct Checker {
     max_size: u64,
@@ -354,14 +344,12 @@ fn get_approximate_split_keys_cf(
 #[cfg(test)]
 pub mod tests {
     use super::Checker;
+    use crate::raftstore::coprocessor::properties::RangePropertiesCollectorFactory;
     use crate::raftstore::coprocessor::{Config, CoprocessorHost, ObserverContext, SplitChecker};
     use crate::raftstore::store::{
         keys, CasualMessage, KeyEntry, SplitCheckRunner, SplitCheckTask,
     };
-    use crate::storage::mvcc::properties::RangePropertiesCollectorFactory;
     use crate::storage::Key;
-    use crate::util::config::ReadableSize;
-    use crate::util::worker::Runnable;
     use engine::rocks::util::{new_engine_opt, CFOptions};
     use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use engine::{ALL_CFS, CF_DEFAULT, CF_WRITE, LARGE_CFS};
@@ -372,6 +360,8 @@ pub mod tests {
     use std::sync::Arc;
     use std::{iter, u64};
     use tempdir::TempDir;
+    use tikv_util::config::ReadableSize;
+    use tikv_util::worker::Runnable;
 
     use super::*;
 

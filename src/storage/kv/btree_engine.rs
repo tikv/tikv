@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{self, Excluded, Included, Unbounded};
@@ -204,6 +193,11 @@ impl Iterator for BTreeEngineIterator {
         self.valid
     }
 
+    #[inline]
+    fn status(&self) -> EngineResult<()> {
+        Ok(())
+    }
+
     fn key(&self) -> &[u8] {
         assert!(self.valid());
         self.cur_key.as_ref().unwrap().as_encoded()
@@ -321,14 +315,14 @@ pub mod tests {
 
         // lower bound > upper bound, seek() returns false.
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a7".to_vec());
-        iter_op.set_upper_bound(b"a3".to_vec());
+        iter_op.set_lower_bound(b"a7", 0);
+        iter_op.set_upper_bound(b"a3", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
         assert!(!cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());
 
         let mut iter_op = IterOption::default();
-        iter_op.set_lower_bound(b"a3".to_vec());
-        iter_op.set_upper_bound(b"a7".to_vec());
+        iter_op.set_lower_bound(b"a3", 0);
+        iter_op.set_upper_bound(b"a7", 0);
         let mut cursor = snap.iter(iter_op, ScanMode::Forward).unwrap();
 
         assert!(cursor.seek(&Key::from_raw(b"a5"), &mut statistics).unwrap());

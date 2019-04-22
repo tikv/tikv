@@ -1,19 +1,7 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod lock;
 mod metrics;
-pub mod properties;
 mod reader;
 mod txn;
 mod write;
@@ -24,11 +12,11 @@ pub use self::reader::{Scanner, ScannerBuilder};
 pub use self::txn::{MvccTxn, MAX_TXN_WRITE_SIZE};
 pub use self::write::{Write, WriteType};
 
-use crate::util::escape;
-use crate::util::metrics::CRITICAL_ERROR;
-use crate::util::{panic_when_unexpected_key_or_data, set_panic_mark};
 use std::error;
 use std::io;
+use tikv_util::escape;
+use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 quick_error! {
     #[derive(Debug)]
@@ -43,7 +31,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: crate::util::codec::Error) {
+        Codec(err: tikv_util::codec::Error) {
             from()
             cause(err)
             description(err.description())

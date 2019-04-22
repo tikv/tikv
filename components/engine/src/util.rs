@@ -1,24 +1,14 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::u64;
 
 use crate::rocks;
 use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::{CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::{CF_LOCK, CF_RAFT};
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
+use tikv_util::keybuilder::KeyBuilder;
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -72,19 +62,11 @@ pub fn delete_all_in_range_cf(
     // Since CF_RAFT and CF_LOCK is usually small, so using
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
-        // HACK: TiKV always enable prefix bloom filter for Write CF,
-        // which requires key.len() > 8
-        //
-        // FIXME: It should delete the `start_key` too.
-        if cf == CF_WRITE {
-            let mut start = start_key.to_vec();
-            start.extend_from_slice(&[0; 8]);
-            wb.delete_range_cf(handle, &start, end_key)?;
-        } else {
-            wb.delete_range_cf(handle, start_key, end_key)?;
-        }
+        wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
-        let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
+        let start = KeyBuilder::from_slice(start_key, 0, 0);
+        let end = KeyBuilder::from_slice(end_key, 0, 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
         while it.valid() {

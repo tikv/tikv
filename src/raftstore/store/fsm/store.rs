@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine::rocks;
@@ -63,14 +52,14 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
-use crate::util::collections::{HashMap, HashSet};
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::time::{duration_to_sec, SlowTimer};
-use crate::util::timer::SteadyTimer;
-use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::timer::SteadyTimer;
+use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 type Key = Vec<u8>;
 
@@ -2006,8 +1995,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
+    use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
     use crate::storage::kv::CompactedEvent;
-    use crate::storage::mvcc::properties::{IndexHandle, IndexHandles, SizeProperties};
     use protobuf::RepeatedField;
 
     use super::*;

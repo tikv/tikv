@@ -1,20 +1,10 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::kv::Result;
 use crate::storage::{Cursor, Key, ScanMode, Snapshot};
 use engine::CfName;
-use engine::IterOption;
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use tikv_util::keybuilder::KeyBuilder;
 
 /// A handy utility to build a snapshot cursor according to various configurations.
 pub struct CursorBuilder<'a, S: Snapshot> {
@@ -83,11 +73,19 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
 
     /// Build `Cursor` from the current configuration.
     pub fn build(self) -> Result<Cursor<S::Iter>> {
-        let mut iter_opt = IterOption::new(
-            self.lower_bound.map(|k| k.into_encoded()),
-            self.upper_bound.map(|k| k.into_encoded()),
-            self.fill_cache,
-        );
+        let l_bound = if let Some(b) = self.lower_bound {
+            let builder = KeyBuilder::from_vec(b.into_encoded(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        let u_bound = if let Some(b) = self.upper_bound {
+            let builder = KeyBuilder::from_vec(b.into_encoded(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        let mut iter_opt = IterOption::new(l_bound, u_bound, self.fill_cache);
         if self.prefix_seek {
             iter_opt = iter_opt.use_prefix_seek().set_prefix_same_as_start(true);
         }

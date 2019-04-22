@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,7 +10,7 @@ use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
-use crate::util::time::Instant;
+use tikv_util::time::Instant;
 
 use super::client::*;
 use super::common::*;
@@ -34,6 +23,7 @@ use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 5;
 const RETRY_INTERVAL_SECS: u64 = 3;
+const STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS: u64 = 20000;
 
 /// ImportJob is responsible for importing data stored in an engine to a cluster.
 pub struct ImportJob<Client> {
@@ -73,7 +63,9 @@ impl<Client: ImportClient> ImportJob<Client> {
             self.client.clone(),
             Arc::clone(&self.engine),
         );
+
         let mut ranges = job.run()?.into_iter().map(|range| range.range).collect();
+        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(1.0);
         for i in 0..MAX_RETRY_TIMES {
             let retry_ranges = Arc::new(Mutex::new(Vec::new()));
             let handles = self.run_import_threads(ranges, Arc::clone(&retry_ranges));
@@ -91,9 +83,10 @@ impl<Client: ImportClient> ImportJob<Client> {
                 "still has ranges need to retry";
                 "tag" => %self.tag,
                 "retry_count" => %retry_count,
-                "current round" => %i,
+                "current_round" => %i,
             );
         }
+        IMPORT_EACH_PHASE.with_label_values(&["import"]).set(0.0);
 
         match res {
             Ok(_) => {
@@ -407,6 +400,18 @@ impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
             let file = self.sst.info.open()?;
             let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();
+            while !self
+                .client
+                .is_space_enough(store_id, self.sst.info.file_size)?
+            {
+                let label = format!("{}", store_id);
+                IMPORT_STORE_SAPCE_NOT_ENOUGH_COUNTER
+                    .with_label_values(&[label.as_str()])
+                    .inc();
+                thread::sleep(Duration::from_millis(
+                    STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS,
+                ))
+            }
             match self.client.upload_sst(store_id, upload) {
                 Ok(_) => {
                     info!("upload"; "tag" => %self.tag, "store" => %store_id);

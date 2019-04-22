@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -103,6 +92,19 @@ impl From<Vec<RpnExpressionNode>> for RpnExpression {
 impl AsRef<[RpnExpressionNode]> for RpnExpression {
     fn as_ref(&self) -> &[RpnExpressionNode] {
         self.0.as_ref()
+    }
+}
+
+impl RpnExpression {
+    /// Gets the field type of the return value.
+    pub fn ret_field_type<'a>(&'a self, schema: &'a [FieldType]) -> &'a FieldType {
+        assert!(!self.0.is_empty());
+        let last_node = self.0.last().unwrap();
+        match last_node {
+            RpnExpressionNode::FnCall { field_type, .. } => field_type,
+            RpnExpressionNode::Constant { field_type, .. } => field_type,
+            RpnExpressionNode::ColumnRef { offset } => &schema[*offset],
+        }
     }
 }
 
