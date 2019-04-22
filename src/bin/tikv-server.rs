@@ -129,7 +129,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
 
     // Create router.
-    let raft_router = ServerRaftStoreRouter::new(router.clone());
     let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
@@ -189,8 +188,10 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-    let reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-    let raft_engine = RaftKv::new(raft_router.clone(), reader);
+    let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+    let raft_engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
         &cfg.readpool.storage.build_config(),

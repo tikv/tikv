@@ -120,12 +120,12 @@ impl Simulator for ServerCluster {
             cfg.server.addr = addr.clone();
         }
 
-        let raft_router = ServerRaftStoreRouter::new(router.clone());
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router);
 
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-        let raft_engine = RaftKv::new(sim_router.clone(), reader);
+        let raft_engine = RaftKv::new(sim_router.clone());
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");

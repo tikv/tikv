@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam::TrySendError;
 use kvproto::errorpb;
 use kvproto::metapb;
-use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
+use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
 use time::Timespec;
 
@@ -169,7 +169,7 @@ impl LocalReader<RaftRouter> {
             store_id: None,
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
-            tag: format!("[local_reader]"),
+            tag: "[local_reader]".to_string(),
         }
     }
 }
@@ -335,6 +335,26 @@ impl<C: ProposalRouter> LocalReader<C> {
         }
         // Forward to raftstore.
         self.redirect(cmd);
+    }
+
+    #[inline]
+    pub fn acceptable(request: &RaftCmdRequest) -> bool {
+        if request.has_admin_request() || request.has_status_request() {
+            false
+        } else {
+            for r in request.get_requests() {
+                match r.get_cmd_type() {
+                    CmdType::Get | CmdType::Snap => (),
+                    CmdType::Delete
+                    | CmdType::Put
+                    | CmdType::DeleteRange
+                    | CmdType::Prewrite
+                    | CmdType::IngestSST
+                    | CmdType::Invalid => return false,
+                }
+            }
+            true
+        }
     }
 }
 

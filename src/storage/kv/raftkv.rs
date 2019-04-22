@@ -23,9 +23,7 @@ use super::{
     Callback, CbContext, Cursor, Engine, Iterator as EngineIterator, Modify, ScanMode, Snapshot,
 };
 use crate::raftstore::errors::Error as RaftServerError;
-use crate::raftstore::store::{
-    Callback as StoreCallback, LocalReader, RaftCommand, RaftRouter, ReadResponse, WriteResponse,
-};
+use crate::raftstore::store::{Callback as StoreCallback, ReadResponse, WriteResponse};
 use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
 use crate::storage::{self, kv, Key, Value};
@@ -108,7 +106,6 @@ impl From<RaftServerError> for kv::Error {
 #[derive(Clone)]
 pub struct RaftKv<S: RaftStoreRouter + 'static> {
     router: S,
-    reader: LocalReader<RaftRouter>,
 }
 
 pub enum CmdRes {
@@ -161,8 +158,8 @@ fn on_read_result(mut read_resp: ReadResponse, req_cnt: usize) -> (CbContext, Re
 
 impl<S: RaftStoreRouter> RaftKv<S> {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, reader: LocalReader<RaftRouter>) -> RaftKv<S> {
-        RaftKv { router, reader }
+    pub fn new(router: S) -> RaftKv<S> {
+        RaftKv { router }
     }
 
     fn new_request_header(&self, ctx: &Context) -> RaftRequestHeader {
@@ -185,18 +182,19 @@ impl<S: RaftStoreRouter> RaftKv<S> {
     ) -> Result<()> {
         let len = reqs.len();
         let header = self.new_request_header(ctx);
-        let mut cmd_req = RaftCmdRequest::new();
-        cmd_req.set_header(header);
-        cmd_req.set_requests(RepeatedField::from_vec(reqs));
-        let cmd = RaftCommand::new(
-            cmd_req,
-            StoreCallback::Read(Box::new(move |resp| {
-                let (cb_ctx, res) = on_read_result(resp, len);
-                cb((cb_ctx, res.map_err(Error::into)));
-            })),
-        );
-        self.reader.propose_raft_command(cmd);
-        Ok(())
+        let mut cmd = RaftCmdRequest::new();
+        cmd.set_header(header);
+        cmd.set_requests(RepeatedField::from_vec(reqs));
+
+        self.router
+            .send_command(
+                cmd,
+                StoreCallback::Read(Box::new(move |resp| {
+                    let (cb_ctx, res) = on_read_result(resp, len);
+                    cb((cb_ctx, res.map_err(Error::into)));
+                })),
+            )
+            .map_err(From::from)
     }
 
     fn exec_write_requests(

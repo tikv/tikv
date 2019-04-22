@@ -203,12 +203,14 @@ impl Simulator for NodeCluster {
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         node.start(
             engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP))),
+            store_meta,
             coprocessor_host,
             importer,
         )?;
@@ -236,7 +238,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router.clone());
+        let router = ServerRaftStoreRouter::new(router, local_reader);
         self.trans
             .core
             .lock()
