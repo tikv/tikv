@@ -229,8 +229,8 @@ impl<C: ProposalRouter> LocalReader<C> {
                 }
             }
             None => {
-                self.metrics.borrow_mut().rejected_by_no_region += 1;
-                debug!("rejected by no region"; "region_id" => region_id);
+                self.metrics.borrow_mut().rejected_by_cache_miss += 1;
+                debug!("rejected by cache miss"; "region_id" => region_id);
                 return Ok(None);
             }
         };
@@ -313,6 +313,8 @@ impl<C: ProposalRouter> LocalReader<C> {
                         None => {
                             // Cleanup, the region may be removed.
                             self.delegates.borrow_mut().remove(&region_id);
+                            self.metrics.borrow_mut().rejected_by_no_region += 1;
+                            debug!("rejected by no region"; "region_id" => region_id);
                             break;
                         }
                     }
@@ -326,6 +328,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                         response,
                         snapshot: None,
                     });
+                    self.delegates.borrow_mut().remove(&region_id);
                     return;
                 }
             }
@@ -386,6 +389,7 @@ struct ReadMetrics {
     rejected_by_epoch: i64,
     rejected_by_appiled_term: i64,
     rejected_by_channel_full: i64,
+    rejected_by_cache_miss: i64,
 }
 
 impl Default for ReadMetrics {
@@ -402,6 +406,7 @@ impl Default for ReadMetrics {
             rejected_by_epoch: 0,
             rejected_by_appiled_term: 0,
             rejected_by_channel_full: 0,
+            rejected_by_cache_miss: 0,
         }
     }
 }
@@ -463,6 +468,12 @@ impl ReadMetrics {
                 .with_label_values(&["channel_full"])
                 .inc_by(self.rejected_by_channel_full);
             self.rejected_by_channel_full = 0;
+        }
+        if self.rejected_by_cache_miss > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["cache_miss"])
+                .inc_by(self.rejected_by_cache_miss);
+            self.rejected_by_cache_miss = 0;
         }
     }
 }
@@ -591,6 +602,7 @@ mod tests {
         // The region is not register yet.
         must_redirect(&mut reader, &rx, cmd.clone());
         assert_eq!(reader.metrics.borrow().rejected_by_no_region, 1);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 1);
 
         // Register region 1
         lease.renew(monotonic_raw_now());
@@ -612,7 +624,7 @@ mod tests {
 
         // The applied_index_term is stale
         must_redirect(&mut reader, &rx, cmd.clone());
-        assert_eq!(reader.metrics.borrow().rejected_by_no_region, 2);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 2);
         assert_eq!(reader.metrics.borrow().rejected_by_appiled_term, 1);
         assert!(reader.delegates.borrow().get(&1).is_none());
 
@@ -622,12 +634,9 @@ mod tests {
             let mut meta = store_meta.lock().unwrap();
             meta.readers.get_mut(&1).unwrap().update(pg);
         }
-        let task = RaftCommand::new(
-            cmd.clone(),
-            Callback::Read(Box::new(move |resp: ReadResponse| {})),
-        );
+        let task = RaftCommand::new(cmd.clone(), Callback::Read(Box::new(move |_| {})));
         must_not_redirect(&mut reader, &rx, task);
-        assert_eq!(reader.metrics.borrow().rejected_by_no_region, 2);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 
         // Let's read.
         let region = region1.clone();
@@ -643,6 +652,7 @@ mod tests {
         // Wait for expiration.
         thread::sleep(Duration::seconds(1).to_std().unwrap());
         must_redirect(&mut reader, &rx, cmd.clone());
+        assert_eq!(reader.metrics.borrow().rejected_by_lease_expire, 1);
 
         // Renew lease.
         lease.renew(monotonic_raw_now());
@@ -663,6 +673,7 @@ mod tests {
         );
         reader.propose_raft_command(task);
         assert_eq!(reader.metrics.borrow().rejected_by_store_id_mismatch, 1);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 3);
 
         // metapb::Peer id mismatch.
         let mut cmd_peer_id = cmd.clone();
@@ -683,11 +694,13 @@ mod tests {
         );
         reader.propose_raft_command(task);
         assert_eq!(reader.metrics.borrow().rejected_by_peer_id_mismatch, 1);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 4);
 
         // Read quorum.
         let mut cmd_read_quorum = cmd.clone();
         cmd_read_quorum.mut_header().set_read_quorum(true);
         must_redirect(&mut reader, &rx, cmd_read_quorum);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 5);
 
         // Term mismatch.
         let mut cmd_term = cmd.clone();
@@ -702,6 +715,7 @@ mod tests {
         );
         reader.propose_raft_command(task);
         assert_eq!(reader.metrics.borrow().rejected_by_term_mismatch, 1);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 6);
 
         // Stale epoch.
         let mut epoch12 = epoch13.clone();
@@ -710,6 +724,7 @@ mod tests {
         cmd_epoch.mut_header().set_region_epoch(epoch12);
         must_redirect(&mut reader, &rx, cmd_epoch);
         assert_eq!(reader.metrics.borrow().rejected_by_epoch, 1);
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 7);
 
         // Expire lease manually, and it can not be renewed.
         let previous_lease_rejection = reader.metrics.borrow().rejected_by_lease_expire;
@@ -720,6 +735,7 @@ mod tests {
             reader.metrics.borrow().rejected_by_lease_expire,
             previous_lease_rejection + 1
         );
+        assert_eq!(reader.metrics.borrow().rejected_by_cache_miss, 8);
 
         // Channel full.
         let task1 = RaftCommand::new(cmd.clone(), Callback::None);

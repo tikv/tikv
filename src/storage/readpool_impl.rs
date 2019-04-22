@@ -3,7 +3,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use prometheus::local::*;
