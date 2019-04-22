@@ -280,10 +280,10 @@ impl IterOption {
             opts.set_prefix_same_as_start(true);
         }
         if let Some(ref key) = self.lower_bound {
-            opts.set_iterate_lower_bound(key);
+            opts.set_iterate_lower_bound(key.to_vec());
         }
         if let Some(ref key) = self.upper_bound {
-            opts.set_iterate_upper_bound(key);
+            opts.set_iterate_upper_bound(key.to_vec());
         }
         opts
     }
