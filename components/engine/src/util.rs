@@ -4,7 +4,7 @@ use std::u64;
 
 use crate::rocks;
 use crate::rocks::{Range, TablePropertiesCollection, Writable, WriteBatch, DB};
-use crate::{CF_LOCK, CF_RAFT, CF_WRITE};
+use crate::{CF_LOCK, CF_RAFT};
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
@@ -62,17 +62,7 @@ pub fn delete_all_in_range_cf(
     // Since CF_RAFT and CF_LOCK is usually small, so using
     // traditional way to cleanup.
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
-        // HACK: TiKV always enable prefix bloom filter for Write CF,
-        // which requires key.len() > 8
-        //
-        // FIXME: It should delete the `start_key` too.
-        if cf == CF_WRITE {
-            let mut start = start_key.to_vec();
-            start.extend_from_slice(&[0; 8]);
-            wb.delete_range_cf(handle, &start, end_key)?;
-        } else {
-            wb.delete_range_cf(handle, start_key, end_key)?;
-        }
+        wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
         let start = KeyBuilder::from_slice(start_key, 0, 0);
         let end = KeyBuilder::from_slice(end_key, 0, 0);
