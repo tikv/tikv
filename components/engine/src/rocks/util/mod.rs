@@ -736,7 +736,7 @@ mod tests {
 
     fn check_prepare_sst_for_ingestion(
         db_opts: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) {
         let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
         let path_str = path.path().to_str().unwrap();
