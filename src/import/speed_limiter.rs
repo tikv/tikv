@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
 
-use crate::util::time::{duration_to_sec, Instant};
+use tikv_util::time::{duration_to_sec, Instant};
 
 /// A `Clock` controls the passing of time.
 pub trait Clock {
