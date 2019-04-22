@@ -8,6 +8,7 @@ use crate::{CF_LOCK, CF_RAFT};
 
 use super::{Error, Result};
 use super::{IterOption, Iterable};
+use tikv_util::keybuilder::KeyBuilder;
 
 /// Check if key in range [`start_key`, `end_key`).
 pub fn check_key_in_range(
@@ -63,7 +64,9 @@ pub fn delete_all_in_range_cf(
     if use_delete_range && cf != CF_RAFT && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {
-        let iter_opt = IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), false);
+        let start = KeyBuilder::from_slice(start_key, 0, 0);
+        let end = KeyBuilder::from_slice(end_key, 0, 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), false);
         let mut it = db.new_iterator_cf(cf, iter_opt)?;
         it.seek(start_key.into());
         while it.valid() {
