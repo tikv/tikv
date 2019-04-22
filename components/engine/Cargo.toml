@@ -27,7 +27,7 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/Connor1996/rust-rocksdb.git"
 package = "rocksdb"
 
 [dev-dependencies]
