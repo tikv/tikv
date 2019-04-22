@@ -16,9 +16,9 @@ use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
 
 use crate::config::DbConfig;
+use crate::raftstore::coprocessor::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::raftstore::store::keys;
 use crate::storage::is_short_value;
-use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
