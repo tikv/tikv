@@ -1730,13 +1730,10 @@ impl Peer {
             .map(|pr| pr.matched)
             .min()
             .unwrap_or_default();
-        let learners_min = status
-            .learner_progress
-            .values()
-            .map(|pr| pr.matched)
-            .min()
-            .unwrap_or_default();
-        cmp::min(voters_min, learners_min)
+        match status.learner_progress.values().map(|pr| pr.matched).min() {
+            Some(learners_min) => cmp::min(voters_min, learners_min),
+            None => voters_min,
+        }
     }
 
     fn pre_propose_prepare_merge<T, C>(
