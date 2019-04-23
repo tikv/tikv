@@ -9,8 +9,9 @@ use std::path::Path;
 use std::usize;
 
 use engine::rocks::{
-    BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    TitanDBOptions,
 };
 use slog;
 use sys_info;
@@ -99,7 +100,7 @@ impl TitanCfConfig {
         let mut opts = TitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, 0, 0.0);
+        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -264,10 +265,12 @@ macro_rules! write_into_metrics {
 
 macro_rules! build_cf_opt {
     ($opt:ident) => {{
+        let mut cache_opts = LRUCacheOptions::new();
+        cache_opts.set_capacity($opt.block_cache_size.0 as usize);
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
-        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
+        block_base_opts.set_block_cache(Cache::new_lru_cache(cache_opts));
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);

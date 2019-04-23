@@ -23,8 +23,8 @@ use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
-    BlockBasedOptions, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
     WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
@@ -339,8 +339,10 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     db_opts.set_max_background_jobs(opts.max_background_jobs);
 
     // Put index and filter in block cache to restrict memory usage.
+    let mut cache_opts = LRUCacheOptions::new();
+    cache_opts.set_capacity(128 * MB as usize);
     let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_lru_cache(128 * MB as usize, -1, 0, 0.0);
+    block_base_opts.set_block_cache(Cache::new_lru_cache(cache_opts));
     block_base_opts.set_cache_index_and_filter_blocks(true);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
