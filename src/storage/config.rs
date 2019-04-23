@@ -86,7 +86,7 @@ impl Default for BlockCacheConfig {
 }
 
 impl BlockCacheConfig {
-    pub fn build_shared_cache(&mut self) -> Option<Cache> {
+    pub fn build_shared_cache(&self) -> Option<Cache> {
         match self.shared {
             false => None,
             true => {

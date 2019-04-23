@@ -229,17 +229,19 @@ impl SSTWriter {
             env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, Some(env))?;
         }
         let uuid = Uuid::new_v4().to_string();
+        // Placeholder. SstFileWriter don't actually use block cache.
+        let cache = None;
 
         // Creates a writer for default CF
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
-        let mut default_opts = db_cfg.defaultcf.build_opt();
+        let mut default_opts = db_cfg.defaultcf.build_opt(&cache);
         default_opts.set_env(Arc::clone(&env));
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
-        let mut write_opts = db_cfg.writecf.build_opt();
+        let mut write_opts = db_cfg.writecf.build_opt(&cache);
         write_opts.set_env(Arc::clone(&env));
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
@@ -342,7 +344,7 @@ fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
     let mut cache_opts = LRUCacheOptions::new();
     cache_opts.set_capacity(128 * MB as usize);
     let mut block_base_opts = BlockBasedOptions::new();
-    block_base_opts.set_block_cache(Cache::new_lru_cache(cache_opts));
+    block_base_opts.set_block_cache(&Cache::new_lru_cache(cache_opts));
     block_base_opts.set_cache_index_and_filter_blocks(true);
     let mut cf_opts = ColumnFamilyOptions::new();
     cf_opts.set_block_based_table_factory(&block_base_opts);
