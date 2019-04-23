@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod client;
-mod metrics;
+pub use pd2::metrics;
 mod util;
 
 pub use pd2::config;

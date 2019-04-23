@@ -5,8 +5,14 @@ edition = "2018"
 publish = false
 
 [dependencies]
+lazy_static = "0.2.1"
 grpcio = { version = "0.4", features = [ "secure" ] }
 quick-error = "1.2.2"
 serde = "1.0"
 serde_derive = "1.0"
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
+
+[dependencies.prometheus]
+version = "0.4.2"
+default-features = false
+features = ["nightly", "push", "process"]
