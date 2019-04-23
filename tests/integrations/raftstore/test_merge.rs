@@ -128,13 +128,20 @@ fn test_node_merge_with_slow_learner() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
 
-    // Merge 2 regions under isolation should fail.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
     (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
-    let do_merge = || pd_client.must_merge(left.get_id(), right.get_id());
-    if panic::catch_unwind(panic::AssertUnwindSafe(do_merge)).is_ok() {
-        panic!("merge with slow learner should fail");
-    }
+
+    // Merge 2 regions under isolation should fail.
+    let merge = new_prepare_merge(right.clone());
+    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("log gap"));
 
     cluster.clear_send_filters();
     cluster.must_put(b"k11", b"v100");
