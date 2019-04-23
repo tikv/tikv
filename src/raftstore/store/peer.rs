@@ -1083,7 +1083,12 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply(&mut self, mut ready: Ready, apply_tasks: &mut Vec<Apply>, raft_metrics: &mut RaftMetrics) {
+    pub fn handle_raft_ready_apply(
+        &mut self,
+        mut ready: Ready,
+        apply_tasks: &mut Vec<Apply>,
+        raft_metrics: &mut RaftMetrics,
+    ) {
         // Call `handle_raft_committed_entries` directly here may lead to inconsistency.
         // In some cases, there will be some pending committed entries when applying a
         // snapshot. If we call `handle_raft_committed_entries` directly, these updates
