@@ -457,10 +457,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        let engine = Arc::new(Mutex::new(self.engine.clone()));
-        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
-            .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
-            .build();
+        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
         Storage::from_engine(
             self.engine,
             &self.config,
