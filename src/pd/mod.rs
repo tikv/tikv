@@ -22,18 +22,7 @@ use kvproto::pdpb;
 pub type Key = Vec<u8>;
 pub use pd2::PdFuture;
 
-#[derive(Default, Clone)]
-pub struct RegionStat {
-    pub down_peers: Vec<pdpb::PeerStats>,
-    pub pending_peers: Vec<metapb::Peer>,
-    pub written_bytes: u64,
-    pub written_keys: u64,
-    pub read_bytes: u64,
-    pub read_keys: u64,
-    pub approximate_size: u64,
-    pub approximate_keys: u64,
-    pub last_report_ts: u64,
-}
+pub use pd2::RegionStat;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RegionInfo {
