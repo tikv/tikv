@@ -138,6 +138,7 @@ fn test_node_merge_with_slow_learner() {
 
     cluster.clear_send_filters();
     cluster.must_put(b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(1), b"k11", b"v100");
     must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
     pd_client.must_merge(left.get_id(), right.get_id());
 }
