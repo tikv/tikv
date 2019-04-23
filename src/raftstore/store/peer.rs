@@ -1147,7 +1147,7 @@ impl Peer {
                 // have no effect.
                 self.proposals.clear();
             }
-            let now = monotonic_coarse_now();
+            let now = monotonic_raw_now();
             for entry in committed_entries.iter().rev() {
                 // raft meta is very small, can be ignored.
                 self.raft_log_size_hint += entry.get_data().len() as u64;
