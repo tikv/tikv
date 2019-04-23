@@ -80,7 +80,7 @@ pub fn init_data_with_details<E: Engine>(
     }
 
     let pool = readpool::Builder::build_for_test();
-    let cop = Endpoint::new(cfg, store.get_engine().clone(), pool);
+    let cop = Endpoint::new(cfg, store.get_engine(), pool);
     (store, cop)
 }
 

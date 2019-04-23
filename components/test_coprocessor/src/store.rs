@@ -168,7 +168,7 @@ impl<E: Engine> Store<E> {
         self.commit_with_ctx(Context::new());
     }
 
-    pub fn get_engine(&self) -> &E {
+    pub fn get_engine(&self) -> E {
         self.store.get_engine()
     }
 

@@ -73,7 +73,7 @@ impl<E: Engine> SyncTestStorage<E> {
         self.store.clone()
     }
 
-    pub fn get_engine(&self) -> &E {
+    pub fn get_engine(&self) -> E {
         self.store.get_engine()
     }
 

@@ -321,7 +321,7 @@ mod tests {
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
         let cop_read_pool = readpool::Builder::build_for_test();
-        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine().clone(), cop_read_pool);
+        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(
