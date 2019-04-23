@@ -123,6 +123,7 @@ log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 pd2 = { path = "components/pd", package = "pd" }
+raftstore2 = { path = "components/raftstore", package = "raftstore" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
