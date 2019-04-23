@@ -122,6 +122,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
+pd2 = { path = "components/pd", package = "pd" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
@@ -163,6 +164,7 @@ members = [
   "components/tikv_alloc",
   "components/codec",
   "components/panic_hook",
+  "components/pd",
   "components/cop_datatype",
   "components/log_wrappers",
   "components/tikv_util",

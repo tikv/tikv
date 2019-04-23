@@ -4,7 +4,7 @@ mod client;
 mod metrics;
 mod util;
 
-mod config;
+pub use pd2::config;
 pub mod errors;
 pub mod pd;
 pub use self::client::RpcClient;

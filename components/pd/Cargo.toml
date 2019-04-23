@@ -1,0 +1,10 @@
+[package]
+name = "pd"
+version = "0.0.1"
+edition = "2018"
+publish = false
+
+[dependencies]
+serde = "1.0"
+serde_derive = "1.0"
+tikv_alloc = { path = "../tikv_alloc", default-features = false }
