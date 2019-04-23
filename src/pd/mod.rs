@@ -2,7 +2,7 @@
 
 mod client;
 pub use pd2::metrics;
-mod util;
+pub use pd2::util;
 
 pub use pd2::config;
 pub use pd2::errors;

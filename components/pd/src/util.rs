@@ -7,7 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tikv_util::collections::HashSet;
 
-use crate::grpc::{
+use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
     Result as GrpcResult,
 };
