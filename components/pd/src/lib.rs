@@ -10,6 +10,7 @@ extern crate serde_derive;
 use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
+use std::ops::Deref;
 
 pub use self::errors::{Error, Result};
 
@@ -30,6 +31,26 @@ pub struct RegionStat {
     pub approximate_size: u64,
     pub approximate_keys: u64,
     pub last_report_ts: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionInfo {
+    pub region: metapb::Region,
+    pub leader: Option<metapb::Peer>,
+}
+
+impl RegionInfo {
+    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
+        RegionInfo { region, leader }
+    }
+}
+
+impl Deref for RegionInfo {
+    type Target = metapb::Region;
+
+    fn deref(&self) -> &Self::Target {
+        &self.region
+    }
 }
 
 pub const REQUEST_TIMEOUT: u64 = 2; // 2s

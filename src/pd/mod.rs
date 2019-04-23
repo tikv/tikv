@@ -14,8 +14,6 @@ pub use self::pd::{Runner as PdRunner, Task as PdTask};
 pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
-use std::ops::Deref;
-
 use kvproto::metapb;
 use kvproto::pdpb;
 
@@ -23,26 +21,7 @@ pub type Key = Vec<u8>;
 pub use pd2::PdFuture;
 
 pub use pd2::RegionStat;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RegionInfo {
-    pub region: metapb::Region,
-    pub leader: Option<metapb::Peer>,
-}
-
-impl RegionInfo {
-    pub fn new(region: metapb::Region, leader: Option<metapb::Peer>) -> RegionInfo {
-        RegionInfo { region, leader }
-    }
-}
-
-impl Deref for RegionInfo {
-    type Target = metapb::Region;
-
-    fn deref(&self) -> &Self::Target {
-        &self.region
-    }
-}
+pub use pd2::RegionInfo;
 
 pub const INVALID_ID: u64 = 0;
 
