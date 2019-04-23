@@ -310,7 +310,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        router: BatchRouter<ApplyFsm, ControlFsm>,
+        router: ApplyRouter,
         notifier: Notifier,
         cfg: &Config,
     ) -> ApplyContext {
@@ -2777,11 +2777,12 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
     }
 }
 
-pub type ApplyRouter = BatchRouter<ApplyFsm, ControlFsm>;
+#[derive(Clone)]
+pub struct ApplyRouter(BatchRouter<ApplyFsm, ControlFsm>);
 
 impl ApplyRouter {
     pub fn schedule_task(&self, region_id: u64, msg: Msg) {
-        let reg = match self.try_send(region_id, msg) {
+        let reg = match self.0.try_send(region_id, msg) {
             Either::Left(Ok(())) => return,
             Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
                 Msg::Registration(reg) => reg,
@@ -2826,11 +2827,19 @@ impl ApplyRouter {
         // messages.
         let (sender, apply_fsm) = ApplyFsm::from_registration(reg);
         let mailbox = BasicMailbox::new(sender, apply_fsm);
-        self.register(region_id, mailbox);
+        self.0.register(region_id, mailbox);
+    }
+
+    pub fn mailbox(&self, addr: u64) -> Option<Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>> {
+        self.0.mailbox(addr)
+    }
+
+    pub fn close(&self, addr: u64) {
+        self.0.close(addr)
     }
 }
 
-pub type ApplyBatchSystem = BatchSystem<ApplyFsm, ControlFsm>;
+pub struct ApplyBatchSystem(BatchSystem<ApplyFsm, ControlFsm>);
 
 impl ApplyBatchSystem {
     pub fn schedule_all<'a>(&self, peers: impl Iterator<Item = &'a Peer>) {
@@ -2839,18 +2848,31 @@ impl ApplyBatchSystem {
             let (tx, fsm) = ApplyFsm::from_peer(peer);
             mailboxes.push((peer.region().get_id(), BasicMailbox::new(tx, fsm)));
         }
-        self.router().register_all(mailboxes);
+        self.0.router().register_all(mailboxes);
+    }
+
+    pub fn spawn<B>(&mut self, name_prefix: String, builder: B)
+    where
+        B: HandlerBuilder<ApplyFsm, ControlFsm>,
+        B::Handler: Send + 'static,
+    {
+        self.0.spawn(name_prefix, builder)
+    }
+
+    pub fn shutdown(&mut self) {
+        self.0.shutdown()
     }
 }
 
 pub fn create_apply_batch_system(cfg: &Config) -> (ApplyRouter, ApplyBatchSystem) {
     let (tx, _) = loose_bounded(usize::MAX);
-    super::batch::create_system(
+    let (ar, ab) = super::batch::create_system(
         cfg.apply_pool_size,
         cfg.apply_max_batch_size,
         tx,
         Box::new(ControlFsm),
-    )
+    );
+    (ApplyRouter(ar), ApplyBatchSystem(ab))
 }
 
 #[cfg(test)]
