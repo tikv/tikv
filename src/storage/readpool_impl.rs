@@ -170,9 +170,9 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statis
 #[inline]
 pub fn with_tls_engine_any<F, R>(f: F) -> R
 where
-    F: FnOnce(&dyn Any) -> R,
+    F: FnOnce(Option<&Box<dyn Any>>) -> R,
 {
-    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref().unwrap().as_ref()))
+    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref()))
 }
 
 #[inline]

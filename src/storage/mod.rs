@@ -661,6 +661,7 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
+        let engine = self.get_engine().clone();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -668,7 +669,10 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = engine_any.downcast_ref().unwrap();
+                let engine = match engine_any {
+                    Some(e) => e.as_ref().downcast_ref().unwrap(),
+                    None => &engine,
+                };
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -715,6 +719,7 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
+        let engine = self.get_engine().clone();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -722,7 +727,10 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = engine_any.downcast_ref().unwrap();
+                let engine = match engine_any {
+                    Some(e) => e.as_ref().downcast_ref().unwrap(),
+                    None => &engine,
+                };
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -779,6 +787,7 @@ impl<E: Engine> Storage<E> {
         options: Options,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
+        let engine = self.get_engine().clone();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -786,7 +795,10 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine: &E = engine_any.downcast_ref().unwrap();
+                let engine = match engine_any {
+                    Some(e) => e.as_ref().downcast_ref().unwrap(),
+                    None => &engine,
+                };
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {

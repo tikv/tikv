@@ -214,6 +214,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     // TODO: Convert to use async / await.
     fn handle_unary_request_impl(
+        engine: E,
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Future<Item = coppb::Response, Error = Error> {
@@ -222,7 +223,10 @@ impl<E: Engine> Endpoint<E> {
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
             .and_then(move |_| {
                 with_tls_engine_any(|engine_any| {
-                    let engine = engine_any.downcast_ref().unwrap();
+                    let engine = match engine_any {
+                        Some(e) => e.as_ref().downcast_ref().unwrap(),
+                        None => &engine,
+                    };
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
                         .map(|snapshot| (tracker, snapshot))
                 })
@@ -272,13 +276,14 @@ impl<E: Engine> Endpoint<E> {
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Future<Item = coppb::Response, Error = Error>> {
+        let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn_handle(priority, move || {
-                Self::handle_unary_request_impl(tracker, handler_builder)
+                Self::handle_unary_request_impl(engine, tracker, handler_builder)
             })
             .map_err(|_| Error::Full)
     }
@@ -310,6 +315,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` multiple times to process the request and produce multiple results.
     // TODO: Convert to use async / await.
     fn handle_stream_request_impl(
+        engine: E,
         tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> impl Stream<Item = coppb::Response, Error = Error> {
@@ -320,7 +326,10 @@ impl<E: Engine> Endpoint<E> {
             future::result(tracker.req_ctx.deadline.check_if_exceeded())
                 .and_then(move |_| {
                     with_tls_engine_any(|engine_any| {
-                        let engine = engine_any.downcast_ref().unwrap();
+                        let engine = match engine_any {
+                            Some(e) => e.as_ref().downcast_ref().unwrap(),
+                            None => &engine,
+                        };
                         Self::async_snapshot(engine, &tracker.req_ctx.context)
                             .map(|snapshot| (tracker, snapshot))
                     })
@@ -409,12 +418,13 @@ impl<E: Engine> Endpoint<E> {
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<impl Stream<Item = coppb::Response, Error = Error>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
+        let engine = self.engine.clone();
         let priority = readpool::Priority::from(req_ctx.context.get_priority());
         let tracker = Box::new(Tracker::new(req_ctx));
 
         self.read_pool
             .spawn(priority, move || {
-                Self::handle_stream_request_impl(tracker, handler_builder) // Stream<Resp, Error>
+                Self::handle_stream_request_impl(engine, tracker, handler_builder) // Stream<Resp, Error>
                     .then(Ok::<_, mpsc::SendError<_>>) // Stream<Result<Resp, Error>, MpscError>
                     .forward(tx)
             })
