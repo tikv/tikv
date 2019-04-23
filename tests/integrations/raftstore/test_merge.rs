@@ -112,12 +112,6 @@ fn test_node_merge_with_slow_learner() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_add_peer(r1, new_learner_peer(2, 2));
 
-    // Make sure the leader has received the learner's last index.
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
-
     // Split the region.
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
@@ -128,15 +122,23 @@ fn test_node_merge_with_slow_learner() {
     assert_eq!(left.get_end_key(), right.get_start_key());
     assert_eq!(right.get_start_key(), b"k2");
 
+    // Make sure the leader has received the learner's last index.
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
     // Merge 2 regions under isolation should fail.
     cluster.add_send_filter(IsolationFilterFactory::new(2));
-    (0..100).for_each(|_| cluster.must_put(b"k1", b"v1"));
+    (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
     let do_merge = || pd_client.must_merge(left.get_id(), right.get_id());
     if panic::catch_unwind(panic::AssertUnwindSafe(do_merge)).is_ok() {
         panic!("merge with slow learner should fail");
     }
 
     cluster.clear_send_filters();
+    cluster.must_put(b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
     pd_client.must_merge(left.get_id(), right.get_id());
 }
 
