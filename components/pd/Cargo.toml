@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+futures = "0.1"
 lazy_static = "0.2.1"
 grpcio = { version = "0.4", features = [ "secure" ] }
 quick-error = "1.2.2"

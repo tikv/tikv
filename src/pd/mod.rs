@@ -16,12 +16,11 @@ pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
 
-use futures::Future;
 use kvproto::metapb;
 use kvproto::pdpb;
 
 pub type Key = Vec<u8>;
-pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
+pub use pd2::PdFuture;
 
 #[derive(Default, Clone)]
 pub struct RegionStat {
