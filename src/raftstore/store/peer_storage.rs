@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::time::Instant;
-use std::{cmp, error, u64};
+use std::{cmp, u64};
 
 use engine::rocks;
 use engine::rocks::{DBOptions, Writable};
@@ -21,11 +21,12 @@ use kvproto::raft_serverpb::{
 use protobuf::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
+use raftstore2::errors::storage_error;
 
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
-use crate::raftstore::{Error, Result};
+use crate::raftstore::Result;
 use tikv_util::worker::Scheduler;
 
 use super::keys::{self, enc_end_key, enc_start_key};
@@ -245,19 +246,6 @@ pub struct PeerStorage {
     stats: CacheQueryStats,
 
     pub tag: String,
-}
-
-fn storage_error<E>(error: E) -> raft::Error
-where
-    E: Into<Box<dyn error::Error + Send + Sync>>,
-{
-    raft::Error::Store(StorageError::Other(error.into()))
-}
-
-impl From<Error> for RaftError {
-    fn from(err: Error) -> RaftError {
-        storage_error(err)
-    }
 }
 
 pub struct ApplySnapResult {

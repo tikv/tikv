@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use std::{error, result, str, thread, time, u64};
+use std::{str, thread, time, u64};
 
 use crc::crc32::{self, Digest, Hasher32};
 use engine::rocks::util::{
@@ -66,26 +66,7 @@ const META_FILE_SUFFIX: &str = ".meta";
 const DELETE_RETRY_MAX_TIMES: u32 = 6;
 const DELETE_RETRY_TIME_MILLIS: u64 = 500;
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        Abort {
-            description("abort")
-            display("abort")
-        }
-        TooManySnapshots {
-            description("too many snapshots")
-        }
-        Other(err: Box<dyn error::Error + Sync + Send>) {
-            from()
-            cause(err.as_ref())
-            description(err.description())
-            display("snap failed {:?}", err)
-        }
-    }
-}
-
-pub type Result<T> = result::Result<T, Error>;
+pub use raftstore2::store::snap::{Error, Result};
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
 #[inline]
