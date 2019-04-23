@@ -16,3 +16,5 @@ pub mod errors;
 pub mod metrics;
 
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
+
+pub const REQUEST_TIMEOUT: u64 = 2; // 2s

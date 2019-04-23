@@ -174,4 +174,4 @@ pub trait PdClient: Send + Sync {
     fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse>;
 }
 
-const REQUEST_TIMEOUT: u64 = 2; // 2s
+pub use pd2::REQUEST_TIMEOUT;
