@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crossbeam::channel::{TryRecvError, TrySendError};
+use crossbeam::channel::{SendError, TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
 use engine::{WriteBatch, WriteOptions, DB};
@@ -60,6 +60,9 @@ use tikv_util::time::{duration_to_sec, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use std::result::Result as StdResult;
+use super::Mailbox;
+use super::batch::{NormalScheduler, ControlScheduler};
 
 type Key = Vec<u8>;
 
@@ -125,7 +128,8 @@ impl StoreMeta {
     }
 }
 
-pub type RaftRouter = BatchRouter<PeerFsm, StoreFsm>;
+#[derive(Clone)]
+pub struct RaftRouter(BatchRouter<PeerFsm, StoreFsm>);
 
 impl RaftRouter {
     pub fn send_raft_message(
@@ -168,6 +172,55 @@ impl RaftRouter {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[inline]
+    pub fn try_send(
+        &self,
+        addr: u64,
+        msg: PeerMsg,
+    ) -> Either<StdResult<(), TrySendError<PeerMsg>>, PeerMsg> {
+        self.0.try_send(addr, msg)
+    }
+
+    #[inline]
+    pub fn send(&self, addr: u64, msg: PeerMsg) -> StdResult<(), TrySendError<PeerMsg>> {
+        self.0.send(addr, msg)
+    }
+
+    #[inline]
+    pub fn force_send(&self, addr: u64, msg: PeerMsg) -> StdResult<(), SendError<PeerMsg>> {
+        self.0.force_send(addr, msg)
+    }
+
+    #[inline]
+    pub fn send_control(&self, msg: StoreMsg) -> StdResult<(), TrySendError<StoreMsg>> {
+        self.0.send_control(msg)
+    }
+
+    #[inline]
+    pub fn register(&self, addr: u64, mailbox: BasicMailbox<PeerFsm>) {
+        self.0.register(addr, mailbox)
+    }
+
+    #[inline]
+    pub fn register_all(&self, mailboxes: Vec<(u64, BasicMailbox<PeerFsm>)>) {
+        self.0.register_all(mailboxes)
+    }
+
+    #[inline]
+    pub fn mailbox(&self, addr: u64) -> Option<Mailbox<PeerFsm, NormalScheduler<PeerFsm, StoreFsm>>> {
+        self.0.mailbox(addr)
+    }
+
+    #[inline]
+    pub fn control_mailbox(&self) -> Mailbox<StoreFsm, ControlScheduler<PeerFsm, StoreFsm>> {
+        self.0.control_mailbox()
+    }
+
+    #[inline]
+    pub fn close(&self, addr: u64) {
+        self.0.close(addr)
     }
 }
 
@@ -1128,9 +1181,9 @@ pub fn create_raft_batch_system(cfg: &Config) -> (RaftRouter, RaftBatchSystem) {
         workers: None,
         apply_router,
         apply_system,
-        router: router.clone(),
+        router: RaftRouter(router.clone()),
     };
-    (router, system)
+    (RaftRouter(router), system)
 }
 
 impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {

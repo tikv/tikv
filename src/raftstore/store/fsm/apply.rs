@@ -2830,10 +2830,12 @@ impl ApplyRouter {
         self.0.register(region_id, mailbox);
     }
 
+    #[inline]
     pub fn mailbox(&self, addr: u64) -> Option<Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>> {
         self.0.mailbox(addr)
     }
 
+    #[inline]
     pub fn close(&self, addr: u64) {
         self.0.close(addr)
     }
@@ -2851,6 +2853,7 @@ impl ApplyBatchSystem {
         self.0.router().register_all(mailboxes);
     }
 
+    #[inline]
     pub fn spawn<B>(&mut self, name_prefix: String, builder: B)
     where
         B: HandlerBuilder<ApplyFsm, ControlFsm>,
@@ -2859,6 +2862,7 @@ impl ApplyBatchSystem {
         self.0.spawn(name_prefix, builder)
     }
 
+    #[inline]
     pub fn shutdown(&mut self) {
         self.0.shutdown()
     }
