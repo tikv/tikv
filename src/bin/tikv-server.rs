@@ -197,7 +197,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         &cfg.readpool.storage.build_config(),
         pd_sender.clone(),
         raft_engine.clone(),
-        "store",
+        "store-read",
     );
 
     let storage = create_raft_storage(
