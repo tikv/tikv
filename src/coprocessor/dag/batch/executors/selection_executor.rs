@@ -563,9 +563,7 @@ mod tests {
             ) -> Result<Option<i64>> {
                 match v {
                     None => Err(Error::Other(box_err!("foo"))),
-                    Some(v) => {
-                        Ok(Some(*v))
-                    }
+                    Some(v) => Ok(Some(*v)),
                 }
             }
         }
@@ -600,10 +598,7 @@ mod tests {
         }
 
         let src_exec = MockExecutor::new(
-            vec![
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-            ],
+            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
