@@ -79,6 +79,13 @@ pub trait TableScanBencher {
     fn box_clone(&self) -> Box<dyn TableScanBencher>;
 }
 
+impl Clone for Box<dyn TableScanBencher> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+
 pub struct NormalTableScanNext1Bencher<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
 }

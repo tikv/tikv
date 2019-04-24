@@ -23,6 +23,16 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
+
+    /// Clones current instance into a trait object.
+    fn box_clone(&self) -> Box<dyn RpnFunction>;
+}
+
+impl Clone for Box<dyn RpnFunction> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
 }
 
 impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
@@ -44,6 +54,11 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue> {
         (**self).eval(rows, context, payload)
+    }
+
+    #[inline]
+    fn box_clone(&self) -> Box<dyn RpnFunction> {
+        (**self).box_clone()
     }
 }
 
@@ -348,6 +363,8 @@ macro_rules! impl_template_fn {
         impl_template_fn! { @inner $name, 3, eval_3_args }
     };
     (@inner $name:ident, $args:expr, $eval_fn:ident) => {
+        impl tikv_util::AssertCopy for $name {}
+
         impl $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
             #[inline]
             fn name(&self) -> &'static str {
@@ -373,6 +390,11 @@ macro_rules! impl_template_fn {
                     context,
                     payload,
                 )
+            }
+
+            #[inline]
+            fn box_clone(&self) -> Box<dyn $crate::coprocessor::dag::rpn_expr::RpnFunction> {
+                Box::new(*self)
             }
         }
     };

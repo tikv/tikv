@@ -22,6 +22,13 @@ pub trait SimpleAggrBencher {
     fn box_clone(&self) -> Box<dyn SimpleAggrBencher>;
 }
 
+impl Clone for Box<dyn SimpleAggrBencher> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+
 /// A bencher that will use normal stream aggregation executor without a group by to bench the
 /// giving aggregate expression.
 pub struct NormalBencher;

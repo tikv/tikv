@@ -156,17 +156,12 @@ fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
         .bench(b, &[table["id"].as_column_info()], &ranges, &store);
 }
 
+#[derive(Clone)]
 struct Input(Box<dyn util::TableScanBencher>);
 
 impl Input {
     pub fn new<T: util::TableScanBencher + 'static>(b: T) -> Self {
         Self(Box::new(b))
-    }
-}
-
-impl Clone for Input {
-    fn clone(&self) -> Self {
-        Input(self.0.box_clone())
     }
 }
 

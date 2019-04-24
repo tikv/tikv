@@ -28,21 +28,13 @@ fn bench_simple_aggr_count_bytes_column(b: &mut criterion::Bencher, input: &Inpu
     input.bencher.bench(b, &expr, input.src_rows);
 }
 
+#[derive(Clone)]
 struct Input {
     /// How many rows to aggregate
     src_rows: usize,
 
     /// The aggregate executor (batch / normal) to use
     bencher: Box<dyn util::SimpleAggrBencher>,
-}
-
-impl Clone for Input {
-    fn clone(&self) -> Self {
-        Input {
-            src_rows: self.src_rows,
-            bencher: self.bencher.box_clone(),
-        }
-    }
 }
 
 impl std::fmt::Debug for Input {

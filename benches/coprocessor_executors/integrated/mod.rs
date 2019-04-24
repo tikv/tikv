@@ -21,18 +21,10 @@ fn bench_select_count_1_from_table(b: &mut criterion::Bencher, input: &Input) {
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
+#[derive(Clone)]
 struct Input {
     rows: usize,
     bencher: Box<dyn util::IntegratedBencher>,
-}
-
-impl Clone for Input {
-    fn clone(&self) -> Self {
-        Input {
-            rows: self.rows,
-            bencher: self.bencher.box_clone(),
-        }
-    }
 }
 
 impl std::fmt::Debug for Input {

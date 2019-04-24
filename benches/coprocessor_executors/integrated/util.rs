@@ -30,6 +30,13 @@ pub trait IntegratedBencher {
     fn box_clone(&self) -> Box<dyn IntegratedBencher>;
 }
 
+impl Clone for Box<dyn IntegratedBencher> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+
 /// A bencher that will use normal executor to execute the given request.
 pub struct NormalBencher<T: TxnStore + 'static> {
     _phantom: PhantomData<T>,
