@@ -380,6 +380,7 @@ mod tests {
 
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
+    use crate::storage::BlockCacheConfig;
     use engine::rocks::util::security::encrypted_env_from_cipher_file;
     use tikv_util::file::file_exists;
 
@@ -455,7 +456,8 @@ mod tests {
             let env = encrypted_env_from_cipher_file(&security_cfg.cipher_file, None).unwrap();
             db_opts.set_env(env);
         }
-        let cfs_opts = cfg.build_cf_opts();
+        let cache = BlockCacheConfig::default().build_shared_cache();
+        let cfs_opts = cfg.build_cf_opts(&cache);
         let db = new_engine_opt(temp_dir.path().to_str().unwrap(), db_opts, cfs_opts).unwrap();
         let db = Arc::new(db);
 

@@ -17,7 +17,7 @@ use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -475,6 +475,13 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        block_cache: BlockCacheConfig {
+            shared: true,
+            capacity: Some(ReadableSize::gb(40)),
+            num_shard_bits: 6,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.8,
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
