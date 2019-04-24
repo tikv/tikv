@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crossbeam::TrySendError;
 use kvproto::errorpb;
@@ -21,6 +22,7 @@ use crate::raftstore::store::{
 use crate::raftstore::Result;
 use engine::DB;
 use tikv_util::collections::HashMap;
+use tikv_util::time::Instant;
 
 use super::metrics::*;
 use crate::raftstore::store::fsm::store::StoreMeta;
@@ -338,6 +340,12 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     #[inline]
+    pub fn execute_raft_command(&self, cmd: RaftCommand) {
+        self.propose_raft_command(cmd);
+        self.metrics.borrow_mut().maybe_flush();
+    }
+
+    #[inline]
     pub fn acceptable(request: &RaftCmdRequest) -> bool {
         if request.has_admin_request() || request.has_status_request() {
             false
@@ -392,7 +400,7 @@ impl<'r, 'm> RequestInspector for Inspector<'r, 'm> {
     }
 }
 
-//const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
+const METRICS_FLUSH_INTERVAL: u64 = 15_000; // 15s
 
 #[derive(Clone)]
 struct ReadMetrics {
@@ -410,6 +418,8 @@ struct ReadMetrics {
     rejected_by_appiled_term: i64,
     rejected_by_channel_full: i64,
     rejected_by_cache_miss: i64,
+
+    last_flush_time: Instant,
 }
 
 impl Default for ReadMetrics {
@@ -427,76 +437,84 @@ impl Default for ReadMetrics {
             rejected_by_appiled_term: 0,
             rejected_by_channel_full: 0,
             rejected_by_cache_miss: 0,
+            last_flush_time: Instant::now(),
         }
     }
 }
 
-//impl ReadMetrics {
-//    fn flush(&mut self) {
-//        self.requests_wait_duration.flush();
-//        self.batch_requests_size.flush();
-//        if self.rejected_by_store_id_mismatch > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["store_id_mismatch"])
-//                .inc_by(self.rejected_by_store_id_mismatch);
-//            self.rejected_by_store_id_mismatch = 0;
-//        }
-//        if self.rejected_by_peer_id_mismatch > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["peer_id_mismatch"])
-//                .inc_by(self.rejected_by_peer_id_mismatch);
-//            self.rejected_by_peer_id_mismatch = 0;
-//        }
-//        if self.rejected_by_term_mismatch > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["term_mismatch"])
-//                .inc_by(self.rejected_by_term_mismatch);
-//            self.rejected_by_term_mismatch = 0;
-//        }
-//        if self.rejected_by_lease_expire > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["lease_expire"])
-//                .inc_by(self.rejected_by_lease_expire);
-//            self.rejected_by_lease_expire = 0;
-//        }
-//        if self.rejected_by_no_region > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["no_region"])
-//                .inc_by(self.rejected_by_no_region);
-//            self.rejected_by_no_region = 0;
-//        }
-//        if self.rejected_by_no_lease > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["no_lease"])
-//                .inc_by(self.rejected_by_no_lease);
-//            self.rejected_by_no_lease = 0;
-//        }
-//        if self.rejected_by_epoch > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["epoch"])
-//                .inc_by(self.rejected_by_epoch);
-//            self.rejected_by_epoch = 0;
-//        }
-//        if self.rejected_by_appiled_term > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["appiled_term"])
-//                .inc_by(self.rejected_by_appiled_term);
-//            self.rejected_by_appiled_term = 0;
-//        }
-//        if self.rejected_by_channel_full > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["channel_full"])
-//                .inc_by(self.rejected_by_channel_full);
-//            self.rejected_by_channel_full = 0;
-//        }
-//        if self.rejected_by_cache_miss > 0 {
-//            LOCAL_READ_REJECT
-//                .with_label_values(&["cache_miss"])
-//                .inc_by(self.rejected_by_cache_miss);
-//            self.rejected_by_cache_miss = 0;
-//        }
-//    }
-//}
+impl ReadMetrics {
+    pub fn maybe_flush(&mut self) {
+        if self.last_flush_time.elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+            self.flush();
+            self.last_flush_time = Instant::now();
+        }
+    }
+
+    fn flush(&mut self) {
+        self.requests_wait_duration.flush();
+        self.batch_requests_size.flush();
+        if self.rejected_by_store_id_mismatch > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["store_id_mismatch"])
+                .inc_by(self.rejected_by_store_id_mismatch);
+            self.rejected_by_store_id_mismatch = 0;
+        }
+        if self.rejected_by_peer_id_mismatch > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["peer_id_mismatch"])
+                .inc_by(self.rejected_by_peer_id_mismatch);
+            self.rejected_by_peer_id_mismatch = 0;
+        }
+        if self.rejected_by_term_mismatch > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["term_mismatch"])
+                .inc_by(self.rejected_by_term_mismatch);
+            self.rejected_by_term_mismatch = 0;
+        }
+        if self.rejected_by_lease_expire > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["lease_expire"])
+                .inc_by(self.rejected_by_lease_expire);
+            self.rejected_by_lease_expire = 0;
+        }
+        if self.rejected_by_no_region > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["no_region"])
+                .inc_by(self.rejected_by_no_region);
+            self.rejected_by_no_region = 0;
+        }
+        if self.rejected_by_no_lease > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["no_lease"])
+                .inc_by(self.rejected_by_no_lease);
+            self.rejected_by_no_lease = 0;
+        }
+        if self.rejected_by_epoch > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["epoch"])
+                .inc_by(self.rejected_by_epoch);
+            self.rejected_by_epoch = 0;
+        }
+        if self.rejected_by_appiled_term > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["appiled_term"])
+                .inc_by(self.rejected_by_appiled_term);
+            self.rejected_by_appiled_term = 0;
+        }
+        if self.rejected_by_channel_full > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["channel_full"])
+                .inc_by(self.rejected_by_channel_full);
+            self.rejected_by_channel_full = 0;
+        }
+        if self.rejected_by_cache_miss > 0 {
+            LOCAL_READ_REJECT
+                .with_label_values(&["cache_miss"])
+                .inc_by(self.rejected_by_cache_miss);
+            self.rejected_by_cache_miss = 0;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

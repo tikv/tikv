@@ -108,7 +108,7 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
         if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
-            self.local_reader.propose_raft_command(cmd);
+            self.local_reader.execute_raft_command(cmd);
             Ok(())
         } else {
             let region_id = cmd.request.get_header().get_region_id();
