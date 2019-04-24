@@ -87,23 +87,21 @@ impl Default for BlockCacheConfig {
 
 impl BlockCacheConfig {
     pub fn build_shared_cache(&self) -> Option<Cache> {
-        match self.shared {
-            false => None,
-            true => {
-                let capacity = match self.capacity {
-                    None => {
-                        let total_mem = sys_info::mem_info().unwrap().total * KB;
-                        ((total_mem as f64) * 0.45) as usize
-                    }
-                    Some(c) => c.0 as usize,
-                };
-                let mut cache_opts = LRUCacheOptions::new();
-                cache_opts.set_capacity(capacity);
-                cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
-                cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
-                cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
-                Some(Cache::new_lru_cache(cache_opts))
-            }
+        if !self.shared {
+            return None;
         }
+        let capacity = match self.capacity {
+            None => {
+                let total_mem = sys_info::mem_info().unwrap().total * KB;
+                ((total_mem as f64) * 0.45) as usize
+            }
+            Some(c) => c.0 as usize,
+        };
+        let mut cache_opts = LRUCacheOptions::new();
+        cache_opts.set_capacity(capacity);
+        cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
+        cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
+        cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
+        Some(Cache::new_lru_cache(cache_opts))
     }
 }
