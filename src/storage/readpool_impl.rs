@@ -54,7 +54,10 @@ pub fn build_read_pool<E: Engine>(
         .name_prefix(name_prefix)
         .on_tick(move || tls_flush(&pd_sender))
         .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
-        .before_stop(move || tls_flush(&pd_sender2))
+        .before_stop(move || {
+            destroy_tls_engine_any();
+            tls_flush(&pd_sender2)
+        })
         .build()
 }
 
@@ -178,6 +181,12 @@ where
 #[inline]
 pub fn set_tls_engine_any<E: Engine>(engine: E) {
     TLS_ENGINE_ANY.with(|e| {
-        e.replace(Some(Box::new(engine)));
+        *e.borrow_mut() = Some(Box::new(engine));
+    });
+}
+
+pub fn destroy_tls_engine_any() {
+    TLS_ENGINE_ANY.with(|e| {
+        *e.borrow_mut() = None;
     });
 }
