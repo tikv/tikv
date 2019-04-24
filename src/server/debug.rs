@@ -23,6 +23,7 @@ use protobuf::{self, Message, RepeatedField};
 use raft::eraftpb::Entry;
 use raft::{self, RawNode};
 
+use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
 use crate::raftstore::coprocessor::{
     get_region_approximate_keys_cf, get_region_approximate_middle,
 };
@@ -32,7 +33,6 @@ use crate::raftstore::store::{
     write_peer_state,
 };
 use crate::raftstore::store::{keys, PeerStorage};
-use crate::storage::mvcc::properties::{MvccProperties, RangeProperties};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
@@ -40,6 +40,7 @@ use tikv_util::codec::bytes;
 use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
+use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
@@ -278,9 +279,9 @@ impl Debugger {
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start);
+        read_opt.set_iterate_lower_bound(start.to_vec());
         if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end);
+            read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
         if !iter.seek_to_first() {
@@ -428,7 +429,12 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+        let readopts = IterOption::new(
+            Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+            Some(KeyBuilder::from_vec(to, 0, 0)),
+            false,
+        )
+        .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
@@ -835,7 +841,12 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let readopts = IterOption::new(
+                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(to, 0, 0)),
+                false,
+            )
+            .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::Start);
@@ -1093,8 +1104,12 @@ impl MvccInfoIterator {
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() { None } else { Some(to) };
-            let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
+            let to = if to.is_empty() {
+                None
+            } else {
+                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
+            };
+            let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));
