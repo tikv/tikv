@@ -140,7 +140,7 @@ impl EvalConfig {
 }
 
 // Warning details caused in eval computation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct EvalWarnings {
     // max number of warnings to return.
     max_warning_cnt: usize,
@@ -151,7 +151,7 @@ pub struct EvalWarnings {
 }
 
 impl EvalWarnings {
-    pub fn new(max_warning_cnt: usize) -> EvalWarnings {
+    fn new(max_warning_cnt: usize) -> EvalWarnings {
         EvalWarnings {
             max_warning_cnt,
             warning_cnt: 0,
