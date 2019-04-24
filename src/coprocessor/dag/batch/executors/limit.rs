@@ -33,10 +33,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_batch();
 
-        let mut result = self.src.next_batch(expect_rows);
+        let mut result = self.src.next_batch(scan_rows);
         if result.data.rows_len() < self.remaining_rows {
             self.remaining_rows -= result.data.rows_len();
         } else {
