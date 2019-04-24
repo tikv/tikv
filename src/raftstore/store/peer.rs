@@ -1724,16 +1724,13 @@ impl Peer {
 
     pub fn get_min_progress(&self) -> u64 {
         let status = self.raft_group.status();
-        let voters_min = status
+        status
             .progress
             .values()
+            .chain(status.learner_progress.values())
             .map(|pr| pr.matched)
             .min()
-            .unwrap_or_default();
-        match status.learner_progress.values().map(|pr| pr.matched).min() {
-            Some(learners_min) => cmp::min(voters_min, learners_min),
-            None => voters_min,
-        }
+            .unwrap_or_default()
     }
 
     fn pre_propose_prepare_merge<T, C>(
