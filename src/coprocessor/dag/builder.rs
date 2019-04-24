@@ -14,7 +14,7 @@ use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
-use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
+use crate::coprocessor::dag::batch::statistics::*;
 use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
@@ -284,14 +284,21 @@ impl DAGBuilder {
         let executors_len = req.get_executors().len();
 
         let config = Arc::new(config);
-        // TODO: Use `ExecSummaryCollectorNormal` according to `DAGRequest`.
-        let out_most_executor =
+        let out_most_executor = if req.get_collect_execution_summaries() {
+            super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorEnabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                config.clone(),
+            )?
+        } else {
             super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorDisabled>(
                 req.take_executors().into_vec(),
                 store,
                 ranges,
                 config.clone(),
-            )?;
+            )?
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
