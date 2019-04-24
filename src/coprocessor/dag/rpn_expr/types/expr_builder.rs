@@ -109,9 +109,13 @@ impl RpnExpressionBuilder {
     }
 
     #[cfg(test)]
-    pub fn push_constant(mut self, value: ScalarValue, field_type: impl Into<FieldType>) -> Self {
+    pub fn push_constant(
+        mut self,
+        value: impl Into<ScalarValue>,
+        field_type: impl Into<FieldType>,
+    ) -> Self {
         let node = RpnExpressionNode::Constant {
-            value,
+            value: value.into(),
             field_type: field_type.into(),
         };
         self.0.push(node);
