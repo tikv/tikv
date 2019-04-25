@@ -27,7 +27,7 @@ impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>
         let conditions = descriptor.get_conditions();
         for c in conditions {
             RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
-                Error::Other(box_err!("Unable to use BatchTableScanExecutor: {}", e))
+                Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
             })?;
         }
         Ok(())
