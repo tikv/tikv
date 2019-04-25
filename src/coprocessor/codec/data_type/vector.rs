@@ -650,7 +650,20 @@ macro_rules! impl_as_slice {
             }
         }
 
-        // `AsMut` is not implemented intentionally.
+        // TODO: We should only expose interface for push value, not the entire Vec.
+        impl AsMut<Vec<Option<$ty>>> for VectorValue {
+            #[inline]
+            fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
+                match self {
+                    VectorValue::$ty(ref mut vec) => vec,
+                    other => panic!(
+                        "Cannot retrieve a mutable `{}` vector over a {} column",
+                        stringify!($ty),
+                        other.eval_type()
+                    ),
+                }
+            }
+        }
     };
 }
 
@@ -662,8 +675,17 @@ impl_as_slice! { DateTime, as_date_time_slice }
 impl_as_slice! { Duration, as_duration_slice }
 impl_as_slice! { Json, as_json_slice }
 
-macro_rules! impl_push {
-    ($ty:tt, $name:ident) => {
+/// Additional `VectorValue` methods available via generics. These methods support different
+/// concrete types but have same names and should be specified via the generic parameter type.
+pub trait VectorValueExt<T: Evaluable> {
+    /// The generic version for `VectorValue::push_xxx()`.
+    fn push(&mut self, v: Option<T>);
+}
+
+macro_rules! impl_ext {
+    ($ty:tt, $push_name:ident) => {
+        // Explicit version
+
         impl VectorValue {
             /// Pushes a value in specified concrete type into current column.
             ///
@@ -671,7 +693,7 @@ macro_rules! impl_push {
             ///
             /// Panics if the current column does not match the type.
             #[inline]
-            pub fn $name(&mut self, v: Option<$ty>) {
+            pub fn $push_name(&mut self, v: Option<$ty>) {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec.push(v),
                     other => panic!(
@@ -682,33 +704,28 @@ macro_rules! impl_push {
                 };
             }
         }
+
+        // Implicit version
+
+        impl VectorValueExt<$ty> for VectorValue {
+            #[inline]
+            fn push(&mut self, v: Option<$ty>) {
+                self.$push_name(v);
+            }
+        }
     };
 }
 
-impl_push! { Int, push_int }
-impl_push! { Real, push_real }
-impl_push! { Decimal, push_decimal }
-impl_push! { Bytes, push_bytes }
-impl_push! { DateTime, push_date_time }
-impl_push! { Duration, push_duration }
-impl_push! { Json, push_json }
+impl_ext! { Int, push_int }
+impl_ext! { Real, push_real }
+impl_ext! { Decimal, push_decimal }
+impl_ext! { Bytes, push_bytes }
+impl_ext! { DateTime, push_date_time }
+impl_ext! { Duration, push_duration }
+impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
-        impl<'a> From<&'a [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
-        impl<'a> From<&'a mut [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a mut [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
         impl From<Vec<Option<$ty>>> for VectorValue {
             #[inline]
             fn from(s: Vec<Option<$ty>>) -> VectorValue {
@@ -918,10 +935,6 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Some(1.0)];
-        let column = VectorValue::from(slice);
-        assert_eq!(column.len(), 2);
-        assert_eq!(column.as_real_slice(), slice);
-
         let vec = slice.to_vec();
         let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);
