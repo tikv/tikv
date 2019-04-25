@@ -94,3 +94,30 @@ impl RpnFnUnaryNot {
         Ok(arg0.map(|arg| (arg == 0) as i64))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_logical_and() {
+        let test_cases = vec![
+            (Some(1), Some(1), Some(1)),
+            (Some(1), Some(0), Some(0)),
+            (Some(0), Some(0), Some(0)),
+            (Some(2), Some(-1), Some(1)),
+            (Some(0), None, Some(0)),
+            (None, Some(1), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(RpnFnLogicalAnd)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+}
