@@ -512,8 +512,8 @@ mod tests {
                 let (sender, runner) = new_runner(10);
                 let dropped = runner.dropped.clone();
                 let mailbox = BasicMailbox::new(sender, runner);
-                tx.send(dropped).unwrap();
                 router_.register(1, mailbox);
+                tx.send(dropped).unwrap();
             })))
             .unwrap();
         let dropped = rx.recv_timeout(Duration::from_secs(3)).unwrap();
