@@ -219,6 +219,17 @@ mod tests {
         assert!(r.is_drained.unwrap());
     }
 
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0 (Int)      Col1(Real)
+    /// == Call #1 ==
+    /// 1               NULL
+    /// NULL            7.0
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// NULL            NULL
+    /// (drained)
     fn make_src_executor_using_fixture_1() -> MockExecutor {
         MockExecutor::new(
             vec![FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()],
@@ -372,6 +383,19 @@ mod tests {
         }
     }
 
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0 (Int)      Col1(Int)       Col2(Int)
+    /// == Call #1 ==
+    /// 4               NULL            1
+    /// NULL            NULL            2
+    /// 2               4               3
+    /// NULL            2               4
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// NULL            NULL            2
+    /// (drained)
     fn make_src_executor_using_fixture_2() -> MockExecutor {
         MockExecutor::new(
             vec![
@@ -597,6 +621,17 @@ mod tests {
             }
         }
 
+        // The built data is as follows:
+        //
+        // == Schema ==
+        // Col0 (Int)       Col1(Int)
+        // == Call #1 ==
+        // 4                4
+        // 1                2
+        // 2                NULL
+        // 1                NULL
+        // == Call #2 ==
+        // (drained)
         let src_exec = MockExecutor::new(
             vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
             vec![
