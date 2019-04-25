@@ -222,7 +222,7 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
-        let mut env = Arc::new(Env::default());
+        let mut env = Arc::new(Env::new_mem());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));

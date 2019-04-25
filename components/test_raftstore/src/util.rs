@@ -172,6 +172,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
             scheduler_worker_pool_size: 1,
+            scheduler_concurrency: 10,
             ..StorageConfig::default()
         },
         server: new_server_config(cluster_id),

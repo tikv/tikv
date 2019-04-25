@@ -1475,7 +1475,7 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_cfg: &config::DbConfig,
     cache: &Option<Cache>,
 ) -> Result<()> {
-    use engine::{WriteOptions, CF_RAFT};
+    use engine::WriteOptions;
 
     if !rocks::util::db_exist(kv_path) {
         debug!("no need upgrade to v3.x");
