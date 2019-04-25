@@ -580,13 +580,19 @@ impl Snap {
         }
     }
 
+    // Only called in `do_build`.
     fn save_meta_file(&mut self) -> RaftStoreResult<()> {
         let mut v = vec![];
         box_try!(self.meta_file.meta.write_to_vec(&mut v));
-        {
-            let mut f = self.meta_file.file.take().unwrap();
+        if let Some(mut f) = self.meta_file.file.take() {
+            // `meta_file` could be None for this case: in `init_for_building` the snapshot exists
+            // so no temporary meta file is created, and this field is None. However in `do_build`
+            // it's deleted so we build it again, and then call `save_meta_file` with `meta_file`
+            // as None.
+            // FIXME: We can fix it later by introducing a better snapshot delete mechanism.
             f.write_all(&v[..])?;
             f.flush()?;
+            f.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
         self.hold_tmp_files = false;
@@ -665,7 +671,6 @@ impl Snap {
         let snapshot_meta = gen_snapshot_meta(&self.cf_files[..])?;
         self.meta_file.meta = snapshot_meta;
         self.save_meta_file()?;
-
         Ok(())
     }
 }
