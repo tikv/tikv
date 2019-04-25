@@ -1343,7 +1343,6 @@ impl TiKvConfig {
                 0: self.rocksdb.defaultcf.block_cache_size.0
                     + self.rocksdb.writecf.block_cache_size.0
                     + self.rocksdb.lockcf.block_cache_size.0
-                    + self.rocksdb.raftcf.block_cache_size.0
                     + self.raftdb.defaultcf.block_cache_size.0,
             });
         }
