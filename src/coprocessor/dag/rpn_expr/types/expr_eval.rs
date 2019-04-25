@@ -246,9 +246,7 @@ mod tests {
     /// Single constant node
     #[test]
     fn test_eval_single_constant_node() {
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
@@ -399,7 +397,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -541,8 +539,8 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
-            .push_constant(3i64, FieldTypeTp::LongLong)
+            .push_constant(1.5f64)
+            .push_constant(3i64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -593,7 +591,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -642,7 +640,7 @@ mod tests {
         }];
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_column_ref(0)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
@@ -827,7 +825,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_constant(3i64, FieldTypeTp::LongLong)
+            .push_constant(3i64)
             .push_column_ref(0)
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
@@ -954,9 +952,9 @@ mod tests {
             .push_column_ref(0)
             .push_fn_call(FnB, FieldTypeTp::Double)
             .push_column_ref(1)
-            .push_constant(7i64, FieldTypeTp::LongLong)
+            .push_constant(7i64)
             .push_fn_call(FnD, FieldTypeTp::LongLong)
-            .push_constant(11i64, FieldTypeTp::LongLong)
+            .push_constant(11i64)
             .push_fn_call(FnC, FieldTypeTp::Double)
             .push_fn_call(FnA, FieldTypeTp::Double)
             .build();
@@ -1034,8 +1032,8 @@ mod tests {
         // FnFoo only accepts 1 parameter but we will give 2.
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(3.0f64, FieldTypeTp::Double)
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(3.0f64)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -1068,7 +1066,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(7i64, FieldTypeTp::LongLong)
+            .push_constant(7i64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
