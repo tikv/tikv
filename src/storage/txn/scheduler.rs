@@ -20,6 +20,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::u64;
 
@@ -29,7 +30,6 @@ use prometheus::HistogramTimer;
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
-use tikv_util::collections::HashMap;
 use tikv_util::threadpool::{ThreadPool, ThreadPoolBuilder};
 use tikv_util::worker::{self, Runnable};
 
@@ -491,7 +491,7 @@ mod tests {
     use crate::storage::txn::latch::*;
     use crate::storage::{Command, Key, Mutation, Options};
     use kvproto::kvrpcpb::Context;
-    use tikv_util::collections::HashMap;
+    use std::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

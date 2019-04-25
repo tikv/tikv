@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use cop_datatype::prelude::*;
@@ -9,7 +10,6 @@ use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
 use tikv_util::codec::number;
-use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};

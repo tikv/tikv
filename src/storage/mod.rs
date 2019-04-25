@@ -11,6 +11,7 @@ pub mod types;
 
 use std::boxed::FnBox;
 use std::cmp;
+use std::collections::HashMap;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
@@ -25,7 +26,6 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;

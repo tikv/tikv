@@ -171,6 +171,7 @@ impl PartialOrd for SortRow {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use tipb::expression::{ByItem, Expr, ExprType};
@@ -180,7 +181,6 @@ mod tests {
     use crate::coprocessor::dag::executor::OriginCols;
     use crate::coprocessor::dag::expr::EvalContext;
     use tikv_util::codec::number::*;
-    use tikv_util::collections::HashMap;
 
     use super::*;
 

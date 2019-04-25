@@ -1,12 +1,13 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
+
 use kvproto::raft_serverpb::{RaftApplyState, RaftTruncatedState};
 
 use engine::rocks::DB;
 use engine::*;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
-use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 
 fn get_msg_cf_or_default<M: protobuf::Message + Default>(engine: &DB, cf: &str, key: &[u8]) -> M {
@@ -44,7 +45,7 @@ fn check_compacted(
     compact_count: u64,
 ) -> bool {
     // Every peer must have compacted logs, so the truncate log state index/term must > than before.
-    let mut compacted_idx = HashMap::default();
+    let mut compacted_idx = HashMap::new();
 
     for (&id, engines) in all_engines {
         let mut state: RaftApplyState =
@@ -200,7 +201,7 @@ fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
 
     cluster.must_put(b"k1", b"v1");
 
-    let mut before_states = HashMap::default();
+    let mut before_states = HashMap::new();
 
     for (&id, engines) in &cluster.engines {
         if id == 1 {

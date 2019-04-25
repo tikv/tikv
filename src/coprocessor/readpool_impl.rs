@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, ReadPool};
-use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;

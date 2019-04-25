@@ -1,11 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
 use std::result;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
-use tikv_util::collections::HashSet;
 
 use crate::grpc::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
@@ -341,7 +341,7 @@ pub fn validate_endpoints(
     security_mgr: &SecurityManager,
 ) -> Result<(PdClient, GetMembersResponse)> {
     let len = cfg.endpoints.len();
-    let mut endpoints_set = HashSet::with_capacity_and_hasher(len, Default::default());
+    let mut endpoints_set = HashSet::with_capacity(len);
 
     let mut members = None;
     let mut cluster_id = None;

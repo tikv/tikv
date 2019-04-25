@@ -152,6 +152,7 @@ impl Executor for TopNExecutor {
 #[cfg(test)]
 pub mod tests {
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use cop_datatype::FieldTypeTp;
@@ -162,7 +163,6 @@ pub mod tests {
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
     use tikv_util::codec::number::NumberEncoder;
-    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;

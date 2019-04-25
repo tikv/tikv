@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::i32;
 
 use super::Result;
 use crate::grpc::CompressionAlgorithms;
 
 use engine::rocks::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
-use tikv_util::collections::HashMap;
 use tikv_util::config::{self, ReadableDuration, ReadableSize};
 
 pub use crate::raftstore::store::Config as RaftStoreConfig;

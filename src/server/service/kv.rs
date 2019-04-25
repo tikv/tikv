@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::iter::{self, FromIterator};
 use std::sync::{Arc, Mutex};
 
@@ -28,7 +29,6 @@ use kvproto::tikvpb::*;
 use kvproto::tikvpb_grpc;
 use prometheus::HistogramTimer;
 use protobuf::RepeatedField;
-use tikv_util::collections::HashMap;
 use tikv_util::future::{paired_future_callback, AndThenWith};
 use tikv_util::mpsc::batch::{unbounded, BatchReceiver, Sender};
 use tikv_util::worker::Scheduler;

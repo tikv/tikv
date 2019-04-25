@@ -1,5 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
+
 use futures::Future;
 
 use kvproto::kvrpcpb::{Context, LockInfo};
@@ -10,7 +12,6 @@ use tikv::storage::{
     Result, Storage, Value,
 };
 use tikv::storage::{TestEngineBuilder, TestStorageBuilder};
-use tikv_util::collections::HashMap;
 
 /// A builder to build a `SyncTestStorage`.
 ///

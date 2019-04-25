@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{self, Arc, RwLock};
 use std::time::*;
@@ -23,7 +24,6 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, Raf
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{escape, HandyRwLock};
 
 use super::*;

@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::collections::Bound::Excluded;
+use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -37,7 +38,6 @@ use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
 use tikv_util::codec::bytes;
-use tikv_util::collections::HashSet;
 use tikv_util::config::ReadableSize;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;

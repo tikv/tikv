@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::mem;
 use std::thread;
 use std::time::Duration;
@@ -17,7 +18,6 @@ use crate::storage::{
     Statistics, StatisticsSummary, StorageCb,
 };
 use crate::storage::{Key, MvccInfo, Value};
-use tikv_util::collections::HashMap;
 use tikv_util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
 };

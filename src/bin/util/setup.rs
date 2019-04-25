@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::collections::HashMap;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -8,7 +9,6 @@ use chrono;
 use clap::ArgMatches;
 
 use tikv::config::{MetricConfig, TiKvConfig};
-use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
 // A workaround for checking if log is initialized.

@@ -114,6 +114,7 @@ pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
 #[cfg(test)]
 pub mod tests {
     use byteorder::{BigEndian, WriteBytesExt};
+    use std::collections::HashMap;
     use std::i64;
 
     use cop_datatype::FieldTypeTp;
@@ -123,7 +124,6 @@ pub mod tests {
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::storage::SnapshotStore;
-    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;

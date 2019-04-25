@@ -1,8 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashSet;
+
 use byteorder::{ByteOrder, LittleEndian};
 use murmur3::murmur3_x64_128;
-use tikv_util::collections::HashSet;
 use tipb::analyze;
 
 /// `FMSketch` is used to count the approximate number of distinct

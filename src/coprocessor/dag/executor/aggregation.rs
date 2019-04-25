@@ -385,6 +385,7 @@ impl StreamAggExecutor {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::i64;
 
     use cop_datatype::FieldTypeTp;
@@ -397,7 +398,6 @@ mod tests {
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
     use crate::storage::SnapshotStore;
-    use tikv_util::collections::HashMap;
 
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;

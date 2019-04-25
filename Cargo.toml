@@ -57,7 +57,6 @@ name = "misc"
 path = "benches/misc/mod.rs"
 
 [dependencies]
-hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-async = "2.3"

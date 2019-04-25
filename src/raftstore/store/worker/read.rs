@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +22,6 @@ use crate::raftstore::store::{
 };
 use crate::raftstore::Result;
 use engine::DB;
-use tikv_util::collections::HashMap;
 use tikv_util::time::duration_to_sec;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};

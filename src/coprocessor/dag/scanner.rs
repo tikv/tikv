@@ -161,6 +161,7 @@ impl<S: Store> Scanner<S> {
 
 #[cfg(test)]
 pub mod tests {
+    use std::collections::HashMap;
     use std::i64;
 
     use cop_datatype::FieldTypeTp;
@@ -172,7 +173,6 @@ pub mod tests {
     use crate::coprocessor::codec::table;
     use crate::coprocessor::util;
     use crate::storage::SnapshotStore;
-    use tikv_util::collections::HashMap;
 
     use super::*;
 

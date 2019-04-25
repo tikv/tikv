@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::boxed::FnBox;
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,7 +9,6 @@ use std::time::Instant;
 use kvproto::metapb;
 
 use crate::pd::PdClient;
-use tikv_util::collections::HashMap;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
 use super::metrics::*;
@@ -137,6 +137,7 @@ impl StoreAddrResolver for PdStoreAddrResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::ops::Sub;
     use std::str::FromStr;
@@ -147,7 +148,6 @@ mod tests {
     use crate::pd::{PdClient, PdFuture, RegionStat, Result};
     use kvproto::metapb;
     use kvproto::pdpb;
-    use tikv_util::collections::HashMap;
 
     const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 

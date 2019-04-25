@@ -1,9 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::local::LocalHistogram;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-
-use tikv_util::collections::HashSet;
 
 use super::metrics::*;
 

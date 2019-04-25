@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,7 +15,6 @@ use uuid::Uuid;
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
 use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
-use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::common::*;

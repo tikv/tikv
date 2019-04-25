@@ -29,7 +29,7 @@ macro_rules! count_args {
 /// # #[macro_use] extern crate tikv_util;
 /// # fn main() {
 /// // empty map
-/// let m: tikv_util::collections::HashMap<u8, u8> = map!();
+/// let m: std::collections::HashMap<u8, u8> = map!();
 /// assert!(m.is_empty());
 ///
 /// // one initial kv pairs.
@@ -48,15 +48,14 @@ macro_rules! count_args {
 macro_rules! map {
     () => {
         {
-            $crate::collections::HashMap::default()
+            std::collections::HashMap::new()
         }
     };
     ( $( $k:expr => $v:expr ),+ ) => {
         {
             let mut temp_map =
-                $crate::collections::HashMap::with_capacity_and_hasher(
-                    count_args!($(($k, $v)),+),
-                    Default::default()
+                std::collections::HashMap::with_capacity(
+                    count_args!($(($k, $v)),+)
                 );
             $(
                 temp_map.insert($k, $v);

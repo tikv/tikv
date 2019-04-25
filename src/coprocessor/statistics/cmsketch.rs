@@ -69,8 +69,8 @@ mod tests {
     use crate::coprocessor::codec::datum::Datum;
     use rand::{Rng, SeedableRng, StdRng};
     use std::cmp::min;
+    use std::collections::HashMap;
     use tikv_util::as_slice;
-    use tikv_util::collections::HashMap;
     use zipf::ZipfDistribution;
 
     impl CMSketch {

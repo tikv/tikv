@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,6 @@ use kvproto::import_kvpb::*;
 use uuid::Uuid;
 
 use crate::config::DbConfig;
-use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::engine::*;

@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::{Entry as HashMapEntry, HashMap};
 use std::ffi::CString;
 use std::i64;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -18,7 +19,6 @@ use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
-use tikv_util::collections::{HashMap, HashMapEntry};
 use tikv_util::mpsc::batch::{self, Sender as BatchSender};
 use tikv_util::security::SecurityManager;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;

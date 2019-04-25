@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::Write;
 use std::{cmp, u8};
@@ -15,7 +16,6 @@ use super::{datum, Datum, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::escape;
 
 // handle or index id
@@ -415,7 +415,7 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
-    use tikv_util::collections::{HashMap, HashSet};
+    use std::collections::{HashMap, HashSet};
 
     use super::*;
 

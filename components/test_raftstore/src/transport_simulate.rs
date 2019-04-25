@@ -1,5 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
@@ -16,7 +17,6 @@ use raft::eraftpb::MessageType;
 use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use tikv::raftstore::{DiscardReason, Error, Result};
 use tikv::server::transport::*;
-use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::{Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {

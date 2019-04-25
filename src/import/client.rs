@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::hash_map::{Entry as HashMapEntry, HashMap};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,7 +18,7 @@ use kvproto::tikvpb_grpc::*;
 
 use crate::pd::{Config as PdConfig, Error as PdError, PdClient, RegionInfo, RpcClient};
 use crate::storage::types::Key;
-use tikv_util::collections::{HashMap, HashMapEntry};
+
 use tikv_util::security::SecurityManager;
 
 use super::common::*;

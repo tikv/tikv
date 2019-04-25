@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::mem;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
@@ -7,7 +8,6 @@ use crate::coprocessor::metrics::*;
 use crate::pd::PdTask;
 use crate::storage::kv::{FlowStatistics, Statistics};
 use prometheus::local::{LocalHistogramVec, LocalIntCounterVec};
-use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
 /// `CopFlowStatistics` is for flow statistics, it would be reported to PD by flush.

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -15,7 +16,6 @@ use crate::raftstore::store::keys::{data_end_key, data_key};
 use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use kvproto::metapb::Region;
 use raft::StateRole;
-use tikv_util::collections::HashMap;
 use tikv_util::escape;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};

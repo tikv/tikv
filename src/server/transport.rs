@@ -4,6 +4,7 @@ use crossbeam::{SendError, TrySendError};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
 use super::metrics::*;
@@ -17,7 +18,6 @@ use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftSto
 use crate::server::raft_client::RaftClient;
 use crate::server::Result;
 use raft::SnapshotStatus;
-use tikv_util::collections::HashSet;
 use tikv_util::worker::Scheduler;
 use tikv_util::HandyRwLock;
 

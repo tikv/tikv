@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
@@ -7,7 +8,6 @@ use std::time::Duration;
 use test_raftstore::*;
 use tikv::raftstore::coprocessor::RegionInfoAccessor;
 use tikv::storage::kv::RegionInfoProvider;
-use tikv_util::collections::HashMap;
 use tikv_util::HandyRwLock;
 
 fn test_seek_region_impl<T: Simulator, R: RegionInfoProvider>(

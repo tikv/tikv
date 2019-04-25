@@ -4,10 +4,11 @@ use super::batch::{Fsm, FsmScheduler};
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use tikv_util::collections::HashMap;
+
 use tikv_util::mpsc;
 use tikv_util::Either;
 

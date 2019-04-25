@@ -1,6 +1,8 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Reverse;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::fs::{File, OpenOptions};
@@ -37,7 +39,6 @@ use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;

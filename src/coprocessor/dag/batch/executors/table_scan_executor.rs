@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
@@ -9,7 +10,6 @@ use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
 use crate::storage::{FixtureStore, Store};
-use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;

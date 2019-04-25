@@ -1,10 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
+use std::collections::HashSet;
 
 use crate::raftstore::coprocessor::properties::RangeProperties;
 use engine::rocks::{CompactionJobInfo, EventListener};
-use tikv_util::collections::HashSet;
 
 pub struct CompactedEvent {
     pub cf: String,
