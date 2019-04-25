@@ -86,6 +86,12 @@ impl<Client: ImportClient> ImportJob<Client> {
                 "[{}] still has ranges need to retry, retry_count:{}, current_count:{}",
                 self.tag, retry_count, i,
             );
+            if i == MAX_RETRY_TIMES - 1 {
+                res = Err(Error::ImportJobFailed(format!(
+                    "retry {} times still {} ranges failed",
+                    i, retry_count
+                )))
+            }
         }
         IMPORT_EACH_PHASE.with_label_values(&["import"]).set(0.0);
 
