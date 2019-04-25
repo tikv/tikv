@@ -199,6 +199,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
@@ -337,7 +338,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let store_ids = match self.store_ids_of_region(region_id) {
+        let mut store_ids = match self.store_ids_of_region(region_id) {
             None => return None,
             Some(ids) => ids,
         };
@@ -348,37 +349,30 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         self.reset_leader_of_region(region_id);
-        let mut leader = None;
+        let mut leaders: HashMap<_, (_, _)> = HashMap::new();
         let mut retry_cnt = 500;
 
         let node_ids = self.sim.rl().get_node_ids();
-        let mut count = 0;
-        while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
-            count = 0;
-            leader = None;
+        // For some tests, we stop the node but pd still has this information,
+        // and we must skip this.
+        store_ids.retain(|id| node_ids.contains(id));
+        while (leaders.len() != 1 || leaders.values().next().unwrap().1 != store_ids.len())
+            && retry_cnt > 0
+        {
+            leaders.clear();
             for store_id in &store_ids {
-                // For some tests, we stop the node but pd still has this information,
-                // and we must skip this.
-                if !node_ids.contains(store_id) {
-                    count += 1;
-                    continue;
-                }
-                let l = self.query_leader(*store_id, region_id, Duration::from_secs(1));
-                if l.is_none() {
-                    continue;
-                }
-                if leader.is_none() {
-                    leader = l;
-                    count += 1;
-                } else if l == leader {
-                    count += 1;
-                }
+                let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
+                    None => continue,
+                    Some(l) => l,
+                };
+                leaders.entry(l.get_id()).or_insert_with(|| (l, 0)).1 += 1;
             }
             sleep_ms(10);
             retry_cnt -= 1;
         }
 
-        if let Some(l) = leader {
+        if !leaders.is_empty() {
+            let (_, (l, _)) = leaders.into_iter().max_by_key(|(_, (_, c))| *c).unwrap();
             self.leaders.insert(region_id, l);
         }
 
@@ -530,6 +524,10 @@ impl<T: Simulator> Cluster<T> {
         let err = resp.get_header().get_error();
         if err.has_stale_command() {
             // command got truncated, leadership may have changed.
+            self.reset_leader_of_region(region_id);
+            return true;
+        }
+        if err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
             return true;
         }
@@ -931,8 +929,8 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {} doesn't exist on store {} after {} tries",
-                    region_id, store_id, try_cnt
+                    "region {} doesn't exist on store {} after {} tries: {:?}",
+                    region_id, store_id, try_cnt, resp
                 );
             }
             try_cnt += 1;

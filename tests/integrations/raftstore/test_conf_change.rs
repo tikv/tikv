@@ -805,7 +805,7 @@ fn test_learner_with_slow_snapshot() {
     cluster.stop_node(3);
     pd_client.must_add_peer(r1, new_peer(3, 3));
     // Ensure raftstore will gc all applied raft logs.
-    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    (0..30).for_each(|_| cluster.must_put(b"k2", b"v2"));
 
     // peer 3 will be promoted by snapshot instead of normal proposal.
     count.store(0, Ordering::SeqCst);

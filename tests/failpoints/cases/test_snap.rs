@@ -149,6 +149,7 @@ fn test_generate_snapshot() {
     pd_client.disable_default_operator();
 
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.stop_node(4);
     cluster.stop_node(5);
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));

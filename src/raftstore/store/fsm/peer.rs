@@ -284,6 +284,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
                 PeerMsg::Start => self.start(),
+                PeerMsg::HeartbeatPd => {
+                    if self.fsm.peer.is_leader() {
+                        self.register_pd_heartbeat_tick()
+                    }
+                }
                 PeerMsg::Noop => {}
             }
         }
@@ -338,6 +343,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.stopped {
             return;
         }
+        trace!("tick"; "tick" => ?tick, "peer_id" => self.fsm.peer_id(), "region_id" => self.region_id());
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
@@ -511,6 +517,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
+        self.register_split_region_check_tick();
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -612,6 +619,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             has_snapshot = true;
             self.register_raft_base_tick();
         }
+        if self.fsm.peer.leader_unreachable {
+            self.fsm.group_state = GroupState::Chaos;
+            self.register_raft_base_tick();
+            self.fsm.peer.leader_unreachable = false;
+        }
         if is_merging && has_snapshot {
             // After applying a snapshot, merge is rollbacked implicitly.
             self.on_ready_rollback_merge(0, None);
@@ -641,6 +653,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if is_zero_duration(&timeout) {
             return;
         }
+        trace!("schedule tick"; "tick" => ?tick, "timeout" => ?timeout, "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
         self.fsm.tick_registry.insert(tick);
 
         let region_id = self.region_id();
@@ -709,9 +722,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         if self.fsm.group_state == GroupState::Indle {
-            self.fsm.missing_ticks += 1;
-            if self.fsm.missing_ticks < self.ctx.cfg.raft_election_timeout_ticks - 1 {
+            if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
                 self.register_raft_base_tick();
+                self.fsm.missing_ticks += 1;
             }
             return;
         }
@@ -722,6 +735,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.has_ready = true;
                 }
             }
+            self.fsm.missing_ticks = 0;
         }
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
@@ -731,7 +745,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
             self.register_raft_base_tick();
         } else {
-            info!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+            debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
             self.fsm.group_state = GroupState::Indle;
             if !self.fsm.peer.is_leader() {
                 self.register_raft_base_tick();
@@ -829,6 +843,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
             self.fsm.group_state = GroupState::Ordered;
             self.fsm.missing_ticks = 0;
+            self.register_raft_base_tick();
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
@@ -1447,6 +1462,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+        self.register_split_region_check_tick();
         let mut guard = self.ctx.store_meta.lock().unwrap();
         let meta: &mut StoreMeta = &mut *guard;
         let region_id = derived.get_id();
@@ -1487,7 +1503,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} original region should exists", self.fsm.peer.tag);
         }
         // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size.take();
+        self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
@@ -2544,11 +2560,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_approximate_region_size(&mut self, size: u64) {
         self.fsm.peer.approximate_size = Some(size);
         self.register_split_region_check_tick();
+        self.register_pd_heartbeat_tick();
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
         self.fsm.peer.approximate_keys = Some(keys);
         self.register_split_region_check_tick();
+        self.register_pd_heartbeat_tick();
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -2622,14 +2640,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state == GroupState::Indle
-            && self.fsm.peer.leader_id() != raft::INVALID_ID
-        {
+        if self.fsm.group_state == GroupState::Indle {
             self.fsm.peer.ping();
-            self.fsm.has_ready = true;
-            return;
-        } else if self.fsm.group_state == GroupState::Ordered {
-            return;
+            self.register_pd_heartbeat_tick();
+            if !self.fsm.peer.is_leader() {
+                // If leader is able to receive messge but can't send out any,
+                // follower should be able to start an election.
+                self.fsm.group_state = GroupState::Chaos;
+            } else {
+                self.fsm.has_ready = true;
+            }
+        } else if self.fsm.group_state == GroupState::Chaos {
+            // Register tick if it's not yet. Only when it fails to receive ping from leader
+            // after two stale check can a follower actually tick.
+            self.register_raft_base_tick();
         }
 
         // If this peer detects the leader is missing for a long long time,

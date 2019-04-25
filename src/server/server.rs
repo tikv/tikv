@@ -296,7 +296,7 @@ mod tests {
         }
 
         fn broadcast_unreachable(&self, _: u64) {
-            self.tx.send(1).unwrap();
+            let _ = self.tx.send(1);
         }
     }
 

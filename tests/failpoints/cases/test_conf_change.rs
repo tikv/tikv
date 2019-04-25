@@ -3,7 +3,7 @@
 use fail;
 use futures::Future;
 use raft::eraftpb::ConfChangeType;
-use std::thread;
+//use std::thread;
 use std::time::Duration;
 use test_raftstore::*;
 use tikv::pd::PdClient;
@@ -142,7 +142,7 @@ fn test_write_after_destroy() {
     must_region_cleared(&engines_3, &region);
 }
 
-#[test]
+/*#[test]
 fn test_tick_after_destroy() {
     let _guard = crate::setup();
     // 3 nodes cluster.
@@ -191,4 +191,4 @@ fn test_tick_after_destroy() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
     thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     cluster.must_put(b"k3", b"v3");
-}
+}*/

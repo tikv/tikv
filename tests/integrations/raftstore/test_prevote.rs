@@ -205,7 +205,7 @@ fn test_prevote_reboot_minority_followers() {
         FailureType::Reboot(&[4, 5]),
         None,
         (2, false),
-        (2, false),
+        None,
     );
 }
 

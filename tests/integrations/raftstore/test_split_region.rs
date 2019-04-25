@@ -260,7 +260,19 @@ impl Filter for EraseHeartbeatCommit {
 
 fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
     let region = cluster.pd_client.get_region(k).unwrap();
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let mut tried_cnt = 0;
+    let leader = loop {
+        match cluster.leader_of_region(region.get_id()) {
+            None => {
+                tried_cnt += 1;
+                if tried_cnt >= 3 {
+                    panic!("leader should be elected");
+                }
+                continue;
+            }
+            Some(l) => break l,
+        }
+    };
     for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
