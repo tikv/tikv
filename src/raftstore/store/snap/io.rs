@@ -26,7 +26,8 @@ pub struct BuildStatistics {
 }
 
 /// Build a snapshot file for the given column family in plain format.
-/// If there are no key-value pairs fetched, no files will be created at `path`.
+/// If there are no key-value pairs fetched, no files will be created at `path`,
+/// otherwise the file will be created and synchronized.
 pub fn build_plain_cf_file(
     path: &str,
     snap: &DbSnapshot,
@@ -55,7 +56,8 @@ pub fn build_plain_cf_file(
 }
 
 /// Build a snapshot file for the given column family in sst format.
-/// If there are no key-value pairs fetched, no files will be created at `path`.
+/// If there are no key-value pairs fetched, no files will be created at `path`,
+/// otherwise the file will be created and synchronized.
 pub fn build_sst_cf_file(
     path: &str,
     snap: &DbSnapshot,
