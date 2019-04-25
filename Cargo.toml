@@ -60,7 +60,7 @@ path = "benches/misc/mod.rs"
 hashbrown = { version = "0.1", features = ["serde"] }
 log = { version = "0.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-async = "2.3"
+slog-async = { version = "2.3", default-features = false }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 slog-term = "2.4"
 slog_derive = "0.1"
@@ -102,16 +102,16 @@ grpcio = { version = "0.4", features = [ "secure" ] }
 raft = "0.4"
 crossbeam = "0.5"
 derive_more = "0.11.0"
-num = "0.2"
+num = { version = "0.2", default-features = false }
 num-traits = "0.2"
 hex = "0.3"
 rust-crypto = "^0.2"
 base64 = "0.10"
-safemem = "0.3"
+safemem = { version = "0.3", default-features = false }
 smallvec = { version = "0.6", features = ["union"] }
 flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
-hyper = "0.12"
+hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
@@ -133,6 +133,7 @@ features = ["nightly", "push", "process"]
 
 [dependencies.prometheus-static-metric]
 version = "0.1.4"
+default-features = false
 
 [dev-dependencies]
 test_util = { path = "components/test_util" }
