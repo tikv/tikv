@@ -1125,6 +1125,13 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::Test(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+            let resp = future_test(req)
+                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Test))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
     }
 }
 
@@ -1627,6 +1634,20 @@ fn future_cop<E: Engine>(
 ) -> impl Future<Item = Response, Error = Error> {
     cop.parse_and_handle_unary_request(req, peer)
         .map_err(|_| unreachable!())
+}
+
+fn future_test(
+    req: BatchCommandTestRequest,
+) -> impl Future<Item = BatchCommandTestResponse, Error = Error> {
+    tokio_timer::Delay::new(
+        std::time::Instant::now() + std::time::Duration::from_micros(req.get_delay_time()),
+    )
+    .map(move |_| {
+        let mut res = BatchCommandTestResponse::new();
+        res.set_test_id(req.get_test_id());
+        res
+    })
+    .map_err(|_| unreachable!())
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
