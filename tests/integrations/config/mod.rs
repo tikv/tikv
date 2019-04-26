@@ -557,4 +557,3 @@ fn test_block_cache_backward_compatible() {
             + cfg.raftdb.defaultcf.block_cache_size.0
     );
 }
-
