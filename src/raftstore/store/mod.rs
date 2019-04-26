@@ -3,7 +3,7 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
-pub mod keys;
+pub use raftstore2::store::keys;
 pub mod msg;
 pub mod transport;
 pub mod util;

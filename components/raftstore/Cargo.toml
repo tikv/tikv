@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+byteorder = "1.2"
 crossbeam = "0.5"
 # FIXME: unfortunate dependency
 engine = { path = "../engine" }

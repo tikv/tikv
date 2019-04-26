@@ -28,3 +28,4 @@ pub mod coprocessor;
 pub mod errors;
 pub mod store;
 
+pub use errors::{Result, Error};

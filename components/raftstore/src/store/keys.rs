@@ -2,7 +2,7 @@
 
 use byteorder::{BigEndian, ByteOrder};
 
-use crate::raftstore::Result;
+use crate::Result;
 use kvproto::metapb::Region;
 use std::mem;
 use tikv_util::escape;
