@@ -7,7 +7,7 @@ use kvproto::raft_cmdpb::{AdminRequest, AdminResponse, Request, Response};
 use protobuf::RepeatedField;
 use raft::StateRole;
 
-pub mod config;
+pub use raftstore2::coprocessor::config;
 pub mod dispatcher;
 pub use raftstore2::coprocessor::error;
 mod metrics;
