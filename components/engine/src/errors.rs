@@ -1,7 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{error, result};
+use std::num::ParseIntError;
+
+use std::path::PathBuf;
 use tikv_util::escape;
+use uuid::ParseError;
 
 quick_error! {
     #[derive(Debug)]
@@ -32,7 +36,25 @@ quick_error! {
             description(err.description())
             display("Io {}", err)
         }
-
+        FileExists(path: PathBuf) {
+            display("File {:?} exists", path)
+        }
+        ParseIntError(err: ParseIntError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        InvalidSSTPath(path: PathBuf) {
+            display("Invalid SST path {:?}", path)
+        }
+        FileCorrupted(path: PathBuf, reason: String) {
+            display("File {:?} corrupted: {}", path, reason)
+        }
+        Uuid(err: ParseError) {
+            from()
+            cause(err)
+            description(err.description())
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())

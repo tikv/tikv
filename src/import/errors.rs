@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Error as IoError;
-use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
@@ -56,22 +55,11 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        ParseIntError(err: ParseIntError) {
-            from()
-            cause(err)
-            description(err.description())
-        }
         FileExists(path: PathBuf) {
             display("File {:?} exists", path)
         }
         FileNotExists(path: PathBuf) {
             display("File {:?} not exists", path)
-        }
-        FileCorrupted(path: PathBuf, reason: String) {
-            display("File {:?} corrupted: {}", path, reason)
-        }
-        InvalidSSTPath(path: PathBuf) {
-            display("Invalid SST path {:?}", path)
         }
         EngineInUse(uuid: Uuid) {
             display("Engine {} is in use", uuid)

@@ -7,6 +7,7 @@
     slog_kv,
     slog_error,
     slog_warn,
+    slog_info,
     slog_record,
     slog_b,
     slog_log,
@@ -45,6 +46,7 @@ mod mutable;
 pub use crate::mutable::*;
 mod cf;
 pub use crate::cf::*;
+pub mod sst_importer;
 
 pub const DATA_KEY_PREFIX_LEN: usize = 1;
 

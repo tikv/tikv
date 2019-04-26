@@ -124,13 +124,13 @@ impl<Router: RaftStoreRouter> ImportSst for ImportSSTService<Router> {
                                     return future::err(Error::InvalidChunk);
                                 }
                                 if let Err(e) = file.append(data) {
-                                    return future::err(e);
+                                    return future::err(Error::from(e));
                                 }
                                 IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
                                 IMPORT_UPLOAD_CHUNK_DURATION.observe(start.elapsed_secs());
                                 future::ok(file)
                             })
-                            .and_then(|mut file| file.finish())
+                            .and_then(|mut file| file.finish().map_err(Error::from))
                     })
                     .map(|_| UploadResponse::new())
                     .then(move |res| send_rpc_response!(res, sink, label, timer)),
