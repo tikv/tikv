@@ -10,7 +10,7 @@ use raft::StateRole;
 pub use raftstore2::coprocessor::config;
 pub mod dispatcher;
 pub use raftstore2::coprocessor::error;
-mod metrics;
+pub use raftstore2::coprocessor::metrics;
 pub mod properties;
 pub mod region_info_accessor;
 mod split_check;
