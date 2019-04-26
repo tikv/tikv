@@ -13,6 +13,8 @@ lazy_static = "0.2.1"
 protobuf = "~2.0"
 quick-error = "1.2.2"
 raft = "0.4"
+slog = { version = "2.3" }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 tikv_util = { path = "../tikv_util" }
 
 [dependencies.prometheus]
