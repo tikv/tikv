@@ -9,6 +9,7 @@ use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
+use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
@@ -320,6 +321,12 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
 
     fn valid(&self) -> bool {
         DBIterator::valid(self)
+    }
+
+    fn status(&self) -> Result<()> {
+        DBIterator::status(self)
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {
