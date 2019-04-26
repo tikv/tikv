@@ -6,7 +6,7 @@ pub mod fsm;
 pub use raftstore2::store::keys;
 pub mod msg;
 pub mod transport;
-pub mod util;
+pub use raftstore2::store::util;
 
 mod bootstrap;
 pub use raftstore2::store::local_metrics;

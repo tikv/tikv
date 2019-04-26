@@ -13,7 +13,7 @@ use raft::INVALID_INDEX;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
-use crate::raftstore::{Error, Result};
+use crate::{Error, Result};
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::{escape, Either};
 
@@ -607,7 +607,7 @@ mod tests {
     use raft::eraftpb::{ConfChangeType, Message, MessageType};
     use time::Duration as TimeDuration;
 
-    use crate::raftstore::store::peer_storage;
+    use super::super::peer_storage;
     use tikv_util::time::{monotonic_now, monotonic_raw_now};
 
     use super::*;
