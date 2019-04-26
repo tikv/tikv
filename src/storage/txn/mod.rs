@@ -2,6 +2,7 @@
 
 mod latch;
 mod process;
+pub mod sched_pool_impl;
 mod scheduler;
 mod store;
 
