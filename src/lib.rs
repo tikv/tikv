@@ -6,7 +6,6 @@
 #![feature(cell_update)]
 #![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
-#![feature(range_contains)]
 #![feature(specialization)]
 // Currently this raises some false positives, so we allow it:
 // https://github.com/rust-lang-nursery/rust-clippy/issues/2638
