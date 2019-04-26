@@ -120,4 +120,24 @@ mod tests {
             assert_eq!(output, expect_output);
         }
     }
+
+    #[test]
+    fn test_logical_or() {
+        let test_cases = vec![
+            (Some(1), Some(1), Some(1)),
+            (Some(1), Some(0), Some(1)),
+            (Some(0), Some(0), Some(0)),
+            (Some(2), Some(-1), Some(1)),
+            (Some(1), None, Some(1)),
+            (None, Some(0), None),
+        ];
+        for (arg0, arg1, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(RpnFnLogicalOr)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
 }
