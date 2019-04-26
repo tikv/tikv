@@ -5,6 +5,7 @@ use std::sync::Arc;
 use protobuf::{Message, RepeatedField};
 
 use kvproto::coprocessor::Response;
+use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse};
 
 use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
@@ -131,7 +132,7 @@ impl RequestHandler for BatchDAGHandler {
 
                 let mut resp = Response::new();
                 let mut sel_resp = SelectResponse::new();
-                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                sel_resp.set_chunks(chunks.into());
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.statistics
@@ -140,8 +141,25 @@ impl RequestHandler for BatchDAGHandler {
                         .map(|v| *v as i64)
                         .collect(),
                 );
+                sel_resp.set_execution_summaries(RepeatedField::from_vec(
+                    self.statistics
+                        .summary_per_executor
+                        .iter()
+                        .map(|summary| {
+                            let mut ret = ExecutorExecutionSummary::new();
+                            if let Some(summary) = summary {
+                                ret.set_num_iterations(summary.num_iterations as u64);
+                                ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                                ret.set_time_processed_ns(
+                                    summary.time_processed_ms as u64 * 1_000_000,
+                                );
+                            }
+                            ret
+                        })
+                        .collect(),
+                ));
 
-                sel_resp.set_warnings(RepeatedField::from_vec(warnings.warnings));
+                sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
 
                 let data = box_try!(sel_resp.write_to_bytes());
