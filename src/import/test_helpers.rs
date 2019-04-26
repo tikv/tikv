@@ -9,12 +9,16 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
+use tempdir::TempDir;
 use uuid::Uuid;
 
+use crate::config::DbConfig;
+use crate::import::engine::Engine;
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
 use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use tikv_util::collections::HashMap;
+use tikv_util::security::SecurityConfig;
 
 use super::client::*;
 use super::common::*;
@@ -61,6 +65,16 @@ pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<
     meta.set_cf_name("default".to_owned());
 
     (meta, data)
+}
+
+/// Creates a new, empty engine in a temporary directory.
+pub fn new_engine(name: &str) -> (TempDir, Engine) {
+    let dir = TempDir::new(name).unwrap();
+    let uuid = Uuid::new_v4();
+    let db_cfg = DbConfig::default();
+    let security_cfg = SecurityConfig::default();
+    let engine = Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap();
+    (dir, engine)
 }
 
 #[derive(Clone)]

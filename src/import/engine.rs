@@ -374,19 +374,11 @@ mod tests {
     use std::io::{self, Write};
     use tempdir::TempDir;
 
+    use crate::import::test_helpers::new_engine;
     use crate::raftstore::store::RegionSnapshot;
     use crate::storage::mvcc::MvccReader;
     use engine::rocks::util::security::encrypted_env_from_cipher_file;
     use tikv_util::file::file_exists;
-
-    fn new_engine() -> (TempDir, Engine) {
-        let dir = TempDir::new("test_import_engine").unwrap();
-        let uuid = Uuid::new_v4();
-        let db_cfg = DbConfig::default();
-        let security_cfg = SecurityConfig::default();
-        let engine = Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap();
-        (dir, engine)
-    }
 
     fn new_write_batch(n: u8, ts: u64) -> WriteBatch {
         let mut wb = WriteBatch::new();
@@ -407,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_write() {
-        let (_dir, engine) = new_engine();
+        let (_dir, engine) = new_engine("test_write");
 
         let n = 10;
         let commit_ts = 10;
@@ -517,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_approximate_ranges() {
-        let (_dir, engine) = new_engine();
+        let (_dir, engine) = new_engine("test_approximate_ranges");
 
         let num_files = 3;
         let num_entries = 3;

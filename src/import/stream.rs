@@ -199,9 +199,7 @@ mod tests {
     use engine::rocks::{DBIterator, DBOptions, ReadOptions, Writable, DB};
     use tempdir::TempDir;
 
-    use crate::config::DbConfig;
     use crate::storage::types::Key;
-    use tikv_util::security::SecurityConfig;
 
     fn open_db<P: AsRef<Path>>(path: P) -> Arc<DB> {
         let path = path.as_ref().to_str().unwrap();
@@ -363,11 +361,8 @@ mod tests {
 
     #[test]
     fn test_sst_file_stream() {
-        let dir = TempDir::new("test_import_sst_file_stream").unwrap();
-        let uuid = Uuid::new_v4();
-        let db_cfg = DbConfig::default();
-        let security_cfg = SecurityConfig::default();
-        let engine = Arc::new(Engine::new(dir.path(), uuid, db_cfg, security_cfg).unwrap());
+        let (_dir, engine) = new_engine("test_import_sst_file_stream");
+        let engine = Arc::new(engine);
 
         for i in 0..16 {
             let k = Key::from_raw(&[i]).append_ts(0);
