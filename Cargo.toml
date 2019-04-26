@@ -169,6 +169,7 @@ members = [
   "components/cop_datatype",
   "components/log_wrappers",
   "components/tikv_util",
+  "components/raftstore",
 ]
 
 [profile.dev]
