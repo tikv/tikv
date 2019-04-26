@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // TODO
 #![allow(dead_code)]
@@ -37,6 +26,16 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
+
+    /// Clones current instance into a trait object.
+    fn box_clone(&self) -> Box<dyn RpnFunction>;
+}
+
+impl Clone for Box<dyn RpnFunction> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
 }
 
 impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
@@ -59,6 +58,11 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
     ) -> Result<VectorValue> {
         (**self).eval(rows, context, payload)
     }
+
+    #[inline]
+    fn box_clone(&self) -> Box<dyn RpnFunction> {
+        (**self).box_clone()
+    }
 }
 
 pub struct Helper;
@@ -76,7 +80,7 @@ impl Helper {
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -100,7 +104,7 @@ impl Helper {
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Option<Arg0>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -134,7 +138,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -194,7 +203,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -218,7 +232,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -243,7 +262,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -268,7 +292,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -297,7 +326,13 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+            &Option<Arg2>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 3);
 
@@ -331,6 +366,8 @@ macro_rules! impl_template_fn {
         impl_template_fn! { @inner $name, 3, eval_3_args }
     };
     (@inner $name:ident, $args:expr, $eval_fn:ident) => {
+        impl tikv_util::AssertCopy for $name {}
+
         impl $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
             #[inline]
             fn name(&self) -> &'static str {
@@ -356,6 +393,11 @@ macro_rules! impl_template_fn {
                     context,
                     payload,
                 )
+            }
+
+            #[inline]
+            fn box_clone(&self) -> Box<dyn $crate::coprocessor::dag::rpn_expr::RpnFunction> {
+                Box::new(*self)
             }
         }
     };

@@ -1,24 +1,13 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::{Context, LockInfo};
 
 use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
-use tikv::storage::engine::{self, RocksEngine};
+use tikv::storage::kv::{self, RocksEngine};
 use tikv::storage::mvcc::{self, MAX_TXN_WRITE_SIZE};
 use tikv::storage::txn;
 use tikv::storage::{self, Engine, Key, KvPair, Mutation, Value};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use super::*;
 
@@ -224,11 +213,11 @@ impl<E: Engine> AssertionStorage<E> {
 
     fn expect_not_leader_or_stale_command(&self, err: storage::Error) {
         match err {
-            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(engine::Error::Request(
+            storage::Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(kv::Error::Request(
                 ref e,
             ))))
-            | storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e)))
-            | storage::Error::Engine(engine::Error::Request(ref e)) => {
+            | storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e)))
+            | storage::Error::Engine(kv::Error::Request(ref e)) => {
                 assert!(
                     e.has_not_leader() | e.has_stale_command(),
                     "invalid error {:?}",

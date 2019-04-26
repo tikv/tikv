@@ -1,19 +1,8 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
-use super::{scan::InnerExecutor, Row, ScanExecutor, ScanOn};
+use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
@@ -80,8 +69,8 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 
     #[inline]
-    fn scan_on(&self) -> ScanOn {
-        ScanOn::Index
+    fn scan_on(&self) -> super::super::scanner::ScanOn {
+        super::super::scanner::ScanOn::Index
     }
 
     // Since the unique index wouldn't always come with
@@ -134,14 +123,12 @@ pub mod tests {
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
+    use tikv_util::collections::HashMap;
 
-    use super::super::{
-        scanner::tests::Data,
-        tests::{new_col_info, TestStore},
-        Executor,
-    };
+    use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::executor::Executor;
+    use crate::coprocessor::dag::scanner::tests::Data;
 
     const TABLE_ID: i64 = 1;
     const INDEX_ID: i64 = 1;

@@ -1,5 +1,14 @@
 SHELL := /bin/bash
-ENABLE_FEATURES ?= default
+ENABLE_FEATURES ?=
+
+# Pick an allocator
+ifeq ($(TCMALLOC),1)
+ENABLE_FEATURES += tcmalloc
+else ifeq ($(SYSTEM_ALLOC),1)
+# no feature needed for system allocator
+else
+ENABLE_FEATURES += jemalloc
+endif
 
 # Disable portable on MacOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
@@ -45,7 +54,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@cargo clippy --all --all-targets -- \
-		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cyclomatic_complexity \
+		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
@@ -57,18 +66,18 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build --features "${ENABLE_FEATURES}"
+	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
 
 ctl:
-	cargo build --release --features "${ENABLE_FEATURES}" --bin tikv-ctl
+	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${BIN_PATH}/
 
 run:
-	cargo run --features "${ENABLE_FEATURES}" --bin tikv-server
+	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
-	cargo build --release --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
@@ -97,16 +106,16 @@ test:
 	export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH}:${LOCAL_DIR}/lib" && \
 	export LOG_LEVEL=DEBUG && \
 	export RUST_BACKTRACE=1 && \
-	cargo test --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
-	cargo test --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --all ${EXTRA_CARGO_ARGS} -- --nocapture && \
+	cargo test --no-default-features --features "${ENABLE_FEATURES}" --bench misc ${EXTRA_CARGO_ARGS} -- --nocapture  && \
 	if [[ "`uname`" == "Linux" ]]; then \
 		export MALLOC_CONF=prof:true,prof_active:false && \
-		cargo test --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
+		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --features "${ENABLE_FEATURES}" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
 
 unset-override:
 	@# unset first in case of any previous overrides
@@ -133,7 +142,7 @@ clean:
 	cargo clean
 
 expression: format clippy
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
 
 
