@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
-mod function;
-mod types;
+pub mod function;
+pub mod types;
 
 mod impl_op;
 
