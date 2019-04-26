@@ -158,21 +158,6 @@
 ## Otherwise, the OOM problem might occur in TiKV.
 # capacity = "1GB"
 
-## Shard the block cache into 2^(num-shard-bits) shards. More shards reduce lock contention for
-## accessing the block cache on read, but increae cache fragmentation. Set the value to -1 to
-## allow RocksDB auto-config number of shards by cache size.
-# num-shard-bits = -1
-
-## Whether to fail read when the cache reaches its capacity, but no cache items can be evicted.
-# strict-capacity-limit = false
-
-## Config ratio of cache capacity allocate to the high-pri pool. Should be a value between 0.0-1.0.
-## When set to value greater than zero, mid-point insertion strategy is enabled. Cache items will
-## first inserted to the middle of LRU list at the position decided by the high-pri pool ratio,
-## and move to the tail of LRU list after at least one cache hit. Enabling mid-point insertion
-## will provide some resistence to large table scan evicting useful cache items.
-# high-pri-pool-ratio = 0.0
-
 [pd]
 ## PD endpoints.
 # endpoints = []
