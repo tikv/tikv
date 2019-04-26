@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
@@ -23,7 +12,7 @@ use uuid::Uuid;
 
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
-use crate::util::time::Instant;
+use tikv_util::time::Instant;
 
 use super::client::*;
 use super::metrics::*;
@@ -76,17 +65,18 @@ impl ImportKv for ImportKVService {
     /// turn off write stall mechanism.
     fn switch_mode(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: SwitchModeRequest,
         sink: UnarySink<SwitchModeResponse>,
     ) {
         let label = "switch_mode";
         let timer = Instant::now_coarse();
+        let min_available_ratio = self.cfg.min_available_ratio;
 
         ctx.spawn(
             self.threads
                 .spawn_fn(move || {
-                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    let client = Client::new(req.get_pd_addr(), 1, min_available_ratio)?;
                     match client.switch_cluster(req.get_request()) {
                         Ok(_) => {
                             info!("switch cluster"; "req" => ?req.get_request());
@@ -105,7 +95,7 @@ impl ImportKv for ImportKVService {
 
     fn open_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: OpenEngineRequest,
         sink: UnarySink<OpenEngineResponse>,
     ) {
@@ -126,7 +116,7 @@ impl ImportKv for ImportKVService {
 
     fn write_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         stream: RequestStream<WriteEngineRequest>,
         sink: ClientStreamingSink<WriteEngineResponse>,
     ) {
@@ -183,7 +173,7 @@ impl ImportKv for ImportKVService {
 
     fn close_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CloseEngineRequest,
         sink: UnarySink<CloseEngineResponse>,
     ) {
@@ -214,7 +204,7 @@ impl ImportKv for ImportKVService {
 
     fn import_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: ImportEngineRequest,
         sink: UnarySink<ImportEngineResponse>,
     ) {
@@ -235,7 +225,7 @@ impl ImportKv for ImportKVService {
 
     fn cleanup_engine(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CleanupEngineRequest,
         sink: UnarySink<CleanupEngineResponse>,
     ) {
@@ -258,12 +248,13 @@ impl ImportKv for ImportKVService {
     /// the database, because otherwise the read can be very slow.
     fn compact_cluster(
         &mut self,
-        ctx: RpcContext,
+        ctx: RpcContext<'_>,
         req: CompactClusterRequest,
         sink: UnarySink<CompactClusterResponse>,
     ) {
         let label = "compact_cluster";
         let timer = Instant::now_coarse();
+        let min_available_ratio = self.cfg.min_available_ratio;
 
         let mut compact = req.get_request().clone();
         if compact.has_range() {
@@ -281,7 +272,7 @@ impl ImportKv for ImportKVService {
         ctx.spawn(
             self.threads
                 .spawn_fn(move || {
-                    let client = Client::new(req.get_pd_addr(), 1)?;
+                    let client = Client::new(req.get_pd_addr(), 1, min_available_ratio)?;
                     match client.compact_cluster(&compact) {
                         Ok(_) => {
                             info!("compact cluster"; "req" => ?compact);

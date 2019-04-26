@@ -1,20 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use criterion::{black_box, Bencher, Criterion};
+use criterion::{black_box, BatchSize, Bencher, Criterion};
 use kvproto::kvrpcpb::Context;
 use test_util::KvGenerator;
-use tikv::storage::engine::Engine;
+use tikv::storage::kv::Engine;
 use tikv::storage::mvcc::MvccTxn;
 use tikv::storage::{Key, Mutation, Options};
 
@@ -24,7 +13,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> =
                 KvGenerator::new(config.key_length, config.value_length)
@@ -43,6 +32,7 @@ fn txn_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchC
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     )
 }
 
@@ -50,7 +40,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
     let engine = config.engine_factory.build();
     let ctx = Context::new();
     let option = Options::default();
-    b.iter_with_setup(
+    b.iter_batched(
         || {
             let snapshot = engine.snapshot(&ctx).unwrap();
             let mut txn = MvccTxn::new(snapshot, 1, true).unwrap();
@@ -78,6 +68,7 @@ fn txn_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher, config: &BenchCon
                 black_box(engine.write(&ctx, modifies)).unwrap();
             }
         },
+        BatchSize::SmallInput,
     );
 }
 

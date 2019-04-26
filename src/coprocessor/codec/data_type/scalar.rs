@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cop_datatype::EvalType;
 
@@ -28,7 +17,7 @@ use super::*;
 ///
 /// TODO: Once we removed the `Option<..>` wrapper, it will be much like `Datum`. At that time,
 /// we only need to preserve one of them.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ScalarValue {
     Int(Option<super::Int>),
     Real(Option<super::Real>),
@@ -54,22 +43,22 @@ impl ScalarValue {
     }
 
     #[inline]
-    pub fn as_vector_like(&self) -> VectorLikeValueRef {
+    pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Scalar(self)
     }
 }
 
 impl AsMySQLBool for ScalarValue {
     #[inline]
-    fn as_mysql_bool(&self) -> bool {
+    fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         match self {
-            ScalarValue::Int(ref v) => v.as_mysql_bool(),
-            ScalarValue::Real(ref v) => v.as_mysql_bool(),
-            ScalarValue::Decimal(ref v) => v.as_mysql_bool(),
-            ScalarValue::Bytes(ref v) => v.as_mysql_bool(),
-            ScalarValue::DateTime(ref v) => v.as_mysql_bool(),
-            ScalarValue::Duration(ref v) => v.as_mysql_bool(),
-            ScalarValue::Json(ref v) => v.as_mysql_bool(),
+            ScalarValue::Int(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Real(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Decimal(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Bytes(ref v) => v.as_mysql_bool(context),
+            ScalarValue::DateTime(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Duration(ref v) => v.as_mysql_bool(context),
+            ScalarValue::Json(ref v) => v.as_mysql_bool(context),
         }
     }
 }
@@ -108,3 +97,29 @@ impl_as_ref! { Bytes, as_bytes }
 impl_as_ref! { DateTime, as_date_time }
 impl_as_ref! { Duration, as_duration }
 impl_as_ref! { Json, as_json }
+
+macro_rules! impl_from {
+    ($ty:tt) => {
+        impl From<Option<$ty>> for ScalarValue {
+            #[inline]
+            fn from(s: Option<$ty>) -> ScalarValue {
+                ScalarValue::$ty(s)
+            }
+        }
+
+        impl From<$ty> for ScalarValue {
+            #[inline]
+            fn from(s: $ty) -> ScalarValue {
+                ScalarValue::$ty(Some(s))
+            }
+        }
+    };
+}
+
+impl_from! { Int }
+impl_from! { Real }
+impl_from! { Decimal }
+impl_from! { Bytes }
+impl_from! { DateTime }
+impl_from! { Duration }
+impl_from! { Json }

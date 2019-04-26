@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Scheduler which schedules the execution of `storage::Command`s.
 //!
@@ -37,12 +26,12 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use crate::storage::engine::Result as EngineResult;
+use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
-use crate::util::collections::HashMap;
-use crate::util::threadpool::{ThreadPool, ThreadPoolBuilder};
-use crate::util::worker::{self, Runnable};
+use tikv_util::collections::HashMap;
+use tikv_util::threadpool::{ThreadPool, ThreadPoolBuilder};
+use tikv_util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
@@ -80,14 +69,14 @@ pub enum Msg {
 
 /// Debug for messages.
 impl Debug for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
 
 /// Display for messages.
 impl Display for Msg {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
@@ -326,9 +315,9 @@ impl<E: Engine> Scheduler<E> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority());
 
-        let cb = box move |(cb_ctx, snapshot)| {
+        let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
-        };
+        });
         if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
             SCHED_STAGE_COUNTER_VEC
                 .with_label_values(&[tag, "async_snapshot_err"])
@@ -501,8 +490,8 @@ mod tests {
     use crate::storage::mvcc;
     use crate::storage::txn::latch::*;
     use crate::storage::{Command, Key, Mutation, Options};
-    use crate::util::collections::HashMap;
     use kvproto::kvrpcpb::Context;
+    use tikv_util::collections::HashMap;
 
     #[test]
     fn test_command_latches() {

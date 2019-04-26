@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -23,9 +12,9 @@ use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 use crate::coprocessor::codec::mysql::charset;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::codec::{self, Datum};
-use crate::util::codec::number;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
+use tikv_util::codec::number;
 
 mod builtin_arithmetic;
 mod builtin_cast;
@@ -82,7 +71,7 @@ struct CusRng {
 }
 
 impl std::fmt::Debug for CusRng {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "()")
     }
 }
@@ -262,7 +251,7 @@ impl Expression {
                 .map_err(Error::from)
                 .and_then(|i| {
                     let fsp = field_type.decimal() as i8;
-                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, ctx.cfg.tz)
+                    Time::from_packed_u64(i, field_type.tp().try_into()?, fsp, &ctx.cfg.tz)
                 })
                 .map(|t| Expression::new_const(Datum::Time(t), field_type)),
             ExprType::MysqlDuration => number::decode_i64(&mut expr.get_val())
@@ -336,7 +325,7 @@ mod tests {
         charset, Decimal, DecimalEncoder, Duration, Json, Time,
     };
     use crate::coprocessor::codec::{mysql, Datum};
-    use crate::util::codec::number::{self, NumberEncoder};
+    use tikv_util::codec::number::{self, NumberEncoder};
 
     #[inline]
     pub fn str2dec(s: &str) -> Datum {

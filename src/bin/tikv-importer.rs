@@ -1,33 +1,11 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-extern crate chrono;
-extern crate clap;
-extern crate fs2;
-extern crate libc;
-#[cfg(unix)]
-extern crate nix;
-extern crate prometheus;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     slog_kv,
-    slog_error,
+    slog_crit,
     slog_info,
     slog_log,
     slog_record,
@@ -35,13 +13,8 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
-extern crate slog_term;
-extern crate tikv;
-extern crate tikv_alloc;
-extern crate toml;
 
 #[cfg(unix)]
 #[macro_use]
@@ -56,7 +29,7 @@ use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
 use tikv::config::TiKvConfig;
 use tikv::import::ImportKVServer;
-use tikv::util::{self as tikv_util, check_environment_variables};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 fn main() {
     let matches = App::new("TiKV Importer")
@@ -122,7 +95,7 @@ fn main() {
     run_import_server(&config);
 }
 
-fn setup_config(matches: &ArgMatches) -> TiKvConfig {
+fn setup_config(matches: &ArgMatches<'_>) -> TiKvConfig {
     let mut config = matches
         .value_of("config")
         .map_or_else(TiKvConfig::default, |path| TiKvConfig::from_file(&path));

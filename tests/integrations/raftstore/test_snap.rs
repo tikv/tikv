@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,8 +11,8 @@ use raft::eraftpb::{Message, MessageType};
 
 use test_raftstore::*;
 use tikv::raftstore::Result;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = 1000;
@@ -59,7 +48,10 @@ fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
     let stale = Arc::new(AtomicBool::new(false));
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::clone(&stale), false),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::clone(&stale),
+            false,
+        )),
     );
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let mut i = 2 * 1024;
@@ -115,7 +107,7 @@ fn test_server_snap_gc() {
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box DropSnapshotFilter::new(tx));
+        .add_recv_filter(3, Box::new(DropSnapshotFilter::new(tx)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
 
     let first_snap_idx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -209,7 +201,7 @@ fn test_concurrent_snap<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(3, box CollectSnapshotFilter::new(tx));
+        .add_recv_filter(3, Box::new(CollectSnapshotFilter::new(tx)));
     pd_client.must_add_peer(r1, new_peer(3, 3));
     let region = cluster.get_region(b"k1");
     // Ensure the snapshot of range ("", "") is sent and piled in filter.
@@ -270,7 +262,7 @@ fn test_cf_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // test if node can be safely restarted without losing any data.
     cluster.stop_node(1);
-    cluster.run_node(1);
+    cluster.run_node(1).unwrap();
 
     cluster.must_put_cf(cf, b"k3", b"v3");
     must_get_cf_equal(&engine1, cf, b"k3", b"v3");
@@ -426,7 +418,7 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster
         .sim
         .wl()
-        .add_recv_filter(4, box SnapshotAppendFilter::new(tx));
+        .add_recv_filter(4, Box::new(SnapshotAppendFilter::new(tx)));
     pd_client.add_peer(1, new_peer(4, 5));
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
     cluster.must_put(b"k1", b"v1");

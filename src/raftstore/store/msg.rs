@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::boxed::FnBox;
 use std::fmt;
@@ -21,13 +10,13 @@ use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use kvproto::raft_serverpb::RaftMessage;
+use raft::SnapshotStatus;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
-use crate::util::escape;
-use crate::util::rocksdb_util::CompactedEvent;
-use raft::{SnapshotStatus, StateRole};
+use crate::storage::kv::CompactedEvent;
+use tikv_util::escape;
 
 use super::RegionSnapshot;
 
@@ -42,18 +31,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-#[derive(Debug)]
-pub enum SeekRegionResult {
-    Found(metapb::Region),
-    LimitExceeded { next_key: Vec<u8> },
-    Ended,
-}
-
 pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
 pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
-
-pub type SeekRegionCallback = Box<dyn FnBox(SeekRegionResult) + Send>;
-pub type SeekRegionFilter = Box<dyn Fn(&metapb::Region, StateRole) -> bool + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -96,7 +75,7 @@ impl Callback {
 }
 
 impl fmt::Debug for Callback {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Callback::None => write!(fmt, "Callback::None"),
             Callback::Read(_) => write!(fmt, "Callback::Read(..)"),
@@ -217,7 +196,7 @@ pub enum CasualMessage {
 }
 
 impl fmt::Debug for CasualMessage {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CasualMessage::ComputeHashResult { index, ref hash } => write!(
                 fmt,
@@ -303,7 +282,7 @@ pub enum PeerMsg {
 }
 
 impl fmt::Debug for PeerMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
@@ -346,7 +325,7 @@ pub enum StoreMsg {
 }
 
 impl fmt::Debug for StoreMsg {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),

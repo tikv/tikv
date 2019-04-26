@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -19,6 +8,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
+use engine::Engines;
+use engine::CF_RAFT;
+use engine::{Peekable, Snapshot as EngineSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SSTMeta;
@@ -37,15 +29,13 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
-use crate::storage::CF_RAFT;
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::time::duration_to_sec;
-use crate::util::worker::{Scheduler, Stopped};
-use crate::util::{escape, is_zero_duration};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::duration_to_sec;
+use tikv_util::worker::{Scheduler, Stopped};
+use tikv_util::{escape, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
-use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
@@ -61,7 +51,6 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use crate::raftstore::store::Engines;
 use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
@@ -219,7 +208,7 @@ impl Fsm for PeerFsm {
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
     #[inline]
-    fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -1699,51 +1688,60 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.on_check_merge();
     }
 
+    // The `PrepareMerge` and `CommitMerge` is executed sequentially, but we cannot
+    // ensure the order to handle the apply results between different peers. So check
+    // the merge locks to ensure `on_ready_prepare_merge` is called.
+    fn check_locks(
+        &self,
+        source: &metapb::Region,
+        meta: &mut StoreMeta,
+    ) -> Option<Arc<AtomicBool>> {
+        let source_region_id = source.get_id();
+        let source_version = source.get_region_epoch().get_version();
+
+        if let Some((exist_version, ready_to_merge)) = meta.merge_locks.remove(&source_region_id) {
+            if exist_version == source_version {
+                assert!(ready_to_merge.is_none());
+                // So `on_ready_prepare_merge` is executed.
+                return None;
+            } else if exist_version < source_version {
+                assert!(
+                    ready_to_merge.is_none(),
+                    "{} source region {} meets a commit merge before {} < {}",
+                    self.fsm.peer.tag,
+                    source_region_id,
+                    exist_version,
+                    source_version
+                );
+            } else {
+                panic!(
+                    "{} source region {} can't finished current merge: {} > {}",
+                    self.fsm.peer.tag, source_region_id, exist_version, source_region_id
+                );
+            }
+        }
+
+        // The corresponding `on_ready_prepare_merge` is not executed yet.
+        // Insert the lock, and `on_ready_prepare_merge` will check and use `ready_to_merge`
+        // to notify.
+        let ready_to_merge = Arc::new(AtomicBool::new(false));
+        meta.merge_locks.insert(
+            source_region_id,
+            (source_version, Some(ready_to_merge.clone())),
+        );
+        Some(ready_to_merge)
+    }
+
     fn on_ready_commit_merge(
         &mut self,
         region: metapb::Region,
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        let source_region_id = source.get_id();
-        let source_version = source.get_region_epoch().get_version();
-        'check_locks: {
-            // The `PrepareMerge` and `CommitMerge` is executed sequentially, but we can not
-            // ensure the order to handle the apply results between different peers. So check
-            // the merge locks to ensure `on_ready_prepare_merge` is called.
-            if let Some((exist_version, ready_to_merge)) =
-                meta.merge_locks.remove(&source_region_id)
-            {
-                if exist_version == source_version {
-                    assert!(ready_to_merge.is_none());
-                    // So `on_ready_prepare_merge` is executed.
-                    break 'check_locks;
-                } else if exist_version < source_version {
-                    assert!(
-                        ready_to_merge.is_none(),
-                        "{} source region {} meets a commit merge before {} < {}",
-                        self.fsm.peer.tag,
-                        source_region_id,
-                        exist_version,
-                        source_version
-                    );
-                } else {
-                    panic!(
-                        "{} source region {} can't finished current merge: {} > {}",
-                        self.fsm.peer.tag, source_region_id, exist_version, source_region_id
-                    );
-                }
-            }
 
-            // The corresponding `on_ready_prepare_merge` is not executed yet.
-            // Insert the lock, and `on_ready_prepare_merge` will check and use `ready_to_merge`
-            // to notify.
-            let ready_to_merge = Arc::new(AtomicBool::new(false));
-            meta.merge_locks.insert(
-                source_region_id,
-                (source_version, Some(ready_to_merge.clone())),
-            );
-            return Some(ready_to_merge);
+        let ready_to_merge = self.check_locks(&source, &mut meta);
+        if ready_to_merge.is_some() {
+            return ready_to_merge;
         }
 
         let prev = meta.region_ranges.remove(&enc_end_key(&source));

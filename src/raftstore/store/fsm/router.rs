@@ -1,26 +1,15 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::batch::{Fsm, FsmScheduler};
-use crate::util::collections::HashMap;
-use crate::util::mpsc;
-use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tikv_util::collections::HashMap;
+use tikv_util::mpsc;
+use tikv_util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -289,16 +278,18 @@ where
             }
         }
 
-        let mailbox = 'fetch_box: {
+        let mailbox = {
             let mut boxes = self.normals.lock().unwrap();
-            if let Some(mailbox) = boxes.get_mut(&addr) {
-                break 'fetch_box mailbox.clone();
+            match boxes.get_mut(&addr) {
+                Some(mailbox) => mailbox.clone(),
+                None => {
+                    drop(boxes);
+                    if !connected {
+                        caches.remove(&addr);
+                    }
+                    return CheckDoResult::NotExist;
+                }
             }
-            drop(boxes);
-            if !connected {
-                caches.remove(&addr);
-            }
-            return CheckDoResult::NotExist;
         };
 
         let res = f(&mailbox);

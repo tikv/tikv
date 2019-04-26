@@ -1,30 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-/// This suite contains benchmarks for several different configurations generated
-/// dynamically. Thus it has `harness = false`.
-extern crate criterion;
-
-extern crate rocksdb;
-extern crate test_raftstore;
-extern crate test_util;
-extern crate tikv;
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
-use rocksdb::{Writable, WriteBatch, DB};
-
+use engine::rocks::{Writable, WriteBatch, DB};
 use test_raftstore::*;
 use test_util::*;
 use tikv::raftstore::store::keys;
@@ -36,7 +15,7 @@ fn enc_write_kvs(db: &DB, kvs: &[(Vec<u8>, Vec<u8>)]) {
     for &(ref k, ref v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
-    db.write(wb).unwrap();
+    db.write(&wb).unwrap();
 }
 
 fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
@@ -171,7 +150,7 @@ impl ClusterFactory<NodeCluster> for NodeClusterFactory {
 }
 
 impl fmt::Debug for NodeClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Node")
     }
 }
@@ -186,13 +165,13 @@ impl ClusterFactory<ServerCluster> for ServerClusterFactory {
 }
 
 impl fmt::Debug for ServerClusterFactory {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Server")
     }
 }
 
 fn main() {
-    tikv::util::config::check_max_open_fds(4096).unwrap();
+    tikv_util::config::check_max_open_fds(4096).unwrap();
 
     let mut criterion = Criterion::default().configure_from_args().sample_size(10);
     bench_raft_cluster(&mut criterion, NodeClusterFactory {});

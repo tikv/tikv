@@ -1,18 +1,6 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,16 +9,16 @@ use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
 use kvproto::kvrpcpb::*;
 use kvproto::metapb::*;
-use rocksdb::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
 use uuid::Uuid;
 
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
+use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
+use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::common::*;
 use super::Result;
-use crate::util::collections::HashMap;
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -61,8 +49,7 @@ pub fn gen_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u
 }
 
 pub fn read_sst_file<P: AsRef<Path>>(path: P, range: (u8, u8)) -> (SSTMeta, Vec<u8>) {
-    let mut data = Vec::new();
-    File::open(path).unwrap().read_to_end(&mut data).unwrap();
+    let data = fs::read(path).unwrap();
     let crc32 = calc_data_crc32(&data);
 
     let mut meta = SSTMeta::new();
@@ -161,5 +148,18 @@ impl ImportClient for MockClient {
         let mut regions = self.scatter_regions.lock().unwrap();
         regions.insert(region.get_id(), region.region.clone());
         Ok(())
+    }
+
+    fn has_region_id(&self, region_id: u64) -> Result<bool> {
+        let regions = self.regions.lock().unwrap();
+        Ok(regions.contains_key(&region_id))
+    }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
+        Ok(true)
     }
 }

@@ -1,22 +1,11 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::coprocessor::codec::Datum;
-#[cfg(test)]
-use crate::util::codec::BytesSlice;
 use std::io::Write;
+#[cfg(test)]
+use tikv_util::codec::BytesSlice;
 use tipb::expression::FieldType;
 
 /// `Chunk` stores multiple rows of data in Apache Arrow format.
@@ -69,7 +58,7 @@ impl Chunk {
 
     /// Get the Row in the chunk with the row index.
     #[inline]
-    pub fn get_row(&self, idx: usize) -> Option<Row> {
+    pub fn get_row(&self, idx: usize) -> Option<Row<'_>> {
         if idx < self.num_rows() {
             Some(Row::new(self, idx))
         } else {
@@ -79,12 +68,12 @@ impl Chunk {
 
     // Get the Iterator for Row in the Chunk.
     #[inline]
-    pub fn iter(&self) -> RowIterator {
+    pub fn iter(&self) -> RowIterator<'_> {
         RowIterator::new(self)
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tps: &[FieldType]) -> Result<Chunk> {
+    pub fn decode(buf: &mut BytesSlice<'_>, tps: &[FieldType]) -> Result<Chunk> {
         let mut chunk = Chunk {
             columns: Vec::with_capacity(tps.len()),
         };

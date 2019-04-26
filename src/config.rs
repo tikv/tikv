@@ -1,57 +1,45 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-extern crate prometheus;
-extern crate toml;
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::i32;
 use std::io::Error as IoError;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::usize;
 
-use rocksdb::{
+use engine::rocks::{
     BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRecoveryMode, TitanDBOptions,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
 };
 use slog;
 use sys_info;
 
 use crate::import::Config as ImportConfig;
 use crate::pd::Config as PdConfig;
+use crate::raftstore::coprocessor::properties::{
+    MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory,
+};
+use crate::raftstore::coprocessor::properties::{
+    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+};
 use crate::raftstore::coprocessor::Config as CopConfig;
 use crate::raftstore::store::keys::region_raft_prefix_len;
 use crate::raftstore::store::Config as RaftstoreConfig;
 use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
-use crate::storage::{
-    Config as StorageConfig, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DEFAULT_ROCKSDB_SUB_DIR,
-};
-use crate::util::config::{
-    self, compression_type_level_serde, CompressionType, ReadableDuration, ReadableSize, GB, KB, MB,
-};
-use crate::util::rocksdb_util::{
-    db_exist,
-    properties::{MvccPropertiesCollectorFactory, RangePropertiesCollectorFactory},
-    CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
+use crate::storage::config::DEFAULT_DATA_DIR;
+use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use engine::rocks::util::config::{self as rocks_config, CompressionType};
+use engine::rocks::util::{
+    db_exist, CFOptions, EventListener, FixedPrefixSliceTransform, FixedSuffixSliceTransform,
     NoopSliceTransform,
 };
-use crate::util::security::SecurityConfig;
-use crate::util::time::duration_to_sec;
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use tikv_util::config::{self, ReadableDuration, ReadableSize, GB, KB, MB};
+use tikv_util::security::SecurityConfig;
+use tikv_util::time::duration_to_sec;
 
 const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
@@ -138,7 +126,7 @@ macro_rules! cf_config {
             pub bloom_filter_bits_per_key: i32,
             pub block_based_bloom_filter: bool,
             pub read_amp_bytes_per_bit: u32,
-            #[serde(with = "compression_type_level_serde")]
+            #[serde(with = "rocks_config::compression_type_level_serde")]
             pub compression_per_level: [DBCompressionType; 7],
             pub write_buffer_size: ReadableSize,
             pub max_write_buffer_number: i32,
@@ -149,16 +137,18 @@ macro_rules! cf_config {
             pub level0_slowdown_writes_trigger: i32,
             pub level0_stop_writes_trigger: i32,
             pub max_compaction_bytes: ReadableSize,
-            #[serde(with = "config::compaction_pri_serde")]
+            #[serde(with = "rocks_config::compaction_pri_serde")]
             pub compaction_pri: CompactionPriority,
             pub dynamic_level_bytes: bool,
             pub num_levels: i32,
             pub max_bytes_for_level_multiplier: i32,
-            #[serde(with = "config::compaction_style_serde")]
+            #[serde(with = "rocks_config::compaction_style_serde")]
             pub compaction_style: DBCompactionStyle,
             pub disable_auto_compactions: bool,
             pub soft_pending_compaction_bytes_limit: ReadableSize,
             pub hard_pending_compaction_bytes_limit: ReadableSize,
+            pub prop_size_index_distance: u64,
+            pub prop_keys_index_distance: u64,
             pub titan: TitanCfConfig,
         }
     };
@@ -359,6 +349,8 @@ impl Default for DefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }
@@ -367,7 +359,10 @@ impl Default for DefaultCfConfig {
 impl DefaultCfConfig {
     pub fn build_opt(&self) -> ColumnFamilyOptions {
         let mut cf_opts = build_cf_opt!(self);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -418,6 +413,8 @@ impl Default for WriteCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -436,7 +433,10 @@ impl WriteCfConfig {
         // Collects user defined properties.
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.mvcc-properties-collector", f);
-        let f = Box::new(RangePropertiesCollectorFactory::default());
+        let f = Box::new(RangePropertiesCollectorFactory {
+            prop_size_index_distance: self.prop_size_index_distance,
+            prop_keys_index_distance: self.prop_keys_index_distance,
+        });
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.set_titandb_options(&self.titan.build_opts());
         cf_opts
@@ -479,6 +479,8 @@ impl Default for LockCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -533,6 +535,8 @@ impl Default for RaftCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan,
         }
     }
@@ -586,7 +590,7 @@ impl TitanDBConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
+    #[serde(with = "rocks_config::recovery_mode_serde")]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -604,6 +608,9 @@ pub struct DbConfig {
     pub info_log_keep_log_file_num: u64,
     pub info_log_dir: String,
     pub rate_bytes_per_sec: ReadableSize,
+    #[serde(with = "rocks_config::rate_limiter_mode_serde")]
+    pub rate_limiter_mode: DBRateLimiterMode,
+    pub auto_tuned: bool,
     pub bytes_per_sync: ReadableSize,
     pub wal_bytes_per_sync: ReadableSize,
     pub max_sub_compactions: u32,
@@ -637,6 +644,8 @@ impl Default for DbConfig {
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
             rate_bytes_per_sec: ReadableSize::kb(0),
+            rate_limiter_mode: DBRateLimiterMode::WriteOnly,
+            auto_tuned: false,
             bytes_per_sync: ReadableSize::mb(1),
             wal_bytes_per_sync: ReadableSize::kb(512),
             max_sub_compactions: 1,
@@ -681,9 +690,15 @@ impl DbConfig {
                     );
                 })
         }
+
         if self.rate_bytes_per_sec.0 > 0 {
-            opts.set_ratelimiter(self.rate_bytes_per_sec.0 as i64);
+            opts.set_ratelimiter_with_auto_tuned(
+                self.rate_bytes_per_sec.0 as i64,
+                self.rate_limiter_mode,
+                self.auto_tuned,
+            );
         }
+
         opts.set_bytes_per_sync(self.bytes_per_sync.0 as u64);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0 as u64);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -700,7 +715,17 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+        vec![
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            // TODO: rmeove CF_RAFT.
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+        ]
+    }
+
+    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
         vec![
             CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
@@ -763,6 +788,8 @@ impl Default for RaftDefaultCfConfig {
             disable_auto_compactions: false,
             soft_pending_compaction_bytes_limit: ReadableSize::gb(64),
             hard_pending_compaction_bytes_limit: ReadableSize::gb(256),
+            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
             titan: TitanCfConfig::default(),
         }
     }
@@ -787,7 +814,7 @@ impl RaftDefaultCfConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RaftDbConfig {
-    #[serde(with = "config::recovery_mode_serde")]
+    #[serde(with = "rocks_config::recovery_mode_serde")]
     pub wal_recovery_mode: DBRecoveryMode,
     pub wal_dir: String,
     pub wal_ttl_seconds: u64,
@@ -889,7 +916,7 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions> {
+    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
         vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
     }
 }
@@ -914,12 +941,12 @@ impl Default for MetricConfig {
 }
 
 pub mod log_level_serde {
-    use crate::util::logger::{get_level_by_string, get_string_by_level};
     use serde::{
         de::{Error, Unexpected},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     use slog::Level;
+    use tikv_util::logger::{get_level_by_string, get_string_by_level};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Level, D::Error>
     where
@@ -983,9 +1010,11 @@ macro_rules! readpool_config {
                     .into());
                 }
                 if self.low_concurrency == 0 {
-                    return Err(
-                        format!("readpool.{}.low-concurrency should be > 0", $display_name).into(),
-                    );
+                    return Err(format!(
+                        "readpool.{}.low-concurrency should be > 0",
+                        $display_name
+                    )
+                    .into());
                 }
                 if self.stack_size.0 < ReadableSize::mb(2).0 {
                     return Err(
@@ -1320,11 +1349,18 @@ impl TiKvConfig {
         }
 
         if last_cfg.storage.data_dir != self.storage.data_dir {
-            return Err(format!(
-                "storage data dir have been changed, former data dir is {}, \
-                 current data dir is {}, please check if it is expected.",
-                last_cfg.storage.data_dir, self.storage.data_dir
-            ));
+            // In tikv 3.0 the default value of storage.data-dir changed
+            // from "" to "./"
+            let using_default_after_upgrade =
+                last_cfg.storage.data_dir.is_empty() && self.storage.data_dir == DEFAULT_DATA_DIR;
+
+            if !using_default_after_upgrade {
+                return Err(format!(
+                    "storage data dir have been changed, former data dir is {}, \
+                     current data dir is {}, please check if it is expected.",
+                    last_cfg.storage.data_dir, self.storage.data_dir
+                ));
+            }
         }
 
         if last_cfg.raft_store.raftdb_path != self.raft_store.raftdb_path {
@@ -1338,28 +1374,22 @@ impl TiKvConfig {
         Ok(())
     }
 
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self
-    where
-        P: fmt::Debug,
-    {
-        fs::File::open(&path)
-            .map_err::<Box<dyn Error>, _>(|e| Box::new(e))
-            .and_then(|mut f| {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                let c = toml::from_str(&s)?;
-                Ok(c)
-            })
-            .unwrap_or_else(|e| {
-                panic!(
-                    "invalid auto generated configuration file {:?}, err {}",
-                    path, e
-                );
-            })
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
+        (|| -> Result<Self, Box<dyn Error>> {
+            let s = fs::read_to_string(&path)?;
+            Ok(::toml::from_str(&s)?)
+        })()
+        .unwrap_or_else(|e| {
+            panic!(
+                "invalid auto generated configuration file {}, err {}",
+                path.as_ref().display(),
+                e
+            );
+        })
     }
 
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), IoError> {
-        let content = toml::to_string(&self).unwrap();
+        let content = ::toml::to_string(&self).unwrap();
         let mut f = fs::File::create(&path)?;
         f.write_all(content.as_bytes())?;
         f.sync_all()?;

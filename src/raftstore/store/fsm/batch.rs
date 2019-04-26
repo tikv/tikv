@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be two
 //! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
@@ -17,10 +6,10 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
-use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
+use tikv_util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -28,7 +17,7 @@ pub trait FsmScheduler {
 
     /// Schedule a Fsm for later handles.
     fn schedule(&self, fsm: Box<Self::Fsm>);
-    /// Shutdown the scheduler, which indicates that resouces like
+    /// Shutdown the scheduler, which indicates that resources like
     /// background thread pool should be released.
     fn shutdown(&self);
 }
@@ -41,7 +30,7 @@ pub trait Fsm {
     fn is_stopped(&self) -> bool;
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    fn set_mailbox(&mut self, _mailbox: Cow<BasicMailbox<Self>>)
+    fn set_mailbox(&mut self, _mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
     {
@@ -127,6 +116,7 @@ impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
 }
 
 /// A basic struct for a round of polling.
+#[allow(clippy::vec_box)]
 pub struct Batch<N, C> {
     normals: Vec<Box<N>>,
     control: Option<Box<C>>,
@@ -492,7 +482,7 @@ pub mod tests {
             self.is_stopped
         }
 
-        fn set_mailbox(&mut self, mailbox: Cow<BasicMailbox<Self>>) {
+        fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>) {
             self.mailbox = Some(mailbox.into_owned());
         }
 

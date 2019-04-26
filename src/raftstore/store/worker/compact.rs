@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::VecDeque;
 use std::error;
@@ -17,13 +6,15 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::storage::CF_WRITE;
-use crate::util::escape;
-use crate::util::rocksdb_util::{self, compact_range, stats::get_range_entries_and_versions};
-use crate::util::worker::Runnable;
-use rocksdb::DB;
+use engine::rocks;
+use engine::rocks::util::compact_range;
+use engine::CF_WRITE;
+use engine::DB;
+use tikv_util::escape;
+use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
+use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
@@ -43,7 +34,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Compact {
                 ref cf_name,
@@ -104,30 +95,28 @@ impl Runner {
     /// Sends a compact range command to RocksDB to compact the range of the cf.
     pub fn compact_range_cf(
         &mut self,
-        cf_name: String,
-        start_key: Option<Vec<u8>>,
-        end_key: Option<Vec<u8>>,
+        cf_name: &str,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
     ) -> Result<(), Error> {
-        let handle = box_try!(rocksdb_util::get_cf_handle(&self.engine, &cf_name));
+        let handle = box_try!(rocks::util::get_cf_handle(&self.engine, &cf_name));
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
-            .with_label_values(&[&cf_name])
+            .with_label_values(&[cf_name])
             .start_coarse_timer();
-        let start = start_key.as_ref().map(Vec::as_slice);
-        let end = end_key.as_ref().map(Vec::as_slice);
         compact_range(
             &self.engine,
             handle,
-            start,
-            end,
+            start_key,
+            end_key,
             false,
             1, /* threads */
         );
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
-            "range_start" => start.map(::log_wrappers::Key),
-            "range_end" => end.map(::log_wrappers::Key),
+            "range_start" => start_key.map(::log_wrappers::Key),
+            "range_end" => end_key.map(::log_wrappers::Key),
             "cf" => cf_name,
             "time_takes" => ?timer.elapsed(),
         );
@@ -143,8 +132,12 @@ impl Runnable<Task> for Runner {
                 start_key,
                 end_key,
             } => {
-                let cf = cf_name.clone();
-                if let Err(e) = self.compact_range_cf(cf_name, start_key, end_key) {
+                let cf = &cf_name;
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_ref().map(Vec::as_slice),
+                    end_key.as_ref().map(Vec::as_slice),
+                ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -162,11 +155,7 @@ impl Runnable<Task> for Runner {
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) = self.compact_range_cf(
-                                cf.clone(),
-                                Some(start.clone()),
-                                Some(end.clone()),
-                            ) {
+                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
                                 error!(
                                     "compact range failed";
                                     "range_start" => log_wrappers::Key(&start),
@@ -178,7 +167,7 @@ impl Runnable<Task> for Runner {
                         }
                     }
                 }
-                Err(e) => warn!("check ranges need reclaim failed, err: {:?}", e),
+                Err(e) => warn!("check ranges need reclaim failed"; "err" => %e),
             },
         }
     }
@@ -210,7 +199,7 @@ fn collect_ranges_need_compact(
     // contains too many RocksDB tombstones. TiKV will merge multiple neighboring ranges
     // that need compacting into a single range.
     let mut ranges_need_compact = VecDeque::new();
-    let cf = box_try!(rocksdb_util::get_cf_handle(engine, CF_WRITE));
+    let cf = box_try!(rocks::util::get_cf_handle(engine, CF_WRITE));
     let mut compact_start = None;
     let mut compact_end = None;
     for range in ranges.windows(2) {
@@ -255,17 +244,18 @@ mod tests {
     use std::thread::sleep;
     use std::time::Duration;
 
+    use engine::rocks::util::{get_cf_handle, new_engine, new_engine_opt, CFOptions};
+    use engine::rocks::Writable;
+    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine::{WriteBatch, DB};
+    use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
 
+    use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys::data_key;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
-    use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{
-        get_cf_handle, new_engine, new_engine_opt, properties::MvccPropertiesCollectorFactory,
-        stats::get_range_entries_and_versions, CFOptions,
-    };
-    use rocksdb::{self, Writable, WriteBatch, DB};
 
     use super::*;
 
@@ -288,7 +278,7 @@ mod tests {
             wb.put_cf(handle, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Generate another SST file has the same content with first SST file.
@@ -298,7 +288,7 @@ mod tests {
             wb.put_cf(handle, k.as_bytes(), b"whatever content")
                 .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         db.flush_cf(handle, true).unwrap();
 
         // Get the total SST files size.
@@ -335,15 +325,15 @@ mod tests {
     }
 
     fn open_db(path: &str) -> DB {
-        let db_opts = rocksdb::DBOptions::new();
-        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_file_num_compaction_trigger(8);
         let f = Box::new(MvccPropertiesCollectorFactory::default());
         cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
         new_engine_opt(path, db_opts, cfs_opts).unwrap()

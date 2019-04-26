@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -22,13 +11,12 @@ use futures::Future;
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
 use raft::eraftpb::MessageType;
 
+use engine::*;
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::raftstore::store::Peekable;
-use tikv::storage::CF_RAFT;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 /// Test if merge is rollback as expected.
 #[test]
@@ -149,7 +137,7 @@ fn test_node_merge_restart() {
     let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
     fail::remove(schedule_merge_fp);
-    cluster.start();
+    cluster.start().unwrap();
 
     // Wait till merge is finished.
     let timer = Instant::now();
@@ -212,7 +200,7 @@ fn test_node_merge_restart() {
     cluster.shutdown();
     fail::remove(skip_destroy_fp);
     cluster.clear_send_filters();
-    cluster.start();
+    cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
 }
@@ -331,7 +319,10 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // Add a collect snapshot filter, it will delay snapshots until have collected multiple snapshots from different peers
     cluster.sim.wl().add_recv_filter(
         3,
-        box LeadingDuplicatedSnapshotFilter::new(Arc::new(AtomicBool::new(false)), together),
+        Box::new(LeadingDuplicatedSnapshotFilter::new(
+            Arc::new(AtomicBool::new(false)),
+            together,
+        )),
     );
     // Write some data to trigger a snapshot of right region.
     for i in 200..210 {

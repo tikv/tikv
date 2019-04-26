@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
@@ -21,7 +10,6 @@ use kvproto::errorpb;
 use kvproto::metapb;
 use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
-use rocksdb::DB;
 use time::Timespec;
 
 use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
@@ -32,10 +20,11 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
-use crate::util::collections::HashMap;
-use crate::util::time::duration_to_sec;
-use crate::util::timer::Timer;
-use crate::util::worker::{Runnable, RunnableWithTimer};
+use engine::DB;
+use tikv_util::collections::HashMap;
+use tikv_util::time::duration_to_sec;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -121,7 +110,7 @@ impl ReadDelegate {
 }
 
 impl Display for ReadDelegate {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "ReadDelegate for region {}, \
@@ -212,7 +201,7 @@ impl Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Register(ref delegate) => write!(f, "localreader Task::Register {:?}", delegate),
             Task::Read(ref cmd) => write!(f, "localreader Task::Read {:?}", cmd.request),
@@ -593,9 +582,9 @@ mod tests {
 
     use crate::raftstore::store::util::Lease;
     use crate::raftstore::store::Callback;
-    use crate::storage::ALL_CFS;
-    use crate::util::rocksdb_util;
-    use crate::util::time::monotonic_raw_now;
+    use engine::rocks;
+    use engine::ALL_CFS;
+    use tikv_util::time::monotonic_raw_now;
 
     use super::*;
 
@@ -609,7 +598,7 @@ mod tests {
     ) {
         let path = TempDir::new(path).unwrap();
         let db =
-            rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
+            rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_id,

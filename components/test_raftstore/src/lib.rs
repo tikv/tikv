@@ -1,27 +1,5 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(box_syntax)]
-
-extern crate futures;
-extern crate grpcio as grpc;
-extern crate kvproto;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate tempdir;
-extern crate tokio_threadpool;
 #[macro_use(
     slog_kv,
     slog_error,
@@ -35,9 +13,8 @@ extern crate tokio_threadpool;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-
 #[macro_use]
-extern crate tikv;
+extern crate tikv_util;
 
 mod cluster;
 mod node;

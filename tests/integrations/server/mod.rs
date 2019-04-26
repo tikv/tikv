@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod kv_service;
 mod raft_client;
@@ -23,11 +12,11 @@ use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
 use kvproto::tikvpb::{BatchCommandsRequest, BatchCommandsResponse, BatchRaftMessage};
 use kvproto::tikvpb_grpc::{create_tikv, Tikv};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 macro_rules! unary_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, _: $req_name, sink: UnarySink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: UnarySink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
@@ -36,7 +25,7 @@ macro_rules! unary_call {
 
 macro_rules! sstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, _: $req_name, sink: ServerStreamingSink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
@@ -45,7 +34,7 @@ macro_rules! sstream_call {
 
 macro_rules! cstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
@@ -54,7 +43,7 @@ macro_rules! cstream_call {
 
 macro_rules! bstream_call {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, _: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
             let status = RpcStatus::new(RpcStatusCode::Unimplemented, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
@@ -63,7 +52,7 @@ macro_rules! bstream_call {
 
 macro_rules! unary_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, req: $req_name, sink: UnarySink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, req: $req_name, sink: UnarySink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
     }
@@ -71,7 +60,7 @@ macro_rules! unary_call_dispatch {
 
 macro_rules! sstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, req: $req_name, sink: ServerStreamingSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, req: $req_name, sink: ServerStreamingSink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
     }
@@ -79,7 +68,7 @@ macro_rules! sstream_call_dispatch {
 
 macro_rules! cstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, req: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, req: RequestStream<$req_name>, sink: ClientStreamingSink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
     }
@@ -87,7 +76,7 @@ macro_rules! cstream_call_dispatch {
 
 macro_rules! bstream_call_dispatch {
     ($name:tt, $req_name:tt, $resp_name:tt) => {
-        fn $name(&mut self, ctx: RpcContext, req: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
+        fn $name(&mut self, ctx: RpcContext<'_>, req: RequestStream<$req_name>, sink: DuplexSink<$resp_name>) {
             (self.0).$name(ctx, req, sink)
         }
     }

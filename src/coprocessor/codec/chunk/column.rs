@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io::Write;
 
@@ -23,9 +12,9 @@ use crate::coprocessor::codec::mysql::{
 };
 use crate::coprocessor::codec::Datum;
 
-use crate::util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::number::{self, NumberEncoder};
 #[cfg(test)]
-use crate::util::codec::BytesSlice;
+use tikv_util::codec::BytesSlice;
 
 /// `Column` stores the same column data of multi rows in one chunk.
 #[derive(Default)]
@@ -338,8 +327,8 @@ impl Column {
     }
 
     #[cfg(test)]
-    pub fn decode(buf: &mut BytesSlice, tp: &dyn FieldTypeAccessor) -> Result<Column> {
-        use crate::util::codec::read_slice;
+    pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
+        use tikv_util::codec::read_slice;
         let length = number::decode_u32_le(buf)? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;

@@ -1,20 +1,8 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
 use crate::test;
-use rocksdb::DB;
 use tempdir::TempDir;
 
 use kvproto::kvrpcpb::Context;
@@ -22,19 +10,20 @@ use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse, Response};
 use kvproto::raft_serverpb::RaftMessage;
 
+use engine;
+use engine::rocks;
+use engine::rocks::DB;
+use engine::{ALL_CFS, CF_DEFAULT};
 use tikv::raftstore::store::{
-    cmd_resp, engine, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
+    cmd_resp, util, Callback, CasualMessage, RaftCommand, ReadResponse, RegionSnapshot,
     SignificantMsg, WriteResponse,
 };
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::storage::engine::raftkv::CmdRes;
-use tikv::storage::engine::{
-    Callback as EngineCallback, CbContext, Modify, Result as EngineResult,
-};
+use tikv::storage::kv::raftkv::CmdRes;
+use tikv::storage::kv::{Callback as EngineCallback, CbContext, Modify, Result as EngineResult};
 use tikv::storage::types::Key;
-use tikv::storage::{Engine, RaftKv, ALL_CFS, CF_DEFAULT};
-use tikv::util::rocksdb_util;
+use tikv::storage::{Engine, RaftKv};
 
 #[derive(Clone)]
 struct SyncBenchRouter {
@@ -95,7 +84,7 @@ impl RaftStoreRouter for SyncBenchRouter {
 fn new_engine() -> (TempDir, Arc<DB>) {
     let dir = TempDir::new("bench_rafkv").unwrap();
     let path = dir.path().to_str().unwrap().to_string();
-    let db = rocksdb_util::new_engine(&path, None, ALL_CFS, None).unwrap();
+    let db = rocks::util::new_engine(&path, None, ALL_CFS, None).unwrap();
     (dir, Arc::new(db))
 }
 

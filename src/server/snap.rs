@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
@@ -28,9 +17,9 @@ use kvproto::raft_serverpb::{Done, SnapshotChunk};
 use kvproto::tikvpb_grpc::TikvClient;
 
 use crate::raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
-use crate::util::security::SecurityManager;
-use crate::util::worker::Runnable;
-use crate::util::DeferContext;
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::Runnable;
+use tikv_util::DeferContext;
 
 use super::metrics::*;
 use super::transport::RaftStoreRouter;
@@ -54,7 +43,7 @@ pub enum Task {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Recv { .. } => write!(f, "Recv"),
             Task::Send {
@@ -258,11 +247,11 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
         move |(head, chunks)| -> Box<dyn Future<Item = (), Error = Error> + Send> {
             let context = match RecvSnapContext::new(head, &snap_mgr) {
                 Ok(context) => context,
-                Err(e) => return box future::err(e),
+                Err(e) => return Box::new(future::err(e)),
             };
 
             if context.file.is_none() {
-                return box future::result(context.finish(raft_router));
+                return Box::new(future::result(context.finish(raft_router)));
             }
 
             let context_key = context.key.clone();
@@ -282,12 +271,14 @@ fn recv_snap<R: RaftStoreRouter + 'static>(
                 Ok(context)
             });
 
-            box recv_chunks
-                .and_then(move |context| context.finish(raft_router))
-                .then(move |r| {
-                    snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
-                    r
-                })
+            Box::new(
+                recv_chunks
+                    .and_then(move |context| context.finish(raft_router))
+                    .then(move |r| {
+                        snap_mgr.deregister(&context_key, &SnapEntry::Receiving);
+                        r
+                    }),
+            )
         },
     );
     f.then(move |res| match res {

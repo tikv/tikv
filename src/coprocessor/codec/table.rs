@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryInto;
 use std::io::Write;
@@ -24,10 +13,10 @@ use tipb::schema::ColumnInfo;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
-use crate::util::collections::{HashMap, HashSet};
-use crate::util::escape;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::escape;
 
 // handle or index id
 pub const ID_LEN: usize = 8;
@@ -218,7 +207,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
         FieldTypeTp::Float => Ok(Datum::F64(f64::from(datum.f64() as f32))),
         FieldTypeTp::Date | FieldTypeTp::DateTime | FieldTypeTp::Timestamp => {
             let fsp = field_type.decimal() as i8;
-            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, ctx.cfg.tz)?;
+            let t = Time::from_packed_u64(datum.u64(), tp.try_into()?, fsp, &ctx.cfg.tz)?;
             Ok(Datum::Time(t))
         }
         FieldTypeTp::Duration => Duration::from_nanos(datum.i64(), 0).map(Datum::Dur),
@@ -257,7 +246,7 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
 
 // `decode_col_value` decodes data to a Datum according to the column info.
 pub fn decode_col_value(
-    data: &mut BytesSlice,
+    data: &mut BytesSlice<'_>,
     ctx: &EvalContext,
     col: &ColumnInfo,
 ) -> Result<Datum> {
@@ -269,7 +258,7 @@ pub fn decode_col_value(
 // TODO: We should only decode columns in the cols map.
 // Row layout: colID1, value1, colID2, value2, .....
 pub fn decode_row(
-    data: &mut BytesSlice,
+    data: &mut BytesSlice<'_>,
     ctx: &mut EvalContext,
     cols: &HashMap<i64, ColumnInfo>,
 ) -> Result<HashMap<i64, Datum>> {
@@ -426,7 +415,7 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::datum::{self, Datum};
-    use crate::util::collections::{HashMap, HashSet};
+    use tikv_util::collections::{HashMap, HashSet};
 
     use super::*;
 

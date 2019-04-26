@@ -1,26 +1,15 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryFrom;
 
 use smallvec::SmallVec;
 
-use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag};
-use tipb::schema::ColumnInfo;
+use cop_datatype::{EvalType, FieldTypeAccessor};
+use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::{datum, Error, Result};
+use crate::coprocessor::codec::{Error, Result};
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -39,17 +28,24 @@ pub enum LazyBatchColumn {
 }
 
 impl std::fmt::Debug for LazyBatchColumn {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LazyBatchColumn::Raw(ref v) => {
                 let vec_display: Vec<_> = v
                     .iter()
-                    .map(|item| crate::util::escape(item.as_slice()))
+                    .map(|item| tikv_util::escape(item.as_slice()))
                     .collect();
                 f.debug_tuple("Raw").field(&vec_display).finish()
             }
             LazyBatchColumn::Decoded(ref v) => f.debug_tuple("Decoded").field(v).finish(),
         }
+    }
+}
+
+impl From<VectorValue> for LazyBatchColumn {
+    #[inline]
+    fn from(vec: VectorValue) -> Self {
+        LazyBatchColumn::Decoded(vec)
     }
 }
 
@@ -185,34 +181,25 @@ impl LazyBatchColumn {
         }
     }
 
-    /// Decodes this column in place according to column info if the column is not decoded.
-    pub fn decode(&mut self, time_zone: Tz, column_info: &ColumnInfo) -> Result<()> {
+    /// Decodes this column in place if the column is not decoded.
+    ///
+    /// The field type is needed because we use the same `DateTime` structure when handling
+    /// Date, Time or Timestamp.
+    // TODO: Maybe it's a better idea to assign different eval types for different date types.
+    pub fn decode(&mut self, time_zone: &Tz, field_type: &FieldType) -> Result<()> {
         if self.is_decoded() {
             return Ok(());
         }
 
         let eval_type =
-            EvalType::try_from(column_info.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+            EvalType::try_from(field_type.tp()).map_err(|e| Error::Other(box_err!(e)))?;
 
         let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
             let raw_values = self.raw();
             for raw_value in raw_values {
-                let raw_datum = if raw_value.is_empty() {
-                    if column_info.has_default_val() {
-                        column_info.get_default_val()
-                    } else if !column_info.flag().contains(FieldTypeFlag::NOT_NULL) {
-                        datum::DATUM_DATA_NULL
-                    } else {
-                        return Err(box_err!(
-                            "Column (id = {}) has flag NOT NULL, but no value is given",
-                            column_info.get_column_id()
-                        ));
-                    }
-                } else {
-                    raw_value.as_slice()
-                };
-                decoded_column.push_datum(raw_datum, time_zone, column_info)?;
+                let raw_datum = raw_value.as_slice();
+                decoded_column.push_datum(raw_datum, time_zone, field_type)?;
             }
         }
         *self = LazyBatchColumn::Decoded(decoded_column);
@@ -227,6 +214,8 @@ impl LazyBatchColumn {
     /// # Panics
     ///
     /// Panics when current column is already decoded.
+    // TODO: Deprecate this function. mut_raw should be preferred so that there won't be repeated
+    // match for each iteration.
     #[inline]
     pub fn push_raw(&mut self, raw_datum: impl AsRef<[u8]>) {
         match self {
@@ -276,29 +265,15 @@ impl LazyBatchColumn {
     pub fn encode(
         &self,
         row_index: usize,
-        column_info: &ColumnInfo,
+        field_type: &FieldType,
         output: &mut Vec<u8>,
     ) -> Result<()> {
         match self {
             LazyBatchColumn::Raw(ref v) => {
-                let value = if v[row_index].is_empty() {
-                    if column_info.has_default_val() {
-                        column_info.get_default_val()
-                    } else if !column_info.flag().contains(FieldTypeFlag::NOT_NULL) {
-                        datum::DATUM_DATA_NULL
-                    } else {
-                        return Err(box_err!(
-                            "Column (id = {}) has flag NOT NULL, but no value is given",
-                            column_info.get_column_id()
-                        ));
-                    }
-                } else {
-                    v[row_index].as_slice()
-                };
-                output.extend_from_slice(value);
+                output.extend_from_slice(v[row_index].as_slice());
                 Ok(())
             }
-            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, column_info, output),
+            LazyBatchColumn::Decoded(ref v) => v.encode(row_index, field_type, output),
         }
     }
 }
@@ -313,8 +288,8 @@ mod tests {
     fn test_lazy_batch_column_clone() {
         use cop_datatype::FieldTypeTp;
 
-        let mut col_info = ColumnInfo::new();
-        col_info.as_mut_accessor().set_tp(FieldTypeTp::Long);
+        let mut ft = FieldType::new();
+        ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
 
         let mut col = LazyBatchColumn::raw_with_capacity(5);
         assert!(col.is_raw());
@@ -332,7 +307,7 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.decode(Tz::utc(), &col_info).unwrap();
+            col.decode(&Tz::utc(), &ft).unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
@@ -372,7 +347,7 @@ mod tests {
             assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         }
         // Non-empty raw to non-empty decoded.
-        col.decode(Tz::utc(), &col_info).unwrap();
+        col.decode(&Tz::utc(), &ft).unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
@@ -497,14 +472,11 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut ft = tipb::expression::FieldType::new();
+        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
-        column.decode(tz, &col_info).unwrap();
+        column.decode(&tz, &ft).unwrap();
 
         b.iter(|| {
             test::black_box(test::black_box(&column).clone());
@@ -528,16 +500,13 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut ft = tipb::expression::FieldType::new();
+        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.decode(test::black_box(tz), test::black_box(&col_info))
+            col.decode(test::black_box(&tz), test::black_box(&ft))
                 .unwrap();
             test::black_box(&col);
         });
@@ -560,18 +529,15 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let col_info = {
-            let mut col_info = tipb::schema::ColumnInfo::new();
-            col_info.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            col_info
-        };
+        let mut ft = tipb::expression::FieldType::new();
+        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
-        column.decode(tz, &col_info).unwrap();
+        column.decode(&tz, &ft).unwrap();
 
         b.iter(|| {
             let mut col = test::black_box(&column).clone();
-            col.decode(test::black_box(tz), test::black_box(&col_info))
+            col.decode(test::black_box(&tz), test::black_box(&ft))
                 .unwrap();
             test::black_box(&col);
         });

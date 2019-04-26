@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::cmp::{max, min, Ordering};
@@ -181,11 +170,11 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        let mut greatest = mysql::time::zero_datetime(ctx.cfg.tz);
+        let mut greatest = mysql::time::zero_datetime(&ctx.cfg.tz);
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
-            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), &ctx.cfg.tz) {
                 Ok(t) => greatest = max(greatest, t),
                 Err(_) => {
                     if let Err(e) = ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
@@ -241,7 +230,7 @@ impl ScalarFunc {
 
         for exp in &self.children {
             let s = try_opt!(exp.eval_string_and_decode(ctx, row));
-            match Time::parse_datetime(&s, Time::parse_fsp(&s), ctx.cfg.tz) {
+            match Time::parse_datetime(&s, Time::parse_fsp(&s), &ctx.cfg.tz) {
                 Ok(t) => least = min(least, t),
                 Err(_) => match ctx.handle_invalid_time_error(Error::invalid_time_format(&s)) {
                     Err(e) => return Err(e),
@@ -485,7 +474,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::coprocessor::dag::expr::{EvalContext, Expression, Flag, SqlMode};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};
@@ -952,8 +941,8 @@ mod tests {
         {
             let mut eval_config = EvalConfig::new();
             eval_config
-                .set_in_insert_stmt(true)
-                .set_strict_sql_mode(true);
+                .set_flag(Flag::IN_INSERT_STMT)
+                .set_sql_mode(SqlMode::STRICT_ALL_TABLES);
             let mut ctx = EvalContext::new(Arc::new(eval_config));
             let row = vec![
                 Datum::Bytes(t1.clone()),

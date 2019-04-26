@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
 use std::sync::Arc;
@@ -20,7 +9,7 @@ use crate::import::SSTImporter;
 use crate::pd::PdClient;
 use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::{StoreMsg, StoreRouter};
-use crate::util::worker::Runnable;
+use tikv_util::worker::Runnable;
 
 pub enum Task {
     DeleteSST { ssts: Vec<SSTMeta> },
@@ -28,7 +17,7 @@ pub enum Task {
 }
 
 impl fmt::Display for Task {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Task::DeleteSST { ref ssts } => write!(f, "Delete {} ssts", ssts.len()),
             Task::ValidateSST { ref ssts } => write!(f, "Validate {} ssts", ssts.len()),

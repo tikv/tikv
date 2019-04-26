@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -17,32 +6,31 @@ use std::sync::Arc;
 use futures::Future;
 use tokio_core::reactor::Handle;
 
+use engine::rocks::util::*;
+use engine::rocks::DB;
 use fs2;
 use kvproto::metapb;
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, RaftCmdRequest, SplitRequest};
 use kvproto::raft_serverpb::RaftMessage;
+use prometheus::local::LocalHistogram;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
-use rocksdb::DB;
 
 use super::metrics::*;
 use crate::pd::{Error, PdClient, RegionStat};
+use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_approximate_size};
 use crate::raftstore::store::cmd_resp::new_error;
+use crate::raftstore::store::util::is_epoch_stale;
 use crate::raftstore::store::util::KeysInfoFormatter;
-use crate::raftstore::store::util::{
-    get_region_approximate_keys, get_region_approximate_size, is_epoch_stale,
-};
 use crate::raftstore::store::Callback;
 use crate::raftstore::store::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use crate::storage::FlowStatistics;
-use crate::util::collections::HashMap;
-use crate::util::escape;
-use crate::util::rocksdb_util::*;
-use crate::util::time::time_now_sec;
-use crate::util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
-use prometheus::local::LocalHistogram;
+use tikv_util::collections::HashMap;
+use tikv_util::escape;
+use tikv_util::time::time_now_sec;
+use tikv_util::worker::{FutureRunnable as Runnable, FutureScheduler as Scheduler, Stopped};
 
 /// Uses an asynchronous thread to tell PD something.
 pub enum Task {
@@ -134,7 +122,7 @@ pub struct PeerStat {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::AskSplit {
                 ref region,
@@ -517,7 +505,7 @@ impl<T: PdClient> Runner<T> {
                             return Ok(());
                         }
                         info!(
-                            "peer is still valid a memeber of region";
+                            "peer is still valid a member of region";
                             "region_id" => local_region.get_id(),
                             "peer_id" => peer.get_id(),
                             "pd_region" => ?pd_region

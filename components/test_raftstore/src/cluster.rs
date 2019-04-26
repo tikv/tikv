@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{self, Arc, RwLock};
@@ -17,23 +6,25 @@ use std::time::*;
 use std::{result, thread};
 
 use futures::Future;
-use rocksdb::DB;
-use tempdir::TempDir;
-
 use kvproto::errorpb::Error as PbError;
-use kvproto::metapb::{self, RegionEpoch};
+use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
+use tempdir::TempDir;
 
+use engine::rocks;
+use engine::rocks::DB;
+use engine::Engines;
+use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::fsm::RaftRouter;
+use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
-use tikv::storage::CF_DEFAULT;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, rocksdb_util, HandyRwLock};
+use tikv::server::Result as ServerResult;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -52,8 +43,10 @@ pub trait Simulator {
         &mut self,
         node_id: u64,
         cfg: TiKvConfig,
-        _: Option<Engines>,
-    ) -> (u64, Engines, Option<TempDir>);
+        engines: Engines,
+        router: RaftRouter,
+        system: RaftBatchSystem,
+    ) -> ServerResult<u64>;
     fn stop_node(&mut self, node_id: u64);
     fn get_node_ids(&self) -> HashSet<u64>;
     fn async_command_on_node(
@@ -98,10 +91,10 @@ pub trait Simulator {
 pub struct Cluster<T: Simulator> {
     pub cfg: TiKvConfig,
     leaders: HashMap<u64, metapb::Peer>,
-    paths: Vec<TempDir>,
-    dbs: Vec<Engines>,
     count: usize,
 
+    pub paths: Vec<TempDir>,
+    pub dbs: Vec<Engines>,
     pub engines: HashMap<u64, Engines>,
 
     pub sim: Arc<RwLock<T>>,
@@ -133,48 +126,51 @@ impl<T: Simulator> Cluster<T> {
         self.cfg.server.cluster_id
     }
 
-    fn create_engines(&mut self) {
+    pub fn create_engines(&mut self) {
         for _ in 0..self.count {
-            let path = TempDir::new("test_cluster").unwrap();
+            let dir = TempDir::new("test_cluster").unwrap();
+            let kv_path = dir.path().join("kv");
             let kv_db_opt = self.cfg.rocksdb.build_opt();
             let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
             let engine = Arc::new(
-                rocksdb_util::new_engine_opt(path.path().to_str().unwrap(), kv_db_opt, kv_cfs_opt)
+                rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
             );
-            let raft_path = path.path().join(Path::new("raft"));
+            let raft_path = dir.path().join(Path::new("raft"));
             let raft_engine = Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
             let engines = Engines::new(engine, raft_engine);
             self.dbs.push(engines);
-            self.paths.push(path);
+            self.paths.push(dir);
         }
     }
 
-    pub fn start(&mut self) {
-        if self.engines.is_empty() {
-            let mut sim = self.sim.wl();
-            for _ in 0..self.count {
-                let (node_id, engines, path) = sim.run_node(0, self.cfg.clone(), None);
-                self.dbs.push(engines.clone());
-                self.engines.insert(node_id, engines);
-                self.paths.push(path.unwrap());
-            }
-        } else {
-            // recover from last shutdown.
-            let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
-            for node_id in node_ids.drain(..) {
-                self.run_node(node_id);
-            }
+    pub fn start(&mut self) -> ServerResult<()> {
+        // Try recover from last shutdown.
+        let node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
+        for node_id in node_ids {
+            self.run_node(node_id)?;
         }
+
+        // Try start new nodes.
+        let mut sim = self.sim.wl();
+        for _ in 0..self.count - self.engines.len() {
+            let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+            let (engines, path) = create_test_engine(None, router.clone(), &self.cfg);
+            self.dbs.push(engines.clone());
+            self.paths.push(path.unwrap());
+            let node_id = sim.run_node(0, self.cfg.clone(), engines.clone(), router, system)?;
+            self.engines.insert(node_id, engines);
+        }
+        Ok(())
     }
 
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
-            let handle = rocksdb_util::get_cf_handle(&engine.kv, "default").unwrap();
-            rocksdb_util::compact_range(&engine.kv, handle, None, None, false, 1);
+            let handle = rocks::util::get_cf_handle(&engine.kv, "default").unwrap();
+            rocks::util::compact_range(&engine.kv, handle, None, None, false, 1);
         }
     }
 
@@ -183,7 +179,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run(&mut self) {
         self.create_engines();
         self.bootstrap_region().unwrap();
-        self.start();
+        self.start().unwrap();
     }
 
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
@@ -191,7 +187,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn run_conf_change(&mut self) -> u64 {
         self.create_engines();
         let region_id = self.bootstrap_conf_change();
-        self.start();
+        self.start().unwrap();
         region_id
     }
 
@@ -199,13 +195,16 @@ impl<T: Simulator> Cluster<T> {
         self.sim.rl().get_node_ids()
     }
 
-    pub fn run_node(&mut self, node_id: u64) {
+    pub fn run_node(&mut self, node_id: u64) -> ServerResult<()> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
+        let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
-            .run_node(node_id, self.cfg.clone(), Some(engines));
+            .run_node(node_id, self.cfg.clone(), engines, router, system)?;
         debug!("node {} started", node_id);
+        Ok(())
     }
 
     pub fn stop_node(&mut self, node_id: u64) {
@@ -306,13 +305,7 @@ impl<T: Simulator> Cluster<T> {
             .get_region_by_id(region_id)
             .wait()
             .unwrap()
-            .map(|region| {
-                region
-                    .get_peers()
-                    .iter()
-                    .map(|p| p.get_store_id())
-                    .collect()
-            })
+            .map(|region| region.get_peers().iter().map(Peer::get_store_id).collect())
     }
 
     pub fn query_leader(
@@ -437,7 +430,7 @@ impl<T: Simulator> Cluster<T> {
         }
 
         for engines in self.engines.values() {
-            write_prepare_bootstrap(engines, &region)?;
+            prepare_bootstrap_cluster(engines, &region)?;
         }
 
         self.bootstrap_cluster(region);
@@ -457,10 +450,13 @@ impl<T: Simulator> Cluster<T> {
         }
 
         let node_id = 1;
-        let region = prepare_bootstrap(&self.engines[&node_id], 1, 1, 1).unwrap();
-        let rid = region.get_id();
+        let region_id = 1;
+        let peer_id = 1;
+
+        let region = initial_region(node_id, region_id, peer_id);
+        prepare_bootstrap_cluster(&self.engines[&node_id], &region).unwrap();
         self.bootstrap_cluster(region);
-        rid
+        region_id
     }
 
     // This is only for fixed id test.

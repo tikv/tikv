@@ -1,35 +1,11 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(box_syntax)]
 #![feature(test)]
 
-extern crate crc;
-extern crate futures;
-extern crate futures_cpupool;
-extern crate grpcio;
-extern crate grpcio as grpc;
-extern crate kvproto;
-extern crate protobuf;
-extern crate raft;
-extern crate rand;
-extern crate rocksdb;
-extern crate tempdir;
+use grpcio as grpc;
+
 extern crate test;
-extern crate tipb;
-extern crate tokio_threadpool;
-extern crate toml;
-extern crate uuid;
+
 #[macro_use(
     slog_kv,
     slog_error,
@@ -43,12 +19,8 @@ extern crate uuid;
 extern crate slog;
 #[macro_use]
 extern crate slog_global;
-
 #[macro_use]
-extern crate tikv;
-extern crate test_coprocessor;
-extern crate test_raftstore;
-extern crate test_storage;
+extern crate tikv_util;
 #[macro_use]
 extern crate test_util;
 
@@ -68,7 +40,7 @@ fn _0_ci_setup() {
 
 #[test]
 fn _1_check_system_requirement() {
-    if let Err(e) = tikv::util::config::check_max_open_fds(4096) {
+    if let Err(e) = tikv_util::config::check_max_open_fds(4096) {
         panic!(
             "To run test, please make sure the maximum number of open file descriptors not \
              less than 2000: {:?}",

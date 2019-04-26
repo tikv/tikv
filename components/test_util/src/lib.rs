@@ -1,25 +1,8 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![cfg_attr(test, feature(test))]
 #[cfg(test)]
 extern crate test;
-
-extern crate rand;
-extern crate slog;
-extern crate time;
-
-extern crate tikv;
 
 mod kv_generator;
 mod logging;
@@ -54,8 +37,8 @@ pub fn setup_for_ci() {
     if env::var("PANIC_ABORT").is_ok() {
         // Panics as aborts, it's helpful for debugging,
         // but also stops tests immediately.
-        tikv::util::set_panic_hook(true, "./");
+        tikv_util::set_panic_hook(true, "./");
     }
 
-    tikv::util::check_environment_variables();
+    tikv_util::check_environment_variables();
 }

@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{mpsc::channel, Arc};
 use std::thread;
@@ -25,7 +14,7 @@ use test_storage::new_raft_engine;
 use tikv::storage;
 use tikv::storage::gc_worker::GC_MAX_PENDING_TASKS;
 use tikv::storage::*;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_storage_gcworker_busy() {
@@ -41,10 +30,14 @@ fn test_storage_gcworker_busy() {
     for _i in 0..GC_MAX_PENDING_TASKS {
         let tx1 = tx1.clone();
         storage
-            .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-                assert!(res.is_ok());
-                tx1.send(1).unwrap();
-            })
+            .async_gc(
+                ctx.clone(),
+                1,
+                Box::new(move |res: storage::Result<()>| {
+                    assert!(res.is_ok());
+                    tx1.send(1).unwrap();
+                }),
+            )
             .unwrap();
     }
     // Sleep to make sure the failpoint is triggered.
@@ -52,22 +45,30 @@ fn test_storage_gcworker_busy() {
     // Schedule one more request. So that there is a request being processed and
     // `GC_MAX_PENDING` requests in queue.
     storage
-        .async_gc(ctx.clone(), 1, box move |res: storage::Result<()>| {
-            assert!(res.is_ok());
-            tx1.send(1).unwrap();
-        })
+        .async_gc(
+            ctx.clone(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                assert!(res.is_ok());
+                tx1.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     // Old GC commands are blocked, the new one will get GCWorkerTooBusy error.
     let (tx2, rx2) = channel();
     storage
-        .async_gc(Context::new(), 1, box move |res: storage::Result<()>| {
-            match res {
-                Err(storage::Error::GCWorkerTooBusy) => {}
-                res => panic!("expect too busy, got {:?}", res),
-            }
-            tx2.send(1).unwrap();
-        })
+        .async_gc(
+            Context::new(),
+            1,
+            Box::new(move |res: storage::Result<()>| {
+                match res {
+                    Err(storage::Error::GCWorkerTooBusy) => {}
+                    res => panic!("expect too busy, got {:?}", res),
+                }
+                tx2.send(1).unwrap();
+            }),
+        )
         .unwrap();
 
     rx2.recv().unwrap();
@@ -104,9 +105,9 @@ fn test_scheduler_leader_change_twice() {
             b"k".to_vec(),
             10,
             Options::default(),
-            box move |res: storage::Result<_>| {
+            Box::new(move |res: storage::Result<_>| {
                 prewrite_tx.send(res).unwrap();
-            },
+            }),
         )
         .unwrap();
     // Sleep to make sure the failpoint is triggered.
@@ -117,8 +118,8 @@ fn test_scheduler_leader_change_twice() {
     fail::remove(snapshot_fp);
 
     match prewrite_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
-        Err(storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))))
-        | Err(storage::Error::Engine(engine::Error::Request(ref e))) => {
+        Err(storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))))
+        | Err(storage::Error::Engine(kv::Error::Request(ref e))) => {
             assert!(e.has_stale_command(), "{:?}", e);
         }
         res => {

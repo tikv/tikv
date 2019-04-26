@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::collections::Bound::Excluded;
@@ -19,40 +8,43 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
-use protobuf::{self, Message, RepeatedField};
-
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
+    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
+use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
+use protobuf::{self, Message, RepeatedField};
 use raft::eraftpb::Entry;
-use rocksdb::{
-    CompactOptions, DBBottommostLevelCompaction, Kv, Range, ReadOptions, SeekKey, Writable,
-    WriteBatch, WriteOptions, DB,
-};
+use raft::{self, RawNode};
 
-use crate::raftstore::store::engine::{IterOption, Mutable};
+use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
+use crate::raftstore::coprocessor::{
+    get_region_approximate_keys_cf, get_region_approximate_middle,
+};
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
+use crate::raftstore::store::{keys, PeerStorage};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use crate::util::codec::bytes;
-use crate::util::collections::HashSet;
-use crate::util::config::ReadableSize;
-use crate::util::escape;
-use crate::util::rocksdb_util::get_cf_handle;
-use crate::util::rocksdb_util::properties::{MvccProperties, RangeProperties};
-use crate::util::worker::Worker;
-use raft::{self, RawNode};
+use tikv_util::codec::bytes;
+use tikv_util::collections::HashSet;
+use tikv_util::config::ReadableSize;
+use tikv_util::escape;
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
-type DBIterator = rocksdb::DBIterator<Arc<DB>>;
+type DBIterator = RocksIterator<Arc<DB>>;
 
 quick_error! {
     #[derive(Debug)]
@@ -158,7 +150,7 @@ impl Debugger {
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
         box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
-            let (id, suffix) = keys::decode_region_meta_key(key)?;
+            let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
@@ -287,9 +279,9 @@ impl Debugger {
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start);
+        read_opt.set_iterate_lower_bound(start.to_vec());
         if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end);
+            read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
         if !iter.seek_to_first() {
@@ -325,7 +317,7 @@ impl Debugger {
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
+        info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -347,7 +339,7 @@ impl Debugger {
         if errors.is_empty() {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(wb, &write_opts));
+            box_try!(db.write_opt(&wb, &write_opts));
         }
         Ok(errors)
     }
@@ -377,10 +369,10 @@ impl Debugger {
     }
 
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
-        let db = &self.engines.kv;
+        let db = self.engines.kv.clone();
 
         v1!("Calculating split keys...");
-        let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
+        let split_keys = divide_db(&db, threads).unwrap().into_iter().map(|k| {
             let k = Key::from_encoded(keys::origin_key(&k).to_vec())
                 .truncate_ts()
                 .unwrap();
@@ -394,7 +386,7 @@ impl Debugger {
         let mut handles = Vec::new();
 
         for thread_index in 0..range_borders.len() - 1 {
-            let db = Arc::clone(db);
+            let db = db.clone();
             let start_key = range_borders[thread_index].clone();
             let end_key = range_borders[thread_index + 1].clone();
 
@@ -437,7 +429,12 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+        let readopts = IterOption::new(
+            Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+            Some(KeyBuilder::from_vec(to, 0, 0)),
+            false,
+        )
+        .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
@@ -576,7 +573,7 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(self.engines.kv.write_opt(wb, &write_opts));
+        box_try!(self.engines.kv.write_opt(&wb, &write_opts));
         Ok(())
     }
 
@@ -653,8 +650,8 @@ impl Debugger {
 
         let mut write_opts = WriteOptions::new();
         write_opts.set_sync(true);
-        box_try!(kv.write_opt(kv_wb, &write_opts));
-        box_try!(raft.write_opt(raft_wb, &write_opts));
+        box_try!(kv.write_opt(&kv_wb, &write_opts));
+        box_try!(raft.write_opt(&raft_wb, &write_opts));
         Ok(())
     }
 
@@ -743,8 +740,10 @@ impl Debugger {
 
         let mut num_entries = 0;
         let mut mvcc_properties = MvccProperties::new();
-        let collection = box_try!(raftstore_util::get_region_properties_cf(
-            db, CF_WRITE, region
+        let start = keys::enc_start_key(&region);
+        let end = keys::enc_end_key(&region);
+        let collection = box_try!(engine::util::get_range_properties_cf(
+            db, CF_WRITE, &start, &end
         ));
         for (_, v) in &*collection {
             num_entries += v.num_entries();
@@ -752,8 +751,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle(db, &region))
-        {
+        let middle_key = match box_try!(get_region_approximate_middle(db, &region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -804,7 +802,7 @@ fn recover_mvcc_for_range(
         if !read_only {
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
-            box_try!(db.write_opt(wb, &write_opts));
+            box_try!(db.write_opt(&wb, &write_opts));
         } else {
             v1!("thread {}: skip write {} rows", thread_index, batch_size);
         }
@@ -843,7 +841,12 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let readopts = IterOption::new(
+                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(to, 0, 0)),
+                false,
+            )
+            .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::Start);
@@ -1101,8 +1104,12 @@ impl MvccInfoIterator {
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() { None } else { Some(to) };
-            let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
+            let to = if to.is_empty() {
+                None
+            } else {
+                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
+            };
+            let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));
@@ -1318,15 +1325,11 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
 }
 
 fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
-    let mut fake_region = Region::default();
-    fake_region.set_start_key(vec![]);
-    fake_region.set_end_key(vec![]);
-    fake_region.mut_peers().push(Peer::default());
-    let get_cf_size =
-        |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &fake_region);
-
-    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+    // Empty start and end key cover all range.
+    let mut region = Region::new();
+    region.mut_peers().push(Peer::new());
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_WRITE, &region));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
@@ -1338,11 +1341,9 @@ fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
 }
 
 fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
-    let cf = get_cf_handle(db, cf)?;
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let range = Range::new(&start, &end);
-    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+    let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
 
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
@@ -1399,16 +1400,17 @@ mod tests {
     use std::iter::FromIterator;
     use std::sync::Arc;
 
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
-    use rocksdb::{ColumnFamilyOptions, DBOptions, Writable};
     use tempdir::TempDir;
 
     use super::*;
-    use crate::raftstore::store::engine::Mutable;
     use crate::storage::mvcc::{Lock, LockType};
-    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{self as rocksdb_util, new_engine_opt, CFOptions};
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::Mutable;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -1507,7 +1509,7 @@ mod tests {
         let tmp = TempDir::new("test_debug").unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocksdb_util::new_engine_opt(
+            rocks::util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
@@ -1873,8 +1875,8 @@ mod tests {
             mock_region_state(13, &[]);
         }
 
-        raft_engine.write_opt(wb1, &WriteOptions::new()).unwrap();
-        kv_engine.write_opt(wb2, &WriteOptions::new()).unwrap();
+        raft_engine.write_opt(&wb1, &WriteOptions::new()).unwrap();
+        kv_engine.write_opt(&wb2, &WriteOptions::new()).unwrap();
 
         let bad_regions = debugger.bad_regions().unwrap();
         assert_eq!(bad_regions.len(), 4);
@@ -2076,12 +2078,12 @@ mod tests {
             )
             .unwrap();
         }
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         // Fix problems.
         let mut checker = MvccChecker::new(Arc::clone(&db), b"k", b"k8").unwrap();
         let wb = WriteBatch::new();
         checker.check_mvcc(&wb, None).unwrap();
-        db.write(wb).unwrap();
+        db.write(&wb).unwrap();
         // Check result.
         for (cf, k, _, expect) in kv {
             let data = db
@@ -2125,7 +2127,7 @@ mod tests {
             let value = key.to_vec();
             wb.put(&data_key, &value).unwrap();
         }
-        debugger.engines.kv.write(wb).unwrap();
+        debugger.engines.kv.write(&wb).unwrap();
 
         let check = |result: Result<_>, expected: &[&[u8]]| {
             assert_eq!(
