@@ -323,7 +323,10 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
-        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+            Ok(arg1) => arg1,
+            Err(_) => return Ok(None),
+        };
         let overflow = Error::overflow("TIME", &format!("({} + {})", &arg0, &arg1));
         let mut res = match arg0.into_owned().checked_add(&arg1) {
             Some(res) => res,
@@ -367,7 +370,10 @@ impl ScalarFunc {
         let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
-        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+            Ok(arg1) => arg1,
+            Err(_) => return Ok(None),
+        };
         let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
         let res = match arg0.into_owned().checked_add(&arg1) {
             Some(res) => res,
@@ -411,7 +417,10 @@ impl ScalarFunc {
         let arg0: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
-        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+            Ok(arg1) => arg1,
+            Err(_) => return Ok(None),
+        };
         let overflow = Error::overflow("TIME", &format!("({} - {})", &arg0, &arg1));
         let mut res = match arg0.into_owned().checked_sub(&arg1) {
             Some(res) => res,
@@ -455,7 +464,10 @@ impl ScalarFunc {
         let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
-        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let arg1 = match MyDuration::parse(&arg1, Time::parse_fsp(s)) {
+            Ok(arg1) => arg1,
+            Err(_) => return Ok(None),
+        };
         let overflow = Error::overflow("DURATION", &format!("({} - {})", &arg0, &arg1));
         let res = match arg0.into_owned().checked_sub(&arg1) {
             Some(res) => res,
@@ -1383,6 +1395,21 @@ mod tests {
                 arg1,
             );
         }
+
+        test_ok_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::AddDatetimeAndString,
+            Datum::Time(Time::parse_utc_datetime("2019-01-01 01:00:00", 6).unwrap()),
+            Datum::Bytes(b"xxx".to_vec()),
+            Datum::Null,
+        );
+        test_ok_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::SubDatetimeAndString,
+            Datum::Time(Time::parse_utc_datetime("2019-01-01 01:00:00", 6).unwrap()),
+            Datum::Bytes(b"xxx".to_vec()),
+            Datum::Null,
+        );
     }
 
     #[test]
@@ -1538,6 +1565,21 @@ mod tests {
                 arg1,
             );
         }
+
+        test_ok_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::AddDurationAndString,
+            Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            Datum::Bytes(b"xxx".to_vec()),
+            Datum::Null,
+        );
+        test_ok_case_two_arg(
+            &mut ctx,
+            ScalarFuncSig::SubDurationAndString,
+            Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            Datum::Bytes(b"xxx".to_vec()),
+            Datum::Null,
+        );
     }
 
     #[test]
