@@ -21,7 +21,10 @@ use super::stream::*;
 use super::{Config, Error, Result};
 
 const MAX_RETRY_TIMES: u64 = 5;
-const RETRY_INTERVAL_SECS: u64 = 3;
+#[cfg(not(test))]
+const RETRY_INTERVAL: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const RETRY_INTERVAL: Duration = Duration::from_millis(10);
 const STORE_UNAVAILABLE_WAIT_INTERVAL_MILLIS: u64 = 20000;
 
 /// ImportJob is responsible for importing data stored in an engine to a cluster.
@@ -290,7 +293,7 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
         for i in 0..MAX_RETRY_TIMES {
             if i != 0 {
-                thread::sleep(Duration::from_secs(RETRY_INTERVAL_SECS));
+                thread::sleep(RETRY_INTERVAL);
             }
 
             let range = self.sst.meta.get_range().clone();
@@ -442,5 +445,38 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
                 Err(e)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::import::test_helpers::*;
+    use kvproto::import_kvpb::{Mutation, Mutation_OP, WriteBatch};
+
+    #[test]
+    fn test_import_failure() {
+        let (_dir, engine) = new_engine("test_import_failure");
+        let mut client = MockClient::new();
+        client.add_region_range(b"a", b"z");
+
+        let mut wb = WriteBatch::new();
+        let mut mutation = Mutation::new();
+        mutation.set_op(Mutation_OP::Put);
+        mutation.set_key(b"key".to_vec());
+        mutation.set_value(b"value".to_vec());
+        wb.mut_mutations().push(mutation);
+        wb.set_commit_ts(1);
+        engine.write(wb).unwrap();
+        engine.flush(true).unwrap();
+
+        let cfg = Config::default();
+        let mut job = ImportJob::new(cfg, client, engine);
+
+        job.client.set_upload_sst_successful(false);
+        job.run().unwrap_err();
+
+        job.client.set_upload_sst_successful(true);
+        job.run().unwrap();
     }
 }

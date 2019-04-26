@@ -22,7 +22,7 @@ use tikv_util::security::SecurityConfig;
 
 use super::client::*;
 use super::common::*;
-use super::Result;
+use super::{Error, Result};
 
 pub fn calc_data_crc32(data: &[u8]) -> u32 {
     let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -82,6 +82,7 @@ pub struct MockClient {
     counter: Arc<AtomicUsize>,
     regions: Arc<Mutex<HashMap<u64, Region>>>,
     scatter_regions: Arc<Mutex<HashMap<u64, Region>>>,
+    is_upload_sst_successful: bool,
 }
 
 impl MockClient {
@@ -90,6 +91,7 @@ impl MockClient {
             counter: Arc::new(AtomicUsize::new(1)),
             regions: Arc::new(Mutex::new(HashMap::new())),
             scatter_regions: Arc::new(Mutex::new(HashMap::new())),
+            is_upload_sst_successful: true,
         }
     }
 
@@ -113,6 +115,10 @@ impl MockClient {
     pub fn get_scatter_region(&self, id: u64) -> Option<RegionInfo> {
         let regions = self.scatter_regions.lock().unwrap();
         regions.get(&id).map(|r| RegionInfo::new(r.clone(), None))
+    }
+
+    pub fn set_upload_sst_successful(&mut self, success: bool) {
+        self.is_upload_sst_successful = success;
     }
 }
 
@@ -175,5 +181,17 @@ impl ImportClient for MockClient {
 
     fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
         Ok(true)
+    }
+
+    fn upload_sst(&self, _: u64, _: UploadStream) -> Result<UploadResponse> {
+        if self.is_upload_sst_successful {
+            Ok(UploadResponse::new())
+        } else {
+            Err(Error::ImportSSTJobFailed("mock failure".to_string()))
+        }
+    }
+
+    fn ingest_sst(&self, _: u64, _: IngestRequest) -> Result<IngestResponse> {
+        Ok(IngestResponse::new())
     }
 }
