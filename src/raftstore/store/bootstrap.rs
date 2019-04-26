@@ -77,15 +77,9 @@ pub fn prepare_bootstrap_cluster(engines: &Engines, region: &metapb::Region) -> 
     engines.sync_kv()?;
 
     let raft_wb = WriteBatch::new();
-<<<<<<< HEAD
     write_initial_raft_state(&raft_wb, &region)?;
-    engines.raft.write(raft_wb)?;
-    engines.raft.sync_wal()?;
-=======
-    write_initial_raft_state(&raft_wb, region.get_id())?;
     engines.write_raft(&raft_wb)?;
     engines.sync_raft()?;
->>>>>>> master
     Ok(())
 }
 

@@ -324,7 +324,6 @@ impl Peer {
 
         let raft_cfg = raft::Config {
             id: peer.get_id(),
-            peers: vec![],
             election_tick: cfg.raft_election_timeout_ticks,
             heartbeat_tick: cfg.raft_heartbeat_ticks,
             min_election_tick: cfg.raft_min_election_timeout_ticks,
@@ -794,7 +793,7 @@ impl Peer {
             self.leader_missing_time = None;
             return StaleState::Valid;
         }
-        let naive_peer = !self.is_initialized() || self.raft_group.raft.is_learner;
+        let naive_peer = !self.is_initialized() || self.raft_group.raft.promotable();
         // Updates the `leader_missing_time` according to the current state.
         //
         // If we are checking this it means we suspect the leader might be missing.
@@ -1547,7 +1546,7 @@ impl Peer {
             _ => unimplemented!(),
         }
         let healthy = self.count_healthy_node(status.progress.values());
-        let quorum_after_change = raft::majority(status.progress.len());
+        let quorum_after_change = raft::util::majority(status.progress.len());
         if healthy >= quorum_after_change {
             return Ok(());
         }

@@ -1252,28 +1252,30 @@ pub fn fetch_entries_to(
 
     let start_key = keys::raft_log_key(region_id, low);
     let end_key = keys::raft_log_key(region_id, high);
-    engine.scan(
-        &start_key,
-        &end_key,
-        true, // fill_cache
-        |_, value| {
-            let mut entry = Entry::new();
-            entry.merge_from_bytes(value)?;
+    engine
+        .scan(
+            &start_key,
+            &end_key,
+            true, // fill_cache
+            |_, value| {
+                let mut entry = Entry::new();
+                entry.merge_from_bytes(value)?;
 
-            // May meet gap or has been compacted.
-            if entry.get_index() != next_index {
-                return Ok(false);
-            }
-            next_index += 1;
+                // May meet gap or has been compacted.
+                if entry.get_index() != next_index {
+                    return Ok(false);
+                }
+                next_index += 1;
 
-            total_size += value.len() as u64;
-            exceeded_max_size = total_size > max_size;
-            if !exceeded_max_size || buf.is_empty() {
-                buf.push(entry);
-            }
-            Ok(!exceeded_max_size)
-        },
-    )?;
+                total_size += value.len() as u64;
+                exceeded_max_size = total_size > max_size;
+                if !exceeded_max_size || buf.is_empty() {
+                    buf.push(entry);
+                }
+                Ok(!exceeded_max_size)
+            },
+        )
+        .map_err(Error::from)?;
 
     // If we get the correct number of entries, returns,
     // or the total size almost exceeds max_size, returns.
@@ -1336,22 +1338,27 @@ pub fn do_snapshot(
         "region_id" => region_id,
     );
 
-    let apply_state: RaftApplyState =
-        match kv_snap.get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))? {
-            None => {
-                return Err(storage_error(format!(
-                    "could not load raft state of region {}",
-                    region_id
-                )));
-            }
-            Some(state) => state,
-        };
+    let apply_state: RaftApplyState = match kv_snap
+        .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+        .map_err(Error::from)?
+    {
+        None => {
+            return Err(storage_error(format!(
+                "could not load raft state of region {}",
+                region_id
+            )));
+        }
+        Some(state) => state,
+    };
 
     let idx = apply_state.get_applied_index();
     let term = if idx == apply_state.get_truncated_state().get_index() {
         apply_state.get_truncated_state().get_term()
     } else {
-        match raft_snap.get_msg::<Entry>(&keys::raft_log_key(region_id, idx))? {
+        match raft_snap
+            .get_msg::<Entry>(&keys::raft_log_key(region_id, idx))
+            .map_err(Error::from)?
+        {
             None => {
                 return Err(storage_error(format!(
                     "entry {} of {} not found.",
@@ -1374,7 +1381,8 @@ pub fn do_snapshot(
         .and_then(|res| match res {
             None => Err(box_err!("could not find region info")),
             Some(state) => Ok(state),
-        })?;
+        })
+        .map_err(Error::from)?;
 
     if state.get_state() != PeerState::Normal {
         return Err(storage_error(format!(

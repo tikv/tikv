@@ -9,7 +9,8 @@ portable = ["engine_rocksdb/portable"]
 sse = ["engine_rocksdb/sse"]
 
 [dependencies]
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/hicqu/kvproto.git", branch = "cc-append-time-activation-rust-protobuf" }
 protobuf = "~2.0"
 raft = "0.4"
 quick-error = "1.2.2"

@@ -6,8 +6,9 @@ publish = false
 
 [dependencies]
 tikv = { path = "../../", default-features = false }
-kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "cc-effective-on-recieved" }
 tikv_util = { path = "../tikv_util" }
+# kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/hicqu/kvproto.git", branch = "cc-append-time-activation-rust-protobuf" }
 protobuf = "~2.0"
 tempdir = "0.3"
 raft = "0.4"
