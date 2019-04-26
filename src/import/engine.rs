@@ -221,7 +221,7 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(cfg: &DbConfig, path: &str) -> Result<SSTWriter> {
-        let env = Arc::new(Env::default());
+        let env = Arc::new(Env::new_mem());
         let uuid = Uuid::new_v4().to_string();
 
         let mut default_opts = cfg.defaultcf.build_opt();
