@@ -5,7 +5,7 @@ pub use raftstore2::store::config;
 pub mod fsm;
 pub use tikv_misc::keys;
 pub use raftstore2::store::msg;
-pub mod transport;
+pub use raftstore2::store::transport;
 pub use tikv_misc::store_util as util;
 
 pub use tikv_misc::raftstore_bootstrap as bootstrap;
