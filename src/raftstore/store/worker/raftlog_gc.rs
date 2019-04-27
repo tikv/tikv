@@ -5,7 +5,7 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use crate::raftstore::store::keys;
+use tikv_misc::keys;
 use engine::rocks::Writable;
 use engine::util::MAX_DELETE_BATCH_SIZE;
 use engine::Iterable;
