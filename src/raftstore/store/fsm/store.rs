@@ -3,7 +3,7 @@
 use crossbeam::channel::{SendError, TryRecvError, TrySendError};
 use engine::rocks;
 use engine::rocks::CompactionJobInfo;
-use engine::{WriteBatch, WriteOptions, DB};
+use engine::{WriteBatch, WriteOptions};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
@@ -70,10 +70,7 @@ const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
 
-pub struct StoreInfo {
-    pub engine: Arc<DB>,
-    pub capacity: u64,
-}
+pub use tikv_misc::store_info::StoreInfo;
 
 pub struct StoreMeta {
     /// region_end_key -> region_id

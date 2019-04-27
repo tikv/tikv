@@ -17,4 +17,5 @@ extern crate tikv_util;
 
 pub mod flow_stats;
 pub mod peer_storage;
+pub mod store_info;
 pub mod store_util;
