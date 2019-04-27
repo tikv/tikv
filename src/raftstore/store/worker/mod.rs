@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod compact;
-mod consistency_check;
+use raftstore2::store::worker::consistency_check;
 use raftstore2::store::worker::metrics;
 mod raftlog_gc;
 mod read;

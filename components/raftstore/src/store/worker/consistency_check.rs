@@ -7,14 +7,14 @@ use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
 use tikv_misc::keys;
-use raftstore2::store::msg::CasualMessage;
-use raftstore2::store::transport::CasualRouter;
+use crate::store::msg::CasualMessage;
+use crate::store::transport::CasualRouter;
 use engine::CF_RAFT;
 use engine::{Iterable, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
-use raftstore2::store::worker::metrics::*;
-use raftstore2::store::metrics::*;
+use crate::store::worker::metrics::*;
+use crate::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
