@@ -11,7 +11,7 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
-use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
+use raftstore2::store::fsm::apply::TaskRes as ApplyTaskRes;
 use tikv_misc::store_util::KeysInfoFormatter;
 use raftstore2::store::snap::SnapKey;
 use tikv_misc::compact_listener::CompactedEvent;
