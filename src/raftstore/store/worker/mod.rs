@@ -3,7 +3,7 @@
 mod compact;
 use raftstore2::store::worker::consistency_check;
 use raftstore2::store::worker::metrics;
-mod raftlog_gc;
+use raftstore2::store::worker::raftlog_gc;
 mod read;
 mod region;
 mod split_check;
