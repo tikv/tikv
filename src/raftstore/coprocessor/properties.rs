@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::u64;
 
-use crate::raftstore::store::keys;
+use raftstore2::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::{
