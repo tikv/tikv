@@ -33,15 +33,17 @@ use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as Ra
 use raft::NO_LIMIT;
 use uuid::Uuid;
 
-use crate::import::SSTImporter;
+use engine::sst_importer::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
-use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::msg::{Callback, PeerMsg};
+use raftstore2::store::metrics::*;
+use crate::raftstore::store::msg::PeerMsg;
+use tikv_misc::raftstore_callback::Callback;
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
-use crate::raftstore::store::util::check_region_epoch;
-use crate::raftstore::store::{cmd_resp, keys, util, Config};
+use tikv_misc::store_util::check_region_epoch;
+use crate::raftstore::store::{cmd_resp, Config};
+use tikv_misc::{keys, store_util as util};
 use crate::raftstore::{Error, Result};
 use tikv_util::mpsc::{loose_bounded, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant, SlowTimer};
