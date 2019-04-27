@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod metrics;
 pub mod properties;
+pub mod region_info_accessor;
 pub mod split_observer;
 
 /// Coprocessor is used to provide a convenient way to inject code to
