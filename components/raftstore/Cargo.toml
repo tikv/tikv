@@ -6,9 +6,11 @@ publish = false
 
 [dependencies]
 byteorder = "1.2"
+crc = "1.8"
 crossbeam = "0.5"
 # FIXME: unfortunate dependency
 engine = { path = "../engine" }
+fail = "0.2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "0.2.1"
 protobuf = "~2.0"

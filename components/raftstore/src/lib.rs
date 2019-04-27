@@ -1,6 +1,8 @@
 #![recursion_limit = "200"]
 
 #[macro_use]
+extern crate fail;
+#[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate prometheus;
@@ -9,7 +11,9 @@ extern crate quick_error;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use(
+    kv,
     slog_kv,
+    slog_error,
     slog_warn,
     slog_info,
     slog_debug,
