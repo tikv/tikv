@@ -31,7 +31,7 @@ use tikv_util::time;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-use super::metrics::*;
+use raftstore2::store::worker::metrics::*;
 
 const GENERATE_POOL_SIZE: usize = 2;
 

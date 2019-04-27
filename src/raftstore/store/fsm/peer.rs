@@ -28,7 +28,7 @@ use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use tikv_misc::pd_client::PdClient;
-use crate::pd::PdTask;
+use tikv_misc::pd_task::Task as PdTask;
 use raftstore2::{Error, Result};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;

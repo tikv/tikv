@@ -21,38 +21,45 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
-use crate::import::SSTImporter;
-use crate::pd::{PdClient, PdRunner, PdTask};
-use crate::raftstore::coprocessor::split_observer::SplitObserver;
-use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::raftstore::store::config::Config;
-use crate::raftstore::store::fsm::metrics::*;
+use engine::sst_importer::SSTImporter;
+use tikv_misc::pd_client::PdClient;
+use tikv_misc::pd_task::Task as PdTask;
+use crate::pd::PdRunner;
+use raftstore2::coprocessor::split_observer::SplitObserver;
+use crate::raftstore::coprocessor::CoprocessorHost;
+use raftstore2::coprocessor::RegionChangeEvent;
+use raftstore2::store::config::Config;
+use raftstore2::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
-use crate::raftstore::store::fsm::{
-    batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+use raftstore2::store::fsm::batch::{
+    self, BatchRouter, BatchSystem, Fsm, HandlerBuilder,
 };
-use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
-use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
-use crate::raftstore::store::local_metrics::RaftMetrics;
-use crate::raftstore::store::metrics::*;
+use raftstore2::store::fsm::router::BasicMailbox;
+use crate::raftstore::store::fsm::{
+    create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
+};
+use crate::raftstore::store::fsm::{ApplyNotifier, PollHandler, RegionProposal};
+use tikv_misc::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
+use raftstore2::store::local_metrics::RaftMetrics;
+use raftstore2::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
-use crate::raftstore::store::transport::{Transport, CasualRouter, ProposalRouter, StoreRouter};
-use crate::raftstore::store::util::is_initial_msg;
+use raftstore2::store::transport::{Transport, CasualRouter, ProposalRouter, StoreRouter};
+use tikv_misc::store_util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
     RegionTask, SplitCheckRunner, SplitCheckTask,
 };
-use crate::raftstore::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter, StoreMsg,
-    StoreTick,
-};
-use crate::raftstore::{Error, Result};
+use tikv_misc::store_util as util;
+use tikv_misc::raftstore_callback::Callback;
+use raftstore2::store::msg::{CasualMessage, PeerMsg, RaftCommand, StoreMsg, StoreTick};
+use raftstore2::store::snap::SnapshotDeleter;
+use crate::raftstore::store::SnapManager;
+use raftstore2::{Error, Result};
 use raftstore2::errors::DiscardReason;
-use crate::storage::kv::{CompactedEvent, CompactionListener};
+use tikv_misc::compact_listener::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use tikv_util::collections::{HashMap, HashSet};
@@ -62,8 +69,8 @@ use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 use std::result::Result as StdResult;
-use super::Mailbox;
-use super::batch::{NormalScheduler, ControlScheduler};
+use raftstore2::store::fsm::router::Mailbox;
+use raftstore2::store::fsm::batch::{NormalScheduler, ControlScheduler};
 
 type Key = Vec<u8>;
 
