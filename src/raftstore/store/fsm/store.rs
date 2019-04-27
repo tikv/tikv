@@ -39,7 +39,7 @@ use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, e
 use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
-use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::transport::{Transport, CasualRouter, ProposalRouter, StoreRouter};
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
@@ -50,7 +50,8 @@ use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter, StoreMsg,
     StoreTick,
 };
-use crate::raftstore::Result;
+use crate::raftstore::{Error, Result};
+use raftstore2::errors::DiscardReason;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
 use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
@@ -218,6 +219,37 @@ impl RaftRouter {
     #[inline]
     pub fn close(&self, addr: u64) {
         self.0.close(addr)
+    }
+}
+
+impl CasualRouter for RaftRouter {
+    #[inline]
+    fn send(&self, region_id: u64, msg: CasualMessage) -> Result<()> {
+        match RaftRouter::send(self, region_id, PeerMsg::CasualMessage(msg)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
+            Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
+        }
+    }
+}
+
+impl ProposalRouter for RaftRouter {
+    #[inline]
+    fn send(&self, cmd: RaftCommand) -> std::result::Result<(), TrySendError<RaftCommand>> {
+        self.send_raft_command(cmd)
+    }
+}
+
+impl StoreRouter for RaftRouter {
+    #[inline]
+    fn send(&self, msg: StoreMsg) -> Result<()> {
+        match self.send_control(msg) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
+            Err(TrySendError::Disconnected(_)) => {
+                Err(Error::Transport(DiscardReason::Disconnected))
+            }
+        }
     }
 }
 
