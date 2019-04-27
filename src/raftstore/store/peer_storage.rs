@@ -24,7 +24,7 @@ use raft::{self, Error as RaftError, RaftState, Ready, Storage, StorageError};
 use raftstore2::errors::storage_error;
 
 use crate::raftstore::store::fsm::GenSnapTask;
-use crate::raftstore::store::util::conf_state_from_region;
+use tikv_misc::store_util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use raftstore2::Result;
 use tikv_util::worker::Scheduler;

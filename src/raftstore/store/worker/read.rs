@@ -12,21 +12,26 @@ use kvproto::raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse};
 use prometheus::local::LocalHistogram;
 use time::Timespec;
 
-use crate::raftstore::errors::RAFTSTORE_IS_BUSY;
+use raftstore2::errors::RAFTSTORE_IS_BUSY;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
-use crate::raftstore::store::util::{self, LeaseState, RemoteLease};
+use tikv_misc::store_util::{self as util, LeaseState, RemoteLease};
+use raftstore2::store::{
+    cmd_resp,
+};
+use raftstore2::store::transport::ProposalRouter;
+use raftstore2::store::msg::RaftCommand;
 use crate::raftstore::store::{
-    cmd_resp, Peer, ProposalRouter, RaftCommand, ReadExecutor, ReadResponse, RequestInspector,
+    Peer, ReadExecutor, ReadResponse, RequestInspector,
     RequestPolicy,
 };
-use crate::raftstore::Result;
+use raftstore2::Result;
 use engine::DB;
 use tikv_util::collections::HashMap;
 use tikv_util::time::duration_to_sec;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Runnable, RunnableWithTimer};
 
-use super::metrics::*;
+use raftstore2::store::worker::metrics::*;
 
 /// A read only delegate of `Peer`.
 #[derive(Debug)]

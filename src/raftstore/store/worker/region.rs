@@ -21,10 +21,10 @@ use tikv_misc::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
-use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
-use crate::raftstore::store::{
-    self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
-};
+use raftstore2::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS};
+use tikv_misc::keys;
+use raftstore2::store::snap::{check_abort, ApplyOptions, SnapEntry, SnapKey};
+use crate::raftstore::store::{self, SnapManager};
 use tikv_util::escape;
 use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
 use tikv_util::time;
