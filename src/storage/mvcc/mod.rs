@@ -4,7 +4,7 @@ pub use tikv_misc::mvcc_lock as lock;
 mod metrics;
 mod reader;
 mod txn;
-mod write;
+pub use tikv_misc::mvcc_write as write;
 
 pub use self::lock::{Lock, LockType};
 pub use self::reader::MvccReader;

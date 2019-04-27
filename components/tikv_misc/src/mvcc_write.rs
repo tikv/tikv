@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::io;
-use tikv_misc::mvcc_types::Value;
-use tikv_misc::mvcc_lock::LockType;
-use tikv_misc::mvcc_types::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use crate::mvcc_types::Value;
+use crate::mvcc_lock::LockType;
+use crate::mvcc_types::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 

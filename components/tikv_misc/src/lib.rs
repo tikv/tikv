@@ -25,6 +25,7 @@ pub mod flow_stats;
 pub mod keys;
 pub mod mvcc_lock;
 pub mod mvcc_types;
+pub mod mvcc_write;
 pub mod pd_client;
 pub mod pd_errors;
 pub mod pd_task;
