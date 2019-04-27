@@ -46,7 +46,7 @@ use raftstore2::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
     SNAPSHOT_CF_SIZE,
 };
-use crate::raftstore::store::peer_storage::JOB_STATUS_CANCELLING;
+use tikv_misc::peer_storage::JOB_STATUS_CANCELLING;
 
 // Data in CF_RAFT should be excluded for a snapshot.
 pub const SNAPSHOT_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];

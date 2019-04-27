@@ -48,7 +48,7 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 
 pub const JOB_STATUS_PENDING: usize = 0;
 pub const JOB_STATUS_RUNNING: usize = 1;
-pub const JOB_STATUS_CANCELLING: usize = 2;
+pub use raftstore2::store::peer_storage::JOB_STATUS_CANCELLING;
 pub const JOB_STATUS_CANCELLED: usize = 3;
 pub const JOB_STATUS_FINISHED: usize = 4;
 pub const JOB_STATUS_FAILED: usize = 5;
