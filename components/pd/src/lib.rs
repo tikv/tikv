@@ -34,6 +34,7 @@ pub mod client;
 pub mod config;
 pub mod errors;
 pub mod metrics;
+pub mod raft;
 pub mod util;
 
 pub type PdFuture<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
