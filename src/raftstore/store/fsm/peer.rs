@@ -36,26 +36,27 @@ use tikv_util::{escape, is_zero_duration};
 use tikv_misc::store_util;
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
-use crate::raftstore::store::cmd_resp::{bind_term, new_error};
+use raftstore2::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
+use raftstore2::store::fsm::apply::{ApplyMetrics, TaskRes as ApplyTaskRes, ExecResult};
 use crate::raftstore::store::fsm::{
-    apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
+    apply, ApplyTask, BasicMailbox, ChangePeer, Fsm,
     RegionProposal,
 };
-use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
-use crate::raftstore::store::metrics::*;
-use crate::raftstore::store::msg::Callback;
+use tikv_misc::keys::{self, enc_end_key, enc_start_key};
+use raftstore2::store::metrics::*;
+use raftstore2::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
-use crate::raftstore::store::util::KeysInfoFormatter;
+use tikv_misc::store_util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use crate::raftstore::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
-    SnapshotDeleter, StoreMsg,
-};
+use raftstore2::store::msg::{CasualMessage, PeerMsg, PeerTick, RaftCommand, SignificantMsg, StoreMsg};
+use raftstore2::store::snap::{SnapKey, SnapshotDeleter};
+use tikv_misc::store_util as util;
+use crate::raftstore::store::Config;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,
