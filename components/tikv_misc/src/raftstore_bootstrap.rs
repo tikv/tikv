@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_misc::keys;
-use tikv_misc::peer_storage::{write_initial_apply_state, write_initial_raft_state};
-use tikv_misc::store_util::new_peer;
-use raftstore2::Result;
+use super::keys;
+use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
+use super::store_util::new_peer;
 use engine::rocks;
 use engine::rocks::Writable;
+use engine::Result;
 use engine::{Engines, Iterable, Mutable, WriteBatch, DB};
 use engine::{CF_DEFAULT, CF_RAFT};
 

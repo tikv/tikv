@@ -23,6 +23,7 @@ pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;
 pub mod peer_storage;
+pub mod raftstore_bootstrap;
 pub mod raftstore_callback;
 pub mod region_snapshot;
 pub mod store_info;

@@ -8,7 +8,7 @@ pub use raftstore2::store::msg;
 pub mod transport;
 pub use tikv_misc::store_util as util;
 
-mod bootstrap;
+pub use tikv_misc::raftstore_bootstrap as bootstrap;
 pub use raftstore2::store::local_metrics;
 pub use raftstore2::store::metrics;
 mod peer;
