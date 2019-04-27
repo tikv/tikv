@@ -17,6 +17,7 @@ extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
 
+pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;
 pub mod peer_storage;
