@@ -6,6 +6,8 @@ use std::collections::Bound::{Included, Unbounded};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::ops::{Deref, DerefMut};
+use std::cmp;
+use std::u64;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{Error, Result};
 
@@ -504,4 +506,57 @@ impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct MvccProperties {
+    pub min_ts: u64,           // The minimal timestamp.
+    pub max_ts: u64,           // The maximal timestamp.
+    pub num_rows: u64,         // The number of rows.
+    pub num_puts: u64,         // The number of MVCC puts of all rows.
+    pub num_versions: u64,     // The number of MVCC versions of all rows.
+    pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
+}
+
+impl MvccProperties {
+    pub fn new() -> MvccProperties {
+        MvccProperties {
+            min_ts: u64::MAX,
+            max_ts: u64::MIN,
+            num_rows: 0,
+            num_puts: 0,
+            num_versions: 0,
+            max_row_versions: 0,
+        }
+    }
+
+    pub fn add(&mut self, other: &MvccProperties) {
+        self.min_ts = cmp::min(self.min_ts, other.min_ts);
+        self.max_ts = cmp::max(self.max_ts, other.max_ts);
+        self.num_rows += other.num_rows;
+        self.num_puts += other.num_puts;
+        self.num_versions += other.num_versions;
+        self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
+    }
+
+    pub fn encode(&self) -> UserProperties {
+        let mut props = UserProperties::new();
+        props.encode_u64(PROP_MIN_TS, self.min_ts);
+        props.encode_u64(PROP_MAX_TS, self.max_ts);
+        props.encode_u64(PROP_NUM_ROWS, self.num_rows);
+        props.encode_u64(PROP_NUM_PUTS, self.num_puts);
+        props.encode_u64(PROP_NUM_VERSIONS, self.num_versions);
+        props.encode_u64(PROP_MAX_ROW_VERSIONS, self.max_row_versions);
+        props
+    }
+
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<MvccProperties> {
+        let mut res = MvccProperties::new();
+        res.min_ts = props.decode_u64(PROP_MIN_TS)?;
+        res.max_ts = props.decode_u64(PROP_MAX_TS)?;
+        res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
+        res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
+        res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
+        res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
+        Ok(res)
+    }
+}
 

@@ -8,7 +8,7 @@ pub use raftstore2::coprocessor::config;
 pub mod dispatcher;
 pub use raftstore2::coprocessor::error;
 pub use raftstore2::coprocessor::metrics;
-pub mod properties;
+pub use raftstore2::coprocessor::properties;
 pub mod region_info_accessor;
 mod split_check;
 pub use raftstore2::coprocessor::split_observer;

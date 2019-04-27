@@ -1,87 +1,17 @@
-// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
-
-use std::cmp;
+use engine::rocks::{
+    DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory,
+    CFHandle, Range, DB,
+};
 use std::collections::HashMap;
+use std::cmp;
 use std::u64;
 
 use tikv_misc::keys;
 use tikv_misc::mvcc_write::{Write, WriteType};
 use tikv_misc::storage_key::Key;
-use engine::rocks::{
-    CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
-};
 use tikv_util::codec::Result;
 
-pub use raftstore2::coprocessor::properties::{
-    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-};
-
-use raftstore2::coprocessor::properties::{
-    PROP_NUM_ERRORS,
-    PROP_MIN_TS,
-    PROP_MAX_TS,
-    PROP_NUM_ROWS,
-    PROP_NUM_PUTS,
-    PROP_NUM_VERSIONS,
-    PROP_MAX_ROW_VERSIONS,
-    PROP_ROWS_INDEX,
-    PROP_ROWS_INDEX_DISTANCE,
-};
-
-#[derive(Clone, Debug, Default)]
-pub struct MvccProperties {
-    pub min_ts: u64,           // The minimal timestamp.
-    pub max_ts: u64,           // The maximal timestamp.
-    pub num_rows: u64,         // The number of rows.
-    pub num_puts: u64,         // The number of MVCC puts of all rows.
-    pub num_versions: u64,     // The number of MVCC versions of all rows.
-    pub max_row_versions: u64, // The maximal number of MVCC versions of a single row.
-}
-
-impl MvccProperties {
-    pub fn new() -> MvccProperties {
-        MvccProperties {
-            min_ts: u64::MAX,
-            max_ts: u64::MIN,
-            num_rows: 0,
-            num_puts: 0,
-            num_versions: 0,
-            max_row_versions: 0,
-        }
-    }
-
-    pub fn add(&mut self, other: &MvccProperties) {
-        self.min_ts = cmp::min(self.min_ts, other.min_ts);
-        self.max_ts = cmp::max(self.max_ts, other.max_ts);
-        self.num_rows += other.num_rows;
-        self.num_puts += other.num_puts;
-        self.num_versions += other.num_versions;
-        self.max_row_versions = cmp::max(self.max_row_versions, other.max_row_versions);
-    }
-
-    pub fn encode(&self) -> UserProperties {
-        let mut props = UserProperties::new();
-        props.encode_u64(PROP_MIN_TS, self.min_ts);
-        props.encode_u64(PROP_MAX_TS, self.max_ts);
-        props.encode_u64(PROP_NUM_ROWS, self.num_rows);
-        props.encode_u64(PROP_NUM_PUTS, self.num_puts);
-        props.encode_u64(PROP_NUM_VERSIONS, self.num_versions);
-        props.encode_u64(PROP_MAX_ROW_VERSIONS, self.max_row_versions);
-        props
-    }
-
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<MvccProperties> {
-        let mut res = MvccProperties::new();
-        res.min_ts = props.decode_u64(PROP_MIN_TS)?;
-        res.max_ts = props.decode_u64(PROP_MAX_TS)?;
-        res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
-        res.num_puts = props.decode_u64(PROP_NUM_PUTS)?;
-        res.num_versions = props.decode_u64(PROP_NUM_VERSIONS)?;
-        res.max_row_versions = props.decode_u64(PROP_MAX_ROW_VERSIONS)?;
-        Ok(res)
-    }
-}
+pub use tikv_misc::cop_props::*;
 
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
@@ -188,8 +118,6 @@ impl TablePropertiesCollectorFactory for MvccPropertiesCollectorFactory {
     }
 }
 
-pub use raftstore2::coprocessor::properties::{IndexHandle, IndexHandles};
-
 #[derive(Default)]
 pub struct RowsProperties {
     pub total_rows: u64,
@@ -209,10 +137,6 @@ impl RowsProperties {
             .get_approximate_distance_in_range(start, end)
     }
 }
-
-pub use raftstore2::coprocessor::properties::{SizeProperties, SizePropertiesCollector, SizePropertiesCollectorFactory, UserProperties, DecodeProperties};
-pub use raftstore2::coprocessor::properties::{RangeOffsetKind, RangeOffsets};
-pub use raftstore2::coprocessor::properties::{RangeProperties, RangePropertiesCollector, RangePropertiesCollectorFactory};
 
 pub fn get_range_entries_and_versions(
     engine: &DB,

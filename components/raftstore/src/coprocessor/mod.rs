@@ -8,7 +8,7 @@ pub use error::{Error, Result};
 pub mod config;
 pub mod error;
 pub mod metrics;
-pub use tikv_misc::cop_props as properties;
+pub mod properties;
 pub mod split_observer;
 
 /// Coprocessor is used to provide a convenient way to inject code to
@@ -90,3 +90,4 @@ pub trait RegionChangeObserver: Coprocessor {
     /// Hook to call when a region changed on this TiKV
     fn on_region_changed(&self, _: &mut ObserverContext<'_>, _: RegionChangeEvent, _: StateRole) {}
 }
+
