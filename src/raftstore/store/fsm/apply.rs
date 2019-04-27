@@ -26,7 +26,7 @@ use kvproto::raft_cmdpb::{
     RaftCmdRequest, RaftCmdResponse, Request, Response,
 };
 use kvproto::raft_serverpb::{
-    MergeState, PeerState, RaftApplyState, RaftTruncatedState, RegionLocalState,
+    MergeState, PeerState, RaftApplyState, RegionLocalState,
 };
 use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
@@ -145,47 +145,8 @@ impl PendingCmdQueue {
 pub use raftstore2::store::fsm::apply::{
     ChangePeer,
     Range,
+    ExecResult,
 };
-
-#[derive(Debug)]
-pub enum ExecResult {
-    ChangePeer(ChangePeer),
-    CompactLog {
-        state: RaftTruncatedState,
-        first_index: u64,
-    },
-    SplitRegion {
-        regions: Vec<Region>,
-        derived: Region,
-    },
-    PrepareMerge {
-        region: Region,
-        state: MergeState,
-    },
-    CommitMerge {
-        region: Region,
-        source: Region,
-    },
-    RollbackMerge {
-        region: Region,
-        commit: u64,
-    },
-    ComputeHash {
-        region: Region,
-        index: u64,
-        snap: Snapshot,
-    },
-    VerifyHash {
-        index: u64,
-        hash: Vec<u8>,
-    },
-    DeleteRange {
-        ranges: Vec<Range>,
-    },
-    IngestSST {
-        ssts: Vec<SSTMeta>,
-    },
-}
 
 /// The possible returned value when applying logs.
 pub enum ApplyResult {
@@ -2280,38 +2241,11 @@ impl Debug for Msg {
     }
 }
 
-#[derive(Default, Clone, Debug, PartialEq)]
-pub struct ApplyMetrics {
-    /// an inaccurate difference in region size since last reset.
-    pub size_diff_hint: i64,
-    /// delete keys' count since last reset.
-    pub delete_keys_hint: u64,
-
-    pub written_bytes: u64,
-    pub written_keys: u64,
-    pub lock_cf_written_bytes: u64,
-}
-
-#[derive(Debug)]
-pub struct ApplyRes {
-    pub region_id: u64,
-    pub apply_state: RaftApplyState,
-    pub applied_index_term: u64,
-    pub exec_res: VecDeque<ExecResult>,
-    pub metrics: ApplyMetrics,
-    pub merged: bool,
-}
-
-#[derive(Debug)]
-pub enum TaskRes {
-    Apply(ApplyRes),
-    Destroy {
-        // ID of region that has been destroyed.
-        region_id: u64,
-        // ID of peer that has been destroyed.
-        peer_id: u64,
-    },
-}
+pub use raftstore2::store::fsm::apply::{
+    ApplyMetrics,
+    ApplyRes,
+    TaskRes,
+};
 
 pub struct ApplyFsm {
     delegate: ApplyDelegate,
