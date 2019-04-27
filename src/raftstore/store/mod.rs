@@ -4,7 +4,7 @@ pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
 pub use tikv_misc::keys;
-pub mod msg;
+pub use raftstore2::store::msg;
 pub mod transport;
 pub use tikv_misc::store_util as util;
 
