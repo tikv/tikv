@@ -1,3 +1,5 @@
+#![feature(fnbox)]
+
 #[macro_use]
 extern crate quick_error;
 #[macro_use(
@@ -18,6 +20,7 @@ extern crate tikv_util;
 pub mod flow_stats;
 pub mod keys;
 pub mod peer_storage;
+pub mod raftstore_callback;
 pub mod region_snapshot;
 pub mod store_info;
 pub mod store_util;

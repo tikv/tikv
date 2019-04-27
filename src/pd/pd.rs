@@ -20,7 +20,7 @@ use crate::raftstore::coprocessor::{get_region_approximate_keys, get_region_appr
 use crate::raftstore::store::cmd_resp::new_error;
 use tikv_misc::store_util::is_epoch_stale;
 use tikv_misc::store_util::KeysInfoFormatter;
-use crate::raftstore::store::Callback;
+use tikv_misc::raftstore_callback::Callback;
 use tikv_misc::store_info::StoreInfo;
 use crate::raftstore::store::{CasualMessage, PeerMsg, RaftCommand, RaftRouter};
 use tikv_misc::flow_stats::FlowStatistics;
