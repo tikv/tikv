@@ -5,7 +5,7 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 
-use crate::raftstore::store::CasualRouter;
+use raftstore2::store::transport::CasualRouter;
 
 use super::*;
 
