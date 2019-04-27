@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 byteorder = "1.2"
 engine = { path = "../engine" }
+futures = "0.1"
 grpcio = { version = "0.4" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "~2.0"

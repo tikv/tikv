@@ -22,6 +22,7 @@ pub mod compact_listener;
 pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;
+pub mod pd_client;
 pub mod pd_errors;
 pub mod peer_storage;
 pub mod raftstore_bootstrap;
