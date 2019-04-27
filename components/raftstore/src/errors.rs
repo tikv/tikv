@@ -15,6 +15,7 @@ use tikv_util::codec;
 use super::coprocessor::Error as CopError;
 use super::store::SnapError;
 use tikv_util::escape;
+use tikv_misc::store_util;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -229,3 +230,24 @@ impl From<Error> for RaftError {
     }
 }
 
+impl From<store_util::Error> for Error {
+    fn from(e: store_util::Error) -> Error {
+        match e {
+            store_util::Error::KeyNotInRegion(key, region) => {
+                Error::KeyNotInRegion(key, region)
+            }
+            store_util::Error::EpochNotMatch(msg, new_regions) => {
+                Error::EpochNotMatch(msg, new_regions)
+            }
+            store_util::Error::StaleCommand => {
+                Error::StaleCommand
+            }
+            store_util::Error::StoreNotMatch(to_store_id, my_store_id) => {
+                Error::StoreNotMatch(to_store_id, my_store_id)
+            }
+            store_util::Error::Other(e) => {
+                Error::Other(e)
+            }
+        }
+    }
+}

@@ -2304,7 +2304,7 @@ impl ReadExecutor {
                     "err" => ?e,
                 );
                 return ReadResponse {
-                    response: cmd_resp::new_error(e),
+                    response: cmd_resp::new_error(e.into()),
                     snapshot: None,
                 };
             }

@@ -4,6 +4,6 @@ pub mod fsm;
 pub mod keys;
 pub mod local_metrics;
 pub mod metrics;
-pub mod peer_storage;
+pub use tikv_misc::peer_storage;
 pub mod snap;
-pub mod util;
+pub use tikv_misc::store_util as util;

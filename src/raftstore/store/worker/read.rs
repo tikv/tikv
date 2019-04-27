@@ -296,7 +296,7 @@ impl<C: ProposalRouter> LocalReader<C> {
         if let Err(e) = util::check_store_id(req, self.store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
             debug!("rejected by store id not match"; "err" => %e);
-            return Err(e);
+            return Err(e.into());
         }
 
         // Check region id.
@@ -315,7 +315,7 @@ impl<C: ProposalRouter> LocalReader<C> {
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
             self.metrics.borrow_mut().rejected_by_peer_id_mismatch += 1;
-            return Err(e);
+            return Err(e.into());
         }
 
         // Check term.
@@ -326,7 +326,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                 "header_term" => req.get_header().get_term(),
             );
             self.metrics.borrow_mut().rejected_by_term_mismatch += 1;
-            return Err(e);
+            return Err(e.into());
         }
 
         // Check region epoch.

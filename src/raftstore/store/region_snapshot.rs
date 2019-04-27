@@ -332,7 +332,7 @@ impl RegionIterator {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
             } else {
-                return Err(e);
+                return Err(e.into());
             }
         }
         Ok(())

@@ -33,6 +33,7 @@ use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
 use tikv_util::{escape, is_zero_duration};
+use tikv_misc::store_util;
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
@@ -2070,7 +2071,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Check store_id, make sure that the msg is dispatched to the right place.
         if let Err(e) = util::check_store_id(msg, self.store_id()) {
             self.ctx.raft_metrics.invalid_proposal.mismatch_store_id += 1;
-            return Err(e);
+            return Err(e.into());
         }
         if msg.has_status_request() {
             // For status commands, we handle it here directly.
@@ -2089,16 +2090,16 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // peer_id must be the same as peer's.
         if let Err(e) = util::check_peer_id(msg, self.fsm.peer.peer_id()) {
             self.ctx.raft_metrics.invalid_proposal.mismatch_peer_id += 1;
-            return Err(e);
+            return Err(e.into());
         }
         // Check whether the term is stale.
         if let Err(e) = util::check_term(msg, self.fsm.peer.term()) {
             self.ctx.raft_metrics.invalid_proposal.stale_command += 1;
-            return Err(e);
+            return Err(e.into());
         }
 
         match util::check_region_epoch(msg, self.fsm.peer.region(), true) {
-            Err(Error::EpochNotMatch(msg, mut new_regions)) => {
+            Err(store_util::Error::EpochNotMatch(msg, mut new_regions)) => {
                 // Attach the region which might be split from the current region. But it doesn't
                 // matter if the region is not split from the current region. If the region meta
                 // received by the TiKV driver is newer than the meta cached in the driver, the meta is
@@ -2110,7 +2111,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.ctx.raft_metrics.invalid_proposal.epoch_not_match += 1;
                 Err(Error::EpochNotMatch(msg, new_regions))
             }
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
             Ok(()) => Ok(None),
         }
     }

@@ -13,7 +13,6 @@ use raft::INVALID_INDEX;
 use time::{Duration, Timespec};
 
 use super::peer_storage;
-use crate::{Error, Result};
 use tikv_util::time::monotonic_raw_now;
 use tikv_util::{escape, Either};
 
@@ -1089,3 +1088,37 @@ mod tests {
         }
     }
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
+            description("key is not in region")
+            display("key {} is not in region key range [{}, {}) for region {}",
+                    escape(key),
+                    escape(region.get_start_key()),
+                    escape(region.get_end_key()),
+                    region.get_id())
+        }
+        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
+            description("region epoch is not match")
+            display("EpochNotMatch {}", msg)
+        }
+        StaleCommand {
+            description("stale command")
+        }
+        StoreNotMatch(to_store_id: u64, my_store_id: u64) {
+            description("store is not match")
+            display("to store id {}, mine {}", to_store_id, my_store_id)
+        }
+        Other(err: Box<dyn std::error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("{:?}", err)
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+

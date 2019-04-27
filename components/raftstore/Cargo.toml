@@ -18,6 +18,7 @@ serde = "1.0"
 serde_derive = "1.0"
 slog = { version = "2.3" }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+tikv_misc = { path = "../tikv_misc" }
 tikv_util = { path = "../tikv_util" }
 time = "0.1"
 
