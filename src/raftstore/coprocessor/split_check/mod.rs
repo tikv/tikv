@@ -9,8 +9,9 @@ use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
+use raftstore2::coprocessor::error::Result;
+use raftstore2::coprocessor::ObserverContext;
+use super::{KeyEntry, SplitChecker};
 
 pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
 pub use self::keys::{

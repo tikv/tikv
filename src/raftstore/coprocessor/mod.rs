@@ -13,9 +13,9 @@ pub mod region_info_accessor;
 mod split_check;
 pub use raftstore2::coprocessor::split_observer;
 
-pub use self::config::Config;
+pub use raftstore2::coprocessor::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};
-pub use self::error::{Error, Result};
+pub use raftstore2::coprocessor::error::{Error, Result};
 pub use self::region_info_accessor::{RegionInfo, RegionInfoAccessor, SeekRegionCallback};
 pub use self::split_check::{
     get_region_approximate_keys, get_region_approximate_keys_cf, get_region_approximate_middle,

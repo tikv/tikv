@@ -8,12 +8,13 @@ use engine::{CF_DEFAULT, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-use crate::raftstore::store::keys;
+use tikv_misc::keys;
 use tikv_util::config::ReadableSize;
 
-use super::super::error::Result;
-use super::super::properties::RangeProperties;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
+use raftstore2::coprocessor::error::Result;
+use raftstore2::coprocessor::properties::RangeProperties;
+use raftstore2::coprocessor::{Coprocessor, ObserverContext};
+use super::super::{KeyEntry, SplitCheckObserver, SplitChecker};
 use super::size::get_region_approximate_size_cf;
 use super::Host;
 

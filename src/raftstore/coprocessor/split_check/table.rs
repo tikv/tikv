@@ -8,8 +8,9 @@ use engine::{IterOption, Iterable};
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
+use tikv_misc::cop_table_consts as table_consts;
 use crate::coprocessor::codec::table as table_codec;
-use crate::raftstore::store::keys;
+use tikv_misc::keys;
 use crate::storage::types::Key;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
@@ -104,8 +105,8 @@ impl SplitCheckObserver for TableCheckObserver {
         let encoded_start_key = region.get_start_key();
         let encoded_end_key = keys::origin_key(&end_key);
 
-        if encoded_start_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
-            || encoded_end_key.len() < table_codec::TABLE_PREFIX_KEY_LEN
+        if encoded_start_key.len() < table_consts::TABLE_PREFIX_KEY_LEN
+            || encoded_end_key.len() < table_consts::TABLE_PREFIX_KEY_LEN
         {
             // For now, let us scan region if encoded_start_key or encoded_end_key
             // is less than TABLE_PREFIX_KEY_LEN.
@@ -121,8 +122,8 @@ impl SplitCheckObserver for TableCheckObserver {
         // Table data starts with `TABLE_PREFIX`.
         // Find out the actual range of this region by comparing with `TABLE_PREFIX`.
         match (
-            encoded_start_key[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
-            encoded_end_key[..table_codec::TABLE_PREFIX_LEN].cmp(table_codec::TABLE_PREFIX),
+            encoded_start_key[..table_consts::TABLE_PREFIX_LEN].cmp(table_consts::TABLE_PREFIX),
+            encoded_end_key[..table_consts::TABLE_PREFIX_LEN].cmp(table_consts::TABLE_PREFIX),
         ) {
             // The range does not cover table data.
             (Ordering::Less, Ordering::Less) | (Ordering::Greater, Ordering::Greater) => return,
@@ -204,10 +205,10 @@ fn to_encoded_table_prefix(encoded_key: &[u8]) -> Option<Vec<u8>> {
 
 // Encode a key like `t{i64}` will append some unnecessary bytes to the output,
 // The first 10 bytes are enough to find out which table this key belongs to.
-const ENCODED_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
+const ENCODED_TABLE_TABLE_PREFIX: usize = table_consts::TABLE_PREFIX_KEY_LEN + 1;
 
 fn is_table_key(encoded_key: &[u8]) -> bool {
-    encoded_key.starts_with(table_codec::TABLE_PREFIX)
+    encoded_key.starts_with(table_consts::TABLE_PREFIX)
         && encoded_key.len() >= ENCODED_TABLE_TABLE_PREFIX
 }
 

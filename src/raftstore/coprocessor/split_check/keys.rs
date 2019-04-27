@@ -1,6 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use tikv_misc::keys;
+use raftstore2::store::msg::CasualMessage;
+use raftstore2::store::transport::CasualRouter;
 use engine::rocks::DB;
 use engine::rocks::{self, Range};
 use engine::util;
@@ -9,10 +11,11 @@ use kvproto::{metapb::Region, pdpb::CheckPolicy};
 use std::mem;
 use std::sync::Mutex;
 
-use super::super::error::Result;
-use super::super::metrics::*;
+use raftstore2::coprocessor::error::Result;
+use raftstore2::coprocessor::metrics::*;
 use super::super::properties::{get_range_entries_and_versions, RangeProperties};
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
+use raftstore2::coprocessor::{Coprocessor, ObserverContext};
+use super::super::{KeyEntry, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {

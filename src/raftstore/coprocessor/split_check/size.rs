@@ -13,12 +13,15 @@ use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 use tikv_util::escape;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use tikv_misc::keys;
+use raftstore2::store::msg::CasualMessage;
+use raftstore2::store::transport::CasualRouter;
 
-use super::super::error::Result;
-use super::super::metrics::*;
-use super::super::properties::RangeProperties;
-use super::super::{Coprocessor, KeyEntry, ObserverContext, SplitCheckObserver, SplitChecker};
+use raftstore2::coprocessor::error::Result;
+use raftstore2::coprocessor::metrics::*;
+use raftstore2::coprocessor::properties::RangeProperties;
+use raftstore2::coprocessor::{Coprocessor, ObserverContext};
+use super::super::{KeyEntry, SplitCheckObserver, SplitChecker};
 use super::Host;
 
 pub struct Checker {
