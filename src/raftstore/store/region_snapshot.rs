@@ -8,8 +8,10 @@ use engine::{
 use kvproto::metapb::Region;
 use std::sync::Arc;
 
-use crate::raftstore::store::keys::DATA_PREFIX_KEY;
-use crate::raftstore::store::{keys, util, PeerStorage};
+use raftstore2::store::keys::DATA_PREFIX_KEY;
+use raftstore2::store::keys;
+use tikv_misc::store_util as util;
+use super::peer_storage::PeerStorage;
 use crate::raftstore::Result;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
