@@ -32,7 +32,8 @@ use tikv_util::worker::Scheduler;
 use tikv_misc::keys::{self, enc_end_key, enc_start_key};
 use raftstore2::store::metrics::*;
 use super::worker::RegionTask;
-use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
+use raftstore2::store::snap::{SnapEntry, SnapKey, SnapshotStatistics};
+use super::snap::SnapManager;
 use crate::config;
 
 // When we create a region peer, we should initialize its log term/index > 0,

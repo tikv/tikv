@@ -13,7 +13,8 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use protobuf::Message;
 
 use raftstore2::errors::Error as RaftStoreError;
-use crate::raftstore::store::{RaftRouter, StoreMsg};
+use crate::raftstore::store::RaftRouter;
+use raftstore2::store::msg::StoreMsg;
 use raftstore2::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::IOLimiter;
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};

@@ -37,7 +37,7 @@ use engine::sst_importer::SSTImporter;
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::store::fsm::{RaftPollerBuilder, RaftRouter};
 use raftstore2::store::metrics::*;
-use crate::raftstore::store::msg::PeerMsg;
+use raftstore2::store::msg::PeerMsg;
 use tikv_misc::raftstore_callback::Callback;
 use crate::raftstore::store::peer::Peer;
 use crate::raftstore::store::peer_storage::{self, write_initial_apply_state, write_peer_state};
