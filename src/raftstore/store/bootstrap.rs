@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_misc::keys;
-use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
+use tikv_misc::peer_storage::{write_initial_apply_state, write_initial_raft_state};
 use tikv_misc::store_util::new_peer;
 use raftstore2::Result;
 use engine::rocks;
