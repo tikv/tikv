@@ -2240,6 +2240,7 @@ dependencies = [
  "test_storage 0.0.1",
  "test_util 0.0.1",
  "tikv_alloc 0.1.0",
+ "tikv_misc 0.0.1",
  "tikv_util 0.1.0",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
  "tipb 0.0.1 (git+https://github.com/pingcap/tipb.git)",
@@ -2268,6 +2269,10 @@ dependencies = [
  "tcmalloc 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "tikv_misc"
+version = "0.0.1"
 
 [[package]]
 name = "tikv_util"
