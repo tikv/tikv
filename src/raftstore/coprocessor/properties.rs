@@ -1,9 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp;
-use std::collections::Bound::{Included, Unbounded};
-use std::collections::{BTreeMap, HashMap};
-use std::io::Read;
+use std::collections::HashMap;
 use std::u64;
 
 use raftstore2::store::keys;
@@ -12,7 +10,6 @@ use crate::storage::types::Key;
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
 };
-use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::Result;
 
 pub use raftstore2::coprocessor::properties::{
@@ -30,10 +27,7 @@ use raftstore2::coprocessor::properties::{
     PROP_MAX_ROW_VERSIONS,
     PROP_ROWS_INDEX,
     PROP_ROWS_INDEX_DISTANCE,
-    PROP_RANGE_INDEX,
 };
-
-use raftstore2::coprocessor::properties::get_entry_size;
 
 #[derive(Clone, Debug, Default)]
 pub struct MvccProperties {
@@ -218,205 +212,7 @@ impl RowsProperties {
 
 pub use raftstore2::coprocessor::properties::{SizeProperties, SizePropertiesCollector, SizePropertiesCollectorFactory, UserProperties, DecodeProperties};
 pub use raftstore2::coprocessor::properties::{RangeOffsetKind, RangeOffsets};
-
-#[derive(Debug, Default)]
-pub struct RangeProperties {
-    pub offsets: BTreeMap<Vec<u8>, RangeOffsets>,
-}
-
-impl RangeProperties {
-    pub fn encode(&self) -> UserProperties {
-        let mut buf = Vec::with_capacity(1024);
-        for (k, offsets) in &self.offsets {
-            buf.encode_u64(k.len() as u64).unwrap();
-            buf.extend(k);
-            buf.encode_u64(offsets.size).unwrap();
-            buf.encode_u64(offsets.keys).unwrap();
-        }
-        let mut props = UserProperties::new();
-        props.encode(PROP_RANGE_INDEX, buf);
-        props
-    }
-
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
-        match RangeProperties::decode_from_range_properties(props) {
-            Ok(res) => return Ok(res),
-            Err(e) => debug!("old_version:decode to RangeProperties failed with err: {:?}, try to decode to SizeProperties", e),
-        }
-        SizeProperties::decode(props).map(|res| res.into())
-    }
-
-    fn decode_from_range_properties<T: DecodeProperties>(props: &T) -> Result<RangeProperties> {
-        let mut res = RangeProperties::default();
-        let mut buf = props.decode(PROP_RANGE_INDEX)?;
-        while !buf.is_empty() {
-            let klen = number::decode_u64(&mut buf)?;
-            let mut k = vec![0; klen as usize];
-            buf.read_exact(&mut k)?;
-            let mut offsets = RangeOffsets::default();
-            offsets.size = number::decode_u64(&mut buf)?;
-            offsets.keys = number::decode_u64(&mut buf)?;
-            res.offsets.insert(k, offsets);
-        }
-        Ok(res)
-    }
-
-    pub fn get_approximate_size_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Size, start, end)
-    }
-
-    pub fn get_approximate_keys_in_range(&self, start: &[u8], end: &[u8]) -> u64 {
-        self.get_approximate_distance_in_range(RangeOffsetKind::Keys, start, end)
-    }
-
-    fn get_approximate_distance_in_range(
-        &self,
-        kind: RangeOffsetKind,
-        start: &[u8],
-        end: &[u8],
-    ) -> u64 {
-        assert!(start <= end);
-        if start == end {
-            return 0;
-        }
-
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(start)));
-        let start_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
-        };
-        let range = self.offsets.range::<[u8], _>((Unbounded, Included(end)));
-        let end_offset = match range.last() {
-            Some((_, v)) => v.get(kind),
-            None => 0,
-        };
-        if end_offset < start_offset {
-            panic!(
-                "start {:?} end {:?} start_offset {} end_offset {}",
-                start, end, start_offset, end_offset
-            );
-        }
-        end_offset - start_offset
-    }
-
-    pub fn smallest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().next().map(|(key, _)| key.clone())
-    }
-
-    pub fn largest_key(&self) -> Option<Vec<u8>> {
-        self.offsets.iter().last().map(|(key, _)| key.clone())
-    }
-}
-
-impl From<SizeProperties> for RangeProperties {
-    fn from(p: SizeProperties) -> RangeProperties {
-        let mut res = RangeProperties::default();
-        for (key, size_handle) in p.index_handles.0 {
-            let mut range = RangeOffsets::default();
-            range.size = size_handle.offset;
-            res.offsets.insert(key, range);
-        }
-        res
-    }
-}
-
-pub struct RangePropertiesCollector {
-    props: RangeProperties,
-    last_offsets: RangeOffsets,
-    last_key: Vec<u8>,
-    cur_offsets: RangeOffsets,
-    prop_size_index_distance: u64,
-    prop_keys_index_distance: u64,
-}
-
-impl Default for RangePropertiesCollector {
-    fn default() -> Self {
-        RangePropertiesCollector {
-            props: RangeProperties::default(),
-            last_offsets: RangeOffsets::default(),
-            last_key: vec![],
-            cur_offsets: RangeOffsets::default(),
-            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-        }
-    }
-}
-
-impl RangePropertiesCollector {
-    pub fn new(prop_size_index_distance: u64, prop_keys_index_distance: u64) -> Self {
-        RangePropertiesCollector {
-            prop_size_index_distance,
-            prop_keys_index_distance,
-            ..Default::default()
-        }
-    }
-
-    fn size_in_last_range(&self) -> u64 {
-        self.cur_offsets.size - self.last_offsets.size
-    }
-
-    fn keys_in_last_range(&self) -> u64 {
-        self.cur_offsets.keys - self.last_offsets.keys
-    }
-
-    fn insert_new_point(&mut self, key: Vec<u8>) {
-        self.last_offsets = self.cur_offsets.clone();
-        self.props.offsets.insert(key, self.cur_offsets.clone());
-    }
-}
-
-impl TablePropertiesCollector for RangePropertiesCollector {
-    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
-        // size
-        let size = match get_entry_size(value, entry_type) {
-            Ok(entry_size) => key.len() as u64 + entry_size,
-            Err(_) => return,
-        };
-        self.cur_offsets.size += size;
-        // keys
-        self.cur_offsets.keys += 1;
-        // Add the start key for convenience.
-        if self.last_key.is_empty()
-            || self.size_in_last_range() >= self.prop_size_index_distance
-            || self.keys_in_last_range() >= self.prop_keys_index_distance
-        {
-            self.insert_new_point(key.to_owned());
-        }
-        self.last_key.clear();
-        self.last_key.extend_from_slice(key);
-    }
-
-    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        if self.size_in_last_range() > 0 || self.keys_in_last_range() > 0 {
-            let key = self.last_key.clone();
-            self.insert_new_point(key);
-        }
-        self.props.encode().0
-    }
-}
-
-pub struct RangePropertiesCollectorFactory {
-    pub prop_size_index_distance: u64,
-    pub prop_keys_index_distance: u64,
-}
-
-impl Default for RangePropertiesCollectorFactory {
-    fn default() -> Self {
-        RangePropertiesCollectorFactory {
-            prop_size_index_distance: DEFAULT_PROP_SIZE_INDEX_DISTANCE,
-            prop_keys_index_distance: DEFAULT_PROP_KEYS_INDEX_DISTANCE,
-        }
-    }
-}
-
-impl TablePropertiesCollectorFactory for RangePropertiesCollectorFactory {
-    fn create_table_properties_collector(&mut self, _: u32) -> Box<dyn TablePropertiesCollector> {
-        Box::new(RangePropertiesCollector::new(
-            self.prop_size_index_distance,
-            self.prop_keys_index_distance,
-        ))
-    }
-}
+pub use raftstore2::coprocessor::properties::{RangeProperties, RangePropertiesCollector, RangePropertiesCollectorFactory};
 
 pub fn get_range_entries_and_versions(
     engine: &DB,
