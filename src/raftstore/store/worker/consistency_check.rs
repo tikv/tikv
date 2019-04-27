@@ -6,13 +6,15 @@ use byteorder::{BigEndian, WriteBytesExt};
 use crc::crc32::{self, Digest, Hasher32};
 use kvproto::metapb::Region;
 
-use crate::raftstore::store::{keys, CasualMessage, CasualRouter};
+use tikv_misc::keys;
+use raftstore2::store::msg::CasualMessage;
+use raftstore2::store::transport::CasualRouter;
 use engine::CF_RAFT;
 use engine::{Iterable, Peekable, Snapshot};
 use tikv_util::worker::Runnable;
 
-use super::metrics::*;
-use crate::raftstore::store::metrics::*;
+use raftstore2::store::worker::metrics::*;
+use raftstore2::store::metrics::*;
 
 /// Consistency checking task.
 pub enum Task {
