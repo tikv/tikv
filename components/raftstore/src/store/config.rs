@@ -4,8 +4,8 @@ use std::time::Duration;
 use std::u64;
 use time::Duration as TimeDuration;
 
-use raftstore2::coprocessor::config as cop_config;
-use raftstore2::Result;
+use crate::coprocessor::config as cop_config;
+use crate::Result;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
