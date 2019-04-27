@@ -48,7 +48,7 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
-pub use tikv_misc::storage_types::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+pub use tikv_misc::mvcc_types::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -56,7 +56,7 @@ pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
 
-pub use tikv_misc::storage_types::Mutation;
+pub use tikv_misc::mvcc_types::Mutation;
 
 pub enum StorageCb {
     Boolean(Callback<()>),

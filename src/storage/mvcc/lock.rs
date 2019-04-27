@@ -1,11 +1,30 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_misc::storage_types::Value;
-use super::{Error, Result};
-use tikv_misc::storage_types::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use std::io;
+use tikv_misc::mvcc_types::Value;
+use tikv_misc::mvcc_types::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Io(err: io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        Codec(err: tikv_util::codec::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
+        BadFormatLock {description("bad format lock data")}
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LockType {

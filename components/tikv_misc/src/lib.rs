@@ -23,6 +23,7 @@ pub mod cop_table_consts;
 pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;
+pub mod mvcc_types;
 pub mod pd_client;
 pub mod pd_errors;
 pub mod pd_task;
@@ -32,7 +33,6 @@ pub mod raftstore_callback;
 pub mod region_snapshot;
 pub mod region_task;
 pub mod storage_key;
-pub mod storage_types;
 pub mod store_info;
 pub mod store_util;
 

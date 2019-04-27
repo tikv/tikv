@@ -6,7 +6,7 @@ use std::u64;
 
 use crate::storage::mvcc::{Lock, Write};
 
-pub use tikv_misc::storage_types::{Value, KvPair};
+pub use tikv_misc::mvcc_types::{Value, KvPair};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.

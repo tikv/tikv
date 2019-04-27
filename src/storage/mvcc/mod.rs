@@ -77,6 +77,22 @@ quick_error! {
     }
 }
 
+impl From<lock::Error> for Error {
+    fn from(e: lock::Error) -> Error {
+        match e {
+            lock::Error::Io(e) => {
+                Error::Io(e)
+            }
+            lock::Error::Codec(e) => {
+                Error::Codec(e)
+            }
+            lock::Error::BadFormatLock => {
+                Error::BadFormatLock
+            }
+        }
+    }
+}
+
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         match *self {
