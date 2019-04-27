@@ -27,7 +27,8 @@ use raft::{
 };
 use time::Timespec;
 
-use crate::pd::{PdTask, INVALID_ID};
+use tikv_misc::pd_task::Task as PdTask;
+use tikv_misc::PD_INVALID_ID as INVALID_ID;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{

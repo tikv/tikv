@@ -33,3 +33,5 @@ pub mod region_snapshot;
 pub mod storage_key;
 pub mod store_info;
 pub mod store_util;
+
+pub const PD_INVALID_ID: u64 = 0;

@@ -21,7 +21,7 @@ pub use pd2::PdFuture;
 pub use pd2::RegionStat;
 pub use pd2::RegionInfo;
 
-pub const INVALID_ID: u64 = 0;
+pub use tikv_misc::PD_INVALID_ID as INVALID_ID;
 
 pub use pd2::PdClient;
 
