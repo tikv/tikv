@@ -12,7 +12,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::SnapshotStatus;
 
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
-use crate::raftstore::store::util::KeysInfoFormatter;
+use tikv_misc::store_util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
 use crate::storage::kv::CompactedEvent;
 use tikv_util::escape;
