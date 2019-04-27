@@ -2,7 +2,6 @@
 
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::collections::{BTreeMap, VecDeque};
-use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
@@ -43,58 +42,7 @@ pub const PENDING_APPLY_CHECK_INTERVAL: u64 = 1_000; // 1000 milliseconds
 
 const CLEANUP_MAX_DURATION: Duration = Duration::from_secs(5);
 
-/// Region related task
-#[derive(Debug)]
-pub enum Task {
-    Gen {
-        region_id: u64,
-        raft_snap: Snapshot,
-        kv_snap: Snapshot,
-        notifier: SyncSender<RaftSnapshot>,
-    },
-    Apply {
-        region_id: u64,
-        status: Arc<AtomicUsize>,
-    },
-    /// Destroy data between [start_key, end_key).
-    ///
-    /// The deletion may and may not succeed.
-    Destroy {
-        region_id: u64,
-        start_key: Vec<u8>,
-        end_key: Vec<u8>,
-    },
-}
-
-impl Task {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
-        Task::Destroy {
-            region_id,
-            start_key,
-            end_key,
-        }
-    }
-}
-
-impl Display for Task {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match *self {
-            Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
-            Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
-            Task::Destroy {
-                region_id,
-                ref start_key,
-                ref end_key,
-            } => write!(
-                f,
-                "Destroy {} [{}, {})",
-                region_id,
-                escape(start_key),
-                escape(end_key)
-            ),
-        }
-    }
-}
+pub use tikv_misc::region_task::Task;
 
 #[derive(Clone)]
 struct StalePeerInfo {
