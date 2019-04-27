@@ -93,6 +93,22 @@ impl From<lock::Error> for Error {
     }
 }
 
+impl From<write::Error> for Error {
+    fn from(e: write::Error) -> Error {
+        match e {
+            write::Error::Io(e) => {
+                Error::Io(e)
+            }
+            write::Error::Codec(e) => {
+                Error::Codec(e)
+            }
+            write::Error::BadFormatWrite => {
+                Error::BadFormatWrite
+            }
+        }
+    }
+}
+
 impl Error {
     pub fn maybe_clone(&self) -> Option<Error> {
         match *self {
