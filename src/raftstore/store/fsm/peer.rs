@@ -27,8 +27,9 @@ use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
-use crate::pd::{PdClient, PdTask};
-use crate::raftstore::{Error, Result};
+use tikv_misc::pd_client::PdClient;
+use crate::pd::PdTask;
+use raftstore2::{Error, Result};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -38,17 +39,18 @@ use tikv_misc::store_util;
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use raftstore2::store::cmd_resp::{bind_term, new_error};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
-use raftstore2::store::fsm::apply::{ApplyMetrics, TaskRes as ApplyTaskRes, ExecResult};
+use raftstore2::store::fsm::apply::{ApplyMetrics, TaskRes as ApplyTaskRes, ExecResult, ChangePeer};
 use crate::raftstore::store::fsm::{
-    apply, ApplyTask, BasicMailbox, ChangePeer, Fsm,
-    RegionProposal,
+    apply, ApplyTask, RegionProposal,
 };
+use raftstore2::store::fsm::batch::Fsm;
+use raftstore2::store::fsm::router::BasicMailbox;
 use tikv_misc::keys::{self, enc_end_key, enc_start_key};
 use raftstore2::store::metrics::*;
 use raftstore2::store::msg::Callback;
 use crate::raftstore::store::peer::{ConsistencyState, Peer, StaleState, WaitApplyResultState};
 use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
-use crate::raftstore::store::transport::Transport;
+use raftstore2::store::transport::Transport;
 use tikv_misc::store_util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
@@ -56,7 +58,7 @@ use crate::raftstore::store::worker::{
 use raftstore2::store::msg::{CasualMessage, PeerMsg, PeerTick, RaftCommand, SignificantMsg, StoreMsg};
 use raftstore2::store::snap::{SnapKey, SnapshotDeleter};
 use tikv_misc::store_util as util;
-use crate::raftstore::store::Config;
+use raftstore2::store::config::Config;
 
 pub struct DestroyPeerJob {
     pub initialized: bool,

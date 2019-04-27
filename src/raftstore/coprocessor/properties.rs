@@ -6,7 +6,7 @@ use std::u64;
 
 use raftstore2::store::keys;
 use crate::storage::mvcc::{Write, WriteType};
-use crate::storage::types::Key;
+use tikv_misc::storage_key::Key;
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
 };

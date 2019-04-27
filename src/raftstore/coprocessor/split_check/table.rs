@@ -11,7 +11,7 @@ use kvproto::pdpb::CheckPolicy;
 use tikv_misc::cop_table_consts as table_consts;
 use crate::coprocessor::codec::table as table_codec;
 use tikv_misc::keys;
-use crate::storage::types::Key;
+use tikv_misc::storage_key::Key;
 use tikv_util::escape;
 use tikv_util::keybuilder::KeyBuilder;
 
