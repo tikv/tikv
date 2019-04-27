@@ -23,9 +23,9 @@ use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
-    ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
-    WriteBatch as RawBatch, DB,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
+    DBIterator, DBOptions, Env, EnvOptions, ExternalSstFileInfo, LRUCacheOptions, ReadOptions,
+    SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
 use tikv_util::config::MB;
@@ -35,6 +35,8 @@ use super::Result;
 use crate::import::stream::SSTFile;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use tikv_util::security::SecurityConfig;
+
+const DISABLED: i32 = i32::MAX;
 
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
@@ -236,13 +238,14 @@ impl SSTWriter {
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt(&cache);
-        default_opts.set_env(Arc::clone(&env));
+        Self::tune_config(Arc::clone(&env), &mut default_opts);
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt(&cache);
-        write_opts.set_env(Arc::clone(&env));
+        Self::tune_config(Arc::clone(&env), &mut write_opts);
+
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
@@ -254,6 +257,12 @@ impl SSTWriter {
             write,
             write_entries: 0,
         })
+    }
+
+    fn tune_config(env: Arc<Env>, cf_opts: &mut ColumnFamilyOptions) {
+        use DBCompressionType::Lz4;
+        cf_opts.set_env(env);
+        cf_opts.compression_per_level(&[Lz4, Lz4, Lz4, Lz4, Lz4, Lz4, Lz4]);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
@@ -330,8 +339,6 @@ pub fn get_approximate_ranges(
 }
 
 fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
-    const DISABLED: i32 = i32::MAX;
-
     let mut db_opts = DBOptions::new();
     db_opts.create_if_missing(true);
     db_opts.enable_statistics(false);
