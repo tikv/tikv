@@ -6,12 +6,13 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use super::metrics::*;
-use super::{
-    Coprocessor, CoprocessorHost, ObserverContext, RegionChangeEvent, RegionChangeObserver,
-    RoleObserver,
+use raftstore2::coprocessor::metrics::*;
+use raftstore2::coprocessor::{
+    Coprocessor, ObserverContext, RegionChangeEvent,
+    RegionChangeObserver, RoleObserver,
 };
-use crate::raftstore::store::keys::{data_end_key, data_key};
+use super::CoprocessorHost;
+use tikv_misc::keys::{data_end_key, data_key};
 use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use kvproto::metapb::Region;
 use raft::StateRole;

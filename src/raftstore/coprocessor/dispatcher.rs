@@ -8,7 +8,16 @@ use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::StateRole;
 use raftstore2::store::transport::CasualRouter;
 
-use super::*;
+use raftstore2::coprocessor::config::Config;
+use raftstore2::coprocessor::error::Result;
+use raftstore2::coprocessor::{
+    AdminObserver, QueryObserver, RoleObserver, RegionChangeObserver,
+    ObserverContext, RegionChangeEvent,
+};
+use super::{
+    SplitCheckObserver, SplitCheckerHost, SizeCheckObserver,
+    KeysCheckObserver, HalfCheckObserver, TableCheckObserver,
+};
 
 struct Entry<T> {
     priority: u32,
