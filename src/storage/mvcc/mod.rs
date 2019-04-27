@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod lock;
+pub use tikv_misc::mvcc_lock as lock;
 mod metrics;
 mod reader;
 mod txn;
