@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
-use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -17,9 +16,12 @@ use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;
-use tikv_util::escape;
 use tikv_util::timer::Timer;
 use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, Scheduler, Worker};
+pub use tikv_misc::kv_region_info::{
+    RegionInfo, SeekRegionCallback, RegionsMap, RegionRangesMap, RegionInfoQuery, RaftStoreEvent,
+};
+
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -35,67 +37,6 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, S
 /// **Caution**: Note that the information in `RegionInfoAccessor` is not perfectly precise. Some
 /// regions may be temporarily absent while merging or splitting is in progress. Also,
 /// `RegionInfoAccessor`'s information may slightly lag the actual regions on the TiKV.
-
-/// `RaftStoreEvent` Represents events dispatched from raftstore coprocessor.
-#[derive(Debug)]
-enum RaftStoreEvent {
-    CreateRegion { region: Region, role: StateRole },
-    UpdateRegion { region: Region, role: StateRole },
-    DestroyRegion { region: Region },
-    RoleChange { region: Region, role: StateRole },
-}
-
-impl RaftStoreEvent {
-    pub fn get_region(&self) -> &Region {
-        match self {
-            RaftStoreEvent::CreateRegion { region, .. }
-            | RaftStoreEvent::UpdateRegion { region, .. }
-            | RaftStoreEvent::DestroyRegion { region, .. }
-            | RaftStoreEvent::RoleChange { region, .. } => region,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RegionInfo {
-    pub region: Region,
-    pub role: StateRole,
-}
-
-impl RegionInfo {
-    pub fn new(region: Region, role: StateRole) -> Self {
-        Self { region, role }
-    }
-}
-
-type RegionsMap = HashMap<u64, RegionInfo>;
-type RegionRangesMap = BTreeMap<Vec<u8>, u64>;
-
-pub type SeekRegionCallback = Box<dyn Fn(&mut dyn Iterator<Item = &RegionInfo>) + Send>;
-
-/// `RegionInfoAccessor` has its own thread. Queries and updates are done by sending commands to the
-/// thread.
-enum RegionInfoQuery {
-    RaftStoreEvent(RaftStoreEvent),
-    SeekRegion {
-        from: Vec<u8>,
-        callback: SeekRegionCallback,
-    },
-    /// Gets all contents from the collection. Only used for testing.
-    DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
-}
-
-impl Display for RegionInfoQuery {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            RegionInfoQuery::RaftStoreEvent(e) => write!(f, "RaftStoreEvent({:?})", e),
-            RegionInfoQuery::SeekRegion { from, .. } => {
-                write!(f, "SeekRegion(from: {})", escape(from))
-            }
-            RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
-        }
-    }
-}
 
 /// `RegionEventListener` implements observer traits. It simply send the events that we are interested in
 /// through the `scheduler`.
