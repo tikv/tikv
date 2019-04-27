@@ -8,9 +8,17 @@ use kvproto::raft_serverpb::{
 };
 use super::keys;
 
+// When we create a region peer, we should initialize its log term/index > 0,
+// so that we can force the follower peer to sync the snapshot first.
 pub const RAFT_INIT_LOG_TERM: u64 = 5;
 pub const RAFT_INIT_LOG_INDEX: u64 = 5;
+
+pub const JOB_STATUS_PENDING: usize = 0;
+pub const JOB_STATUS_RUNNING: usize = 1;
 pub const JOB_STATUS_CANCELLING: usize = 2;
+pub const JOB_STATUS_CANCELLED: usize = 3;
+pub const JOB_STATUS_FINISHED: usize = 4;
+pub const JOB_STATUS_FAILED: usize = 5;
 
 // When we bootstrap the region we must call this to initialize region local state first.
 pub fn write_initial_raft_state<T: Mutable>(raft_wb: &T, region_id: u64) -> engine::Result<()> {

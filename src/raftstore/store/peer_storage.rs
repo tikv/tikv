@@ -36,12 +36,6 @@ use raftstore2::store::snap::{SnapEntry, SnapKey, SnapshotStatistics};
 use super::snap::SnapManager;
 use crate::config;
 
-// When we create a region peer, we should initialize its log term/index > 0,
-// so that we can force the follower peer to sync the snapshot first.
-pub use raftstore2::store::peer_storage::{
-    RAFT_INIT_LOG_TERM,
-    RAFT_INIT_LOG_INDEX,
-};
 const MAX_SNAP_TRY_CNT: usize = 5;
 const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 
@@ -49,12 +43,16 @@ const RAFT_LOG_MULTI_GET_CNT: u64 = 8;
 const MAX_CACHE_CAPACITY: usize = 1024 - 1;
 const SHRINK_CACHE_CAPACITY: usize = 64;
 
-pub const JOB_STATUS_PENDING: usize = 0;
-pub const JOB_STATUS_RUNNING: usize = 1;
-pub use raftstore2::store::peer_storage::JOB_STATUS_CANCELLING;
-pub const JOB_STATUS_CANCELLED: usize = 3;
-pub const JOB_STATUS_FINISHED: usize = 4;
-pub const JOB_STATUS_FAILED: usize = 5;
+pub use tikv_misc::peer_storage::{
+    RAFT_INIT_LOG_TERM,
+    RAFT_INIT_LOG_INDEX,
+    JOB_STATUS_PENDING,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_CANCELLING,
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_FINISHED,
+    JOB_STATUS_FAILED,
+};
 
 #[derive(Debug)]
 pub enum SnapState {

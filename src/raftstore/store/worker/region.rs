@@ -17,7 +17,7 @@ use engine::{util as engine_util, Engines, Mutable, Peekable, Snapshot};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
 use raft::eraftpb::Snapshot as RaftSnapshot;
 
-use crate::raftstore::store::peer_storage::{
+use tikv_misc::peer_storage::{
     JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
     JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
 };
