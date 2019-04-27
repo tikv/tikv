@@ -5,6 +5,7 @@ extern crate quick_error;
 #[macro_use(
     kv,
     slog_kv,
+    slog_warn,
     slog_debug,
     slog_log,
     slog_record,
@@ -17,6 +18,7 @@ extern crate slog_global;
 #[macro_use]
 extern crate tikv_util;
 
+pub mod compact_listener;
 pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;

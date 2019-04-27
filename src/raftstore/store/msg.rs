@@ -14,7 +14,7 @@ use raft::SnapshotStatus;
 use crate::raftstore::store::fsm::apply::TaskRes as ApplyTaskRes;
 use tikv_misc::store_util::KeysInfoFormatter;
 use crate::raftstore::store::SnapKey;
-use crate::storage::kv::CompactedEvent;
+use tikv_misc::compact_listener::CompactedEvent;
 use tikv_util::escape;
 
 pub use tikv_misc::raftstore_callback::*;

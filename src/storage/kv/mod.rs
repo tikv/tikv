@@ -18,7 +18,6 @@ use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
 
 mod btree_engine;
-mod compact_listener;
 mod cursor_builder;
 mod metrics;
 mod perf_context;
@@ -26,7 +25,7 @@ pub mod raftkv;
 mod rocksdb_engine;
 
 pub use self::btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot};
-pub use self::compact_listener::{CompactedEvent, CompactionListener};
+pub use tikv_misc::compact_listener::{CompactedEvent, CompactionListener};
 pub use self::cursor_builder::CursorBuilder;
 pub use self::perf_context::{PerfStatisticsDelta, PerfStatisticsInstant};
 pub use self::rocksdb_engine::{RocksEngine, RocksSnapshot, TestEngineBuilder};

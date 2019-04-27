@@ -2,7 +2,7 @@
 
 use std::cmp;
 
-use tikv_misc::cop_props::RangeProperties;
+use super::cop_props::RangeProperties;
 use engine::rocks::{CompactionJobInfo, EventListener};
 use tikv_util::collections::HashSet;
 
