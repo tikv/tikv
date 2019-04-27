@@ -12,7 +12,6 @@ use raftstore2::coprocessor::{
 };
 use super::CoprocessorHost;
 use tikv_misc::keys::{data_end_key, data_key};
-use crate::storage::kv::{RegionInfoProvider, Result as EngineResult};
 use kvproto::metapb::Region;
 use raft::StateRole;
 use tikv_util::collections::HashMap;
@@ -21,7 +20,6 @@ use tikv_util::worker::{Builder as WorkerBuilder, Runnable, RunnableWithTimer, S
 pub use tikv_misc::kv_region_info::{
     RegionInfo, SeekRegionCallback, RegionsMap, RegionRangesMap, RegionInfoQuery, RaftStoreEvent,
 };
-
 
 /// `RegionInfoAccessor` is used to collect all regions' information on this TiKV into a collection
 /// so that other parts of TiKV can get region information from it. It registers a observer to
@@ -376,7 +374,7 @@ impl RunnableWithTimer<RegionInfoQuery, ()> for RegionCollector {
 #[derive(Clone)]
 pub struct RegionInfoAccessor {
     worker: Arc<Mutex<Worker<RegionInfoQuery>>>,
-    scheduler: Scheduler<RegionInfoQuery>,
+    pub scheduler: Scheduler<RegionInfoQuery>,
 }
 
 impl RegionInfoAccessor {
@@ -418,18 +416,6 @@ impl RegionInfoAccessor {
             .schedule(RegionInfoQuery::DebugDump(tx))
             .unwrap();
         rx.recv().unwrap()
-    }
-}
-
-impl RegionInfoProvider for RegionInfoAccessor {
-    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> EngineResult<()> {
-        let msg = RegionInfoQuery::SeekRegion {
-            from: from.to_vec(),
-            callback,
-        };
-        self.scheduler
-            .schedule(msg)
-            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
     }
 }
 

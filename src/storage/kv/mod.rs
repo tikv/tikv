@@ -7,12 +7,16 @@ use std::time::Duration;
 use std::{error, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
+use crate::raftstore::coprocessor::region_info_accessor::RegionInfoAccessor;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+pub use tikv_misc::kv_region_info::{
+    RegionInfoQuery,
+};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
@@ -154,6 +158,18 @@ pub trait RegionInfoProvider: Send + Clone + 'static {
     /// Find the first region `r` whose range contains or greater than `from_key` and the peer on
     /// this TiKV satisfies `filter(peer)` returns true.
     fn seek_region(&self, from: &[u8], filter: SeekRegionCallback) -> Result<()>;
+}
+
+impl RegionInfoProvider for RegionInfoAccessor {
+    fn seek_region(&self, from: &[u8], callback: SeekRegionCallback) -> Result<()> {
+        let msg = RegionInfoQuery::SeekRegion {
+            from: from.to_vec(),
+            callback,
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+    }
 }
 
 macro_rules! near_loop {
