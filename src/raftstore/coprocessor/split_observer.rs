@@ -3,7 +3,7 @@
 use raftstore2::coprocessor::{
     AdminObserver, Coprocessor, ObserverContext, Result as CopResult
 };
-use crate::coprocessor::codec::table;
+use tikv_misc::cop_table_consts as table;
 use tikv_util::codec::bytes::{self, encode_bytes};
 use tikv_util::escape;
 

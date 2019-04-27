@@ -19,6 +19,7 @@ extern crate slog_global;
 extern crate tikv_util;
 
 pub mod compact_listener;
+pub mod cop_table_consts;
 pub mod cop_props;
 pub mod flow_stats;
 pub mod keys;
