@@ -13,7 +13,7 @@ use engine::DB;
 use tikv_util::escape;
 use tikv_util::worker::Runnable;
 
-use super::metrics::COMPACT_RANGE_CF;
+use raftstore2::store::worker::metrics::COMPACT_RANGE_CF;
 use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
