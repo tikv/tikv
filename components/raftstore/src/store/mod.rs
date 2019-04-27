@@ -1,7 +1,7 @@
 pub use self::snap::Error as SnapError;
 
 pub mod fsm;
-pub mod keys;
+pub use tikv_misc::keys;
 pub mod local_metrics;
 pub mod metrics;
 pub use tikv_misc::peer_storage;

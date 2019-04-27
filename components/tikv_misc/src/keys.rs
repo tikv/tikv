@@ -2,7 +2,6 @@
 
 use byteorder::{BigEndian, ByteOrder};
 
-use crate::Result;
 use kvproto::metapb::Region;
 use std::mem;
 use tikv_util::escape;
@@ -219,6 +218,20 @@ pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
         data_key(region_end_key)
     }
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Other(err: Box<dyn std::error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("{:?}", err)
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {

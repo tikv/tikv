@@ -2276,6 +2276,7 @@ dependencies = [
 name = "tikv_misc"
 version = "0.0.1"
 dependencies = [
+ "byteorder 1.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "engine 0.0.1",
  "kvproto 0.0.1 (git+https://github.com/pingcap/kvproto.git)",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",

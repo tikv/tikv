@@ -5,6 +5,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+byteorder = "1.2"
 engine = { path = "../engine" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 protobuf = "~2.0"

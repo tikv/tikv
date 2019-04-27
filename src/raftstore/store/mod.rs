@@ -3,10 +3,10 @@
 pub mod cmd_resp;
 pub mod config;
 pub mod fsm;
-pub use raftstore2::store::keys;
+pub use tikv_misc::keys;
 pub mod msg;
 pub mod transport;
-pub use raftstore2::store::util;
+pub use tikv_misc::store_util as util;
 
 mod bootstrap;
 pub use raftstore2::store::local_metrics;
