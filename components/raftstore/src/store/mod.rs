@@ -11,3 +11,4 @@ pub use tikv_misc::peer_storage;
 pub mod snap;
 pub use tikv_misc::store_util as util;
 pub mod transport;
+pub mod worker;

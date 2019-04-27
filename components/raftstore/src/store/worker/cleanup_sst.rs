@@ -6,10 +6,10 @@ use std::sync::Arc;
 use kvproto::import_sstpb::SSTMeta;
 
 use engine::sst_importer::SSTImporter;
-use crate::pd::PdClient;
+use tikv_misc::pd_client::PdClient;
 use tikv_misc::store_util::is_epoch_stale;
-use raftstore2::store::msg::StoreMsg;
-use raftstore2::store::transport::StoreRouter;
+use crate::store::msg::StoreMsg;
+use crate::store::transport::StoreRouter;
 use tikv_util::worker::Runnable;
 
 pub enum Task {
