@@ -33,21 +33,24 @@ use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
-use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
+use tikv_misc::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
-use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
-use crate::raftstore::{Error, Result};
+use raftstore2::store::config::Config;
+use tikv_misc::raftstore_callback::{Callback, ReadResponse};
+use tikv_misc::region_snapshot::RegionSnapshot;
+use raftstore2::{Error, Result};
 use tikv_util::collections::HashMap;
 use tikv_util::time::{duration_to_sec, monotonic_raw_now};
 use tikv_util::worker::Scheduler;
 use tikv_util::{escape, MustConsumeVec};
 
-use super::cmd_resp;
-use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
-use super::metrics::*;
-use super::peer_storage::{write_peer_state, ApplySnapResult, InvokeContext, PeerStorage};
-use super::transport::Transport;
-use super::util::{self, check_region_epoch, is_initial_msg, Lease, LeaseState};
+use raftstore2::store::cmd_resp;
+use raftstore2::store::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
+use raftstore2::store::metrics::*;
+use tikv_misc::peer_storage::write_peer_state;
+use super::peer_storage::{ApplySnapResult, InvokeContext, PeerStorage};
+use raftstore2::store::transport::Transport;
+use tikv_misc::store_util::{self as util, check_region_epoch, is_initial_msg, Lease, LeaseState};
 use super::DestroyPeerJob;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
