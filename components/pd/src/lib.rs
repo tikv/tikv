@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
-extern crate quick_error;
-#[macro_use]
 extern crate serde_derive;
 #[macro_use(
     kv,
@@ -32,7 +30,7 @@ pub use self::errors::{Error, Result};
 
 pub mod client;
 pub mod config;
-pub mod errors;
+pub use tikv_misc::pd_errors as errors;
 pub mod metrics;
 pub mod raft;
 pub mod stats;
