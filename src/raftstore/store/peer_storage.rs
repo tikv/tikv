@@ -26,11 +26,11 @@ use raftstore2::errors::storage_error;
 use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
-use crate::raftstore::Result;
+use raftstore2::Result;
 use tikv_util::worker::Scheduler;
 
-use super::keys::{self, enc_end_key, enc_start_key};
-use super::metrics::*;
+use tikv_misc::keys::{self, enc_end_key, enc_start_key};
+use raftstore2::store::metrics::*;
 use super::worker::RegionTask;
 use super::{SnapEntry, SnapKey, SnapManager, SnapshotStatistics};
 use crate::config;
