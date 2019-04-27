@@ -4,8 +4,8 @@ use std::cmp;
 use std::collections::HashMap;
 use std::u64;
 
-use raftstore2::store::keys;
-use crate::storage::mvcc::{Write, WriteType};
+use tikv_misc::keys;
+use tikv_misc::mvcc_write::{Write, WriteType};
 use tikv_misc::storage_key::Key;
 use engine::rocks::{
     CFHandle, DBEntryType, Range, TablePropertiesCollector, TablePropertiesCollectorFactory, DB,
