@@ -29,5 +29,6 @@ pub mod peer_storage;
 pub mod raftstore_bootstrap;
 pub mod raftstore_callback;
 pub mod region_snapshot;
+pub mod storage_key;
 pub mod store_info;
 pub mod store_util;
