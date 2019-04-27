@@ -2,7 +2,7 @@
 
 use std::error;
 
-use crate::raftstore::Error;
+use crate::Error;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 
 pub fn bind_term(resp: &mut RaftCmdResponse, term: u64) {

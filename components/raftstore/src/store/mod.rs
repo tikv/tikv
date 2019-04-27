@@ -1,5 +1,6 @@
 pub use self::snap::Error as SnapError;
 
+pub mod cmd_resp;
 pub mod fsm;
 pub use tikv_misc::keys;
 pub mod local_metrics;

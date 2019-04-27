@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod cmd_resp;
+pub use raftstore2::store::cmd_resp;
 pub mod config;
 pub mod fsm;
 pub use tikv_misc::keys;
