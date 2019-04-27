@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Reverse;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Formatter};
 use std::fs::{self, Metadata};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, ErrorKind, Read, Write};
@@ -28,7 +28,6 @@ use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::Message;
 use protobuf::RepeatedField;
-use raft::eraftpb::Snapshot as RaftSnapshot;
 
 use raftstore2::errors::Error as RaftStoreError;
 use tikv_misc::keys::{self, enc_end_key, enc_start_key};
@@ -82,47 +81,7 @@ pub fn check_abort(status: &AtomicUsize) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct SnapKey {
-    pub region_id: u64,
-    pub term: u64,
-    pub idx: u64,
-}
-
-impl SnapKey {
-    #[inline]
-    pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
-        SnapKey {
-            region_id,
-            term,
-            idx,
-        }
-    }
-
-    pub fn from_region_snap(region_id: u64, snap: &RaftSnapshot) -> SnapKey {
-        let index = snap.get_metadata().get_index();
-        let term = snap.get_metadata().get_term();
-        SnapKey::new(region_id, term, index)
-    }
-
-    pub fn from_snap(snap: &RaftSnapshot) -> io::Result<SnapKey> {
-        let mut snap_data = RaftSnapshotData::new();
-        if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
-            return Err(io::Error::new(ErrorKind::Other, e));
-        }
-
-        Ok(SnapKey::from_region_snap(
-            snap_data.get_region().get_id(),
-            snap,
-        ))
-    }
-}
-
-impl Display for SnapKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)
-    }
-}
+pub use raftstore2::store::snap::SnapKey;
 
 #[derive(Default)]
 pub struct SnapshotStatistics {
