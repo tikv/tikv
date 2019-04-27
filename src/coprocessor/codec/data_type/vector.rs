@@ -675,7 +675,10 @@ impl_as_slice! { DateTime, as_date_time_slice }
 impl_as_slice! { Duration, as_duration_slice }
 impl_as_slice! { Json, as_json_slice }
 
+/// Additional `VectorValue` methods available via generics. These methods support different
+/// concrete types but have same names and should be specified via the generic parameter type.
 pub trait VectorValueExt<T: Evaluable> {
+    /// The generic version for `VectorValue::push_xxx()`.
     fn push(&mut self, v: Option<T>);
 }
 
@@ -723,20 +726,6 @@ impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
-        impl<'a> From<&'a [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
-        impl<'a> From<&'a mut [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a mut [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
         impl From<Vec<Option<$ty>>> for VectorValue {
             #[inline]
             fn from(s: Vec<Option<$ty>>) -> VectorValue {
@@ -946,10 +935,6 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Some(1.0)];
-        let column = VectorValue::from(slice);
-        assert_eq!(column.len(), 2);
-        assert_eq!(column.as_real_slice(), slice);
-
         let vec = slice.to_vec();
         let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);

@@ -605,7 +605,7 @@ mod tests {
     use super::*;
     use crate::rocks::{
         ColumnFamilyOptions, DBOptions, EnvOptions, IngestExternalFileOptions, SstFileWriter,
-        Writable, DB,
+        TitanDBOptions, Writable, DB,
     };
     use crate::CF_DEFAULT;
     use tempdir::TempDir;
@@ -734,8 +734,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_prepare_sst_for_ingestion() {
+    fn check_prepare_sst_for_ingestion(
+        db_opts: Option<DBOptions>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
+    ) {
         let path = TempDir::new("_util_rocksdb_test_prepare_sst_for_ingestion").expect("");
         let path_str = path.path().to_str().unwrap();
 
@@ -746,7 +748,7 @@ mod tests {
         let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
 
         let cf_name = "default";
-        let db = new_engine(path_str, None, &[cf_name], None).unwrap();
+        let db = new_engine(path_str, db_opts, &[cf_name], cf_opts).unwrap();
         let cf = db.cf_handle(cf_name).unwrap();
         let mut ingest_opts = IngestExternalFileOptions::new();
         ingest_opts.move_files(true);
@@ -781,6 +783,26 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, cf, &kvs);
         assert!(!sst_clone.exists());
+    }
+
+    #[test]
+    fn test_prepare_sst_for_ingestion() {
+        check_prepare_sst_for_ingestion(None, None);
+    }
+
+    #[test]
+    fn test_prepare_sst_for_ingestion_titan() {
+        let mut db_opts = DBOptions::new();
+        let mut titan_opts = TitanDBOptions::new();
+        // Force all values write out to blob files.
+        titan_opts.set_min_blob_size(0);
+        db_opts.set_titandb_options(&titan_opts);
+        let mut cf_opts = ColumnFamilyOptions::new();
+        cf_opts.set_titandb_options(&titan_opts);
+        check_prepare_sst_for_ingestion(
+            Some(db_opts),
+            Some(vec![CFOptions::new("default", cf_opts)]),
+        );
     }
 
     #[test]

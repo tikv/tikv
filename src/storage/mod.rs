@@ -18,7 +18,7 @@ use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
 use engine::rocks::DB;
-use engine::IterOption;
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
@@ -1335,7 +1335,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.into_encoded());
+            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1343,7 +1343,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1373,7 +1373,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_lower_bound(end.into_encoded());
+            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1381,7 +1381,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
