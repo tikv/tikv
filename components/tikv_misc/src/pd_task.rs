@@ -1,10 +1,10 @@
 use kvproto::metapb;
 use kvproto::pdpb;
 use std::fmt::{self, Display, Formatter};
-use tikv_misc::flow_stats::FlowStatistics;
-use tikv_misc::raftstore_callback::Callback;
-use tikv_misc::store_info::StoreInfo;
-use tikv_misc::store_util::KeysInfoFormatter;
+use crate::flow_stats::FlowStatistics;
+use crate::raftstore_callback::Callback;
+use crate::store_info::StoreInfo;
+use crate::store_util::KeysInfoFormatter;
 use tikv_util::collections::HashMap;
 use tikv_util::escape;
 

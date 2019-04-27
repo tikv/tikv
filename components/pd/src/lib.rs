@@ -29,7 +29,6 @@ pub use tikv_misc::pd_errors as errors;
 pub mod metrics;
 pub mod raft;
 pub mod stats;
-pub mod task;
 pub mod util;
 
 pub use tikv_misc::pd_client::*;

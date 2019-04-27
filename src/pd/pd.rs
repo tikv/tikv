@@ -33,7 +33,7 @@ use pd2::raft::{
     new_merge_request,
 };
 
-pub use pd2::task::Task;
+pub use tikv_misc::pd_task::Task;
 pub use pd2::stats::{StoreStat, PeerStat};
 
 pub struct Runner<T: PdClient> {
