@@ -2,7 +2,7 @@
 
 mod compact;
 mod consistency_check;
-mod metrics;
+use raftstore2::store::worker::metrics;
 mod raftlog_gc;
 mod read;
 mod region;
