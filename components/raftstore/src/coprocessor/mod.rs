@@ -11,6 +11,7 @@ pub mod config;
 pub mod error;
 pub mod metrics;
 pub use tikv_misc::cop_props as properties;
+pub mod split_observer;
 
 /// Coprocessor is used to provide a convenient way to inject code to
 /// KV processing.

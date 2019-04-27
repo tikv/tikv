@@ -11,7 +11,7 @@ pub use raftstore2::coprocessor::metrics;
 pub mod properties;
 pub mod region_info_accessor;
 mod split_check;
-pub mod split_observer;
+pub use raftstore2::coprocessor::split_observer;
 
 pub use self::config::Config;
 pub use self::dispatcher::{CoprocessorHost, Registry};

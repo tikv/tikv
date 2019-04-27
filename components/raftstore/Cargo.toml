@@ -13,6 +13,7 @@ engine = { path = "../engine" }
 fail = "0.2"
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "0.2.1"
+log_wrappers = { path = "../log_wrappers" }
 protobuf = "~2.0"
 quick-error = "1.2.2"
 raft = "0.4"

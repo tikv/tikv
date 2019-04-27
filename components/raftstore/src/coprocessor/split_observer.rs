@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use raftstore2::coprocessor::{
+use crate::coprocessor::{
     AdminObserver, Coprocessor, ObserverContext, Result as CopResult
 };
 use tikv_misc::cop_table_consts as table;
