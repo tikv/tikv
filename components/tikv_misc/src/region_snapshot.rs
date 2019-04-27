@@ -5,16 +5,15 @@ use engine::{
     self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
     SyncSnapshot,
 };
-use kvproto::metapb::Region;
+use kvproto::metapb::{self, Region};
 use std::sync::Arc;
 
-use tikv_misc::keys::DATA_PREFIX_KEY;
-use tikv_misc::keys;
-use tikv_misc::store_util as util;
-use crate::raftstore::Result;
+use super::keys::DATA_PREFIX_KEY;
+use super::keys;
+use super::store_util;
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
-use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark, escape};
 
 /// Snapshot of a region.
 ///
@@ -321,7 +320,7 @@ impl RegionIterator {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+        if let Err(e) = store_util::check_key_in_region_inclusive(key, &self.region) {
             CRITICAL_ERROR
                 .with_label_values(&["key not in region"])
                 .inc();
@@ -335,6 +334,66 @@ impl RegionIterator {
         Ok(())
     }
 }
+
+quick_error! {
+    #[derive(Debug)]
+    pub enum Error {
+        Engine(err: engine::Error) {
+            from()
+            description("Engine error")
+            display("Engine {:?}", err)
+        }
+        KeyNotInRegion(key: Vec<u8>, region: metapb::Region) {
+            description("key is not in region")
+            display("key {} is not in region key range [{}, {}) for region {}",
+                    escape(key),
+                    escape(region.get_start_key()),
+                    escape(region.get_end_key()),
+                    region.get_id())
+        }
+        EpochNotMatch(msg: String, new_regions: Vec<metapb::Region>) {
+            description("region epoch is not match")
+            display("EpochNotMatch {}", msg)
+        }
+        StaleCommand {
+            description("stale command")
+        }
+        StoreNotMatch(to_store_id: u64, my_store_id: u64) {
+            description("store is not match")
+            display("to store id {}, mine {}", to_store_id, my_store_id)
+        }
+        Other(err: Box<dyn std::error::Error + Sync + Send>) {
+            from()
+            cause(err.as_ref())
+            description(err.description())
+            display("{:?}", err)
+        }
+    }
+}
+
+impl From<store_util::Error> for Error {
+    fn from(e: store_util::Error) -> Error {
+        match e {
+            store_util::Error::KeyNotInRegion(key, region) => {
+                Error::KeyNotInRegion(key, region)
+            }
+            store_util::Error::EpochNotMatch(msg, new_regions) => {
+                Error::EpochNotMatch(msg, new_regions)
+            }
+            store_util::Error::StaleCommand => {
+                Error::StaleCommand
+            }
+            store_util::Error::StoreNotMatch(to_store_id, my_store_id) => {
+                Error::StoreNotMatch(to_store_id, my_store_id)
+            }
+            store_util::Error::Other(e) => {
+                Error::Other(e)
+            }
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {

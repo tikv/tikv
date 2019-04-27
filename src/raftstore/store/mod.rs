@@ -13,7 +13,7 @@ pub use raftstore2::store::local_metrics;
 pub use raftstore2::store::metrics;
 mod peer;
 mod peer_storage;
-mod region_snapshot;
+pub use tikv_misc::region_snapshot;
 mod snap;
 mod worker;
 

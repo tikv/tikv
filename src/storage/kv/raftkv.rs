@@ -28,6 +28,8 @@ use crate::raftstore::store::{RegionIterator, RegionSnapshot};
 use crate::server::transport::RaftStoreRouter;
 use crate::storage::{self, kv, Key, Value};
 
+use tikv_misc::region_snapshot::Error as SnapError;
+
 quick_error! {
     #[derive(Debug)]
     pub enum Error {
@@ -99,6 +101,12 @@ impl From<Error> for kv::Error {
 impl From<RaftServerError> for kv::Error {
     fn from(e: RaftServerError) -> kv::Error {
         kv::Error::Request(e.into())
+    }
+}
+
+impl From<SnapError> for kv::Error {
+    fn from(e: SnapError) -> kv::Error {
+        RaftServerError::from(e).into()
     }
 }
 

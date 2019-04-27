@@ -16,6 +16,7 @@ use super::coprocessor::Error as CopError;
 use super::store::SnapError;
 use tikv_util::escape;
 use tikv_misc::store_util;
+use tikv_misc::region_snapshot::Error as SnapError2;
 
 pub const RAFTSTORE_IS_BUSY: &str = "raftstore is busy";
 
@@ -204,6 +205,31 @@ impl Into<errorpb::Error> for Error {
         };
 
         errorpb
+    }
+}
+
+impl From<SnapError2> for Error {
+    fn from(e: SnapError2) -> Error {
+        match e {
+            SnapError2::Engine(e) => {
+                Error::Engine(e)
+            }
+            SnapError2::KeyNotInRegion(key, region) => {
+                Error::KeyNotInRegion(key, region).into()
+            }
+            SnapError2::EpochNotMatch(msg, new_regions) => {
+                Error::EpochNotMatch(msg, new_regions).into()
+            }
+            SnapError2::StaleCommand => {
+                Error::StaleCommand.into()
+            }
+            SnapError2::StoreNotMatch(to_store_id, my_store_id) => {
+                Error::StoreNotMatch(to_store_id, my_store_id).into()
+            }
+            SnapError2::Other(e) => {
+                Error::Other(e).into()
+            }
+        }
     }
 }
 
