@@ -32,6 +32,7 @@ pub mod raftstore_callback;
 pub mod region_snapshot;
 pub mod region_task;
 pub mod storage_key;
+pub mod storage_types;
 pub mod store_info;
 pub mod store_util;
 

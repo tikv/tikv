@@ -1,8 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::types::Value;
+use tikv_misc::storage_types::Value;
 use super::{Error, Result};
-use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
+use tikv_misc::storage_types::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};

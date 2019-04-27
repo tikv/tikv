@@ -48,9 +48,7 @@ pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
-// Short value max len must <= 255.
-pub const SHORT_VALUE_MAX_LEN: usize = 64;
-pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub use tikv_misc::storage_types::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -58,25 +56,7 @@ pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
 }
 
-#[derive(Debug, Clone)]
-pub enum Mutation {
-    Put((Key, Value)),
-    Delete(Key),
-    Lock(Key),
-    Insert((Key, Value)), // has a constraint that key should not exist.
-}
-
-#[allow(clippy::match_same_arms)]
-impl Mutation {
-    pub fn key(&self) -> &Key {
-        match *self {
-            Mutation::Put((ref key, _)) => key,
-            Mutation::Delete(ref key) => key,
-            Mutation::Lock(ref key) => key,
-            Mutation::Insert((ref key, _)) => key,
-        }
-    }
-}
+pub use tikv_misc::storage_types::Mutation;
 
 pub enum StorageCb {
     Boolean(Callback<()>),

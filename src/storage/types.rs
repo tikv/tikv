@@ -6,14 +6,7 @@ use std::u64;
 
 use crate::storage::mvcc::{Lock, Write};
 
-/// Value type which is essentially raw bytes.
-pub type Value = Vec<u8>;
-
-/// Key-value pair type.
-///
-/// The value is simply raw bytes; the key is a little bit tricky, which is
-/// encoded bytes.
-pub type KvPair = (Vec<u8>, Value);
+pub use tikv_misc::storage_types::{Value, KvPair};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.

@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::super::types::Value;
+use tikv_misc::storage_types::Value;
 use super::lock::LockType;
 use super::{Error, Result};
 use crate::storage::{SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX};
