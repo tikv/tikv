@@ -20,7 +20,7 @@ use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::import_sstpb::SSTMeta;
-use kvproto::metapb::{Peer as PeerMeta, Region};
+use kvproto::metapb::Region;
 use kvproto::raft_cmdpb::{
     AdminCmdType, AdminRequest, AdminResponse, ChangePeerRequest, CmdType, CommitMergeRequest,
     RaftCmdRequest, RaftCmdResponse, Request, Response,
@@ -142,29 +142,10 @@ impl PendingCmdQueue {
     }
 }
 
-#[derive(Default, Debug)]
-pub struct ChangePeer {
-    pub conf_change: ConfChange,
-    pub peer: PeerMeta,
-    pub region: Region,
-}
-
-#[derive(Debug)]
-pub struct Range {
-    pub cf: String,
-    pub start_key: Vec<u8>,
-    pub end_key: Vec<u8>,
-}
-
-impl Range {
-    fn new(cf: String, start_key: Vec<u8>, end_key: Vec<u8>) -> Range {
-        Range {
-            cf,
-            start_key,
-            end_key,
-        }
-    }
-}
+pub use raftstore2::store::fsm::apply::{
+    ChangePeer,
+    Range,
+};
 
 #[derive(Debug)]
 pub enum ExecResult {
