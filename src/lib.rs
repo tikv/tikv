@@ -4,7 +4,7 @@
 //!
 //! TiKV ("Ti" stands for Titanium) is an open source distributed
 //! transactional key-value database. Unlike other traditional NoSQL
-//! systems, TiKV not only provides classical Key-Value APIs, but also
+//! systems, TiKV not only provides classical key-value APIs, but also
 //! transactional APIs with ACID compliance. TiKV was originally
 //! created to complement [TiDB], a distributed HTAP database
 //! compatible with the MySQL protocol.
