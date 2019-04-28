@@ -67,6 +67,7 @@ pub struct DestroyPeerJob {
 pub enum GroupState {
     Ordered,
     Chaos,
+    PreChaos,
     Indle,
 }
 
@@ -335,6 +336,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             }
             CasualMessage::ClearRegionSize => {
                 self.on_clear_region_size();
+            }
+            CasualMessage::RegionOverlapped => {
+                debug!("start ticking for overlapped"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
+                // Maybe do some safe check first?
+                self.fsm.group_state = GroupState::Chaos;
+                self.register_raft_base_tick();
             }
         }
     }
@@ -1224,6 +1231,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 // check but the peer is already destroyed.
                 regions_to_destroy.push(exist_region.get_id());
                 continue;
+            } else {
+                let _ = self.ctx.router.force_send(
+                    exist_region.get_id(),
+                    PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
+                );
             }
             self.ctx.raft_metrics.message_dropped.region_overlap += 1;
             return Ok(Some(key));
@@ -2646,10 +2658,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if !self.fsm.peer.is_leader() {
                 // If leader is able to receive messge but can't send out any,
                 // follower should be able to start an election.
-                self.fsm.group_state = GroupState::Chaos;
+                self.fsm.group_state = GroupState::PreChaos;
             } else {
                 self.fsm.has_ready = true;
             }
+        } else if self.fsm.group_state == GroupState::PreChaos {
+            self.fsm.group_state = GroupState::Chaos;
         } else if self.fsm.group_state == GroupState::Chaos {
             // Register tick if it's not yet. Only when it fails to receive ping from leader
             // after two stale check can a follower actually tick.

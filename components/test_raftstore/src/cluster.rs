@@ -338,7 +338,7 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn leader_of_region(&mut self, region_id: u64) -> Option<metapb::Peer> {
-        let mut store_ids = match self.store_ids_of_region(region_id) {
+        let store_ids = match self.store_ids_of_region(region_id) {
             None => return None,
             Some(ids) => ids,
         };
@@ -349,30 +349,42 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         self.reset_leader_of_region(region_id);
-        let mut leaders: HashMap<_, (_, _)> = HashMap::new();
-        let mut retry_cnt = 500;
+        let mut leader = None;
+        let mut leaders = HashMap::new();
 
         let node_ids = self.sim.rl().get_node_ids();
         // For some tests, we stop the node but pd still has this information,
         // and we must skip this.
-        store_ids.retain(|id| node_ids.contains(id));
-        while (leaders.len() != 1 || leaders.values().next().unwrap().1 != store_ids.len())
-            && retry_cnt > 0
-        {
-            leaders.clear();
-            for store_id in &store_ids {
+        let alive_store_ids: Vec<_> = store_ids
+            .iter()
+            .filter(|id| node_ids.contains(id))
+            .cloned()
+            .collect();
+        for _ in 0..500 {
+            for store_id in &alive_store_ids {
                 let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
                     None => continue,
                     Some(l) => l,
                 };
-                leaders.entry(l.get_id()).or_insert_with(|| (l, 0)).1 += 1;
+                leaders
+                    .entry(l.get_id())
+                    .or_insert_with(|| (l, vec![]))
+                    .1
+                    .push(*store_id);
+            }
+            if let Some((_, (l, c))) = leaders.drain().max_by_key(|(_, (_, c))| c.len()) {
+                // It may be a step down leader.
+                if c.contains(&l.get_store_id()) {
+                    leader = Some(l);
+                    if c.len() > store_ids.len() / 2 {
+                        break;
+                    }
+                }
             }
             sleep_ms(10);
-            retry_cnt -= 1;
         }
 
-        if !leaders.is_empty() {
-            let (_, (l, _)) = leaders.into_iter().max_by_key(|(_, (_, c))| *c).unwrap();
+        if let Some(l) = leader {
             self.leaders.insert(region_id, l);
         }
 
@@ -527,9 +539,9 @@ impl<T: Simulator> Cluster<T> {
             self.reset_leader_of_region(region_id);
             return true;
         }
+        // Not match epoch can be introduced by wrong leader.
         if err.has_epoch_not_match() {
             self.reset_leader_of_region(region_id);
-            return true;
         }
         if !err.has_not_leader() {
             return false;
@@ -775,19 +787,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
-        let mut try_cnt = 0;
+        let timer = Instant::now();
         loop {
             self.reset_leader_of_region(region_id);
             if self.leader_of_region(region_id) == Some(leader.clone()) {
                 return;
             }
-            if try_cnt > 250 {
+            if timer.elapsed() > Duration::from_secs(5) {
                 panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
             }
-            if try_cnt % 50 == 0 {
-                self.transfer_leader(region_id, leader.clone());
-            }
-            try_cnt += 1;
+            self.transfer_leader(region_id, leader.clone());
         }
     }
 
