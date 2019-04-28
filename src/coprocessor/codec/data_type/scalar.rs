@@ -17,7 +17,7 @@ use super::*;
 ///
 /// TODO: Once we removed the `Option<..>` wrapper, it will be much like `Datum`. At that time,
 /// we only need to preserve one of them.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ScalarValue {
     Int(Option<super::Int>),
     Real(Option<super::Real>),
@@ -97,3 +97,29 @@ impl_as_ref! { Bytes, as_bytes }
 impl_as_ref! { DateTime, as_date_time }
 impl_as_ref! { Duration, as_duration }
 impl_as_ref! { Json, as_json }
+
+macro_rules! impl_from {
+    ($ty:tt) => {
+        impl From<Option<$ty>> for ScalarValue {
+            #[inline]
+            fn from(s: Option<$ty>) -> ScalarValue {
+                ScalarValue::$ty(s)
+            }
+        }
+
+        impl From<$ty> for ScalarValue {
+            #[inline]
+            fn from(s: $ty) -> ScalarValue {
+                ScalarValue::$ty(Some(s))
+            }
+        }
+    };
+}
+
+impl_from! { Int }
+impl_from! { Real }
+impl_from! { Decimal }
+impl_from! { Bytes }
+impl_from! { DateTime }
+impl_from! { Duration }
+impl_from! { Json }

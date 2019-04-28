@@ -50,9 +50,9 @@ pub mod config;
 pub mod file;
 pub mod future;
 pub mod future_pool;
-pub mod io_limiter;
 #[macro_use]
 pub mod macros;
+pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
@@ -100,6 +100,10 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertClone: Clone {}
+
+pub trait AssertCopy: Copy {}
 
 pub trait AssertSend: Send {}
 

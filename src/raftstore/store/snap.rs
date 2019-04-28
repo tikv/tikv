@@ -35,10 +35,10 @@ use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
+use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
 use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use tikv_util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -1628,7 +1628,7 @@ pub mod tests {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
             if p1.is_some() {
                 let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                if !p2.is_some() {
+                if p2.is_none() {
                     panic!("cf {}: expect key {:?} has value", cf, key);
                 }
                 let p1 = p1.unwrap();
