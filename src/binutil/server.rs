@@ -19,6 +19,7 @@ use crate::server::{create_raft_storage, Node, Server};
 use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use engine::Engines;
 use fs2::FileExt;
 use std::fs::File;
@@ -28,78 +29,62 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use std::usize;
 use tikv_util::check_environment_variables;
-use tikv_util::security::{self, SecurityManager};
+use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
 use tikv_util::worker::{Builder, FutureWorker};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
-/// Various sanity-checks and logging before running a server.
-///
-/// Warnings are logged and fatal errors exit.
-///
-/// # Logs
-///
-/// The presense of these environment variables that affect the database
-/// behavior is logged.
-///
-/// - `GRPC_POLL_STRATEGY`
-/// - `http_proxy` and `https_proxy`
-///
-/// # Warnings
-///
-/// - if `net.core.somaxconn` < 32768
-/// - if `net.ipv4.tcp_syncookies` is not 0
-/// - if `vm.swappiness` is not 0
-/// - if data directories are not on SSDs
-/// - if the "TZ" environment variable is not set on unix
-///
-/// # Fatal errors
-///
-/// If the max open file descriptor limit is not high enough to support
-/// the main database and the raft database.
-pub fn pre_start(cfg: &TiKvConfig) {
-    // Before any startup, check system configuration and environment variables.
-    check_system_config(&cfg);
-    check_environment_variables();
-
-    if cfg.panic_when_unexpected_key_or_data {
-        info!("panic-when-unexpected-key-or-data is on");
-        tikv_util::set_panic_when_unexpected_key_or_data(true);
+pub fn run_tikv(mut config: TiKvConfig) {
+    if let Err(e) = check_and_persist_critical_config(&config) {
+        fatal!("critical config check failed: {}", e);
     }
+
+    // Sets the global logger ASAP.
+    // It is okay to use the config w/o `validate()`,
+    // because `initial_logger()` handles various conditions.
+    initial_logger(&config);
+    tikv_util::set_panic_hook(false, &config.storage.data_dir);
+
+    // Print version information.
+    super::log_tikv_info();
+
+    config.compatible_adjust();
+    if let Err(e) = config.validate() {
+        fatal!("invalid configuration: {}", e.description());
+    }
+    info!(
+        "using config";
+        "config" => serde_json::to_string(&config).unwrap(),
+    );
+
+    config.write_into_metrics();
+    // Do some prepare works before start.
+    pre_start(&config);
+
+    let security_mgr = Arc::new(
+        SecurityManager::new(&config.security)
+            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
+    );
+    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
+        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
+    let cluster_id = pd_client
+        .get_cluster_id()
+        .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
+    if cluster_id == DEFAULT_CLUSTER_ID {
+        fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
+    }
+    config.server.cluster_id = cluster_id;
+    info!(
+        "connect to PD cluster";
+        "cluster_id" => cluster_id
+    );
+
+    let _m = Monitor::default();
+    run_raft_server(pd_client, &config, security_mgr);
 }
 
-fn check_system_config(config: &TiKvConfig) {
-    if let Err(e) = tikv_util::config::check_max_open_fds(
-        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
-    ) {
-        fatal!("{}", e);
-    }
-
-    for e in tikv_util::config::check_kernel() {
-        warn!(
-            "check-kernel";
-            "err" => %e
-        );
-    }
-
-    // Check RocksDB data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
-        warn!(
-            "rocksdb check data dir";
-            "err" => %e
-        );
-    }
-    // Check raft data dir
-    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
-        warn!(
-            "raft check data dir";
-            "err" => %e
-        );
-    }
-}
-
-pub fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
+fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<SecurityManager>) {
     let store_path = Path::new(&cfg.storage.data_dir);
     let lock_path = store_path.join(Path::new("LOCK"));
     let db_path = store_path.join(Path::new(DEFAULT_ROCKSDB_SUB_DIR));
@@ -145,7 +130,7 @@ pub fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc
 
     // Create encrypted env from cipher file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
-        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
+        match encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
                 "failed to create encrypted env from cipher file, err {:?}",
                 e
@@ -335,51 +320,67 @@ pub fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc
     }
 }
 
-pub fn run_tikv(mut config: TiKvConfig) {
-    if let Err(e) = check_and_persist_critical_config(&config) {
-        fatal!("critical config check failed: {}", e);
+/// Various sanity-checks and logging before running a server.
+///
+/// Warnings are logged and fatal errors exit.
+///
+/// # Logs
+///
+/// The presense of these environment variables that affect the database
+/// behavior is logged.
+///
+/// - `GRPC_POLL_STRATEGY`
+/// - `http_proxy` and `https_proxy`
+///
+/// # Warnings
+///
+/// - if `net.core.somaxconn` < 32768
+/// - if `net.ipv4.tcp_syncookies` is not 0
+/// - if `vm.swappiness` is not 0
+/// - if data directories are not on SSDs
+/// - if the "TZ" environment variable is not set on unix
+///
+/// # Fatal errors
+///
+/// If the max open file descriptor limit is not high enough to support
+/// the main database and the raft database.
+fn pre_start(cfg: &TiKvConfig) {
+    // Before any startup, check system configuration and environment variables.
+    check_system_config(&cfg);
+    check_environment_variables();
+
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
+    }
+}
+
+fn check_system_config(config: &TiKvConfig) {
+    if let Err(e) = tikv_util::config::check_max_open_fds(
+        RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
+    ) {
+        fatal!("{}", e);
     }
 
-    // Sets the global logger ASAP.
-    // It is okay to use the config w/o `validate()`,
-    // because `initial_logger()` handles various conditions.
-    initial_logger(&config);
-    tikv_util::set_panic_hook(false, &config.storage.data_dir);
-
-    // Print version information.
-    super::log_tikv_info();
-
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e.description());
+    for e in tikv_util::config::check_kernel() {
+        warn!(
+            "check-kernel";
+            "err" => %e
+        );
     }
-    info!(
-        "using config";
-        "config" => serde_json::to_string(&config).unwrap(),
-    );
 
-    config.write_into_metrics();
-    // Do some prepare works before start.
-    pre_start(&config);
-
-    let security_mgr = Arc::new(
-        SecurityManager::new(&config.security)
-            .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e.description())),
-    );
-    let pd_client = RpcClient::new(&config.pd, Arc::clone(&security_mgr))
-        .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e));
-    let cluster_id = pd_client
-        .get_cluster_id()
-        .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
-    if cluster_id == DEFAULT_CLUSTER_ID {
-        fatal!("cluster id can't be {}", DEFAULT_CLUSTER_ID);
+    // Check RocksDB data dir
+    if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
+        warn!(
+            "rocksdb check data dir";
+            "err" => %e
+        );
     }
-    config.server.cluster_id = cluster_id;
-    info!(
-        "connect to PD cluster";
-        "cluster_id" => cluster_id
-    );
-
-    let _m = Monitor::default();
-    run_raft_server(pd_client, &config, security_mgr);
+    // Check raft data dir
+    if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
+        warn!(
+            "raft check data dir";
+            "err" => %e
+        );
+    }
 }

@@ -473,6 +473,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
         ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
         ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
+        ErrorType::REGION_NOT_FOUND => Err(Error::RegionNotFound(vec![])),
         ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
         ErrorType::OK => Ok(()),
     }
