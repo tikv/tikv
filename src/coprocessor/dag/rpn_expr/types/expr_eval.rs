@@ -1157,7 +1157,7 @@ mod tests {
             }
         }
 
-        fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
             // FnA: CastIntAsInt
             // FnB: CastIntAsReal
             // FnC: CastIntAsString
