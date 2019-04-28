@@ -22,9 +22,10 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
+pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
-mod builder;
+pub mod builder;
 pub mod executor;
 pub mod expr;
 pub mod handler;

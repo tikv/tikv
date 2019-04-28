@@ -6,7 +6,7 @@
 #![feature(cell_update)]
 #![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
-#![feature(range_contains)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate bitflags;
