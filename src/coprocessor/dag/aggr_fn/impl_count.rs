@@ -148,3 +148,55 @@ impl super::AggrFunctionStateResultPartial<Vec<Option<Int>>> for AggrFnStateCoun
 }
 
 impl super::AggrFunctionState for AggrFnStateCount {}
+
+#[cfg(test)]
+mod tests {
+    use cop_datatype::EvalType;
+
+    use super::super::AggrFunction;
+    use super::*;
+
+    #[test]
+    fn test_update() {
+        let mut ctx = EvalContext::default();
+        let function = AggrFnCount;
+        let mut state = function.create_state();
+
+        let mut result = VectorValue::with_capacity(0, EvalType::Int);
+        let mut_inner = AsMut::<Vec<Option<Int>>>::as_mut(&mut result);
+
+        state.push_result(&mut ctx, mut_inner).unwrap();
+        assert_eq!(mut_inner.as_slice(), &[Some(0)]);
+
+        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+
+        mut_inner.clear();
+        state.push_result(&mut ctx, mut_inner).unwrap();
+        assert_eq!(mut_inner.as_slice(), &[Some(0)]);
+
+        state.update(&mut ctx, &Some(5.0f64)).unwrap();
+        state.update(&mut ctx, &Option::<Real>::None).unwrap();
+        state.update(&mut ctx, &Some(7i64)).unwrap();
+
+        mut_inner.clear();
+        state.push_result(&mut ctx, mut_inner).unwrap();
+        assert_eq!(mut_inner.as_slice(), &[Some(2)]);
+
+        state.update_repeat(&mut ctx, &Some(3i64), 4).unwrap();
+        state
+            .update_repeat(&mut ctx, &Option::<Int>::None, 7)
+            .unwrap();
+
+        mut_inner.clear();
+        state.push_result(&mut ctx, mut_inner).unwrap();
+        assert_eq!(mut_inner.as_slice(), &[Some(6)]);
+
+        state
+            .update_vector(&mut ctx, &[Some(1i64), None, Some(-1i64)])
+            .unwrap();
+
+        mut_inner.clear();
+        state.push_result(&mut ctx, mut_inner).unwrap();
+        assert_eq!(mut_inner.as_slice(), &[Some(8)]);
+    }
+}
