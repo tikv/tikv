@@ -12,6 +12,7 @@ use crate::coprocessor::codec::table as table_codec;
 use crate::raftstore::store::keys;
 use crate::storage::types::Key;
 use tikv_util::escape;
+use tikv_util::keybuilder::KeyBuilder;
 
 use super::super::{
     Coprocessor, KeyEntry, ObserverContext, Result, SplitCheckObserver, SplitChecker,
@@ -172,7 +173,11 @@ fn last_key_of_region(db: &DB, region: &Region) -> Result<Option<Vec<u8>>> {
     let end_key = keys::enc_end_key(region);
     let mut last_key = None;
 
-    let iter_opt = IterOption::new(Some(start_key), Some(end_key), false);
+    let iter_opt = IterOption::new(
+        Some(KeyBuilder::from_vec(start_key, 0, 0)),
+        Some(KeyBuilder::from_vec(end_key, 0, 0)),
+        false,
+    );
     let mut iter = box_try!(db.new_iterator_cf(CF_WRITE, iter_opt));
 
     // the last key
