@@ -118,7 +118,7 @@ impl<C: Clock> SpeedLimiter<C> {
             drop(lock);
 
             let sleep_seconds = 1.0 - value / self.speed_limit;
-            let sleep_dur = Duration::from_float_secs(sleep_seconds);
+            let sleep_dur = Duration::from_secs_f64(sleep_seconds);
             let should_log = sleep_dur > LOG_THRESHOLD;
             if should_log {
                 // Don't bother with short waits, avoiding flooding the log with
