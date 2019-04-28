@@ -97,7 +97,7 @@ impl RpnFnUnaryNot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
@@ -115,7 +115,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(RpnFnLogicalAnd)
+                .evaluate(ScalarFuncSig::LogicalAnd)
                 .unwrap();
             assert_eq!(output, expect_output);
         }
@@ -135,7 +135,7 @@ mod tests {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
-                .evaluate(RpnFnLogicalOr)
+                .evaluate(ScalarFuncSig::LogicalOr)
                 .unwrap();
             assert_eq!(output, expect_output);
         }

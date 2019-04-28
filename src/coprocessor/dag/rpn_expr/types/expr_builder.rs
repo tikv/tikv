@@ -150,6 +150,12 @@ impl RpnExpressionBuilder {
     }
 }
 
+impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
+    fn as_ref(&self) -> &[RpnExpressionNode] {
+        self.0.as_ref()
+    }
+}
+
 /// Transforms eval tree nodes into RPN nodes.
 ///
 /// Suppose that we have a function call:

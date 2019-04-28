@@ -95,6 +95,8 @@ impl<F: CmpOp> Comparer for RealComparer<F> {
             (Some(lhs), Some(rhs)) => lhs
                 .partial_cmp(rhs)
                 // FIXME: It is wired to be a codec error.
+                // FIXME: This should never happen because special numbers like NaN and Inf are not
+                // allowed at all.
                 .ok_or_else(|| {
                     Error::from(codec::Error::InvalidDataType(format!(
                         "{} and {} can't be compared",
@@ -259,5 +261,183 @@ impl CmpOp for CmpOpNullEQ {
     #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Equal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::builder::FieldTypeBuilder;
+    use cop_datatype::{FieldTypeFlag, FieldTypeTp};
+    use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+
+    #[test]
+    fn test_compare_signed_int() {
+        let test_cases = vec![
+            (None, None, ScalarFuncSig::GTInt, None),
+            (Some(1), None, ScalarFuncSig::GTInt, None),
+            (Some(-1), None, ScalarFuncSig::GTInt, None),
+            (None, Some(1), ScalarFuncSig::GTInt, None),
+            (None, Some(-1), ScalarFuncSig::GTInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::GTInt, Some(1)),
+            (Some(-1), Some(1), ScalarFuncSig::GTInt, Some(0)),
+            (Some(1), Some(1), ScalarFuncSig::GTInt, Some(0)),
+            (Some(-1), Some(-1), ScalarFuncSig::GTInt, Some(0)),
+            (None, None, ScalarFuncSig::GEInt, None),
+            (Some(1), None, ScalarFuncSig::GEInt, None),
+            (Some(-1), None, ScalarFuncSig::GEInt, None),
+            (None, Some(1), ScalarFuncSig::GEInt, None),
+            (None, Some(-1), ScalarFuncSig::GEInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::GEInt, Some(1)),
+            (Some(-1), Some(1), ScalarFuncSig::GEInt, Some(0)),
+            (Some(1), Some(1), ScalarFuncSig::GEInt, Some(1)),
+            (Some(-1), Some(-1), ScalarFuncSig::GEInt, Some(1)),
+            (None, None, ScalarFuncSig::LTInt, None),
+            (Some(1), None, ScalarFuncSig::LTInt, None),
+            (Some(-1), None, ScalarFuncSig::LTInt, None),
+            (None, Some(1), ScalarFuncSig::LTInt, None),
+            (None, Some(-1), ScalarFuncSig::LTInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::LTInt, Some(0)),
+            (Some(-1), Some(1), ScalarFuncSig::LTInt, Some(1)),
+            (Some(1), Some(1), ScalarFuncSig::LTInt, Some(0)),
+            (Some(-1), Some(-1), ScalarFuncSig::LTInt, Some(0)),
+            (None, None, ScalarFuncSig::LEInt, None),
+            (Some(1), None, ScalarFuncSig::LEInt, None),
+            (Some(-1), None, ScalarFuncSig::LEInt, None),
+            (None, Some(1), ScalarFuncSig::LEInt, None),
+            (None, Some(-1), ScalarFuncSig::LEInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::LEInt, Some(0)),
+            (Some(-1), Some(1), ScalarFuncSig::LEInt, Some(1)),
+            (Some(1), Some(1), ScalarFuncSig::LEInt, Some(1)),
+            (Some(-1), Some(-1), ScalarFuncSig::LEInt, Some(1)),
+            (None, None, ScalarFuncSig::EQInt, None),
+            (Some(1), None, ScalarFuncSig::EQInt, None),
+            (Some(-1), None, ScalarFuncSig::EQInt, None),
+            (None, Some(1), ScalarFuncSig::EQInt, None),
+            (None, Some(-1), ScalarFuncSig::EQInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::EQInt, Some(0)),
+            (Some(-1), Some(1), ScalarFuncSig::EQInt, Some(0)),
+            (Some(1), Some(1), ScalarFuncSig::EQInt, Some(1)),
+            (Some(-1), Some(-1), ScalarFuncSig::EQInt, Some(1)),
+            (None, None, ScalarFuncSig::NEInt, None),
+            (Some(1), None, ScalarFuncSig::NEInt, None),
+            (Some(-1), None, ScalarFuncSig::NEInt, None),
+            (None, Some(1), ScalarFuncSig::NEInt, None),
+            (None, Some(-1), ScalarFuncSig::NEInt, None),
+            (Some(1), Some(-1), ScalarFuncSig::NEInt, Some(1)),
+            (Some(-1), Some(1), ScalarFuncSig::NEInt, Some(1)),
+            (Some(1), Some(1), ScalarFuncSig::NEInt, Some(0)),
+            (Some(-1), Some(-1), ScalarFuncSig::NEInt, Some(0)),
+            (None, None, ScalarFuncSig::NullEQInt, Some(1)),
+            (Some(1), None, ScalarFuncSig::NullEQInt, Some(0)),
+            (Some(-1), None, ScalarFuncSig::NullEQInt, Some(0)),
+            (None, Some(1), ScalarFuncSig::NullEQInt, Some(0)),
+            (None, Some(-1), ScalarFuncSig::NullEQInt, Some(0)),
+            (Some(1), Some(-1), ScalarFuncSig::NullEQInt, Some(0)),
+            (Some(-1), Some(1), ScalarFuncSig::NullEQInt, Some(0)),
+            (Some(1), Some(1), ScalarFuncSig::NullEQInt, Some(1)),
+            (Some(-1), Some(-1), ScalarFuncSig::NullEQInt, Some(1)),
+        ];
+        for (arg0, arg1, sig, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output);
+        }
+    }
+
+    #[test]
+    fn test_compare_int_2() {
+        let test_cases = vec![
+            (Some(5), false, Some(3), false, Ordering::Greater),
+            (
+                Some(std::u64::MAX as i64),
+                false,
+                Some(5),
+                false,
+                Ordering::Less,
+            ),
+            (
+                Some(std::u64::MAX as i64),
+                true,
+                Some((std::u64::MAX - 1) as i64),
+                true,
+                Ordering::Greater,
+            ),
+            (
+                Some(std::u64::MAX as i64),
+                true,
+                Some(5),
+                true,
+                Ordering::Greater,
+            ),
+            (Some(5), true, Some(std::i64::MIN), false, Ordering::Greater),
+            (
+                Some(std::u64::MAX as i64),
+                true,
+                Some(std::i64::MIN),
+                false,
+                Ordering::Greater,
+            ),
+            (Some(5), true, Some(3), false, Ordering::Greater),
+            (Some(std::i64::MIN), false, Some(3), true, Ordering::Less),
+            (
+                Some(5),
+                false,
+                Some(std::u64::MAX as i64),
+                true,
+                Ordering::Less,
+            ),
+            (Some(5), false, Some(3), true, Ordering::Greater),
+        ];
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, ordering) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+
+            for (sig, accept_orderings) in &[
+                (ScalarFuncSig::EQInt, vec![Ordering::Equal]),
+                (
+                    ScalarFuncSig::NEInt,
+                    vec![Ordering::Greater, Ordering::Less],
+                ),
+                (ScalarFuncSig::GTInt, vec![Ordering::Greater]),
+                (
+                    ScalarFuncSig::GEInt,
+                    vec![Ordering::Greater, Ordering::Equal],
+                ),
+                (ScalarFuncSig::LTInt, vec![Ordering::Less]),
+                (ScalarFuncSig::LEInt, vec![Ordering::Less, Ordering::Equal]),
+            ] {
+                let output = RpnFnScalarEvaluator::new()
+                    .push_param_with_field_type(lhs, lhs_field_type.clone())
+                    .push_param_with_field_type(rhs, rhs_field_type.clone())
+                    .evaluate(sig.clone())
+                    .unwrap();
+                if accept_orderings.iter().any(|&x| x == ordering) {
+                    assert_eq!(output, Some(1));
+                } else {
+                    assert_eq!(output, Some(0));
+                }
+            }
+        }
     }
 }
