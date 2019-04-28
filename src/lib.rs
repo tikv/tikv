@@ -6,6 +6,7 @@
 #![feature(cell_update)]
 #![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
+#![feature(duration_float)]
 #![feature(specialization)]
 
 #[macro_use]
