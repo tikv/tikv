@@ -171,6 +171,9 @@ macro_rules! try_opt_or {
     }};
 }
 
+/// A safe panic macro that prevents double panic.
+///
+/// You probably want to use this macro instead of `panic!` in a `drop` method.
 /// It checks whether the current thread is unwinding because of panic. If it is,
 /// log an error message instead of causing double panic.
 #[macro_export]
