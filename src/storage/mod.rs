@@ -51,6 +51,7 @@ pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub const TXN_SIZE_PREFIX: u8 = b't';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -121,6 +122,12 @@ pub enum Command {
         txn_status: HashMap<u64, u64>,
         scan_key: Option<Key>,
         key_locks: Vec<(Key, Lock)>,
+    },
+    ResolveLockLite {
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
     },
     DeleteRange {
         ctx: Context,
@@ -202,6 +209,7 @@ impl Display for Command {
                 start_key, limit, max_ts, ctx
             ),
             Command::ResolveLock { .. } => write!(f, "kv::resolve_lock"),
+            Command::ResolveLockLite { .. } => write!(f, "kv::resolve_lock_lite"),
             Command::DeleteRange {
                 ref ctx,
                 ref start_key,
@@ -281,6 +289,7 @@ impl Command {
             Command::Rollback { .. } => "rollback",
             Command::ScanLock { .. } => "scan_lock",
             Command::ResolveLock { .. } => "resolve_lock",
+            Command::ResolveLockLite { .. } => "resolve_lock_lite",
             Command::DeleteRange { .. } => "delete_range",
             Command::Pause { .. } => "pause",
             Command::MvccByKey { .. } => "key_mvcc",
@@ -296,6 +305,7 @@ impl Command {
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
             Command::Commit { lock_ts, .. } => lock_ts,
             Command::ScanLock { max_ts, .. } => max_ts,
+            Command::ResolveLockLite { start_ts, .. } => start_ts,
             Command::ResolveLock { .. }
             | Command::DeleteRange { .. }
             | Command::Pause { .. }
@@ -311,6 +321,7 @@ impl Command {
             | Command::Rollback { ref ctx, .. }
             | Command::ScanLock { ref ctx, .. }
             | Command::ResolveLock { ref ctx, .. }
+            | Command::ResolveLockLite { ref ctx, .. }
             | Command::DeleteRange { ref ctx, .. }
             | Command::Pause { ref ctx, .. }
             | Command::MvccByKey { ref ctx, .. }
@@ -326,6 +337,7 @@ impl Command {
             | Command::Rollback { ref mut ctx, .. }
             | Command::ScanLock { ref mut ctx, .. }
             | Command::ResolveLock { ref mut ctx, .. }
+            | Command::ResolveLockLite { ref mut ctx, .. }
             | Command::DeleteRange { ref mut ctx, .. }
             | Command::Pause { ref mut ctx, .. }
             | Command::MvccByKey { ref mut ctx, .. }
@@ -360,6 +372,13 @@ impl Command {
                     bytes += lock.0.as_encoded().len();
                 }
             }
+            Command::ResolveLockLite {
+                ref resolve_keys, ..
+            } => {
+                for k in resolve_keys {
+                    bytes += k.as_encoded().len();
+                }
+            }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
             }
@@ -380,6 +399,7 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub txn_size: u64, // How many keys this transaction involved.
 }
 
 impl Options {
@@ -389,6 +409,7 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            txn_size: 0,
         }
     }
 
@@ -1012,6 +1033,25 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Boolean(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock.inc();
+        Ok(())
+    }
+
+    pub fn async_resolve_lock_lite(
+        &self,
+        ctx: Context,
+        start_ts: u64,
+        commit_ts: u64,
+        resolve_keys: Vec<Key>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        let cmd = Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        };
+        self.schedule(cmd, StorageCb::Boolean(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.resolve_lock_lite.inc();
         Ok(())
     }
 

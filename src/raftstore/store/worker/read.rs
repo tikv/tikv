@@ -192,7 +192,8 @@ impl Task {
                     | CmdType::DeleteRange
                     | CmdType::Prewrite
                     | CmdType::IngestSST
-                    | CmdType::Invalid => return false,
+                    | CmdType::Invalid
+                    | CmdType::ReadIndex => return false,
                 }
             }
             true

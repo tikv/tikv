@@ -828,6 +828,19 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn read_index(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _: ReadIndexRequest,
+        sink: UnarySink<ReadIndexResponse>,
+    ) {
+        let f = sink
+            .fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map(|_| ())
+            .map_err(|_| {});
+        ctx.spawn(f);
+    }
+
     fn batch_commands(
         &mut self,
         ctx: RpcContext<'_>,
@@ -1205,6 +1218,7 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.txn_size = req.get_txn_size();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1348,6 +1362,11 @@ fn future_resolve_lock<E: Engine>(
     storage: &Storage<E>,
     mut req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
+    let resolve_keys: Vec<Key> = req
+        .get_keys()
+        .iter()
+        .map(|key| Key::from_raw(key))
+        .collect();
     let txn_status = if req.get_start_version() > 0 {
         HashMap::from_iter(iter::once((
             req.get_start_version(),
@@ -1362,7 +1381,14 @@ fn future_resolve_lock<E: Engine>(
     };
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_resolve_lock(req.take_context(), txn_status, cb);
+    let res = if !resolve_keys.is_empty() {
+        let start_ts = req.get_start_version();
+        assert!(start_ts > 0);
+        let commit_ts = req.get_commit_version();
+        storage.async_resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
+    } else {
+        storage.async_resolve_lock(req.take_context(), txn_status, cb)
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ResolveLockResponse::new();

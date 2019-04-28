@@ -582,6 +582,26 @@ fn process_write_impl<S: Snapshot>(
             };
             (pr, modifies, rows, ctx)
         }
+        Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        } => {
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let rows = resolve_keys.len();
+            // ti-client guarantees the size of resolve_keys will not too large, so no necessary
+            // to control the write_size as ResolveLock.
+            for key in resolve_keys {
+                if commit_ts > 0 {
+                    txn.commit(key, commit_ts)?;
+                } else {
+                    txn.rollback(key)?;
+                }
+            }
+            statistics.add(&txn.take_statistics());
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
+        }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
             (ProcessResult::Res, vec![], 0, ctx)

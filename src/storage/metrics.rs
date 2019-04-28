@@ -11,6 +11,7 @@ make_static_metric! {
         rollback,
         scan_lock,
         resolve_lock,
+        resolve_lock_lite,
         gc,
         unsafe_destroy_range,
         delete_range,
