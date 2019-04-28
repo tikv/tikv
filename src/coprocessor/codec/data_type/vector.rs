@@ -726,20 +726,6 @@ impl_ext! { Json, push_json }
 
 macro_rules! impl_from {
     ($ty:tt) => {
-        impl<'a> From<&'a [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
-        impl<'a> From<&'a mut [Option<$ty>]> for VectorValue {
-            #[inline]
-            fn from(s: &'a mut [Option<$ty>]) -> VectorValue {
-                VectorValue::$ty(s.to_vec())
-            }
-        }
-
         impl From<Vec<Option<$ty>>> for VectorValue {
             #[inline]
             fn from(s: Vec<Option<$ty>>) -> VectorValue {
@@ -949,10 +935,6 @@ mod tests {
     #[test]
     fn test_from() {
         let slice: &[_] = &[None, Some(1.0)];
-        let column = VectorValue::from(slice);
-        assert_eq!(column.len(), 2);
-        assert_eq!(column.as_real_slice(), slice);
-
         let vec = slice.to_vec();
         let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);

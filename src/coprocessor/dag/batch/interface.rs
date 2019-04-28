@@ -27,7 +27,7 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
     /// See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult;
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
     /// Collects statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
@@ -46,8 +46,8 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows)
     }
 
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
