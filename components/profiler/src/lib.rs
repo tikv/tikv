@@ -46,10 +46,10 @@
 extern crate tikv_alloc;
 
 #[cfg(all(unix, feature = "profiling"))]
-mod profiler_linux;
+mod profiler_unix;
 
 #[cfg(all(unix, feature = "profiling"))]
-pub use profiler_linux::*;
+pub use profiler_unix::*;
 
 #[cfg(not(all(unix, feature = "profiling")))]
 mod profiler_dummy;

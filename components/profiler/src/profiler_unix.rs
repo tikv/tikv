@@ -16,7 +16,7 @@ lazy_static::lazy_static! {
     static ref ACTIVE_PROFILER: Mutex<Profiler> = Mutex::new(Profiler::None);
 }
 
-/// Start profiling.
+/// Start profiling. Returns false if failed, i.e. there is already a profiling in progress.
 ///
 /// When `profiling` feature is not enabled, this function will do nothing and there is totally
 /// zero cost.
@@ -26,12 +26,12 @@ lazy_static::lazy_static! {
 /// will be generated to the file specified by `name`.
 // TODO: Better multi-thread support.
 #[inline]
-pub fn start(name: impl AsRef<str>) {
+pub fn start(name: impl AsRef<str>) -> bool {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
 
     // Profiling in progress.
     if *profiler != Profiler::None {
-        return;
+        return false;
     }
 
     if valgrind_request::running_on_valgrind() != 0 {
@@ -45,24 +45,28 @@ pub fn start(name: impl AsRef<str>) {
             .start(name.as_ref())
             .unwrap();
     }
+
+    true
 }
 
-/// Stop profiling if it is started previously.
+/// Stop profiling. Returns false if failed, i.e. there is no profiling in progress.
 ///
 /// When `profiling` feature is not enabled, this function will do nothing and there is totally
 /// zero cost.
 #[inline]
-pub fn stop() {
+pub fn stop() -> bool {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
     match *profiler {
-        Profiler::None => {}
+        Profiler::None => false,
         Profiler::CallGrind => {
             CallgrindClientRequest::stop(None);
             *profiler = Profiler::None;
+            true
         }
         Profiler::GPerfTools => {
             cpuprofiler::PROFILER.lock().unwrap().stop().unwrap();
             *profiler = Profiler::None;
+            true
         }
     }
 }
