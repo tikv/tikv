@@ -142,35 +142,34 @@ impl FromStr for ReadableSize {
             return Err(format!("ASCII string is expected, but got {:?}", s));
         }
 
-        let mut chrs = size_str.chars();
-        let mut number_str = size_str;
-        let mut unit_char = chrs.next_back().unwrap();
-        if unit_char < '0' || unit_char > '9' {
-            number_str = chrs.as_str();
-            if unit_char == 'B' {
-                let b = match chrs.next_back() {
-                    Some(b) => b,
-                    None => return Err(format!("numeric value is expected: {:?}", s)),
-                };
-                if b < '0' || b > '9' {
-                    number_str = chrs.as_str();
-                    unit_char = b;
-                }
-            }
-        } else {
-            unit_char = 'B';
-        }
+        let unit = size_str
+            .to_string()
+            .chars()
+            .filter(|c| char::is_ascii_alphabetic(c))
+            .collect::<String>();
 
-        let unit = match unit_char {
-            'K' => KB,
-            'M' => MB,
-            'G' => GB,
-            'T' => TB,
-            'P' => PB,
-            'B' => UNIT,
-            _ => return Err(format!("only B, KB, MB, GB, TB, PB are supported: {:?}", s)),
+        let unit = match unit.as_ref() {
+            "K" | "KB" | "KiB" => KB,
+            "M" | "MB" | "MiB" => MB,
+            "G" | "GB" | "GiB" => GB,
+            "T" | "TB" | "TiB" => TB,
+            "P" | "PB" | "PiB" => PB,
+            "B" | "" => UNIT,
+            _ => {
+                return Err(format!(
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
+                    s
+                ))
+            }
         };
-        match number_str.trim().parse::<f64>() {
+
+        let size = size_str
+            .to_string()
+            .chars()
+            .filter(|c| char::is_ascii_digit(c) || *c == '.')
+            .collect::<String>();
+
+        match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
             Err(_) => Err(format!("invalid size string: {:?}", s)),
         }
@@ -872,6 +871,17 @@ mod tests {
             ("23", 23),
             ("1", 1),
             ("1024B", KB),
+            // units with binary prefixes
+            (" 0.5 PiB", PB / 2),
+            ("1PiB", PB),
+            ("0.5 TiB", TB / 2),
+            ("2 TiB", TB * 2),
+            ("0.5GiB ", GB / 2),
+            ("787GiB ", GB * 787),
+            ("0.5MiB", MB / 2),
+            ("3MiB", MB * 3),
+            ("0.5KiB", KB / 2),
+            ("1 KiB", KB),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
