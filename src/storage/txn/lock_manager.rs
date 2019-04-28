@@ -99,6 +99,10 @@ impl WaitTable {
         }
     }
 
+    fn size(&self) -> usize {
+        self.wait_table.iter().map(|(_, v)| v.len()).sum()
+    }
+
     fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
         self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
         true
@@ -316,4 +320,85 @@ pub fn gen_key_hash(key: &Key) -> u64 {
 
 pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
     keys.iter().map(|key| gen_key_hash(key)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_util::KvGenerator;
+
+    #[test]
+    fn test_extract_lock() {
+        let raw_key = b"key".to_vec();
+        let key = Key::from_raw(&raw_key);
+        let ts = 100;
+        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked {
+            key: raw_key,
+            primary: vec![],
+            ts,
+            ttl: 0,
+        }));
+        let lock = extract_lock(&Err(case));
+        assert_eq!(lock.ts, ts);
+        assert_eq!(lock.hash, gen_key_hash(&key));
+    }
+
+    fn dummy_waiter(ts: u64, hash: u64) -> Waiter {
+        Waiter {
+            start_ts: 0,
+            for_update_ts: 0,
+            cb: StorageCb::Boolean(Box::new(|_| ())),
+            pr: ProcessResult::Res,
+            lock: Lock { ts, hash },
+            timeout: 0,
+        }
+    }
+
+    #[test]
+    fn test_wait_table_add_and_remove() {
+        let mut wait_table = WaitTable::new();
+        for i in 0..10 {
+            let n = i as u64;
+            wait_table.add_waiter(n, dummy_waiter(n, n));
+        }
+        assert_eq!(10, wait_table.size());
+        for i in (0..10).rev() {
+            let n = i as u64;
+            println!("{}", i);
+            assert!(wait_table
+                .remove_waiter(0, Lock { ts: n, hash: n })
+                .is_some());
+        }
+        assert_eq!(0, wait_table.size());
+        assert!(wait_table
+            .remove_waiter(0, Lock { ts: 0, hash: 0 })
+            .is_none());
+    }
+
+    #[test]
+    fn test_wait_table_get_ready_waiters() {
+        let mut wait_table = WaitTable::new();
+        let ts = 100;
+        let mut hashes: Vec<u64> = KvGenerator::new(64, 0)
+            .generate(10)
+            .into_iter()
+            .map(|(key, _)| gen_key_hash(&Key::from_raw(&key)))
+            .collect();
+        for hash in hashes.iter() {
+            wait_table.add_waiter(ts, dummy_waiter(ts, *hash));
+        }
+        hashes.sort();
+
+        let not_ready = hashes.split_off(hashes.len() / 2);
+        let ready_waiters = wait_table.get_ready_waiters(ts, hashes.clone());
+        assert_eq!(hashes.len(), ready_waiters.len());
+        assert_eq!(not_ready.len(), wait_table.size());
+
+        let ready_waiters = wait_table.get_ready_waiters(ts, hashes.clone());
+        assert!(ready_waiters.is_empty());
+
+        let ready_waiters = wait_table.get_ready_waiters(ts, not_ready.clone());
+        assert_eq!(not_ready.len(), ready_waiters.len());
+        assert_eq!(0, wait_table.size());
+    }
 }
