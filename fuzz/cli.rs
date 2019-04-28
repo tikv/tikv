@@ -25,7 +25,7 @@ extern crate regex;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use failure::{Error, ResultExt};
 
@@ -87,7 +87,7 @@ impl Fuzzer {
     }
 }
 
-fn main() {
+fn main() -> Result<(), i32> {
     use structopt::StructOpt;
 
     match Cli::from_args() {
@@ -97,9 +97,13 @@ fn main() {
             }
         }
         Cli::Run { fuzzer, target } => {
-            run(fuzzer, &target).unwrap();
+            if let Err(error) = run(fuzzer, &target) {
+                eprintln!("Running fuzzer failed: {}", error);
+                return Err(1);
+            }
         }
     }
+    Ok(())
 }
 
 /// Write the fuzz target source file from corresponding template file.
@@ -179,6 +183,19 @@ fn run_afl(target: &str) -> Result<(), Error> {
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
+    // 0. check afl is ready
+    let pre_check = Command::new("cargo")
+        .args(&["afl"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    if !pre_check.success() {
+        Err(format_err!(
+            "cannot run afl subcommand, please run `cargo install afl` before testing"
+        ))?;
+    }
+
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
         .args(&["afl", "build", "--bin", target])
@@ -223,6 +240,18 @@ fn run_afl(target: &str) -> Result<(), Error> {
 
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
+    let pre_check = Command::new("cargo")
+        .args(&["hfuzz", "version"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    if !pre_check.success() {
+        Err(format_err!(
+            "cannot run hfuzz subcommand, please run `cargo install hfuzz --version 0.5.34` before testing"
+        ))?;
+    }
+
     let fuzzer = Fuzzer::Honggfuzz;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
