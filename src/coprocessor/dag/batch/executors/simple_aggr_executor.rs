@@ -14,6 +14,7 @@ use tipb::expression::FieldType;
 use super::super::interface::*;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
@@ -143,6 +144,32 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         src: Src,
         aggr_definitions: Vec<Expr>,
     ) -> Result<Self> {
+        Self::new_impl(
+            summary_collector,
+            config,
+            src,
+            aggr_definitions,
+            AggrDefinitionParser::parse,
+        )
+    }
+
+    /// Provides ability to customize `AggrDefinitionParser::parse`. Useful in tests.
+    fn new_impl<F>(
+        summary_collector: C,
+        config: Arc<EvalConfig>,
+        src: Src,
+        aggr_definitions: Vec<Expr>,
+        parse_aggr_definition: F,
+    ) -> Result<Self>
+    where
+        F: Fn(
+            Expr,
+            &Tz,
+            usize,
+            &mut Vec<FieldType>,
+            &mut Vec<RpnExpression>,
+        ) -> Result<Box<dyn AggrFunction>>,
+    {
         let aggr_len = aggr_definitions.len();
         let mut aggr_fn_states = Vec::with_capacity(aggr_len);
         let mut aggr_fn_output_cardinality = Vec::with_capacity(aggr_len);
@@ -153,7 +180,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             let aggr_output_len = ordered_schema.len();
             let aggr_input_len = ordered_aggr_fn_input_exprs.len();
 
-            let aggr_fn = AggrDefinitionParser::parse(
+            let aggr_fn = parse_aggr_definition(
                 def,
                 &config.tz,
                 src.schema().len(),
@@ -255,7 +282,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         Ok(())
     }
 
-    #[inline]
+    // Don't inline this function to reduce hot code size.
+    #[inline(never)]
     fn aggregate_results(&mut self) -> Result<LazyBatchColumnVec> {
         // Construct empty columns. All columns are decoded.
         let mut output_columns: Vec<_> = self
