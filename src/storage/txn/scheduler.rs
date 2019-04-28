@@ -35,6 +35,7 @@ use crate::util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
+use super::lock_manager::{self, LockManagerScheduler};
 use super::process::{
     execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
 };
@@ -65,6 +66,13 @@ pub enum Msg {
         err: Error,
         tag: &'static str,
     },
+    PessimisticLockWait {
+        cid: u64,
+        start_ts: u64,
+        for_update_ts: u64,
+        pr: ProcessResult,
+        lock: lock_manager::Lock,
+    },
 }
 
 /// Debug for messages.
@@ -83,6 +91,7 @@ impl Display for Msg {
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
+            Msg::PessimisticLockWait { cid, .. } => write!(f, "PessimisticLockWait [cid={}]", cid),
         }
     }
 }
@@ -141,6 +150,9 @@ pub struct Scheduler<E: Engine> {
     // actual scheduler to schedule the execution of commands
     scheduler: worker::Scheduler<Msg>,
 
+    // scheduler for lock manager
+    lm_scheduler: LockManagerScheduler,
+
     // cmd id generator
     id_alloc: u64,
 
@@ -166,6 +178,7 @@ impl<E: Engine> Scheduler<E> {
     pub fn new(
         engine: E,
         scheduler: worker::Scheduler<Msg>,
+        lm_scheduler: LockManagerScheduler,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -177,6 +190,7 @@ impl<E: Engine> Scheduler<E> {
             pending_tasks: Default::default(),
             task_contexts: Default::default(),
             scheduler,
+            lm_scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold,
@@ -239,7 +253,8 @@ impl<E: Engine> Scheduler<E> {
         };
         let pool_scheduler = pool.scheduler();
         let scheduler = self.scheduler.clone();
-        Executor::new(scheduler, pool_scheduler)
+        let lm_scheduler = self.lm_scheduler.clone();
+        Executor::new(pool_scheduler, scheduler, lm_scheduler)
     }
 
     /// Event handler for new command.
@@ -404,6 +419,26 @@ impl<E: Engine> Scheduler<E> {
         self.release_lock(&tctx.lock, cid);
     }
 
+    /// Event handler for the request of pessimistic_lock waiting
+    fn pessimistic_lock_wait(
+        &mut self,
+        cid: u64,
+        start_ts: u64,
+        for_update_ts: u64,
+        pr: ProcessResult,
+        lock: lock_manager::Lock,
+    ) {
+        debug!("command waits for lock released"; "cid" => cid);
+        let tctx = self.dequeue_task_context(cid);
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[tctx.tag, "lock_wait"])
+            .inc();
+        // TODO: timeout config
+        self.lm_scheduler
+            .wait_for(start_ts, for_update_ts, tctx.cb, pr, lock, 1000);
+        self.release_lock(&tctx.lock, cid);
+    }
+
     /// Generates the lock for a command.
     ///
     /// Basically, read-only commands require no latches, write commands require latches hashed
@@ -450,6 +485,13 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                     result,
                 } => self.on_write_finished(cid, pr, result, tag),
                 Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+                Msg::PessimisticLockWait {
+                    cid,
+                    start_ts,
+                    for_update_ts,
+                    pr,
+                    lock,
+                } => self.pessimistic_lock_wait(cid, start_ts, for_update_ts, pr, lock),
             }
         }
     }

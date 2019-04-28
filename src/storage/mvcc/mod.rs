@@ -55,10 +55,10 @@ quick_error! {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, escape(key))
         }
-        WriteConflict { start_ts: u64, for_update_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
+        WriteConflict { start_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
-            display("write conflict, start_ts:{}, for_update_ts: {}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
-             start_ts, for_update_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+            display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
+             start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
@@ -107,14 +107,12 @@ impl Error {
             }),
             Error::WriteConflict {
                 start_ts,
-                for_update_ts,
                 conflict_start_ts,
                 conflict_commit_ts,
                 ref key,
                 ref primary,
             } => Some(Error::WriteConflict {
                 start_ts,
-                for_update_ts,
                 conflict_start_ts,
                 conflict_commit_ts,
                 key: key.to_owned(),

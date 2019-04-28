@@ -151,7 +151,9 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         req: PessimisticLockRequest,
         sink: UnarySink<PessimisticLockResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_prewrite.start_coarse_timer();
+        let timer = GRPC_MSG_HISTOGRAM_VEC
+            .kv_pessimistic_lock
+            .start_coarse_timer();
         let future = future_pessimistic_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
@@ -1888,7 +1890,6 @@ mod tests {
         let primary = b"primary".to_vec();
         let case = storage::Error::from(TxnError::from(MvccError::WriteConflict {
             start_ts,
-            for_update_ts: 0,
             conflict_start_ts,
             conflict_commit_ts,
             key: key.clone(),

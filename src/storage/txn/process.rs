@@ -25,6 +25,7 @@ use crate::util::time::SlowTimer;
 use crate::util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
+use super::lock_manager::{self, LockManagerScheduler};
 use super::scheduler::Msg;
 use super::{Error, Result};
 
@@ -114,25 +115,33 @@ pub struct Executor<E: Engine> {
     pool: Option<threadpool::Scheduler<SchedContext<E>>>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<worker::Scheduler<Msg>>,
+    // If the task releases some locks, we wake up waiters waiting for it.
+    lm_scheduler: Option<LockManagerScheduler>,
 }
 
 impl<E: Engine> Executor<E> {
     pub fn new(
-        scheduler: worker::Scheduler<Msg>,
         pool: threadpool::Scheduler<SchedContext<E>>,
+        scheduler: worker::Scheduler<Msg>,
+        lm_scheduler: LockManagerScheduler,
     ) -> Self {
         Executor {
-            scheduler: Some(scheduler),
             pool: Some(pool),
+            scheduler: Some(scheduler),
+            lm_scheduler: Some(lm_scheduler),
         }
+    }
+
+    fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
+        self.pool.take().unwrap()
     }
 
     fn take_scheduler(&mut self) -> worker::Scheduler<Msg> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
-        self.pool.take().unwrap()
+    fn take_lm_scheduler(&mut self) -> LockManagerScheduler {
+        self.lm_scheduler.take().unwrap()
     }
 
     /// Start the execution of the task.
@@ -243,16 +252,28 @@ impl<E: Engine> Executor<E> {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
         let cid = task.cid;
+        let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let msg = match process_write_impl(task.cmd, snapshot, &mut statistics) {
+        let lm_scheduler = self.take_lm_scheduler();
+        let msg = match process_write_impl(task.cmd, snapshot, lm_scheduler, &mut statistics) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
-            Ok((ctx, pr, to_be_write, rows)) => {
+            Ok((ctx, pr, to_be_write, rows, lock_info)) => {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "write"])
                     .inc();
-                if to_be_write.is_empty() {
+
+                if lock_info.is_some() {
+                    let (lock, for_update_ts) = lock_info.unwrap();
+                    Msg::PessimisticLockWait {
+                        cid,
+                        start_ts: ts,
+                        for_update_ts,
+                        pr,
+                        lock,
+                    }
+                } else if to_be_write.is_empty() {
                     Msg::WriteFinished {
                         cid,
                         pr,
@@ -448,9 +469,16 @@ fn process_read_impl<E: Engine>(
 fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
+    lm_scheduler: LockManagerScheduler,
     statistics: &mut Statistics,
-) -> Result<(Context, ProcessResult, Vec<Modify>, usize)> {
-    let (pr, modifies, rows, ctx) = match cmd {
+) -> Result<(
+    Context,
+    ProcessResult,
+    Vec<Modify>,
+    usize,
+    Option<(lock_manager::Lock, u64)>,
+)> {
+    let (pr, modifies, rows, ctx, lock_info) = match cmd {
         Command::Prewrite {
             ctx,
             mutations,
@@ -476,11 +504,11 @@ fn process_write_impl<S: Snapshot>(
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
                 let modifies = txn.into_modifies();
-                (pr, modifies, rows, ctx)
+                (pr, modifies, rows, ctx, None)
             } else {
                 // Skip write stage if some keys are locked.
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0, ctx)
+                (pr, vec![], 0, ctx, None)
             }
         }
         Command::PessimisticLock {
@@ -500,20 +528,23 @@ fn process_write_impl<S: Snapshot>(
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                        break;
                     }
                     Err(e) => return Err(Error::from(e)),
                 }
             }
 
             statistics.add(&txn.take_statistics());
+            // no conflict
             if locks.is_empty() {
                 let pr = ProcessResult::MultiRes { results: vec![] };
                 let modifies = txn.into_modifies();
-                (pr, modifies, rows, ctx)
+                (pr, modifies, rows, ctx, None)
             } else {
-                // Skip write stage if some keys are locked.
+                let lock = lock_manager::extract_lock(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
-                (pr, vec![], 0, ctx)
+                // Wait for lock released
+                (pr, vec![], 0, ctx, Some((lock, for_update_ts)))
             }
         }
         Command::Commit {
@@ -530,22 +561,25 @@ fn process_write_impl<S: Snapshot>(
                 });
             }
             let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
+            let key_hashes = lock_manager::gen_key_hashes(&keys);
             let rows = keys.len();
             for k in keys {
                 txn.commit(k, commit_ts)?;
             }
-
+            lm_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Cleanup {
             ctx, key, start_ts, ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+            let key_hash = lock_manager::gen_key_hash(&key);
             txn.rollback(key)?;
 
+            lm_scheduler.wake_up(start_ts, vec![key_hash], 0);
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), 1, ctx)
+            (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
         Command::Rollback {
             ctx,
@@ -554,13 +588,15 @@ fn process_write_impl<S: Snapshot>(
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
+            let key_hashes = lock_manager::gen_key_hashes(&keys);
             let rows = keys.len();
             for k in keys {
                 txn.rollback(k)?;
             }
 
+            lm_scheduler.wake_up(start_ts, key_hashes, 0);
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::ResolveLock {
             ctx,
@@ -572,7 +608,13 @@ fn process_write_impl<S: Snapshot>(
             let mut modifies: Vec<Modify> = vec![];
             let mut write_size = 0;
             let rows = key_locks.len();
+            let mut ts_to_keys = HashMap::new();
             for (current_key, current_lock) in key_locks {
+                ts_to_keys
+                    .entry(current_lock.ts)
+                    .or_insert(vec![])
+                    .push(lock_manager::gen_key_hash(&current_key));
+
                 let mut txn =
                     MvccTxn::new(snapshot.clone(), current_lock.ts, !ctx.get_not_fill_cache())?;
                 let status = txn_status.get(&current_lock.ts);
@@ -601,6 +643,10 @@ fn process_write_impl<S: Snapshot>(
                     break;
                 }
             }
+            ts_to_keys
+                .into_iter()
+                .for_each(|(ts, hashes)| lm_scheduler.wake_up(ts, hashes, 0));
+
             let pr = if scan_key.is_none() {
                 ProcessResult::Res
             } else {
@@ -613,16 +659,16 @@ fn process_write_impl<S: Snapshot>(
                     },
                 }
             };
-            (pr, modifies, rows, ctx)
+            (pr, modifies, rows, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
-            (ProcessResult::Res, vec![], 0, ctx)
+            (ProcessResult::Res, vec![], 0, ctx, None)
         }
         _ => panic!("unsupported write command"),
     };
 
-    Ok((ctx, pr, modifies, rows))
+    Ok((ctx, pr, modifies, rows, lock_info))
 }
 
 fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {

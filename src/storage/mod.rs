@@ -27,7 +27,7 @@ use crate::server::readpool::{self, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use crate::util;
 use crate::util::collections::HashMap;
-use crate::util::worker::{self, Builder, ScheduleError, Worker};
+use crate::util::worker::{self, Builder, FutureWorker, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -45,7 +45,7 @@ pub use self::kv::{
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_context::Context as ReadPoolContext;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
+pub use self::txn::{LmTask, LockManager, Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
@@ -489,8 +489,6 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use crate::util::worker::FutureWorker;
-
         let read_pool = {
             let pd_worker = FutureWorker::new("test-future–worker");
             ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
@@ -535,6 +533,9 @@ pub struct Storage<E: Engine> {
     /// `worker_scheduler` is used to schedule tasks to run in `worker`.
     worker_scheduler: worker::Scheduler<Msg>,
 
+    /// The worker for lock manager
+    lm_worker: Arc<Mutex<FutureWorker<LmTask>>>,
+
     /// The thread pool used to run most read operations.
     read_pool: ReadPool<ReadPoolContext>,
 
@@ -560,6 +561,7 @@ impl<E: Engine> Clone for Storage<E> {
 
         Self {
             engine: self.engine.clone(),
+            lm_worker: self.lm_worker.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
             read_pool: self.read_pool.clone(),
@@ -595,6 +597,12 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to join sched_handle"; "err" => ?e);
         }
 
+        let mut lm_worker = self.lm_worker.lock().unwrap();
+        let h = lm_worker.stop().unwrap();
+        if let Err(e) = h.join() {
+            error!("Failed to join lock_manager"; "err" => ?e);
+        }
+
         let r = self.gc_worker.stop();
         if let Err(e) = r {
             error!("Failed to stop gc_worker:"; "err" => ?e);
@@ -620,9 +628,15 @@ impl<E: Engine> Storage<E> {
                 .create(),
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
+
+        let mut lm_worker = FutureWorker::new("lock-manager");
+        let lm_runner = LockManager::new(lm_worker.scheduler());
+        let lm_scheduler = lm_runner.scheduler();
+
         let runner = Scheduler::new(
             engine.clone(),
             worker_scheduler.clone(),
+            lm_scheduler,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -635,12 +649,14 @@ impl<E: Engine> Storage<E> {
         );
 
         worker.lock().unwrap().start(runner)?;
+        lm_worker.start(lm_runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
 
         Ok(Storage {
             engine,
+            lm_worker: Arc::new(Mutex::new(lm_worker)),
             worker,
             worker_scheduler,
             read_pool,

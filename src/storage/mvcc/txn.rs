@@ -179,7 +179,6 @@ impl<S: Snapshot> MvccTxn<S> {
                         MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                         return Err(Error::WriteConflict {
                             start_ts: self.start_ts,
-                            for_update_ts: 0,
                             conflict_start_ts: write.start_ts,
                             conflict_commit_ts: commit,
                             key: key.to_raw()?,
@@ -222,8 +221,7 @@ impl<S: Snapshot> MvccTxn<S> {
             if commit >= for_update_ts {
                 MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
                 return Err(Error::WriteConflict {
-                    start_ts: self.start_ts,
-                    for_update_ts,
+                    start_ts: for_update_ts,
                     conflict_start_ts: write.start_ts,
                     conflict_commit_ts: commit,
                     key: key.to_raw()?,
@@ -238,8 +236,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     if commit == self.start_ts && write.write_type == WriteType::Rollback {
                         MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
                         return Err(Error::WriteConflict {
-                            start_ts: self.start_ts,
-                            for_update_ts,
+                            start_ts: for_update_ts,
                             conflict_start_ts: write.start_ts,
                             conflict_commit_ts: commit,
                             key: key.to_raw()?,
@@ -250,7 +247,6 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        // TODO: Should we return error if the key is locked by prewrite?
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
