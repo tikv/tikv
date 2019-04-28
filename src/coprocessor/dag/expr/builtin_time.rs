@@ -463,13 +463,13 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-        let arg1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
-        let overflow = Error::overflow("DURATION", &format!("({} - {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_sub(&arg1) {
-            Some(res) => res,
-            None => return Err(overflow),
+        let d0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let d1: Cow<'a, MyDuration> = try_opt!(self.children[1].eval_duration(ctx, row));
+        let diff = match d0.to_nanos().checked_sub(d1.to_nanos()) {
+            Some(result) => result,
+            None => return Err(Error::overflow("DURATION", &format!("({} - {})", &d0, &d1))),
         };
+        let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
         Ok(Some(Cow::Owned(res)))
     }
 
