@@ -172,9 +172,31 @@ fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Er
     Ok(corpus_dir)
 }
 
+fn install_fuzzer(fuzzer: Fuzzer, version: &str) -> Result<(), Error> {
+    let fuzzer_install = Command::new("cargo")
+        .args(&["install", "honggfuzz", "--version", version])
+        .spawn()
+        .context(format!("Failed to run the installation of {}", fuzzer))?
+        .wait()
+        .context(format!("Failed to wait the installation of {}", fuzzer))?;
+
+    // 101 means already installed. We skip this case.
+    if !fuzzer_install.success() && fuzzer_install.code() != Some(101) {
+        Err(format_err!(
+            "{} exited with code {:?}",
+            fuzzer,
+            fuzzer_install.code()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Run one target fuzz test using AFL
 fn run_afl(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Afl;
+    let version = "0.4.3";
+    install_fuzzer(fuzzer, version)?;
 
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
@@ -224,6 +246,8 @@ fn run_afl(target: &str) -> Result<(), Error> {
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Honggfuzz;
+    let version = "0.5.34";
+    install_fuzzer(fuzzer, version)?;
 
     let mut rust_flags = env::var("RUSTFLAGS").unwrap_or_default();
     rust_flags.push_str("-Z sanitizer=address");
@@ -260,6 +284,7 @@ fn run_honggfuzz(target: &str) -> Result<(), Error> {
 /// Run one target fuzz test using Libfuzzer
 fn run_libfuzzer(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Libfuzzer;
+
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
