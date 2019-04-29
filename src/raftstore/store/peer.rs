@@ -1723,10 +1723,11 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        self.raft_group
-            .status()
+        let status = self.raft_group.status();
+        status
             .progress
             .values()
+            .chain(status.learner_progress.values())
             .map(|pr| pr.matched)
             .min()
             .unwrap_or_default()

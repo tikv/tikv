@@ -5,9 +5,9 @@ use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
+use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;
@@ -548,5 +548,44 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+
+    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_store"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.get_store_opt(&req, Self::call_option())
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        let store = resp.get_store();
+        if store.get_state() != metapb::StoreState::Tombstone {
+            Ok(resp.take_stats())
+        } else {
+            Err(Error::StoreTombstone(format!("{:?}", store)))
+        }
+    }
+
+    fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_operator"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetOperatorRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.get_operator_opt(&req, Self::call_option())
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp)
     }
 }
