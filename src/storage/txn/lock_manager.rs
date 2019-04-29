@@ -239,7 +239,7 @@ impl LockManager {
         let mut ready_waiters = self.wait_table.get_ready_waiters(lock_ts, hashes);
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
-            // Sleep a little so the transaction in lower position will more likely get the lock.
+            // Sleep a little so the transaction with small start_ts will more likely get the lock.
             let when = Instant::now() + Duration::from_millis(10 * (i as u64));
             let timer = Delay::new(when)
                 .and_then(move |_| {
@@ -247,6 +247,7 @@ impl LockManager {
                     if conflict_ts < waiter.for_update_ts {
                         conflict_ts = std::u64::MAX;
                     }
+                    // TODO: is std::u64::MAX as conflict_ts ok? is empty key ok?
                     let mvcc_err = MvccError::WriteConflict {
                         start_ts: waiter.for_update_ts,
                         conflict_start_ts: lock_ts,

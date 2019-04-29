@@ -1156,6 +1156,13 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticLock(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_pessimistic_lock.start_coarse_timer();
+            let resp = future_pessimistic_lock(&storage, req)
+                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::PessimisticLock))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
+            response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
+        }
     }
 }
 
