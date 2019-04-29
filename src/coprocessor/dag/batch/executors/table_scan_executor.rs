@@ -28,7 +28,7 @@ pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
 
 impl
     BatchTableScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
@@ -321,7 +321,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
