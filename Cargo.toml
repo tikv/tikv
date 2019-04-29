@@ -117,14 +117,13 @@ vlog = "0.1.4"
 twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tipb = { git = "https://github.com/pingcap/tipb.git", rev = "833c2ffd" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", rev = "3d8cb3a3" }
+murmur3 = { git = "https://github.com/pingcap/murmur3.git", rev = "4af9e1a8" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
 
-[dependencies.murmur3]
-git = "https://github.com/pingcap/murmur3.git"
 
 [dependencies.prometheus]
 version = "0.4.2"
@@ -149,7 +148,7 @@ arrow = "0.10.0"
 signal = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "ac3841d2" }
 
 [workspace]
 members = [

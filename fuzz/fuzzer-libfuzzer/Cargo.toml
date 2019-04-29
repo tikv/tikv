@@ -5,4 +5,4 @@ publish = false
 
 [dependencies]
 fuzz-targets = {path = "../targets"}
-libfuzzer-sys = {git = "https://github.com/rust-fuzz/libfuzzer-sys.git"}
+libfuzzer-sys = {git = "https://github.com/rust-fuzz/libfuzzer-sys.git", rev = "4594b1f3" }

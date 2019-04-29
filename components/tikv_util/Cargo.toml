@@ -50,7 +50,7 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "ac3841d2" }
 
 [dev-dependencies]
 raft = "0.4"
