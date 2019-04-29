@@ -203,6 +203,15 @@ mod tests {
                 Some(b"short_value".to_vec()),
                 0,
             ),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 16),
+            Lock::new(
+                LockType::Delete,
+                b"pk".to_vec(),
+                1,
+                10,
+                Some(b"short_value".to_vec()),
+                16,
+            ),
         ];
         for (i, lock) in locks.drain(..).enumerate() {
             let v = lock.to_bytes();
