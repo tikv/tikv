@@ -91,22 +91,38 @@ impl RpnExpressionBuilder {
         Self(Vec::new())
     }
 
+    /// Pushes a `FnCall` node.
     #[cfg(test)]
     pub fn push_fn_call(
         mut self,
         func: impl RpnFunction,
-        field_type: impl Into<FieldType>,
+        return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func: Box::new(func),
-            field_type: field_type.into(),
+            field_type: return_field_type.into(),
         };
         self.0.push(node);
         self
     }
 
+    /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
+    /// field type that matches the field type of the given value.
     #[cfg(test)]
-    pub fn push_constant(
+    pub fn push_constant(mut self, value: impl Into<ScalarValue>) -> Self {
+        let value = value.into();
+        let field_type = value
+            .eval_type()
+            .into_certain_field_type_tp_for_test()
+            .into();
+        let node = RpnExpressionNode::Constant { value, field_type };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node.
+    #[cfg(test)]
+    pub fn push_constant_with_field_type(
         mut self,
         value: impl Into<ScalarValue>,
         field_type: impl Into<FieldType>,
@@ -119,6 +135,7 @@ impl RpnExpressionBuilder {
         self
     }
 
+    /// Pushes a `ColumnRef` node.
     #[cfg(test)]
     pub fn push_column_ref(mut self, offset: usize) -> Self {
         let node = RpnExpressionNode::ColumnRef { offset };
@@ -126,6 +143,7 @@ impl RpnExpressionBuilder {
         self
     }
 
+    /// Builds the `RpnExpression`.
     #[cfg(test)]
     pub fn build(self) -> RpnExpression {
         RpnExpression::from(self.0)

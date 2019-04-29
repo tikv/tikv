@@ -3,7 +3,7 @@
 use std::i32;
 
 use super::Result;
-use crate::grpc::CompressionAlgorithms;
+use grpcio::CompressionAlgorithms;
 
 use engine::rocks::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
 use tikv_util::collections::HashMap;
