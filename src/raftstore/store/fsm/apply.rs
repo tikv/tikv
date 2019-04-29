@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -614,6 +614,7 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -658,6 +659,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
 
@@ -2141,6 +2143,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
 }
 
 impl Registration {
@@ -2151,6 +2154,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
         }
     }
 }
@@ -2568,26 +2572,43 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-
-        // Persists any pending changes of this region.
-        let region_id = self.delegate.id();
-        if apply_ctx
-            .apply_res
-            .iter()
-            .any(|res| res.region_id == region_id)
-        {
-            apply_ctx.flush();
+        if apply_ctx.timer.is_none() {
+            apply_ctx.timer = Some(SlowTimer::new());
         }
+        if apply_ctx.kv_wb.is_none() {
+            apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+        }
+        self.delegate.write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+        fail_point!(
+            "apply_on_handle_snapshot_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
+
+        // Because apply states are wrote to raft engine, so we have to
+        // force sync to make sure there is no lost update after restart.
+        apply_ctx.sync_log_hint = true;
+        apply_ctx.flush();
+
+
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
-                "region_id" => region_id,
+                "region_id" => self.delegate.region_id(),
                 "peer_id" => self.delegate.id()
             );
         }
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
+        fail_point!(
+            "apply_on_handle_snapshot_finish_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
