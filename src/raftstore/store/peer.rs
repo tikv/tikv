@@ -419,7 +419,7 @@ impl Peer {
     #[inline]
     pub fn get_index_term(&self, idx: u64) -> u64 {
         match self.raft_group.raft.raft_log.term(idx) {
-            Ok(t) => return t,
+            Ok(t) => t,
             Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
         }
     }
