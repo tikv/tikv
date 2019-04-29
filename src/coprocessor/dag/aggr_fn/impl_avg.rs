@@ -164,7 +164,7 @@ where
         if self.count == 0 {
             target[1].push(None);
         } else {
-            target[1].push(Some(self.sum.clone()))
+            target[1].push(Some(self.sum.clone()));
         }
         Ok(())
     }
