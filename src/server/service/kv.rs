@@ -4,10 +4,6 @@ use std::iter::{self, FromIterator};
 use std::sync::{Arc, Mutex};
 
 use crate::coprocessor::Endpoint;
-use crate::grpc::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
-};
 use crate::raftstore::store::{Callback, CasualMessage};
 use crate::server::load_statistics::ThreadLoad;
 use crate::server::metrics::*;
@@ -20,6 +16,10 @@ use crate::storage::txn::Error as TxnError;
 use crate::storage::{self, Engine, Key, Mutation, Options, Storage, Value};
 use futures::executor::{self, Notify, Spawn};
 use futures::{future, Async, Future, Sink, Stream};
+use grpcio::{
+    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus,
+    RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
+};
 use kvproto::coprocessor::*;
 use kvproto::errorpb::{Error as RegionError, ServerIsBusy};
 use kvproto::kvrpcpb::{self, *};
