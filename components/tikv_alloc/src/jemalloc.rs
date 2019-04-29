@@ -1,5 +1,6 @@
 // The implementation of this crate when jemalloc is turned on
 
+use super::error::{ProfError, ProfResult};
 use crate::AllocStats;
 use jemalloc_ctl::{stats, Epoch as JeEpoch};
 use jemallocator::ffi::malloc_stats_print;
@@ -11,7 +12,7 @@ pub const fn allocator() -> Allocator {
     jemallocator::Jemalloc
 }
 
-pub use self::profiling::dump_prof;
+pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -68,6 +69,8 @@ mod profiling {
     use jemallocator;
     use libc::c_char;
 
+    use super::{ProfError, ProfResult};
+
     // C string should end with a '\0'.
     const PROF_ACTIVE: &'static [u8] = b"prof.active\0";
     const PROF_DUMP: &'static [u8] = b"prof.dump\0";
@@ -87,6 +90,26 @@ mod profiling {
                 .as_mut()
                 .map_or(ptr::null_mut(), |v| v.as_mut_ptr() as *mut c_char)
         }
+    }
+
+    pub fn activate_prof() -> ProfResult<()> {
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
+                error!("failed to activate profiling: {}", e);
+                return Err(ProfError::JemallocError(e));
+            };
+        }
+        return Ok(());
+    }
+
+    pub fn deactivate_prof() -> ProfResult<()> {
+        unsafe {
+            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, false) {
+                error!("failed to deactivate profiling: {}", e);
+                return Err(ProfError::JemallocError(e));
+            };
+        }
+        return Ok(());
     }
 
     /// Dump the profile to the `path`.
@@ -186,5 +209,13 @@ mod profiling {
 
 #[cfg(not(feature = "mem-profiling"))]
 mod profiling {
+    use super::{ProfError, ProfResult};
+
     pub fn dump_prof(_path: Option<&str>) {}
+    pub fn activate_prof() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn deactivate_prof() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
 }
