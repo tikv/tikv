@@ -688,9 +688,6 @@
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
 
-## Generally, you can set it from 256MB to 2GB. In most cases, you can use the default value. But
-## if the system resources are adequate, you can set it higher.
-
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
