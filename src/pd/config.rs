@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::config::ReadableDuration;
 use std::error::Error;
+use tikv_util::config::ReadableDuration;
 
 /// The configuration for a PD Client.
 ///

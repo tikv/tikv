@@ -139,7 +139,7 @@
 # endpoints = []
 # The interval at which to retry a PD connection initialization. Set to 0 to disable retrying 
 # connection initialization.
-# retry-interval = 300
+# retry-interval = "300ms"
 # If the client observes the same error message on retry, it can repeat the message only
 # every `n` times. Set to 1 to disable this feature.
 # retry-log-every = 10
