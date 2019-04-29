@@ -1637,7 +1637,7 @@ pub mod tests {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
             if p1.is_some() {
                 let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                if !p2.is_some() {
+                if p2.is_none() {
                     panic!("cf {}: expect key {:?} has value", cf, key);
                 }
                 let p1 = p1.unwrap();
