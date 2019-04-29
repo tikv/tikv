@@ -1745,7 +1745,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_catch_up_logs(
         &mut self,
-        region: metapb::Region,
         mut merge: CommitMergeRequest,
         logs_up_to_date: Arc<AtomicU64>,
     ) {
@@ -1771,24 +1770,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         msg.set_entries(entries);
         msg.set_commit(merge.get_commit());
 
-        // send a dummy raft message
-        let mut raft_msg = RaftMessage::new();
-        raft_msg.set_region_id(region_id);
-        raft_msg.set_from_peer(self.fsm.peer.peer.clone());
-        raft_msg.set_to_peer(self.fsm.peer.peer.clone());
-        raft_msg.set_region_epoch(region.get_region_epoch().clone());
-        raft_msg.set_message(msg);
-
         info!(
-            "send append entries to source region, from: {}, to: {}",
-            self.fsm.peer.leader_id(),
-            self.fsm.peer.peer_id()
+            "send append entries to source region";
+            "region_id" => region_id,
+            "peer_id" => self.fsm.peer.peer_id(),
         );
-
-        self.ctx
-            .router
-            .force_send(region_id, PeerMsg::RaftMessage(raft_msg))
-            .unwrap();
+        self.fsm.peer.step(msg).unwrap();
     }
 
     fn on_ready_commit_merge(
@@ -2027,11 +2014,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.on_ready_prepare_merge(region, state);
                 }
                 ExecResult::CatchUpLogs {
-                    region,
                     merge,
                     logs_up_to_date,
                 } => {
-                    self.on_ready_catch_up_logs(region, merge, logs_up_to_date);
+                    self.on_ready_catch_up_logs(merge, logs_up_to_date);
                 }
                 ExecResult::CommitMerge { region, source } => {
                     if let Some(ready_to_merge) =

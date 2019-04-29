@@ -179,7 +179,6 @@ pub enum ExecResult {
         state: MergeState,
     },
     CatchUpLogs {
-        region: Region,
         merge: CommitMergeRequest,
         logs_up_to_date: Arc<AtomicU64>,
     },
@@ -2463,7 +2462,6 @@ impl ApplyFsm {
             if apply_index < catch_up_logs.merge.get_commit() {
                 let mut res = VecDeque::new();
                 res.push_back(ExecResult::CatchUpLogs {
-                    region: self.delegate.region.clone(),
                     merge: catch_up_logs.merge,
                     logs_up_to_date: catch_up_logs.logs_up_to_date,
                 });
