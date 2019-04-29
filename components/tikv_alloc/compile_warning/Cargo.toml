@@ -6,3 +6,4 @@ edition = "2018"
 
 [lib]
 proc-macro = true
+test = false
