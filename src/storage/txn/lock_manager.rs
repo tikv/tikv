@@ -364,7 +364,6 @@ mod tests {
         assert_eq!(10, wait_table.size());
         for i in (0..10).rev() {
             let n = i as u64;
-            println!("{}", i);
             assert!(wait_table
                 .remove_waiter(0, Lock { ts: n, hash: n })
                 .is_some());
@@ -400,5 +399,53 @@ mod tests {
         let ready_waiters = wait_table.get_ready_waiters(ts, not_ready.clone());
         assert_eq!(not_ready.len(), ready_waiters.len());
         assert_eq!(0, wait_table.size());
+    }
+
+    #[test]
+    fn test_lock_manager() {
+        use crate::util::worker::FutureWorker;
+        use std::sync::mpsc;
+
+        let mut lm_worker = FutureWorker::new("lock-manager");
+        let lm_runner = LockManager::new(lm_worker.scheduler());
+        let lm_scheduler = lm_runner.scheduler();
+        lm_worker.start(lm_runner).unwrap();
+
+        // timeout
+        let (tx, rx) = mpsc::channel();
+        let cb = Box::new(move |result| {
+            tx.send(result).unwrap();
+        });
+        let pr = ProcessResult::Res;
+        lm_scheduler.wait_for(
+            0,
+            0,
+            StorageCb::Boolean(cb),
+            pr,
+            Lock { ts: 0, hash: 0 },
+            100,
+        );
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(150))
+                .unwrap()
+                .unwrap(),
+            ()
+        );
+
+        // wake-up
+        let (tx, rx) = mpsc::channel();
+        let cb = Box::new(move |result| {
+            tx.send(result).unwrap();
+        });
+        lm_scheduler.wait_for(
+            0,
+            0,
+            StorageCb::Boolean(cb),
+            ProcessResult::Res,
+            Lock { ts: 1, hash: 1 },
+            100,
+        );
+        lm_scheduler.wake_up(1, vec![3, 1, 2], 1);
+        assert!(rx.recv_timeout(Duration::from_millis(50)).unwrap().is_err());
     }
 }
