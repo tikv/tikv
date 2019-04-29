@@ -3793,4 +3793,58 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_resolve_lock_lite() {
+        let storage = TestStorageBuilder::new().build().unwrap();
+        let (tx, rx) = channel();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                99,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Rollback key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(99);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                99,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+    }
 }
