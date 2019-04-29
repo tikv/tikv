@@ -45,13 +45,12 @@ pub fn build_read_pool<E: Engine>(
     config: &readpool::Config,
     pd_sender: FutureScheduler<PdTask>,
     engine: E,
-    name_prefix: &str,
 ) -> ReadPool {
     let pd_sender2 = pd_sender.clone();
     let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(config)
-        .name_prefix(name_prefix)
+        .name_prefix("store-read")
         .on_tick(move || tls_flush(&pd_sender))
         .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
         .before_stop(move || {
