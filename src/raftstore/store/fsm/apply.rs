@@ -419,11 +419,17 @@ impl ApplyContext {
             // large raft write batch which causes high write duration.
             // To keep raft write batch small we can clear it if there is no
             // sync cmd in the current cmd batch.
+            //
+            // It is required to be cleared by the end of this function,
+            // otherwise it may write stall states, eg raftstore writes a apply
+            // state when applying snapshot which is newer then
+            // the apply state here.
+            //
+            // TODO: we need to flush apply states periodically to avoid
+            // re-apply too many entries after restart.
             self.raft_wb_mut().clear();
         }
-        if self.sync_log_hint {
-            self.sync_log_hint = false;
-        }
+        self.sync_log_hint = false;
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
@@ -476,14 +482,8 @@ impl ApplyContext {
     pub fn flush(&mut self) {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
-            Some(t) => Some(t),
-            None => {
-                if self.sync_log_hint {
-                    None
-                } else {
-                    return;
-                }
-            }
+            Some(t) => t,
+            None => return,
         };
 
         // Write to engine
@@ -504,15 +504,13 @@ impl ApplyContext {
             }
         }
 
-        if let Some(t) = t {
-            STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
-            slow_log!(
-                t,
-                "{} handle ready {} committed entries",
-                self.tag,
-                self.committed_count
-            );
-        }
+        STORE_APPLY_LOG_HISTOGRAM.observe(duration_to_sec(t.elapsed()) as f64);
+        slow_log!(
+            t,
+            "{} handle ready {} committed entries",
+            self.tag,
+            self.committed_count
+        );
         self.committed_count = 0;
     }
 }
@@ -2610,8 +2608,10 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
+        if apply_ctx.timer.is_none() {
+            apply_ctx.timer = Some(SlowTimer::new());
+        }
 
-        let region_id = self.delegate.id();
         if apply_ctx.raft_wb.is_none() {
             apply_ctx.raft_wb = Some(WriteBatch::with_capacity(DEFAULT_RAFT_WB_SIZE));
         }
@@ -2627,7 +2627,7 @@ impl ApplyFsm {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
-                "region_id" => region_id,
+                "region_id" => self.delegate.region_id(),
                 "peer_id" => self.delegate.id()
             );
         }
