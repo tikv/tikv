@@ -629,7 +629,7 @@ pub struct DbConfig {
 
     // Deprecated since v3.x.
     #[doc(hidden)]
-    #[serde(skip_serializing, skip_deserializing)]
+    #[serde(skip_serializing)]
     pub raftcf: RaftCfConfig,
 }
 

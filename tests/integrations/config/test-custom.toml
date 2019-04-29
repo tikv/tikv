@@ -300,45 +300,6 @@ prop-size-index-distance = 4000000
 prop-keys-index-distance = 40000
 
 [rocksdb.raftcf]
-block-size = "12KB"
-block-cache-size = "12GB"
-disable-block-cache = false
-cache-index-and-filter-blocks = false
-pin-l0-filter-and-index-blocks = false
-use-bloom-filter = false
-optimize-filters-for-hits = false
-whole-key-filtering = true
-bloom-filter-bits-per-key = 123
-block-based-bloom-filter = true
-read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
-write-buffer-size = "1MB"
-max-write-buffer-number = 12
-min-write-buffer-number-to-merge = 12
-max-bytes-for-level-base = "12KB"
-target-file-size-base = "123KB"
-level0-file-num-compaction-trigger = 123
-level0-slowdown-writes-trigger = 123
-level0-stop-writes-trigger = 123
-max-compaction-bytes = "1GB"
-compaction-pri = 3
-dynamic-level-bytes = true
-num-levels = 4
-max-bytes-for-level-multiplier = 8
-compaction-style = 1
-disable-auto-compactions = true
-soft-pending-compaction-bytes-limit = "12GB"
-hard-pending-compaction-bytes-limit = "12GB"
-prop-size-index-distance = 4000000
-prop-keys-index-distance = 40000
 
 [raftdb]
 wal-recovery-mode = 3

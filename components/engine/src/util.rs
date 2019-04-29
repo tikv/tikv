@@ -57,8 +57,6 @@ pub fn delete_all_in_range_cf(
     end_key: &[u8],
     use_delete_range: bool,
 ) -> Result<()> {
-    // CF_RAFT has been removed!
-    assert_ne!(cf, crate::CF_RAFT);
     let handle = rocks::util::get_cf_handle(db, cf)?;
     let wb = WriteBatch::new();
     // Since CF_LOCK is usually small, so using traditional way to cleanup.
