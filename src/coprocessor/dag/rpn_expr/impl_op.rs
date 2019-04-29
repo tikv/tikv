@@ -39,7 +39,9 @@ impl RpnFnLogicalOr {
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
-        // Intentionally not merging `None` and `Some(0)` conditions to be clear.
+        // Rule 1. As long as there is `Some(x)` where x is not 0, the result is `1`.
+        // Rule 2. As long as there is `None`, the result is `None`.
+        // Rule 3. For the rest, the result is `0`.
         Ok(match arg0 {
             None => match arg1 {
                 None => None,
