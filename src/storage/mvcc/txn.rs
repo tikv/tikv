@@ -163,12 +163,12 @@ impl<S: Snapshot> MvccTxn<S> {
                     });
                 }
                 // TODO: refactor
-                if !is_pessimistic_lock && lock.lock_type != LockType::Pessimistic {
+                if lock.lock_type != LockType::Pessimistic {
                     // No need to overwrite the lock and data.
                     // If we use single delete, we can't put a key multiple times.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                     return Ok(());
-                } else if !(is_pessimistic_lock && lock.lock_type == LockType::Pessimistic) {
+                } else if !is_pessimistic_lock {
                     return Err(Error::KeyIsLocked {
                         key: key.to_raw()?,
                         primary: lock.primary,
