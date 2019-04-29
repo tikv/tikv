@@ -243,15 +243,16 @@ impl LockManager {
             let when = Instant::now() + Duration::from_millis(10 * (i as u64));
             let timer = Delay::new(when)
                 .and_then(move |_| {
-                    let mut conflict_ts = commit_ts;
-                    if conflict_ts < waiter.for_update_ts {
-                        conflict_ts = std::u64::MAX;
-                    }
-                    // TODO: is std::u64::MAX as conflict_ts ok? is empty key ok?
+                    // Maybe we can store the latest commit_ts in TiKV, and use
+                    // it as conflict_commit_ts when waker's commit_ts is smaller
+                    // than waiter's for_update_ts.
+                    //
+                    // If so TiDB can use this conflict_commit_ts as for_update_ts
+                    // directly, there is no need to get a ts from PD.
                     let mvcc_err = MvccError::WriteConflict {
                         start_ts: waiter.for_update_ts,
                         conflict_start_ts: lock_ts,
-                        conflict_commit_ts: conflict_ts,
+                        conflict_commit_ts: commit_ts,
                         key: vec![],
                         primary: vec![],
                     };
