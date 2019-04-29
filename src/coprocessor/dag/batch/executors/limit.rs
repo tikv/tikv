@@ -34,7 +34,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let timer = self.summary_collector.on_start_batch();
+        let timer = self.summary_collector.on_start_iterate();
 
         let mut result = self.src.next_batch(scan_rows);
         if result.data.rows_len() < self.remaining_rows {
@@ -46,7 +46,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
         }
 
         self.summary_collector
-            .on_finish_batch(timer, result.data.rows_len());
+            .on_finish_iterate(timer, result.data.rows_len());
 
         result
     }
@@ -64,9 +64,7 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use crate::coprocessor::codec::data_type::VectorValue;
-    use crate::coprocessor::dag::batch::statistics::{
-        ExecSummaryCollectorDisabled, ExecSummaryCollectorEnabled,
-    };
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
