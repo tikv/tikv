@@ -532,6 +532,9 @@ impl Peer {
         self.get_store().region()
     }
 
+    /// Check whether the peer can be hibernated.
+    ///
+    /// This should be used with `check_after_tick` to get a correct conclusion.
     pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
         let mut res = CheckTickResult::default();
         if !self.is_leader() {
@@ -541,16 +544,20 @@ impl Peer {
         if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
             return res;
         }
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let last_index = self.raft_group.raft.raft_log.last_index();
         for (id, pr) in status.progress.unwrap().iter() {
+            // Only recent active peer is considerred, so that an isolated follower
+            // won't cause a waste of leader's resource.
             if *id == self.peer.get_id() || !pr.recent_active {
                 continue;
             }
+            // Keep replicating data to active followers.
             if pr.matched != last_index {
                 return res;
             }
         }
+        // Unapplied entries can change the configuration of the group.
         res.up_to_date = self.get_store().applied_index() == last_index;
         res
     }
@@ -559,6 +566,10 @@ impl Peer {
         if res.leader {
             res.up_to_date && self.is_leader()
         } else {
+            // If follower keeps receiving data from leader, then it's safe to stop
+            // ticking, as leader will make sure it has the latest logs.
+            // Checking term to make sure campaign has finished and the leader starts
+            // doing its job, it's not required but a safe options to
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
@@ -608,7 +619,7 @@ impl Peer {
 
     #[inline]
     pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
-        self.raft_group.status()
+        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -773,7 +784,7 @@ impl Peer {
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let truncated_idx = self.get_store().truncated_index();
 
         if status.progress.is_none() {
@@ -1574,7 +1585,7 @@ impl Peer {
             return Err(box_err!("ignore remove leader"));
         }
 
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let total = status.progress.unwrap().voters().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
@@ -1641,7 +1652,7 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> bool {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let progress = status.progress.unwrap();
 
         if !progress.voters().contains_key(&peer_id) {
@@ -1773,7 +1784,7 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        self.raft_group.status().progress.map_or(0, |p| {
+        self.raft_group.status_ref().progress.map_or(0, |p| {
             p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
         })
     }
