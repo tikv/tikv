@@ -65,7 +65,7 @@ where
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
-pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
+pub trait Evaluable: Clone + Send + PartialOrd + std::fmt::Debug + 'static {
     const EVAL_TYPE: EvalType;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type.
