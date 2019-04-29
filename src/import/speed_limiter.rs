@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::Duration;
 
-use tikv_util::time::{duration_to_sec, Instant};
+use util::time::{duration_to_sec, Instant};
 
 /// A `Clock` controls the passing of time.
 pub trait Clock {
@@ -118,27 +118,21 @@ impl<C: Clock> SpeedLimiter<C> {
             drop(lock);
 
             let sleep_seconds = 1.0 - value / self.speed_limit;
-            let sleep_dur = Duration::from_secs_f64(sleep_seconds);
+            let sleep_dur = Duration::from_nanos((sleep_seconds * 1e9) as u64);
             let should_log = sleep_dur > LOG_THRESHOLD;
             if should_log {
                 // Don't bother with short waits, avoiding flooding the log with
                 // useless information.
                 info!(
-                    "speed limited begin";
-                    "tag" => %tag,
-                    "value" => %value,
-                    "size" => %byte_size,
-                    "going to wait" => ?sleep_dur,
+                    "{} speed limited begin, value = {}, size = {}, going to wait {:?}",
+                    tag, value, size, sleep_dur,
                 );
             }
             self.clock.sleep(sleep_dur);
             if should_log {
                 info!(
-                    "speed limited end";
-                    "tag" => %tag,
-                    "value" => %value,
-                    "size" => %byte_size,
-                    "takes" => ?sleep_dur,
+                    "{} speed limited end, value = {}, size = {}, takes {:?}",
+                    tag, value, size, sleep_dur,
                 );
             }
         }
@@ -309,8 +303,7 @@ mod metronome {
                 sleeper.sleep(Duration::from_secs(250));
                 assert_eq!(sleeper.now(), Duration::from_secs(400));
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(sleeper.now(), Duration::from_secs(500));
     }
@@ -332,8 +325,7 @@ mod metronome {
             scope(|sc| {
                 sc.spawn(|_| metronome.run(1));
                 sleeper.spawn(sc, || panic!("expected failure"));
-            })
-            .unwrap();
+            }).unwrap();
         });
 
         panic::take_hook();
@@ -383,8 +375,7 @@ mod tests {
                 speed_limit.take("", 55);
                 assert_eq!(speed_limit.clock.now(), Duration::from_secs(0));
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(speed_limit.clock.now(), Duration::from_secs(0));
     }
@@ -414,8 +405,7 @@ mod tests {
                 speed_limit.take("", 205);
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_750));
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_750));
     }
@@ -464,8 +454,7 @@ mod tests {
                 speed_limit.clock.sleep(Duration::from_nanos(1));
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_751));
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_751));
     }
@@ -523,8 +512,7 @@ mod tests {
                 speed_limit.clock.sleep(Duration::from_nanos(1));
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_966_796_876));
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(3_351_562_500));
     }
@@ -564,8 +552,7 @@ mod tests {
                     Duration::from_nanos(11_566_406_250)
                 );
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(
             speed_limit.clock.now(),
@@ -595,8 +582,7 @@ mod tests {
                     Duration::from_nanos(19_533_203_125)
                 );
             });
-        })
-        .unwrap();
+        }).unwrap();
 
         assert_eq!(
             speed_limit.clock.now(),
