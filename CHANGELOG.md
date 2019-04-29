@@ -17,6 +17,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add support for the `INSERT` operation, make prewrite succeed only when keys do not exist, and eliminate `Batch Get` [#4085](https://github.com/tikv/tikv/pull/4085)
 - Use more fair batch strategy in the Batch System [#4200](https://github.com/tikv/tikv/pull/4200)
 - Support Raw scan in tikv-ctl [#3825](https://github.com/tikv/tikv/pull/3825)
+- Fixed the tikv-importer issue which import failure was silently ignored [#4566](https://github.com/tikv/tikv/pull/4566)
 
 ## [3.0.0-beta]
 - Support distributed GC [#3179](https://github.com/tikv/tikv/pull/3179)
