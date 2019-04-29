@@ -269,9 +269,7 @@ mod tests {
 
         // Build a selection executor with a predicate that always returns true.
         let exec_predicate_true = |src_exec: MockExecutor| {
-            let predicate = RpnExpressionBuilder::new()
-                .push_constant(1i64, FieldTypeTp::LongLong)
-                .build();
+            let predicate = RpnExpressionBuilder::new().push_constant(1i64).build();
             BatchSelectionExecutor::new_for_test(src_exec, vec![predicate])
         };
 
@@ -310,9 +308,7 @@ mod tests {
     fn test_predicate_always_false() {
         let src_exec = make_src_executor_using_fixture_1();
 
-        let predicate = RpnExpressionBuilder::new()
-            .push_constant(0i64, FieldTypeTp::LongLong)
-            .build();
+        let predicate = RpnExpressionBuilder::new().push_constant(0i64).build();
         let mut exec = BatchSelectionExecutor::new_for_test(src_exec, vec![predicate]);
 
         // The selection executor should always return empty rows.
