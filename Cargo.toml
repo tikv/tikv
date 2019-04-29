@@ -117,6 +117,8 @@ flate2 = { version = "1.0", features = ["zlib"], default-features = false }
 more-asserts = "0.1"
 hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
+tokio-fs = "0.1.6"
+tokio-io = "0.1.12"
 vlog = "0.1.4"
 twoway = "0.2.0"
 profiler = { path = "components/profiler" }
