@@ -101,6 +101,7 @@ pub enum Command {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
+        is_first_lock: bool,
         options: Options,
     },
     Commit {
@@ -412,6 +413,7 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub is_pessimistic_lock: Vec<bool>,
 }
 
 impl Options {
@@ -421,6 +423,7 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            is_pessimistic_lock: vec![],
         }
     }
 
@@ -948,6 +951,7 @@ impl<E: Engine> Storage<E> {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
+        is_first_lock: bool,
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
@@ -964,6 +968,7 @@ impl<E: Engine> Storage<E> {
             primary,
             start_ts,
             for_update_ts,
+            is_first_lock,
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;

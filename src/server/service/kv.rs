@@ -1157,9 +1157,13 @@ fn handle_batch_commands_request<E: Engine>(
             response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
         Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticLock(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.kv_pessimistic_lock.start_coarse_timer();
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_pessimistic_lock
+                .start_coarse_timer();
             let resp = future_pessimistic_lock(&storage, req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::PessimisticLock))
+                .map(oneof!(
+                    BatchCommandsResponse_Response_oneof_cmd::PessimisticLock
+                ))
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
             response_batch_commands_request(executor, id, resp, tx, timer, thread_load);
         }
@@ -1243,6 +1247,7 @@ fn future_prewrite<E: Engine>(
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
+    options.is_pessimistic_lock = req.take_is_pessimistic_lock();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1287,6 +1292,7 @@ fn future_pessimistic_lock<E: Engine>(
         req.take_primary_lock(),
         req.get_start_version(),
         req.get_for_update_ts(),
+        req.get_is_first_lock(),
         options,
         cb,
     );

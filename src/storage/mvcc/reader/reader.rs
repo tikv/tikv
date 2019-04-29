@@ -537,6 +537,15 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
+        fn prewrite_pessimistic_lock(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            let mut options = Options::default();
+            options.is_pessimistic_lock.push(true);
+            txn.prewrite(m, pk, &options).unwrap();
+            self.write(txn.into_modifies());
+        }
+
         fn pessimistic_lock(&mut self, k: Key, pk: &[u8], start_ts: u64, for_update_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
@@ -898,7 +907,7 @@ mod tests {
         must_get(&engine, key, 102, b"v1");
 
         let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
-        engine.prewrite(mutation, key, 10);
+        engine.prewrite_pessimistic_lock(mutation, key, 10);
         must_get_err(&engine, key, 102);
 
         engine.commit(key, 10, 120);
@@ -909,7 +918,7 @@ mod tests {
         must_get(&engine, key, 108, b"v1");
 
         let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
-        engine.prewrite(mutation, key, 110);
+        engine.prewrite_pessimistic_lock(mutation, key, 110);
         must_get(&engine, key, 108, b"v1");
         must_get_err(&engine, key, 112);
     }

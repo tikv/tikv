@@ -484,13 +484,17 @@ fn process_write_impl<S: Snapshot>(
             mutations,
             primary,
             start_ts,
-            options,
+            mut options,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
-            for m in mutations {
+            for (i, m) in mutations.into_iter().enumerate() {
+                // TODO: refactor: if api is changed, many codes should be adjusted.
+                if !options.is_pessimistic_lock.is_empty() {
+                    options.is_pessimistic_lock[0] = options.is_pessimistic_lock[i];
+                }
                 match txn.prewrite(m, &primary, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -520,6 +524,7 @@ fn process_write_impl<S: Snapshot>(
             options,
             ..
         } => {
+            // TODO: support is_first_lock
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = keys.len();
