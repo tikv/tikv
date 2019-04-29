@@ -176,6 +176,22 @@ fn create_corpus_dir(base: impl AsRef<Path>, target: &str) -> Result<PathBuf, Er
     Ok(corpus_dir)
 }
 
+fn pre_check(command: &mut Command, hint: &str) -> Result<(), Error> {
+    let check = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    if !check.success() {
+        Err(format_err!(
+            "Pre-checking for fuzzing failed. Consider run `{}` before fuzzing.",
+            hint
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Run one target fuzz test using AFL
 fn run_afl(target: &str) -> Result<(), Error> {
     let fuzzer = Fuzzer::Afl;
@@ -183,18 +199,7 @@ fn run_afl(target: &str) -> Result<(), Error> {
     let seed_dir = get_seed_dir(target);
     let corpus_dir = create_corpus_dir(fuzzer.directory(), target)?;
 
-    // 0. check afl is ready
-    let pre_check = Command::new("cargo")
-        .args(&["afl"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    if !pre_check.success() {
-        Err(format_err!(
-            "cannot run afl subcommand, please run `cargo install afl` before testing"
-        ))?;
-    }
+    pre_check(Command::new("cargo").args(&["afl"]), "cargo install afl")?;
 
     // 1. cargo afl build (in fuzzer-afl directory)
     let fuzzer_build = Command::new("cargo")
@@ -240,17 +245,10 @@ fn run_afl(target: &str) -> Result<(), Error> {
 
 /// Run one target fuzz test using Honggfuzz
 fn run_honggfuzz(target: &str) -> Result<(), Error> {
-    let pre_check = Command::new("cargo")
-        .args(&["hfuzz", "version"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .unwrap();
-    if !pre_check.success() {
-        Err(format_err!(
-            "cannot run hfuzz subcommand, please run `cargo install hfuzz --version 0.5.34` before testing"
-        ))?;
-    }
+    pre_check(
+        Command::new("cargo").args(&["hfuzz", "version"]),
+        "cargo install hfuzz --version 0.5.34",
+    )?;
 
     let fuzzer = Fuzzer::Honggfuzz;
 
