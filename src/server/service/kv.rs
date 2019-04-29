@@ -1697,12 +1697,14 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ref primary,
             ts,
             ttl,
+            txn_size,
         })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
             lock_info.set_lock_ttl(ttl);
+            lock_info.set_txn_size(txn_size);
             key_error.set_locked(lock_info);
         }
         // failed in prewrite

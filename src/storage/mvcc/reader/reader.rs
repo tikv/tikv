@@ -204,6 +204,7 @@ impl<S: Snapshot> MvccReader<S> {
             primary: lock.primary,
             ts: lock.ts,
             ttl: lock.ttl,
+            txn_size: lock.txn_size,
         })
     }
 

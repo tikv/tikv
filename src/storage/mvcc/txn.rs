@@ -190,6 +190,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
+                        txn_size: lock.txn_size,
                     });
                 }
                 // No need to overwrite the lock and data.
