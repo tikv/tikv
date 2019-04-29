@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
@@ -281,6 +281,8 @@ pub struct Peer {
     /// The state for consistency check.
     pub consistency_state: ConsistencyState,
 
+    /// The counter records pending snapshot requests.
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     /// The index of last compacted raft log. It is used for the next compact log task.
@@ -360,6 +362,7 @@ impl Peer {
             compaction_declined_bytes: 0,
             pending_remove: false,
             pending_merge_state: None,
+            pending_request_snapshot_count: Arc::new(AtomicUsize::new(0)),
             last_committed_prepare_merge_idx: 0,
             leader_missing_time: Some(Instant::now()),
             tag,
@@ -866,6 +869,13 @@ impl Peer {
         // the snapshot, and send remaining log entries, which may increase committed_index.
         // TODO: add more test
         self.last_applying_idx == self.get_store().applied_index()
+            // Requesting snapshots also triggers apply workers to write
+            // apply states even if there is no pending committed entry.
+            // TODO: Instead of sharing the counter, we should apply snapshots
+            //       in apply workers.
+            // TOOD: Add a test to make sure apply state will not be updated
+            //       unexpectedly.
+            && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
     }
 
     #[inline]
@@ -997,6 +1007,8 @@ impl Peer {
         // Check whether there is a pending generate snapshot task, the task
         // needs to be sent the apply system.
         if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
+            self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
         }

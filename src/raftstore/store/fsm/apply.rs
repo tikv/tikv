@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -421,8 +421,8 @@ impl ApplyContext {
             // sync cmd in the current cmd batch.
             //
             // It is required to be cleared by the end of this function,
-            // otherwise it may write stall states, eg raftstore writes a apply
-            // state when applying snapshot which is newer then
+            // otherwise it may write stale states, eg raftstore writes an apply
+            // state when applying snapshot which is newer than
             // the apply state here.
             //
             // TODO: we need to flush apply states periodically to avoid
@@ -657,6 +657,7 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -701,6 +702,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
 
@@ -2181,6 +2183,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
 }
 
 impl Registration {
@@ -2191,6 +2194,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
         }
     }
 }
@@ -2621,6 +2625,9 @@ impl ApplyFsm {
         // force sync to make sure there is no lost update after restart.
         apply_ctx.sync_log_hint = true;
         apply_ctx.flush();
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
