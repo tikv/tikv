@@ -1757,7 +1757,6 @@ impl ApplyDelegate {
 
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            // the source region maybe already closed in `exec_prepare_merge`, it is okay.
             let msg = Msg::CatchUpLogs(CatchUpLogs {
                 target_mailbox: mailbox,
                 merge: merge.to_owned(),
