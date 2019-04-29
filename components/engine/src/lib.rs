@@ -46,6 +46,8 @@ pub use crate::mutable::*;
 mod cf;
 pub use crate::cf::*;
 
+pub const DATA_KEY_PREFIX_LEN: usize = 1;
+
 #[derive(Clone, Debug)]
 pub struct Engines {
     pub kv: Arc<DB>,
