@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! There are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) -> (Int, Double)`.
-
 use cop_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -12,6 +10,7 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::{Error, Result};
 
+/// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
 
 impl super::parser::Parser for AggrFnDefinitionParserAvg {
@@ -68,7 +67,8 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
         });
         out_schema.push(aggr_def.take_field_type());
 
-        // Currently we don't insert CAST, so the built expression will be directly used.
+        // Currently we don't support casting in `check_supported`, so we can directly use the
+        // built expression.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
@@ -84,6 +84,9 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
     }
 }
 
+/// The AVG aggregate function.
+///
+/// Note that there are `AVG(Decimal) -> (Int, Decimal)` and `AVG(Double) -> (Int, Double)`.
 #[derive(Debug)]
 pub struct AggrFnAvg<T: Summable> {
     _phantom: std::marker::PhantomData<T>,
@@ -113,6 +116,7 @@ where
     }
 }
 
+/// The state of the AVG aggregate function.
 #[derive(Debug)]
 pub struct AggrFnStateAvg<T: Summable> {
     sum: T,
@@ -148,20 +152,19 @@ where
         }
     }
 
-    // Note: The result of `AVG()` is returned as `[count, sum]`.
-
     #[inline]
     fn push_result_concrete(
         &self,
         _ctx: &mut EvalContext,
         target: &mut [VectorValue],
     ) -> Result<()> {
+        // Note: The result of `AVG()` is returned as `(count, sum)`.
         assert_eq!(target.len(), 2);
         target[0].push_int(Some(self.count as Int));
         if self.count == 0 {
             target[1].push(None);
         } else {
-            target[1].push(Some(self.sum.clone()))
+            target[1].push(Some(self.sum.clone()));
         }
         Ok(())
     }

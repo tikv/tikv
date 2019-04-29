@@ -9,6 +9,7 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
+/// The parser for COUNT aggregate function.
 pub struct AggrFnDefinitionParserCount;
 
 impl super::parser::Parser for AggrFnDefinitionParserCount {
@@ -21,7 +22,7 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
             ));
         }
 
-        // Check whether or not the children expr is supported
+        // Only check whether or not the children expr is supported.
         let child = &aggr_def.get_children()[0];
         RpnExpressionBuilder::check_expr_tree_supported(child)?;
 
@@ -50,7 +51,7 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
             ft
         });
 
-        // COUNT doesn't need to cast, directly use expression.
+        // COUNT doesn't need to cast, so using the expression directly.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
@@ -61,6 +62,7 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
     }
 }
 
+/// The COUNT aggregate function.
 #[derive(Debug)]
 pub struct AggrFnCount;
 
@@ -76,6 +78,7 @@ impl super::AggrFunction for AggrFnCount {
     }
 }
 
+/// The state of the COUNT aggregate function.
 #[derive(Debug)]
 pub struct AggrFnStateCount {
     count: usize,
@@ -87,9 +90,9 @@ impl AggrFnStateCount {
     }
 }
 
-// Manually implement `AggrFunctionStateUpdatePartial` to achieve best performance for
-// `update_repeat` and `update_vector`. Also note that we support all
-// `AggrFunctionStateUpdatePartial` in COUNT.
+// Here we manually implement `AggrFunctionStateUpdatePartial` so that `update_repeat` and
+// `update_vector` can be faster. Also note that we support all kind of
+// `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
 
 impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
     #[inline]
@@ -107,6 +110,7 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
         value: &Option<T>,
         repeat_times: usize,
     ) -> Result<()> {
+        // Will be used for expressions like `COUNT(1)`.
         if value.is_some() {
             self.count += repeat_times;
         }
@@ -115,6 +119,7 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
 
     #[inline]
     fn update_vector(&mut self, _ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
+        // Will be used for expressions like `COUNT(col)`.
         for value in values {
             if value.is_some() {
                 self.count += 1;
