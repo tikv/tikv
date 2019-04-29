@@ -63,12 +63,19 @@ pub struct DestroyPeerJob {
     pub peer: metapb::Peer,
 }
 
+/// Represents state of the group.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum GroupState {
+    /// The group is working generally, leader keeps
+    /// replicating data to followers.
     Ordered,
+    /// The group is out of order. Leadership may not be hold.
     Chaos,
+    /// The group is about to be out of order. It leave some
+    /// safe space to avoid step chaos too often.
     PreChaos,
-    Indle,
+    /// The group is hibernated.
+    Idle,
 }
 
 pub struct PeerFsm {
@@ -728,7 +735,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state == GroupState::Indle {
+        if self.fsm.group_state == GroupState::Idle {
             if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
                 self.register_raft_base_tick();
                 self.fsm.missing_ticks += 1;
@@ -753,7 +760,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.register_raft_base_tick();
         } else {
             debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-            self.fsm.group_state = GroupState::Indle;
+            self.fsm.group_state = GroupState::Idle;
             if !self.fsm.peer.is_leader() {
                 self.register_raft_base_tick();
             }
@@ -2652,7 +2659,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state == GroupState::Indle {
+        if self.fsm.group_state == GroupState::Idle {
             self.fsm.peer.ping();
             self.register_pd_heartbeat_tick();
             if !self.fsm.peer.is_leader() {
