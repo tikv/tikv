@@ -268,7 +268,7 @@ impl<T: Simulator> Cluster<T> {
         mut request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let mut retry_cnt = 0;
+        let timer = Instant::now();
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
@@ -280,8 +280,7 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
-                retry_cnt += 1;
+            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -563,7 +562,10 @@ impl<T: Simulator> Cluster<T> {
         read_quorum: bool,
         timeout: Duration,
     ) -> RaftCmdResponse {
-        for _ in 0..20 {
+        let timer = Instant::now();
+        let mut tried_times = 0;
+        while tried_times < 10 || timer.elapsed() < timeout {
+            tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(
@@ -598,7 +600,7 @@ impl<T: Simulator> Cluster<T> {
             }
             return resp;
         }
-        panic!("request failed after retry for 20 times");
+        panic!("request timeout");
     }
 
     // Get region when the `filter` returns true.
