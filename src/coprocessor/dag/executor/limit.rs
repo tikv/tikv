@@ -4,22 +4,24 @@ use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
 
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Result;
 
 /// Retrieves rows from the source executor and only produces part of the rows.
-pub struct LimitExecutor<'a> {
+pub struct LimitExecutor<C: ExecSummaryCollector> {
+    summary_collector: C,
     limit: u64,
     cursor: u64,
-    src: Box<dyn Executor + Send + 'a>,
+    src: Box<dyn Executor + Send>,
     first_collect: bool,
 }
 
-impl<'a> LimitExecutor<'a> {
-    pub fn new(limit: Limit, src: Box<dyn Executor + Send + 'a>) -> LimitExecutor<'_> {
+impl<C: ExecSummaryCollector> LimitExecutor<C> {
+    pub fn new(summary_collector: C, limit: Limit, src: Box<dyn Executor + Send>) -> Self {
         LimitExecutor {
+            summary_collector,
             limit: limit.get_limit(),
             cursor: 0,
             src,
@@ -28,15 +30,19 @@ impl<'a> LimitExecutor<'a> {
     }
 }
 
-impl<'a> Executor for LimitExecutor<'a> {
+impl<C: ExecSummaryCollector> Executor for LimitExecutor<C> {
     fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
         if self.cursor >= self.limit {
+            self.summary_collector.on_finish_iterate(timer, 0);
             return Ok(None);
         }
         if let Some(row) = self.src.next()? {
             self.cursor += 1;
+            self.summary_collector.on_finish_iterate(timer, 1);
             Ok(Some(row))
         } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
             Ok(None)
         }
     }
@@ -63,6 +69,7 @@ impl<'a> Executor for LimitExecutor<'a> {
 
     fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
         self.src.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
     }
 }
 
@@ -73,6 +80,7 @@ mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     #[test]
     fn test_limit_executor() {
@@ -102,7 +110,7 @@ mod tests {
         let limit = 5;
         limit_meta.set_limit(limit);
         // init topn executor
-        let mut limit_ect = LimitExecutor::new(limit_meta, ts_ect);
+        let mut limit_ect = LimitExecutor::new(ExecSummaryCollectorDisabled, limit_meta, ts_ect);
         let mut limit_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = limit_ect.next().unwrap() {
             limit_rows.push(row.take_origin());
