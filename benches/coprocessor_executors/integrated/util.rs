@@ -9,7 +9,7 @@ use kvproto::coprocessor::KeyRange;
 use tipb::executor::Executor as PbExecutor;
 
 use test_coprocessor::*;
-use tikv::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
+use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 

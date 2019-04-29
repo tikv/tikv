@@ -15,7 +15,7 @@ use tipb::schema::ColumnInfo;
 use test_coprocessor::*;
 use tikv::coprocessor::dag::batch::executors::BatchTableScanExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::batch::statistics::*;
+use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::coprocessor::dag::executor::TableScanExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;

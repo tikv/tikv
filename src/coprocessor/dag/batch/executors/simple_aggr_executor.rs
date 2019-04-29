@@ -50,7 +50,7 @@ pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExe
 
 impl
     BatchSimpleAggregationExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         Box<dyn BatchExecutor>,
     >
 {
@@ -359,7 +359,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let timer = self.summary_collector.on_start_batch();
+        let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch();
 
         let ret = match result {
@@ -392,7 +392,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
         };
 
         self.summary_collector
-            .on_finish_batch(timer, ret.data.rows_len());
+            .on_finish_iterate(timer, ret.data.rows_len());
         ret
     }
 
