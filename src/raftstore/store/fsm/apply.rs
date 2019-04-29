@@ -30,7 +30,6 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::RepeatedField;
 use raft::eraftpb::{ConfChange, ConfChangeType, Entry, EntryType, Snapshot as RaftSnapshot};
-use raft::NO_LIMIT;
 use uuid::Uuid;
 
 use crate::import::SSTImporter;
@@ -178,6 +177,11 @@ pub enum ExecResult {
     PrepareMerge {
         region: Region,
         state: MergeState,
+    },
+    CatchUpLogs {
+        region: Region,
+        merge: CommitMergeRequest,
+        logs_up_to_date: Arc<AtomicU64>,
     },
     CommitMerge {
         region: Region,
@@ -415,7 +419,6 @@ impl ApplyContext {
             exec_res: results,
             metrics: delegate.metrics.clone(),
             applied_index_term: delegate.applied_index_term,
-            merged: false,
         });
     }
 
@@ -445,7 +448,7 @@ impl ApplyContext {
         };
 
         // Write to engine
-        // raftsotre.sync-log = true means we need prevent data loss when power failure.
+        // raftstore.sync-log = true means we need prevent data loss when power failure.
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
@@ -562,14 +565,7 @@ struct WaitSourceMergeState {
     /// A flag that indicates whether the source peer has applied to the required
     /// index. If the source peer is ready, this flag should be set to the region id
     /// of source peer.
-    ready_to_merge: Arc<AtomicU64>,
-    /// When handling `CatchUpLogs` message, maybe there is a merge cascade, namely,
-    /// a source peer to catch up logs whereas the logs contain a `CommitMerge`.
-    /// In this case, the source peer needs to merge another source peer first, so storing the
-    /// `CatchUpLogs` message in this field, and once the cascaded merge and all other pending
-    /// msgs are handled, the source peer will check this field and then send `LogsUpToDate`
-    /// message to its target peer.
-    catch_up_logs: Option<CatchUpLogs>,
+    logs_up_to_date: Arc<AtomicU64>,
 }
 
 impl Debug for WaitSourceMergeState {
@@ -577,8 +573,7 @@ impl Debug for WaitSourceMergeState {
         f.debug_struct("WaitSourceMergeState")
             .field("pending_entries", &self.pending_entries.len())
             .field("pending_msgs", &self.pending_msgs.len())
-            .field("ready_to_merge", &self.ready_to_merge)
-            .field("catch_up_logs", &self.catch_up_logs.is_some())
+            .field("logs_up_to_date", &self.logs_up_to_date)
             .finish()
     }
 }
@@ -722,7 +717,7 @@ impl ApplyDelegate {
             match res {
                 ApplyResult::None => {}
                 ApplyResult::Res(res) => results.push_back(res),
-                ApplyResult::WaitMergeSource(ready_to_merge) => {
+                ApplyResult::WaitMergeSource(logs_up_to_date) => {
                     apply_ctx.committed_count -= drainer.len() + 1;
                     let mut pending_entries = Vec::with_capacity(drainer.len() + 1);
                     // Note that CommitMerge is skipped when `WaitMergeSource` is returned.
@@ -733,8 +728,7 @@ impl ApplyDelegate {
                     self.wait_merge_state = Some(WaitSourceMergeState {
                         pending_entries,
                         pending_msgs: Vec::default(),
-                        ready_to_merge,
-                        catch_up_logs: None,
+                        logs_up_to_date,
                     });
                     return;
                 }
@@ -793,7 +787,7 @@ impl ApplyDelegate {
         self.applied_index_term = term;
         assert!(term > 0);
         while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
-            // apprently, all the callbacks whose term is less than entry's term are stale.
+            // apparently, all the callbacks whose term is less than entry's term are stale.
             apply_ctx
                 .cbs
                 .last_mut()
@@ -960,7 +954,8 @@ impl ApplyDelegate {
                 | ExecResult::VerifyHash { .. }
                 | ExecResult::CompactLog { .. }
                 | ExecResult::DeleteRange { .. }
-                | ExecResult::IngestSST { .. } => {}
+                | ExecResult::IngestSST { .. }
+                | ExecResult::CatchUpLogs { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1719,49 +1714,6 @@ impl ApplyDelegate {
         ))
     }
 
-    fn load_entries_for_merge(
-        &self,
-        ctx: &ApplyContext,
-        merge: &CommitMergeRequest,
-        apply_index: u64,
-    ) -> Vec<Entry> {
-        // Entries from [first_index, last_index) need to be loaded.
-        let first_index = apply_index + 1;
-        let last_index = merge.get_commit() + 1;
-        if first_index >= last_index {
-            return vec![];
-        }
-        let exist_first_index = merge
-            .get_entries()
-            .get(0)
-            .map_or(last_index, |e| e.get_index());
-        if first_index >= exist_first_index {
-            return merge.get_entries()[(first_index - exist_first_index) as usize..].to_vec();
-        }
-        let source_region = merge.get_source();
-        let mut entries = Vec::with_capacity((last_index - first_index) as usize);
-        peer_storage::fetch_entries_to(
-            &ctx.engines.raft,
-            source_region.get_id(),
-            first_index,
-            exist_first_index,
-            NO_LIMIT,
-            &mut entries,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "{} failed to load entries [{}:{}) from region {}: {:?}",
-                self.tag,
-                first_index,
-                exist_first_index,
-                source_region.get_id(),
-                e
-            );
-        });
-        entries.extend_from_slice(merge.get_entries());
-        entries
-    }
-
     fn exec_commit_merge(
         &mut self,
         ctx: &mut ApplyContext,
@@ -1804,16 +1756,17 @@ impl ApplyDelegate {
             );
 
             let mailbox = ctx.router.mailbox(self.region_id()).unwrap();
-            let ready_to_merge = Arc::new(AtomicU64::new(0));
+            let logs_up_to_date = Arc::new(AtomicU64::new(0));
+            // the source region maybe already closed in `exec_prepare_merge`, it is okay.
             let msg = Msg::CatchUpLogs(CatchUpLogs {
                 target_mailbox: mailbox,
                 merge: merge.to_owned(),
-                ready_to_merge: ready_to_merge.clone(),
+                logs_up_to_date: logs_up_to_date.clone(),
             });
             ctx.router.schedule_task(source_region_id, msg);
             return Ok((
                 AdminResponse::default(),
-                ApplyResult::WaitMergeSource(ready_to_merge),
+                ApplyResult::WaitMergeSource(logs_up_to_date),
             ));
         }
 
@@ -2199,16 +2152,16 @@ pub struct Destroy {
 /// target mailbox.
 pub struct CatchUpLogs {
     /// Mailbox to notify when given logs are applied.
-    target_mailbox: DelegateMailbox,
+    pub target_mailbox: DelegateMailbox,
     /// Merge request that contains logs to be applied.
-    merge: CommitMergeRequest,
-    /// A flag indicate that all logs are applied.
+    pub merge: CommitMergeRequest,
+    /// A flag indicate that all source region's logs are applied.
     ///
     /// This is still necessary although we have a mailbox field already.
     /// Mailbox is used to notify target region, and trigger a round of polling.
     /// But due to the FIFO natural of channel, we need a flag to check if it's
     /// ready when polling.
-    ready_to_merge: Arc<AtomicU64>,
+    pub logs_up_to_date: Arc<AtomicU64>,
 }
 
 type DelegateMailbox = Mailbox<ApplyFsm, NormalScheduler<ApplyFsm, ControlFsm>>;
@@ -2316,7 +2269,6 @@ pub struct ApplyRes {
     pub applied_index_term: u64,
     pub exec_res: VecDeque<ExecResult>,
     pub metrics: ApplyMetrics,
-    pub merged: bool,
 }
 
 #[derive(Debug)]
@@ -2458,7 +2410,7 @@ impl ApplyFsm {
     fn resume_pending_merge(&mut self, ctx: &mut ApplyContext) -> bool {
         match self.delegate.wait_merge_state {
             Some(ref state) => {
-                let source_region_id = state.ready_to_merge.load(Ordering::SeqCst);
+                let source_region_id = state.logs_up_to_date.load(Ordering::SeqCst);
                 if source_region_id == 0 {
                     return false;
                 }
@@ -2478,9 +2430,8 @@ impl ApplyFsm {
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries);
             if let Some(ref mut s) = self.delegate.wait_merge_state {
-                // So the delegate is executing another `CommitMerge`.
+                // So the delegate is executing another `CommitMerge` in pending_entries.
                 s.pending_msgs = state.pending_msgs;
-                s.catch_up_logs = state.catch_up_logs;
                 return false;
             }
         }
@@ -2489,75 +2440,61 @@ impl ApplyFsm {
             self.handle_tasks(ctx, &mut state.pending_msgs);
         }
 
-        match self.delegate.wait_merge_state {
-            Some(ref mut s) => {
-                // So the delegate is executing another `CommitMerge` when handling
-                // `pending_msgs`.
-                s.catch_up_logs = state.catch_up_logs;
-                false
-            }
-            None => {
-                info!(
-                    "all pending logs are applied";
-                    "region_id" => self.delegate.region_id(),
-                    "peer_id" => self.delegate.id(),
-                );
-                if let Some(catch_up_logs) = state.catch_up_logs {
-                    // There is a merge cascade, need to notify the source peer.
-                    ctx.write_to_db();
-                    let region_id = self.delegate.region_id();
-                    catch_up_logs
-                        .ready_to_merge
-                        .store(region_id, Ordering::SeqCst);
-                    let _ = catch_up_logs
-                        .target_mailbox
-                        .force_send(Msg::LogsUpToDate(region_id));
-                }
-                true
-            }
+        // So the delegate is executing another `CommitMerge` in pending_msgs.
+        if self.delegate.wait_merge_state.is_some() {
+            return false;
         }
+
+        info!(
+            "all pending logs are applied";
+            "region_id" => self.delegate.region_id(),
+            "peer_id" => self.delegate.id(),
+        );
+        true
     }
 
-    fn catch_up_logs_for_merge(&mut self, ctx: &mut ApplyContext, mut catch_up_logs: CatchUpLogs) {
+    fn catch_up_logs_for_merge(&mut self, ctx: &mut ApplyContext, catch_up_logs: CatchUpLogs) {
         if ctx.timer.is_none() {
             ctx.timer = Some(SlowTimer::new());
         }
-        let apply_index = self.delegate.apply_state.get_applied_index();
-        if apply_index < catch_up_logs.merge.get_commit() {
-            let entries =
-                self.delegate
-                    .load_entries_for_merge(ctx, &catch_up_logs.merge, apply_index);
-            if entries.is_empty() {
-                panic!(
-                    "{} failed to load entries for {:?}",
-                    self.delegate.tag, catch_up_logs.merge
-                );
-            }
-            self.delegate.handle_raft_committed_entries(ctx, entries);
-            match self.delegate.wait_merge_state {
-                None => {
-                    ctx.apply_res.last_mut().unwrap().merged = true;
-                }
-                Some(ref mut state) => {
-                    // So the peer is executing a CommitMerge while catching up
-                    // logs, we need to store the catch up logs command to notify
-                    // the target peer when all pending entries are handled. Note that
-                    // all pending entries are stored in `wait_merge_state` now,
-                    // the command field can be cleared.
-                    catch_up_logs.merge.entries.clear();
-                    state.catch_up_logs = Some(catch_up_logs);
-                    return;
-                }
+
+        // if it is already up to date, no need to catch up anymore
+        if catch_up_logs.logs_up_to_date.load(Ordering::SeqCst) == 0 {
+            let apply_index = self.delegate.apply_state.get_applied_index();
+            if apply_index < catch_up_logs.merge.get_commit() {
+                let mut res = VecDeque::new();
+                res.push_back(ExecResult::CatchUpLogs {
+                    region: self.delegate.region.clone(),
+                    merge: catch_up_logs.merge,
+                    logs_up_to_date: catch_up_logs.logs_up_to_date,
+                });
+
+                // TODO: can we use `ctx.finish_for()` directly? is it safe here?
+                // send logs to raftstore to append
+                ctx.apply_res.push(ApplyRes {
+                    region_id: self.delegate.region_id(),
+                    apply_state: self.delegate.apply_state.clone(),
+                    exec_res: res,
+                    metrics: self.delegate.metrics.clone(),
+                    applied_index_term: self.delegate.applied_index_term,
+                });
+                return;
             }
         }
+
+        fail_point!(
+            "after_handle_catch_up_logs_for_merge",
+            { self.delegate.id == 1003 && self.delegate.region_id() == 1000 },
+            |_| ()
+        );
 
         let region_id = self.delegate.region_id();
         self.destroy(ctx);
         catch_up_logs
-            .ready_to_merge
+            .logs_up_to_date
             .store(region_id, Ordering::SeqCst);
         info!(
-            "logs are all applied now";
+            "source logs are all applied now";
             "region_id" => self.delegate.region_id(),
             "peer_id" => self.delegate.id(),
         );

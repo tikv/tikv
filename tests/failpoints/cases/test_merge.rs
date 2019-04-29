@@ -205,6 +205,41 @@ fn test_node_merge_restart() {
     must_get_none(&cluster.get_engine(3), b"k3");
 }
 
+#[test]
+fn test_node_merge_catch_up_logs_restart() {
+    let _guard = crate::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // after source peer is applied but before set it to tombstone
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+    fail::cfg("after_handle_catch_up_logs_for_merge", "return()").unwrap();
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(100));
+    cluster.shutdown();
+    fail::remove("after_handle_catch_up_logs_for_merge");
+    cluster.start().unwrap();
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+}
+
 /// Test if merging state will be removed after accepting a snapshot.
 #[test]
 fn test_node_merge_recover_snapshot() {
