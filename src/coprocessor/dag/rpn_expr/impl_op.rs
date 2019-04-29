@@ -18,17 +18,13 @@ impl RpnFnLogicalAnd {
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
         // Intentionally not merging `None` and `Some(0)` conditions to be clear.
-        Ok(match arg0 {
-            None => match arg1 {
-                Some(0) => Some(0),
-                _ => None,
-            },
-            Some(0) => Some(0),
-            Some(_) => match arg1 {
-                None => None,
-                Some(0) => Some(0),
-                Some(_) => Some(1),
-            },
+        Ok(match (arg0, arg1) {
+            (None, Some(0)) => Some(0),
+            (None, _) => None,
+            (Some(0), _) => Some(0),
+            (Some(_), None) => None,
+            (Some(_), Some(0)) => Some(0),
+            (Some(_), Some(_)) => Some(1),
         })
     }
 }
