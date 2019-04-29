@@ -105,7 +105,7 @@ mod imp;
 
 #[cfg(any(windows, fuzzing))]
 compile_warning!("Memory allocation uses System alloc on Windows");
-#[cfg(all(any(windows, fuzzing), feature = "jemalloc"))]
+#[cfg(any(windows, fuzzing, features))]
 #[path = "system.rs"]
 mod imp;
 
