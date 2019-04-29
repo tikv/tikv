@@ -255,6 +255,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "compile_warning"
+version = "0.1.0"
+
+[[package]]
 name = "cookie"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2205,6 +2209,7 @@ dependencies = [
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
+ "compile_warning 0.1.0",
  "jemalloc-ctl 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemalloc-sys 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -45,3 +45,7 @@ optional = true
 version = "0.3.0"
 optional = true
 features = ["bundled"]
+
+[dependencies.compile_warning]
+version = "0.1"
+path = "./compile_warning" 

@@ -1,0 +1,8 @@
+[package]
+name = "compile_warning"
+version = "0.1.0"
+authors = ["blackanger <blackanger.z@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true

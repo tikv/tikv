@@ -19,3 +19,7 @@ $ TCMALLOC=1 make build
 // System Allocator
 $ SYSTEM_ALLOC=1 make build
 ```
+
+# Note
+
+Memory allocation will use System alloc on Windows
