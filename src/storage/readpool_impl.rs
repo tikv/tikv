@@ -36,15 +36,11 @@ thread_local! {
     );
 }
 
-pub fn build_read_pool(
-    config: &readpool::Config,
-    pd_sender: FutureScheduler<PdTask>,
-    name_prefix: &str,
-) -> ReadPool {
+pub fn build_read_pool(config: &readpool::Config, pd_sender: FutureScheduler<PdTask>) -> ReadPool {
     let pd_sender2 = pd_sender.clone();
 
     Builder::from_config(config)
-        .name_prefix(name_prefix)
+        .name_prefix("store-read")
         .on_tick(move || tls_flush(&pd_sender))
         .before_stop(move || tls_flush(&pd_sender2))
         .build()

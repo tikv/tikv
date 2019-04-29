@@ -450,6 +450,10 @@ impl EngineIterator for RegionIterator {
         RegionIterator::valid(self)
     }
 
+    fn status(&self) -> kv::Result<()> {
+        RegionIterator::status(self).map_err(From::from)
+    }
+
     fn validate_key(&self, key: &Key) -> kv::Result<()> {
         self.should_seekable(key.as_encoded()).map_err(From::from)
     }

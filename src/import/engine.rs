@@ -16,9 +16,9 @@ use kvproto::import_kvpb::*;
 use kvproto::import_sstpb::*;
 
 use crate::config::DbConfig;
+use crate::raftstore::coprocessor::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::raftstore::store::keys;
 use crate::storage::is_short_value;
-use crate::storage::mvcc::properties::{SizeProperties, SizePropertiesCollectorFactory};
 use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
@@ -222,7 +222,7 @@ pub struct SSTWriter {
 
 impl SSTWriter {
     pub fn new(db_cfg: &DbConfig, security_cfg: &SecurityConfig, path: &str) -> Result<SSTWriter> {
-        let mut env = Arc::new(Env::default());
+        let mut env = Arc::new(Env::new_mem());
         let mut base_env = None;
         if !security_cfg.cipher_file.is_empty() {
             base_env = Some(Arc::clone(&env));

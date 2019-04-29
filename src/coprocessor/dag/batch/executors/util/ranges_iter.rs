@@ -1,8 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// Needed because we have not introduced IndexScan so far and not all features of this module is
-// used.
-#![allow(unused)]
 use kvproto::coprocessor::KeyRange;
 
 #[derive(PartialEq, Clone, Debug)]
