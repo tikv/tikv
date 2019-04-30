@@ -73,7 +73,7 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.3", features = [ "secure" ] }
-raft = "0.3"
+raft = "0.4.2"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
 fxhash = "0.2"
@@ -84,9 +84,6 @@ rust-crypto = "^0.2"
 hyper = "0.12"
 tokio-threadpool = "0.1"
 more-asserts = "0.1"
-
-[replace]
-"raft:0.3.1" = { git = "https://github.com/pingcap/raft-rs.git" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"
