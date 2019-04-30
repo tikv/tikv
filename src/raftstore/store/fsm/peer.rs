@@ -851,13 +851,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if util::is_vote_msg(&msg.get_message())
             || msg.get_message().get_msg_type() == MessageType::MsgTimeoutNow
         {
-            self.fsm.group_state = GroupState::Chaos;
-            self.fsm.missing_ticks = 0;
-            self.register_raft_base_tick();
+            self.reset_raft_tick(GroupState::Chaos);
         } else if msg.get_from_peer().get_id() == self.fsm.peer.leader_id() {
-            self.fsm.group_state = GroupState::Ordered;
-            self.fsm.missing_ticks = 0;
-            self.register_raft_base_tick();
+            self.reset_raft_tick(GroupState::Ordered);
         }
 
         let from_peer_id = msg.get_from_peer().get_id();
@@ -871,6 +867,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         self.fsm.has_ready = true;
         Ok(())
+    }
+
+    fn reset_raft_tick(&mut self, state: GroupState) {
+        self.fsm.group_state = state;
+        self.fsm.missing_ticks = 0;
+        self.register_raft_base_tick();
     }
 
     // return false means the message is invalid, and can be ignored.

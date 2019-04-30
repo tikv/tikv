@@ -186,7 +186,7 @@ pub struct Runner<T: PdClient> {
     region_peers: HashMap<u64, PeerStat>,
     store_stat: StoreStat,
     is_hb_receiver_scheduled: bool,
-    // How many seconds is a region expected to send a heartbeat.
+    // Seconds between when a region is expected to send a heartbeat.
     region_heartbeat_interval: u64,
 
     // use for Runner inner handle function to send Task to itself
