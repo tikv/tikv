@@ -24,7 +24,7 @@ use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
 };
 use protobuf::{Message, RepeatedField};
-use raft::eraftpb::{self, ConfChangeType, MessageType};
+use raft::eraftpb::ConfChangeType;
 use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
@@ -1745,37 +1745,31 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_ready_catch_up_logs(
         &mut self,
-        mut merge: CommitMergeRequest,
+        merge: CommitMergeRequest,
         logs_up_to_date: Arc<AtomicU64>,
     ) {
         let region_id = self.fsm.region_id();
         assert_eq!(region_id, merge.get_source().get_id());
         self.fsm.peer.catch_up_logs = Some(logs_up_to_date);
 
-        let entries = merge.take_entries();
-        let first = entries.first().unwrap();
-        let last = entries.last().unwrap();
-
-        let log_idx = first.get_index() - 1;
-        let log_term = self.fsm.peer.get_index_term(log_idx);
-
-        // warp these entries as MsgAppend
-        let mut msg = eraftpb::Message::new();
-        msg.set_msg_type(MessageType::MsgAppend);
-        msg.set_from(self.fsm.peer.leader_id());
-        msg.set_to(self.fsm.peer.peer_id());
-        msg.set_index(log_idx);
-        msg.set_log_term(log_term);
-        msg.set_term(last.get_term());
-        msg.set_entries(entries);
-        msg.set_commit(merge.get_commit());
-
-        info!(
-            "send append entries to source region";
-            "region_id" => region_id,
-            "peer_id" => self.fsm.peer.peer_id(),
-        );
-        self.fsm.peer.step(msg).unwrap();
+        // directly append these logs to raft log
+        match self.fsm.peer.maybe_append_merge_entries(merge) {
+            Some(last_index) => {
+                info!(
+                    "send append entries to source region";
+                    "region_id" => region_id,
+                    "peer_id" => self.fsm.peer.peer_id(),
+                    "last_index" => last_index,
+                );
+            }
+            None => {
+                info!(
+                    "no need to catch up logs";
+                    "region_id" => region_id,
+                    "peer_id" => self.fsm.peer.peer_id(),
+                );
+            }
+        }
     }
 
     fn on_ready_commit_merge(

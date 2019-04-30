@@ -13,8 +13,8 @@ use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
-    TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, CmdType, CommitMergeRequest, RaftCmdRequest,
+    RaftCmdResponse, Request, Response, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
@@ -422,6 +422,28 @@ impl Peer {
             Ok(t) => t,
             Err(e) => panic!("{} fail to load term for {}: {:?}", self.tag, idx, e),
         }
+    }
+
+    #[inline]
+    pub fn maybe_append_merge_entries(&mut self, merge: CommitMergeRequest) -> Option<u64> {
+        let mut entries = merge.get_entries();
+        if entries.is_empty() {
+            return None;
+        }
+        let first = entries.first().unwrap();
+
+        // make sure message should be with index not smaller than committed
+        let mut log_idx = first.get_index() - 1;
+        if log_idx < self.raft_group.raft.raft_log.committed {
+            entries = &entries[(self.raft_group.raft.raft_log.committed - log_idx) as usize..];
+            log_idx = self.raft_group.raft.raft_log.committed;
+        }
+        let log_term = self.get_index_term(log_idx);
+
+        self.raft_group
+            .raft
+            .raft_log
+            .maybe_append(log_idx, log_term, merge.get_commit(), entries)
     }
 
     /// Tries to destroy itself. Returns a job (if needed) to do more cleaning tasks.
