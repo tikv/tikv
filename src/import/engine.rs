@@ -23,9 +23,9 @@ use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompressionType,
-    DBIterator, DBOptions, Env, EnvOptions, ExternalSstFileInfo, LRUCacheOptions, ReadOptions,
-    SequentialFile, SstFileWriter, Writable, WriteBatch as RawBatch, DB,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, DBCompressionType, DBIterator, DBOptions, Env,
+    EnvOptions, ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter,
+    Writable, WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
 use tikv_util::config::MB;
