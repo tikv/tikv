@@ -76,8 +76,9 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -90,7 +91,7 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
