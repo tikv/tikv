@@ -23,10 +23,10 @@ impl BatchExecuteStatistics {
     ///
     /// If execution summary does not need to be collected, it is safe to pass 0 to the `executors`
     /// argument, which will avoid one allocation.
-    pub fn new(executors: usize, ranges: usize) -> Self {
+    pub fn new(executors_len: usize, ranges_len: usize) -> Self {
         Self {
-            summary_per_executor: vec![ExecSummary::default(); executors],
-            scanned_rows_per_range: vec![0; ranges],
+            summary_per_executor: vec![ExecSummary::default(); executors_len],
+            scanned_rows_per_range: vec![0; ranges_len],
             cf_stats: crate::storage::Statistics::default(),
         }
     }
