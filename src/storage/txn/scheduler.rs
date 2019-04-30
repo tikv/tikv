@@ -207,6 +207,10 @@ impl<E: Engine> Scheduler<E> {
         let tctx = {
             let cmd = task.cmd();
             let lock = self.gen_lock(cmd);
+            // Write command should acquire write lock.
+            if !cmd.readonly() && !lock.is_write_lock() {
+                panic!("write lock is expected for command {:?}", cmd);
+            }
             TaskContext::new(lock, callback, cmd)
         };
 
