@@ -205,7 +205,8 @@ fn fuzz_duration(
 ) -> Result<(), Error> {
     use tikv::coprocessor::codec::mysql::DurationEncoder;
     let _ = t.fsp();
-    let _ = t.clone().set_fsp(cursor.read_as_u8()?);
+    let mut u = t;
+    u.set_fsp(cursor.read_as_u8()?);
     let _ = t.hours();
     let _ = t.minutes();
     let _ = t.secs();
@@ -214,7 +215,8 @@ fn fuzz_duration(
     let _ = t.to_secs();
     let _ = t.is_zero();
     let _ = t.to_decimal();
-    let _ = t.clone().round_frac(cursor.read_as_i8()?);
+    let u = t;
+    u.round_frac(cursor.read_as_i8()?)?;
     let mut v = Vec::new();
     let _ = v.encode_duration(&t);
     Ok(())
