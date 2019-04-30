@@ -437,6 +437,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
 mod tests {
     use super::*;
 
+    use cop_codegen::AggrFunction;
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
@@ -445,18 +446,9 @@ mod tests {
 
     #[test]
     fn test_no_row() {
-        #[derive(Debug)]
+        #[derive(Debug, AggrFunction)]
+        #[aggr_function(state = AggrFnFooState)]
         struct AggrFnFoo;
-
-        impl AggrFunction for AggrFnFoo {
-            fn name(&self) -> &'static str {
-                "AggrFnFoo"
-            }
-
-            fn create_state(&self) -> Box<dyn AggrFunctionState> {
-                Box::new(AggrFnFooState)
-            }
-        }
 
         #[derive(Debug)]
         struct AggrFnFooState;

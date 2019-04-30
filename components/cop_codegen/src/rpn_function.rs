@@ -1,3 +1,5 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 #[derive(FromDeriveInput, Debug)]
 #[darling(attributes(rpn_function))]
 pub struct RpnFunctionOpts {
