@@ -27,7 +27,7 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
 
 impl
     BatchIndexScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
@@ -98,8 +98,8 @@ impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
     }
 
     #[inline]
@@ -153,11 +153,11 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     ///
     /// Note: the structure of the constructed column is the same as table scan executor but due
     /// to different reasons.
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
         for _ in 0..self.columns_len_without_handle {
-            columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
         if self.decode_handle {
             // For primary key, we construct a decoded `VectorValue` because it is directly
@@ -165,7 +165,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
             // Note that for normal index, primary key is appended at the end of key with a
             // datum flag.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                expect_rows,
+                scan_rows,
                 EvalType::Int,
             ));
         }
@@ -252,7 +252,7 @@ mod tests {
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};

@@ -28,7 +28,7 @@ pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
 
 impl
     BatchTableScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
@@ -105,8 +105,8 @@ impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
     }
 
     #[inline]
@@ -173,7 +173,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
@@ -186,22 +186,22 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
             // Columns before `handle_index` (if any) should be raw.
             for _ in 0..handle_index {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
             // For PK handle, we construct a decoded `VectorValue` because it is directly
             // stored as i64, without a datum flag, at the end of key.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                expect_rows,
+                scan_rows,
                 EvalType::Int,
             ));
             // Columns after `handle_index` (if any) should also be raw.
             for _ in handle_index + 1..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
         } else {
             // PK is unspecified in schema. All column should be in raw format.
             for _ in 0..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
         }
 
@@ -321,7 +321,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};

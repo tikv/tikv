@@ -24,7 +24,7 @@ pub trait ScanExecutorImpl: Send {
     fn build_scanner<S: Store>(&self, store: &S, desc: bool, range: KeyRange)
         -> Result<Scanner<S>>;
 
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec;
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec;
 
     /// Accepts a key value pair and fills the column vector.
     ///
@@ -131,10 +131,10 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     /// The columns are ensured to be regular even if there are errors during the process.
     fn fill_column_vec(
         &mut self,
-        expect_rows: usize,
+        scan_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
-        assert!(expect_rows > 0);
+        assert!(scan_rows > 0);
 
         loop {
             let range = self.ranges.next();
@@ -170,7 +170,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
                     return Err(e);
                 }
 
-                if columns.rows_len() >= expect_rows {
+                if columns.rows_len() >= scan_rows {
                     return Ok(false); // not drained
                 }
             } else {
@@ -215,14 +215,14 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
-        assert!(expect_rows > 0);
+        assert!(scan_rows > 0);
 
-        let timer = self.summary_collector.on_start_batch();
+        let timer = self.summary_collector.on_start_iterate();
 
-        let mut data = self.imp.build_column_vec(expect_rows);
-        let is_drained = self.fill_column_vec(expect_rows, &mut data);
+        let mut data = self.imp.build_column_vec(scan_rows);
+        let is_drained = self.fill_column_vec(scan_rows, &mut data);
 
         data.assert_columns_equal_length();
 
@@ -238,7 +238,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         };
 
         self.summary_collector
-            .on_finish_batch(timer, data.rows_len());
+            .on_finish_iterate(timer, data.rows_len());
 
         BatchExecuteResult {
             data,
