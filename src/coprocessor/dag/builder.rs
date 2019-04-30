@@ -261,9 +261,10 @@ impl DAGBuilder {
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
         let executors_len = req.get_executors().len();
+        let collect_exec_summary = req.get_collect_execution_summaries();
 
         let config = Arc::new(config);
-        let out_most_executor = if req.get_collect_execution_summaries() {
+        let out_most_executor = if collect_exec_summary {
             super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorEnabled>(
                 req.take_executors().into_vec(),
                 store,
@@ -297,8 +298,15 @@ impl DAGBuilder {
             out_most_executor,
             output_offsets,
             config,
-            ranges_len,
-            executors_len,
+            BatchExecuteStatistics::new(
+                if collect_exec_summary {
+                    executors_len
+                } else {
+                    0 // Avoid allocation for executor summaries when it is not needed
+                },
+                ranges_len,
+            ),
+            collect_exec_summary,
         ))
     }
 
