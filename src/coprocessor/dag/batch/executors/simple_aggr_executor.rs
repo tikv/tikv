@@ -16,60 +16,11 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
+use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
-
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
-    summary_collector: C,
-    context: EvalContext,
-    src: Src,
-
-    is_ended: bool,
-
-    /// Aggregate function states.
-    aggr_fn_states: Vec<Box<dyn AggrFunctionState>>,
-
-    aggr_fn_output_cardinality: Vec<usize>, // One slot each aggregate function
-
-    /// The schema of aggregation output is not given directly, so we need to compute one.
-    ordered_schema: Vec<FieldType>, // maybe multiple slot each aggregate function
-
-    // Maybe multiple slot each aggregate function
-    ordered_aggr_fn_output_types: Vec<EvalType>,
-
-    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
-    // aggregate function so it accidentally becomes one slot each aggregate function.
-    ordered_aggr_fn_input_types: Vec<EvalType>,
-
-    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
-    // aggregate function so it accidentally becomes one slot each aggregate function.
-    ordered_aggr_fn_input_exprs: Vec<RpnExpression>,
-}
-
-impl
-    BatchSimpleAggregationExecutor<
-        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
-        Box<dyn BatchExecutor>,
-    >
-{
-    /// Checks whether this executor can be used.
-    #[inline]
-    pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
-        assert_eq!(descriptor.get_group_by().len(), 0);
-        let aggr_definitions = descriptor.get_agg_func();
-        for def in aggr_definitions {
-            AggrDefinitionParser::check_supported(def).map_err(|e| {
-                Error::Other(box_err!(
-                    "Unable to use BatchSimpleAggregateExecutor: {}",
-                    e
-                ))
-            })?;
-        }
-        Ok(())
-    }
-}
 
 // TODO: This macro may be able to be reused elsewhere.
 macro_rules! match_each_eval_type_and_call {
@@ -137,6 +88,74 @@ where
     aggr_fn_state.push_result(ctx, concrete_output_column)
 }
 
+pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
+    summary_collector: C,
+    context: EvalContext,
+    src: Src,
+
+    is_ended: bool,
+
+    /// Aggregate function states.
+    aggr_fn_states: Vec<Box<dyn AggrFunctionState>>,
+
+    aggr_fn_output_cardinality: Vec<usize>, // One slot each aggregate function
+
+    /// The schema of aggregation output is not given directly, so we need to compute one.
+    ordered_schema: Vec<FieldType>, // maybe multiple slot each aggregate function
+
+    // Maybe multiple slot each aggregate function
+    ordered_aggr_fn_output_types: Vec<EvalType>,
+
+    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
+    // aggregate function so it accidentally becomes one slot each aggregate function.
+    ordered_aggr_fn_input_types: Vec<EvalType>,
+
+    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
+    // aggregate function so it accidentally becomes one slot each aggregate function.
+    ordered_aggr_fn_input_exprs: Vec<RpnExpression>,
+}
+
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+    #[cfg(test)]
+    pub fn new_for_test<F>(src: Src, aggr_definitions: Vec<Expr>, parse_aggr_definition: F) -> Self
+    where
+        F: Fn(
+            Expr,
+            &Tz,
+            usize,
+            &mut Vec<FieldType>,
+            &mut Vec<RpnExpression>,
+        ) -> Result<Box<dyn AggrFunction>>,
+    {
+        Self::new_impl(
+            ExecSummaryCollectorDisabled,
+            Arc::new(EvalConfig::default()),
+            src,
+            aggr_definitions,
+            parse_aggr_definition,
+        )
+        .unwrap()
+    }
+}
+
+impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
+        assert_eq!(descriptor.get_group_by().len(), 0);
+        let aggr_definitions = descriptor.get_agg_func();
+        for def in aggr_definitions {
+            AggrDefinitionParser::check_supported(def).map_err(|e| {
+                Error::Other(box_err!(
+                    "Unable to use BatchSimpleAggregateExecutor: {}",
+                    e
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor<C, Src> {
     pub fn new(
         summary_collector: C,
@@ -171,6 +190,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         ) -> Result<Box<dyn AggrFunction>>,
     {
         let aggr_len = aggr_definitions.len();
+        if aggr_len == 0 {
+            return Err(box_err!("There should be at least one aggregate function"));
+        }
+
         let mut aggr_fn_states = Vec::with_capacity(aggr_len);
         let mut aggr_fn_output_cardinality = Vec::with_capacity(aggr_len);
         let mut ordered_schema = Vec::with_capacity(aggr_len * 2);
@@ -318,7 +341,13 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             output_offset += output_cardinality;
         }
 
-        Ok(LazyBatchColumnVec::from(output_columns))
+        // Check whether data is actually outputted when there is no error. If not,
+        // we should panic.
+        let ret = LazyBatchColumnVec::from(output_columns);
+        assert_eq!(ret.rows_len(), 1);
+        ret.assert_columns_equal_length();
+
+        Ok(ret)
     }
 
     #[inline]
@@ -401,5 +430,96 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
         self.src.collect_statistics(destination);
         self.summary_collector
             .collect_into(&mut destination.summary_per_executor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::FieldTypeTp;
+
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::expr::EvalWarnings;
+    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+
+    #[test]
+    fn test_no_row() {
+        #[derive(Debug)]
+        struct AggrFnFoo;
+
+        impl AggrFunction for AggrFnFoo {
+            fn name(&self) -> &'static str {
+                "AggrFnFoo"
+            }
+
+            fn create_state(&self) -> Box<dyn AggrFunctionState> {
+                Box::new(AggrFnFooState)
+            }
+        }
+
+        #[derive(Debug)]
+        struct AggrFnFooState;
+
+        impl ConcreteAggrFunctionState for AggrFnFooState {
+            type ParameterType = f64;
+            type ResultTargetType = Vec<Option<i64>>;
+
+            fn update_concrete(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: &Option<Self::ParameterType>,
+            ) -> Result<()> {
+                // Update should never be called since we are testing aggregate for no row.
+                unreachable!()
+            }
+
+            fn push_result_concrete(
+                &self,
+                _ctx: &mut EvalContext,
+                target: &mut Self::ResultTargetType,
+            ) -> Result<()> {
+                target.push(Some(42));
+                Ok(())
+            }
+        }
+
+        let src_exec = MockExecutor::new(
+            vec![],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        );
+
+        let mut exec = BatchSimpleAggregationExecutor::new_for_test(
+            src_exec,
+            vec![Expr::new()],
+            |_, _, _, out_schema, out_exp| {
+                out_schema.push(FieldTypeTp::LongLong.into());
+                out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
+                Ok(Box::new(AggrFnFoo))
+            },
+        );
+
+        let r = exec.next_batch(1);
+        // The scan rows parameter has no effect for mock executor. We don't care.
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 1);
+        assert_eq!(r.data.columns_len(), 1);
+        assert!(r.data[0].is_decoded());
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(42)]);
+        assert!(r.is_drained.unwrap());
     }
 }
