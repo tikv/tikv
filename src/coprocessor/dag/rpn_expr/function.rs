@@ -6,6 +6,8 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 /// A trait for all RPN functions.
+///
+/// This trait can be auto derived by using `cop_codegen::RpnFunction`.
 pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
     /// The display name of the function.
     fn name(&self) -> &'static str;
