@@ -162,26 +162,24 @@ impl<S: Snapshot> MvccTxn<S> {
                         ttl: lock.ttl,
                     });
                 }
-                // TODO: refactor
                 if lock.lock_type != LockType::Pessimistic {
                     // No need to overwrite the lock and data.
                     // If we use single delete, we can't put a key multiple times.
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                     return Ok(());
-                } else if !is_pessimistic_lock {
-                    return Err(Error::KeyIsLocked {
-                        key: key.to_raw()?,
-                        primary: lock.primary,
-                        ts: lock.ts,
-                        ttl: lock.ttl,
-                    });
                 }
             } else if is_pessimistic_lock {
-                // pessimistic lock not exists
-                return Err(Error::TxnLockNotFound {
+                // Pessimistic lock does not exist, the txn should be aborted.
+                info!("prewrite failed (pessimistic lock not found)";
+                      "key" => %key,
+                      "start_ts" => self.start_ts);
+
+                return Err(Error::WriteConflict {
                     start_ts: self.start_ts,
-                    commit_ts: 0,
-                    key: key.as_encoded().to_owned(),
+                    conflict_start_ts: 0,
+                    conflict_commit_ts: 0,
+                    key: key.to_raw()?,
+                    primary: primary.to_vec(),
                 });
             }
 
@@ -348,7 +346,7 @@ impl<S: Snapshot> MvccTxn<S> {
     pub fn rollback(&mut self, key: Key) -> Result<()> {
         match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
-                // If prewrite type is DEL or LOCK, it is no need to delete value.
+                // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
                 }
