@@ -229,3 +229,14 @@ pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Err
     let fsp = cursor.read_as_i8()?;
     fuzz_duration(Duration::from_nanos(nanos, fsp)?, cursor)
 }
+
+pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Error> {
+    use std::io::Read;
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let fsp = cursor.read_as_i8()?;
+    let mut buf: [u8; 32] = [b' '; 32];
+    cursor.read_exact(&mut buf)?;
+    let d = Duration::parse(&buf, fsp)?;
+    fuzz_duration(d, cursor)
+}
