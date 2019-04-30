@@ -17,6 +17,7 @@ use tikv::raftstore::store::{
 use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use tikv_util::rocksdb_util;
+use tikv_util::config::MB;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -126,6 +127,8 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
     let raft_engine =
         rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+    let mut cache_opts = LRUCacheOptions::new();
+    cache_opts.set_capacity(8 * MB);
 
     // No need to upgrade an empty node.
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
@@ -133,6 +136,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
+        Some(Cache::new_lru_cache(cache_opts)),
     )
     .unwrap();
     // Check whether there is a kv engine.
