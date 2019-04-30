@@ -243,7 +243,6 @@ impl SSTWriter {
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt(&cache);
         Self::tune_config(Arc::clone(&env), &mut write_opts);
-
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
@@ -258,9 +257,9 @@ impl SSTWriter {
     }
 
     fn tune_config(env: Arc<Env>, cf_opts: &mut ColumnFamilyOptions) {
-        use DBCompressionType::Lz4;
+        use DBCompressionType::{Lz4, No};
         cf_opts.set_env(env);
-        cf_opts.compression_per_level(&[Lz4, Lz4, Lz4, Lz4, Lz4, Lz4, Lz4]);
+        cf_opts.compression_per_level(&[No, No, No, No, No, No, Lz4]);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
