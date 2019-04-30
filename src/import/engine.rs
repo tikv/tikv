@@ -36,8 +36,6 @@ use crate::import::stream::SSTFile;
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
 use tikv_util::security::SecurityConfig;
 
-const DISABLED: i32 = i32::MAX;
-
 /// Engine wraps rocksdb::DB with customized options to support efficient bulk
 /// write.
 pub struct Engine {
@@ -339,6 +337,8 @@ pub fn get_approximate_ranges(
 }
 
 fn tune_dboptions_for_bulk_load(opts: &DbConfig) -> (DBOptions, CFOptions<'_>) {
+    const DISABLED: i32 = i32::MAX;
+
     let mut db_opts = DBOptions::new();
     db_opts.create_if_missing(true);
     db_opts.enable_statistics(false);
