@@ -1,13 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cop_codegen::RpnFunction;
+
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 2)]
 pub struct RpnFnLogicalAnd;
-
-impl_template_fn! { 2 arg @ RpnFnLogicalAnd }
 
 impl RpnFnLogicalAnd {
     #[inline]
@@ -26,10 +27,9 @@ impl RpnFnLogicalAnd {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 2)]
 pub struct RpnFnLogicalOr;
-
-impl_template_fn! { 2 arg @ RpnFnLogicalOr }
 
 impl RpnFnLogicalOr {
     #[inline]
@@ -58,10 +58,9 @@ impl RpnFnLogicalOr {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 1)]
 pub struct RpnFnIntIsNull;
-
-impl_template_fn! { 1 arg @ RpnFnIntIsNull }
 
 impl RpnFnIntIsNull {
     #[inline]
@@ -74,10 +73,9 @@ impl RpnFnIntIsNull {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 1)]
 pub struct RpnFnUnaryNot;
-
-impl_template_fn! { 1 arg @ RpnFnUnaryNot }
 
 impl RpnFnUnaryNot {
     #[inline]

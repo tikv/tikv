@@ -2,11 +2,15 @@
 
 use std::cmp::Ordering;
 
+use cop_codegen::RpnFunction;
+
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::{codec, Error, Result};
 
+#[derive(RpnFunction)]
+#[rpn_function(args = 2)]
 pub struct RpnFnCompare<C: Comparer> {
     _phantom: std::marker::PhantomData<C>,
 }
@@ -53,8 +57,6 @@ unsafe impl<C: Comparer> Send for RpnFnCompare<C> {}
 unsafe impl<C: Comparer> Sync for RpnFnCompare<C> {}
 
 // ======
-
-impl_template_fn! { 2 arg @ RpnFnCompare<C>, C: Comparer }
 
 pub trait Comparer: 'static {
     type T: Evaluable;

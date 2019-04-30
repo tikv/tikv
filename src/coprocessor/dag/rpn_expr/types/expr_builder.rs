@@ -410,6 +410,7 @@ mod tests {
 
     use super::super::RpnFnCallPayload;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
@@ -418,10 +419,9 @@ mod tests {
     use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 1)]
     struct FnA;
-
-    impl_template_fn! { 1 arg @ FnA }
 
     impl FnA {
         fn call(
@@ -434,10 +434,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 2 float arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 2)]
     struct FnB;
-
-    impl_template_fn! { 2 arg @ FnB }
 
     impl FnB {
         fn call(
@@ -451,10 +450,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 int arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnC;
-
-    impl_template_fn! { 3 arg @ FnC }
 
     impl FnC {
         fn call(
@@ -469,10 +467,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 float arguments, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnD;
-
-    impl_template_fn! { 3 arg @ FnD }
 
     impl FnD {
         fn call(

@@ -2,14 +2,15 @@
 
 //! For demo purpose.
 
+use cop_codegen::RpnFunction;
+
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 0)]
 pub struct RpnFnDummy0ArgFunc;
-
-impl_template_fn! { 0 arg @ RpnFnDummy0ArgFunc }
 
 impl RpnFnDummy0ArgFunc {
     #[inline]
@@ -18,10 +19,9 @@ impl RpnFnDummy0ArgFunc {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 1)]
 pub struct RpnFnDummy1ArgFunc;
-
-impl_template_fn! { 1 arg @ RpnFnDummy1ArgFunc }
 
 impl RpnFnDummy1ArgFunc {
     #[inline]
@@ -34,10 +34,9 @@ impl RpnFnDummy1ArgFunc {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 2)]
 pub struct RpnFnDummy2ArgFunc;
-
-impl_template_fn! { 2 arg @ RpnFnDummy2ArgFunc }
 
 impl RpnFnDummy2ArgFunc {
     #[inline]
@@ -51,10 +50,9 @@ impl RpnFnDummy2ArgFunc {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, RpnFunction)]
+#[rpn_function(args = 3)]
 pub struct RpnFnDummy3ArgFunc;
-
-impl_template_fn! { 3 arg @ RpnFnDummy3ArgFunc }
 
 impl RpnFnDummy3ArgFunc {
     #[inline]
