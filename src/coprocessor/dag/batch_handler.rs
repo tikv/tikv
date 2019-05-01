@@ -50,6 +50,9 @@ pub struct BatchDAGHandler {
     /// Traditional metric interface.
     // TODO: Deprecate it in Coprocessor DAG v2.
     metrics: ExecutorMetrics,
+
+    /// Whether or not execution summary need to be collected.
+    collect_exec_summary: bool,
 }
 
 impl BatchDAGHandler {
@@ -58,16 +61,17 @@ impl BatchDAGHandler {
         out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
-        ranges_len: usize,
-        executors_len: usize,
+        statistics: BatchExecuteStatistics,
+        collect_exec_summary: bool,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
+            statistics,
             metrics: ExecutorMetrics::default(),
+            collect_exec_summary,
         }
     }
 }
@@ -141,23 +145,22 @@ impl RequestHandler for BatchDAGHandler {
                         .map(|v| *v as i64)
                         .collect(),
                 );
-                sel_resp.set_execution_summaries(RepeatedField::from_vec(
-                    self.statistics
+
+                if self.collect_exec_summary {
+                    let summaries = self
+                        .statistics
                         .summary_per_executor
                         .iter()
                         .map(|summary| {
                             let mut ret = ExecutorExecutionSummary::new();
-                            if let Some(summary) = summary {
-                                ret.set_num_iterations(summary.num_iterations as u64);
-                                ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                                ret.set_time_processed_ns(
-                                    summary.time_processed_ms as u64 * 1_000_000,
-                                );
-                            }
+                            ret.set_num_iterations(summary.num_iterations as u64);
+                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
                             ret
                         })
-                        .collect(),
-                ));
+                        .collect();
+                    sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                }
 
                 sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
