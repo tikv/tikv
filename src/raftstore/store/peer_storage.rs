@@ -9,8 +9,8 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks;
+use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
 use engine::rocks::{DBOptions, Writable};
-use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
@@ -1473,6 +1473,7 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_path: &str,
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
+    cache: &Option<Cache>,
 ) -> Result<()> {
     use engine::WriteOptions;
 
@@ -1495,7 +1496,7 @@ pub fn maybe_upgrade_from_2_to_3(
     let t = Instant::now();
 
     // Create v2.0.x kv engine.
-    let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
+    let kv_cfs_opts = kv_cfg.build_cf_opts_v2(cache);
     let mut kv_engine = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
 
     // Move meta data from kv engine to raft engine.
