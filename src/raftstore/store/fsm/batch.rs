@@ -456,7 +456,6 @@ pub mod tests {
     use super::*;
     use std::borrow::Cow;
     use std::boxed::FnBox;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -466,13 +465,7 @@ pub mod tests {
         is_stopped: bool,
         recv: mpsc::Receiver<Message>,
         mailbox: Option<BasicMailbox<Runner>>,
-        pub dropped: Arc<AtomicBool>,
-    }
-
-    impl Drop for Runner {
-        fn drop(&mut self) {
-            self.dropped.store(true, Ordering::SeqCst);
-        }
+        pub sender: Option<mpsc::Sender<()>>,
     }
 
     impl Fsm for Runner {
@@ -498,7 +491,7 @@ pub mod tests {
             is_stopped: false,
             recv: rx,
             mailbox: None,
-            dropped: Arc::default(),
+            sender: None,
         };
         (tx, Box::new(fsm))
     }
