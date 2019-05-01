@@ -19,7 +19,7 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::readpool::ReadPool;
+use tikv::server::readpool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -28,10 +28,11 @@ use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
-use tikv::storage::{self, RaftKv};
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker};
+
+use tikv::storage::RaftKv;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 
@@ -126,11 +127,8 @@ impl Simulator for ServerCluster {
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-future-worker");
-        let storage_read_pool =
-            ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                storage::ReadPoolContext::new(pd_worker.scheduler())
-            });
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let storage_read_pool = readpool::Builder::build_for_test();
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,
@@ -155,12 +153,9 @@ impl Simulator for ServerCluster {
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let cop_read_pool = readpool::Builder::build_for_test();
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
         for _ in 0..100 {

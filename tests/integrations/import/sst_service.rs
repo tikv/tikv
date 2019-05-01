@@ -8,7 +8,7 @@ use futures::{stream, Future, Stream};
 use tempdir::TempDir;
 use uuid::Uuid;
 
-use crate::grpc::{ChannelBuilder, Environment, Result, WriteFlags};
+use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::kvrpcpb::*;
@@ -17,7 +17,7 @@ use kvproto::tikvpb_grpc::*;
 use test_raftstore::*;
 use tikv::import::test_helpers::*;
 use tikv::pd::PdClient;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 

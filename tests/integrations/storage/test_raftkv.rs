@@ -7,9 +7,9 @@ use engine::{CfName, CF_DEFAULT};
 use test_raftstore::*;
 use tikv::storage::kv::*;
 use tikv::storage::{CFStatistics, Key};
-use tikv::util::codec::bytes;
-use tikv::util::escape;
-use tikv::util::HandyRwLock;
+use tikv_util::codec::bytes;
+use tikv_util::escape;
+use tikv_util::HandyRwLock;
 
 #[test]
 fn test_raftkv() {

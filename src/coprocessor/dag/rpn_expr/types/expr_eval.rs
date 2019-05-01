@@ -1,4 +1,5 @@
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
 use tipb::expression::FieldType;
 
 use super::super::function::RpnFunction;
@@ -237,6 +238,7 @@ mod tests {
     use super::super::RpnFnCallPayload;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
+    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
     use crate::coprocessor::Result;
@@ -244,15 +246,7 @@ mod tests {
     /// Single constant node
     #[test]
     fn test_eval_single_constant_node() {
-        let rpn_nodes = vec![RpnExpressionNode::Constant {
-            value: ScalarValue::Real(Some(1.5)),
-            field_type: {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
@@ -306,8 +300,7 @@ mod tests {
         let (columns, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
@@ -319,8 +312,7 @@ mod tests {
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
 
         let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 0 }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
@@ -338,8 +330,7 @@ mod tests {
         let (columns, schema) = new_single_column_node_fixture();
 
         let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // smaller row number
@@ -348,8 +339,7 @@ mod tests {
         assert!(hooked_eval.is_err());
 
         let mut c = columns.clone();
-        let rpn_nodes = vec![RpnExpressionNode::ColumnRef { offset: 1 }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // larger row number
@@ -372,15 +362,9 @@ mod tests {
             }
         }
 
-        let rpn_nodes = vec![RpnExpressionNode::FnCall {
-            func: Box::new(FnFoo),
-            field_type: {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 4, &[], &mut columns);
@@ -412,25 +396,10 @@ mod tests {
             }
         }
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(1.5)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_constant(1.5f64)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
@@ -476,19 +445,10 @@ mod tests {
             ft
         }];
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-        ];
-
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -496,6 +456,64 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_int_slice(),
             [Some(6), Some(10), None]
+        );
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+    }
+
+    /// Unary function (argument is raw column). The column should be decoded.
+    #[test]
+    fn test_eval_unary_function_raw_column() {
+        /// FnFoo(v) performs v + 5.
+        #[derive(Debug, Clone, Copy)]
+        struct FnFoo;
+
+        impl_template_fn! { 1 arg @ FnFoo }
+
+        impl FnFoo {
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+                v: &Option<i64>,
+            ) -> Result<Option<i64>> {
+                Ok(Some(v.unwrap() + 5))
+            }
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::raw_with_capacity(3);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            col
+        }]);
+
+        let schema = &[{
+            let mut ft = FieldType::new();
+            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+            ft
+        }];
+
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_int_slice(),
+            [Some(0), Some(-2), Some(8)]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
@@ -520,33 +538,11 @@ mod tests {
             }
         }
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(1.5)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Int(Some(3)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_constant(1.5f64)
+            .push_constant(3i64)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 3, &[], &mut columns);
@@ -593,27 +589,11 @@ mod tests {
             ft
         }];
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(1.5)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_constant(1.5f64)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -659,27 +639,11 @@ mod tests {
             ft
         }];
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(1.5)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_constant(1.5f64)
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -744,20 +708,11 @@ mod tests {
         ];
 
         // FnFoo(col1, col0)
-        let rpn_nodes = vec![
-            RpnExpressionNode::ColumnRef { offset: 1 },
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-        ];
-
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(1)
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -765,6 +720,74 @@ mod tests {
         assert_eq!(
             val.vector_value().unwrap().as_int_slice(),
             [Some(-2), Some(-17), Some(22)]
+        );
+        assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
+    }
+
+    /// Binary function (arguments are both raw columns). The same column is referred multiple times
+    /// and it should be Ok.
+    #[test]
+    fn test_eval_binary_function_raw_column() {
+        /// FnFoo(v1, v2) performs v1 * v2.
+        #[derive(Debug, Clone, Copy)]
+        struct FnFoo;
+
+        impl_template_fn! { 2 arg @ FnFoo }
+
+        impl FnFoo {
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+                v1: &Option<i64>,
+                v2: &Option<i64>,
+            ) -> Result<Option<i64>> {
+                Ok(Some(v1.unwrap() * v2.unwrap()))
+            }
+        }
+
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::raw_with_capacity(3);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            let mut datum_raw = Vec::new();
+            DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
+            col.push_raw(&datum_raw);
+
+            col
+        }]);
+
+        let schema = &[
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+            {
+                let mut ft = FieldType::new();
+                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+                ft
+            },
+        ];
+
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
+        let mut ctx = EvalContext::default();
+        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let val = result.unwrap();
+        assert!(val.is_vector());
+        assert_eq!(
+            val.vector_value().unwrap().as_int_slice(),
+            [Some(25), Some(49), Some(9)]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::LongLong);
     }
@@ -798,34 +821,14 @@ mod tests {
             col
         }]);
 
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Int(Some(3)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-        ];
-
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_constant(3i64)
+            .push_column_ref(0)
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -945,59 +948,16 @@ mod tests {
         ];
 
         // Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
-
-        let rpn_nodes = vec![
-            RpnExpressionNode::ColumnRef { offset: 0 },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnB),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::ColumnRef { offset: 1 },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Int(Some(7)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnD),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Int(Some(11)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnC),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnA),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
+        let exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_fn_call(FnB, FieldTypeTp::Double)
+            .push_column_ref(1)
+            .push_constant(7i64)
+            .push_fn_call(FnD, FieldTypeTp::LongLong)
+            .push_constant(11i64)
+            .push_fn_call(FnC, FieldTypeTp::Double)
+            .push_fn_call(FnA, FieldTypeTp::Double)
+            .build();
 
         //      FnA(
         //          [0.5, -0.1, 3.5],
@@ -1008,7 +968,7 @@ mod tests {
         //          )
         //      )
         //      => [25.0, 3.8, 146.0]
-        let exp = RpnExpression::from(rpn_nodes);
+
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
@@ -1038,15 +998,9 @@ mod tests {
             }
         }
 
-        let rpn_nodes = vec![RpnExpressionNode::FnCall {
-            func: Box::new(FnFoo),
-            field_type: {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        }];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_fn_call(FnFoo, FieldTypeTp::LongLong)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
@@ -1077,33 +1031,11 @@ mod tests {
 
         // FnFoo only accepts 1 parameter but we will give 2.
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(3.0)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Real(Some(1.5)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_constant(3.0f64)
+            .push_constant(1.5f64)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
@@ -1133,25 +1065,10 @@ mod tests {
             }
         }
 
-        let rpn_nodes = vec![
-            RpnExpressionNode::Constant {
-                value: ScalarValue::Int(Some(7)),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                    ft
-                },
-            },
-            RpnExpressionNode::FnCall {
-                func: Box::new(FnFoo),
-                field_type: {
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-            },
-        ];
-        let exp = RpnExpression::from(rpn_nodes);
+        let exp = RpnExpressionBuilder::new()
+            .push_constant(7i64)
+            .push_fn_call(FnFoo, FieldTypeTp::Double)
+            .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
@@ -1166,7 +1083,7 @@ mod tests {
         use tipb::expression::ScalarFuncSig;
         use tipb::expression::{Expr, ExprType};
 
-        use crate::util::codec::number::NumberEncoder;
+        use tikv_util::codec::number::NumberEncoder;
 
         // We will build an expression tree from:
         //      FnD(

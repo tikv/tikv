@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use crate::grpc::*;
 use futures::{Future, Stream};
+use grpcio::*;
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 

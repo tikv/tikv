@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::collections::HashSet;
 use std::sync::Arc;
+use tikv_util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;

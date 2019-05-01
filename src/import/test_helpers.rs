@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::pd::RegionInfo;
 use crate::raftstore::store::keys;
-use crate::util::collections::HashMap;
 use engine::rocks::{ColumnFamilyOptions, EnvOptions, SstFileWriter, DB};
+use tikv_util::collections::HashMap;
 
 use super::client::*;
 use super::common::*;
@@ -153,5 +153,13 @@ impl ImportClient for MockClient {
     fn has_region_id(&self, region_id: u64) -> Result<bool> {
         let regions = self.regions.lock().unwrap();
         Ok(regions.contains_key(&region_id))
+    }
+
+    fn is_scatter_region_finished(&self, _: u64) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn is_space_enough(&self, _: u64, _: u64) -> Result<bool> {
+        Ok(true)
     }
 }

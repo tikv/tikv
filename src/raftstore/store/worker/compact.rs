@@ -6,15 +6,15 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::storage::mvcc::properties::get_range_entries_and_versions;
-use crate::util::escape;
-use crate::util::worker::Runnable;
 use engine::rocks;
 use engine::rocks::util::compact_range;
 use engine::CF_WRITE;
 use engine::DB;
+use tikv_util::escape;
+use tikv_util::worker::Runnable;
 
 use super::metrics::COMPACT_RANGE_CF;
+use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
 
 type Key = Vec<u8>;
 
@@ -251,9 +251,9 @@ mod tests {
     use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use tempdir::TempDir;
 
+    use crate::raftstore::coprocessor::properties::get_range_entries_and_versions;
+    use crate::raftstore::coprocessor::properties::MvccPropertiesCollectorFactory;
     use crate::raftstore::store::keys::data_key;
-    use crate::storage::mvcc::properties::get_range_entries_and_versions;
-    use crate::storage::mvcc::properties::MvccPropertiesCollectorFactory;
     use crate::storage::mvcc::{Write, WriteType};
     use crate::storage::types::Key as MvccKey;
 

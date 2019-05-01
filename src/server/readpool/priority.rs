@@ -11,6 +11,16 @@ pub enum Priority {
     High,
 }
 
+impl Priority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Priority::Normal => "normal",
+            Priority::Low => "low",
+            Priority::High => "high",
+        }
+    }
+}
+
 impl From<kvrpcpb::CommandPri> for Priority {
     fn from(p: kvrpcpb::CommandPri) -> Priority {
         match p {

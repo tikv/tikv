@@ -14,8 +14,8 @@ use engine::{CF_RAFT, CF_WRITE};
 use test_raftstore::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::keys;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 /// Test if merge is working as expected in a general condition.
 #[test]
@@ -100,6 +100,54 @@ fn test_node_base_merge() {
     }
 
     cluster.must_put(b"k4", b"v4");
+}
+
+#[test]
+fn test_node_merge_with_slow_learner() {
+    let mut cluster = new_node_cluster(0, 2);
+    configure_for_merge(&mut cluster);
+
+    // Create a cluster with peer 1 as leader and peer 2 as learner.
+    let r1 = cluster.run_conf_change();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.must_add_peer(r1, new_learner_peer(2, 2));
+
+    // Split the region.
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    assert_eq!(region.get_id(), right.get_id());
+    assert_eq!(left.get_end_key(), right.get_start_key());
+    assert_eq!(right.get_start_key(), b"k2");
+
+    // Make sure the leader has received the learner's last index.
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+    (0..100).for_each(|i| cluster.must_put(b"k1", format!("v{}", i).as_bytes()));
+
+    // Merge 2 regions under isolation should fail.
+    let merge = new_prepare_merge(right.clone());
+    let req = new_admin_request(left.get_id(), left.get_region_epoch(), merge);
+    let resp = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+    assert!(resp
+        .get_header()
+        .get_error()
+        .get_message()
+        .contains("log gap"));
+
+    cluster.clear_send_filters();
+    cluster.must_put(b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(1), b"k11", b"v100");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v100");
+    pd_client.must_merge(left.get_id(), right.get_id());
 }
 
 /// Test whether merge will be aborted if prerequisites is not met.

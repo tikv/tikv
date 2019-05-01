@@ -1,12 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
 use time::{self, Tm};
 
 use super::super::Result;
@@ -330,7 +330,7 @@ impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
 mod tests {
     use super::*;
     use crate::coprocessor::codec::mysql::MAX_FSP;
-    use crate::util::escape;
+    use tikv_util::escape;
 
     #[test]
     fn test_hours() {
@@ -472,7 +472,7 @@ mod tests {
                     }
                 }
                 None => {
-                    if !d.is_err() {
+                    if d.is_ok() {
                         panic!("{} should not be passed, got {:?}", escape(input), d);
                     }
                 }

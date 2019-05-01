@@ -5,15 +5,15 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use crate::grpc::EnvBuilder;
 use futures::Future;
 use futures_cpupool::Builder;
+use grpcio::EnvBuilder;
 use kvproto::metapb;
 use kvproto::pdpb;
 
 use test_util;
 use tikv::pd::{validate_endpoints, Config, Error as PdError, PdClient, RegionStat, RpcClient};
-use tikv::util::security::{SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::mock::mocker::*;
 use super::mock::Server as MockServer;

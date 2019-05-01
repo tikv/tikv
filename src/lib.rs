@@ -6,17 +6,13 @@
 #![feature(cell_update)]
 #![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
-#![feature(range_contains)]
-// Currently this raises some false positives, so we allow it:
-// https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![allow(clippy::nonminimal_bool)]
+#![feature(duration_float)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
 extern crate fail;
-#[macro_use]
-extern crate futures;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -27,14 +23,12 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use(
     kv,
-    slog_o,
     slog_kv,
     slog_trace,
     slog_error,
     slog_warn,
     slog_info,
     slog_debug,
-    slog_crit,
     slog_log,
     slog_record,
     slog_b,
@@ -51,12 +45,11 @@ extern crate derive_more;
 extern crate more_asserts;
 #[macro_use]
 extern crate vlog;
+#[macro_use]
+extern crate tikv_util;
 #[cfg(test)]
 extern crate test;
-use grpcio as grpc;
 
-#[macro_use]
-pub mod util;
 pub mod config;
 pub mod coprocessor;
 pub mod import;
@@ -64,5 +57,3 @@ pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
-
-pub use crate::storage::Storage;

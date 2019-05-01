@@ -4,8 +4,8 @@ use super::process::{execute_callback, ProcessResult};
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::{Error as StorageError, Key, StorageCb};
-use crate::util::collections::HashMap;
-use crate::util::worker::{FutureRunnable, FutureScheduler, Stopped};
+use crate::tikv_util::collections::HashMap;
+use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_lock_manager() {
-        use crate::util::worker::FutureWorker;
+        use crate::tikv_util::worker::FutureWorker;
         use std::sync::mpsc;
 
         let mut lm_worker = FutureWorker::new("lock-manager");

@@ -5,15 +5,15 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
-use crate::grpc::Error as GrpcError;
 use futures::sync::oneshot::Canceled;
+use grpcio::Error as GrpcError;
 use kvproto::errorpb;
 use kvproto::metapb::*;
 use uuid::{ParseError, Uuid};
 
 use crate::pd::{Error as PdError, RegionInfo};
 use crate::raftstore::errors::Error as RaftStoreError;
-use crate::util::codec::Error as CodecError;
+use tikv_util::codec::Error as CodecError;
 
 quick_error! {
     #[derive(Debug)]

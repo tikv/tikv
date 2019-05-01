@@ -32,7 +32,7 @@ impl ScalarFunc {
 mod tests {
     use crate::coprocessor::codec::mysql::Decimal;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::ctx::Flag;
     use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
@@ -89,7 +89,7 @@ mod tests {
                 Datum::I64(37),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastStringAsInt, args);
@@ -123,7 +123,7 @@ mod tests {
                 Datum::I64(63),
             ),
         ];
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         for (input, exp) in cases {
             let args = &[datum_expr(input)];
             let child = scalar_func_expr(ScalarFuncSig::CastDecimalAsInt, args);

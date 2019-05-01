@@ -11,7 +11,7 @@ use protobuf::RepeatedField;
 
 use tikv::coprocessor;
 use tikv::coprocessor::codec::table;
-use tikv::util::codec::number::NumberEncoder;
+use tikv_util::codec::number::NumberEncoder;
 
 #[derive(Clone)]
 pub struct Table {

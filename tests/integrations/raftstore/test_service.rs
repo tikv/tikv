@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
@@ -21,7 +21,7 @@ use tikv::coprocessor::REQ_TYPE_DAG;
 use tikv::raftstore::store::keys;
 use tikv::storage::mvcc::{Lock, LockType};
 use tikv::storage::Key;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;

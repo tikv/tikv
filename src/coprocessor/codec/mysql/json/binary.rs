@@ -6,9 +6,9 @@ use std::{f64, str};
 
 use super::{Json, ERR_CONVERT_FAILED};
 use crate::coprocessor::codec::{Error, Result};
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::{read_slice, BytesSlice};
 use byteorder::WriteBytesExt;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::{read_slice, BytesSlice};
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;

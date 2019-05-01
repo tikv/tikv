@@ -23,8 +23,8 @@ use tikv::raftstore::store::fsm::{create_raft_batch_system, RaftBatchSystem, Raf
 use tikv::raftstore::store::*;
 use tikv::raftstore::{Error, Result};
 use tikv::server::Result as ServerResult;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{escape, HandyRwLock};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{escape, HandyRwLock};
 
 use super::*;
 
@@ -130,8 +130,9 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..self.count {
             let dir = TempDir::new("test_cluster").unwrap();
             let kv_path = dir.path().join("kv");
+            let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
-            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),

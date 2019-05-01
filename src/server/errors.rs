@@ -5,8 +5,8 @@ use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use crate::grpc::Error as GrpcError;
 use futures::Canceled;
+use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 
@@ -15,8 +15,8 @@ use crate::pd::Error as PdError;
 use crate::raftstore::Error as RaftServerError;
 use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
-use crate::util::codec::Error as CodecError;
-use crate::util::worker::ScheduleError;
+use tikv_util::codec::Error as CodecError;
+use tikv_util::worker::ScheduleError;
 
 quick_error! {
     #[derive(Debug)]

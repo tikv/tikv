@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tipb::expression::FieldType;
 
@@ -18,32 +7,36 @@ use crate::coprocessor::Result;
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
-pub struct BatchLimitExecutor<Src: BatchExecutor, C: ExecSummaryCollector> {
+pub struct BatchLimitExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
+    summary_collector: C,
     src: Src,
     remaining_rows: usize,
-    summary_collector: C,
 }
 
-impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchLimitExecutor<Src, C> {
-    pub fn new(src: Src, limit: usize, summary_collector: C) -> Result<Self> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchLimitExecutor<C, Src> {
+    pub fn new(summary_collector: C, src: Src, limit: usize) -> Result<Self> {
         if limit == 0 {
             return Err(box_err!("limit should not be zero"));
         }
         Ok(Self {
+            summary_collector,
             src,
             remaining_rows: limit,
-            summary_collector,
         })
     }
 }
 
-impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitExecutor<Src, C> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<C, Src> {
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        let timer = self.summary_collector.start_record_duration();
-        self.summary_collector.inc_iterations();
+    fn schema(&self) -> &[FieldType] {
+        self.src.schema()
+    }
 
-        let mut result = self.src.next_batch(expect_rows);
+    #[inline]
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let timer = self.summary_collector.on_start_iterate();
+
+        let mut result = self.src.next_batch(scan_rows);
         if result.data.rows_len() < self.remaining_rows {
             self.remaining_rows -= result.data.rows_len();
         } else {
@@ -51,9 +44,10 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitEx
             self.remaining_rows = 0;
             result.is_drained = Ok(true);
         }
+
         self.summary_collector
-            .inc_produced_rows(result.data.rows_len());
-        self.summary_collector.inc_elapsed_duration(timer);
+            .on_finish_iterate(timer, result.data.rows_len());
+
         result
     }
 
@@ -63,11 +57,6 @@ impl<Src: BatchExecutor, C: ExecSummaryCollector> BatchExecutor for BatchLimitEx
         self.summary_collector
             .collect_into(&mut destination.summary_per_executor)
     }
-
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        self.src.schema()
-    }
 }
 
 #[cfg(test)]
@@ -75,9 +64,7 @@ mod tests {
     use super::*;
     use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
     use crate::coprocessor::codec::data_type::VectorValue;
-    use crate::coprocessor::dag::batch::statistics::{
-        ExecSummaryCollectorDisabled, ExecSummaryCollectorEnabled,
-    };
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
@@ -124,6 +111,11 @@ mod tests {
 
     impl BatchExecutor for MockExecutor {
         #[inline]
+        fn schema(&self) -> &[FieldType] {
+            self.field_types.as_ref()
+        }
+
+        #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
             let upper = if expect_rows + self.offset > self.data.len() {
                 self.data.len()
@@ -153,11 +145,6 @@ mod tests {
 
         #[inline]
         fn collect_statistics(&mut self, _: &mut BatchExecuteStatistics) {}
-
-        #[inline]
-        fn schema(&self) -> &[FieldType] {
-            self.field_types.as_ref()
-        }
     }
 
     #[test]
@@ -171,7 +158,7 @@ mod tests {
         for (limit, get_rows) in data {
             let src = MockExecutor::new();
             let mut executor =
-                BatchLimitExecutor::new(src, limit, ExecSummaryCollectorDisabled).unwrap();
+                BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, limit).unwrap();
             let res = executor.next_batch(get_rows);
             if limit <= get_rows {
                 // is drained
@@ -185,9 +172,9 @@ mod tests {
     }
 
     #[test]
-    fn test_limit_remainning() {
+    fn test_limit_remaining() {
         let src = MockExecutor::new();
-        let mut executor = BatchLimitExecutor::new(src, 5, ExecSummaryCollectorDisabled).unwrap();
+        let mut executor = BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, 5).unwrap();
         let expect_rows = 3;
         let mut remaining_rows = 5;
         while remaining_rows > 0 {
@@ -201,14 +188,14 @@ mod tests {
     fn test_execution_summary() {
         let src = MockExecutor::new();
         let mut executor =
-            BatchLimitExecutor::new(src, 4, ExecSummaryCollectorEnabled::new(1)).unwrap();
+            BatchLimitExecutor::new(ExecSummaryCollectorEnabled::new(1), src, 4).unwrap();
         executor.next_batch(1);
         executor.next_batch(2);
         let mut s = BatchExecuteStatistics::new(2, 1);
         // Collected statistics remain unchanged until `next_batch` generated delta statistics.
         for _ in 0..2 {
             executor.collect_statistics(&mut s);
-            let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+            let exec_summary = s.summary_per_executor[1];
             assert_eq!(3, exec_summary.num_produced_rows);
             assert_eq!(2, exec_summary.num_iterations);
         }
@@ -216,7 +203,7 @@ mod tests {
         // we get 1 row since the limit is 4
         executor.next_batch(10);
         executor.collect_statistics(&mut s);
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(4, exec_summary.num_produced_rows);
         assert_eq!(3, exec_summary.num_iterations);
     }
@@ -224,7 +211,7 @@ mod tests {
     #[test]
     fn test_invalid_limit() {
         let src = MockExecutor::new();
-        assert!(BatchLimitExecutor::new(src, 0, ExecSummaryCollectorDisabled).is_err());
+        assert!(BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, 0).is_err());
     }
 
     /// MockErrExecutor is based on MockExecutor, the only difference is
@@ -263,7 +250,7 @@ mod tests {
         for (limit, get_rows) in data {
             let src = MockErrExecutor::new();
             let mut executor =
-                BatchLimitExecutor::new(src, limit, ExecSummaryCollectorDisabled).unwrap();
+                BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, limit).unwrap();
             let res = executor.next_batch(get_rows);
             if limit <= get_rows {
                 // error happens after limit rows

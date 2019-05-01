@@ -14,7 +14,7 @@ pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
-use crate::util::escape;
+use tikv_util::escape;
 
 quick_error! {
     #[derive(Debug)]
@@ -24,7 +24,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        Codec(err: crate::util::codec::Error) {
+        Codec(err: tikv_util::codec::Error) {
             from()
             cause(err)
             description(err.description())

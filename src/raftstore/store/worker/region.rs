@@ -25,11 +25,11 @@ use crate::raftstore::store::snap::{plain_file_used, Error, Result, SNAPSHOT_CFS
 use crate::raftstore::store::{
     self, check_abort, keys, ApplyOptions, SnapEntry, SnapKey, SnapManager,
 };
-use crate::util::escape;
-use crate::util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
-use crate::util::time;
-use crate::util::timer::Timer;
-use crate::util::worker::{Runnable, RunnableWithTimer};
+use tikv_util::escape;
+use tikv_util::threadpool::{DefaultContext, ThreadPool, ThreadPoolBuilder};
+use tikv_util::time;
+use tikv_util::timer::Timer;
+use tikv_util::worker::{Runnable, RunnableWithTimer};
 
 use super::metrics::*;
 
@@ -671,9 +671,6 @@ mod tests {
     use crate::raftstore::store::snap::tests::get_test_db_for_regions;
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::{keys, SnapKey, SnapManager};
-    use crate::util::time;
-    use crate::util::timer::Timer;
-    use crate::util::worker::Worker;
     use engine::rocks;
     use engine::rocks::{ColumnFamilyOptions, Snapshot, Writable, WriteBatch};
     use engine::Engines;
@@ -681,6 +678,9 @@ mod tests {
     use engine::{CF_DEFAULT, CF_RAFT};
     use kvproto::raft_serverpb::{PeerState, RegionLocalState};
     use tempdir::TempDir;
+    use tikv_util::time;
+    use tikv_util::timer::Timer;
+    use tikv_util::worker::Worker;
 
     use super::Event;
     use super::PendingDeleteRanges;

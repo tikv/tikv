@@ -17,7 +17,8 @@ use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
-use crate::util::worker::Runnable;
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 
@@ -81,8 +82,11 @@ impl<'a> MergedIterator<'a> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
-            let iter_opt =
-                IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+            let iter_opt = IterOption::new(
+                Some(KeyBuilder::from_slice(start_key, 0, 0)),
+                Some(KeyBuilder::from_slice(end_key, 0, 0)),
+                fill_cache,
+            );
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
             if iter.seek(start_key.into()) {
                 heap.push(KeyEntry::new(

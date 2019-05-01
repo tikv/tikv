@@ -9,8 +9,8 @@ use std::time::Instant;
 use std::{cmp, error, u64};
 
 use engine::rocks;
+use engine::rocks::{Cache, Snapshot as DbSnapshot, WriteBatch, DB};
 use engine::rocks::{DBOptions, Writable};
-use engine::rocks::{Snapshot as DbSnapshot, WriteBatch, DB};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Iterable, Mutable, Peekable};
@@ -26,8 +26,7 @@ use crate::raftstore::store::fsm::GenSnapTask;
 use crate::raftstore::store::util::conf_state_from_region;
 use crate::raftstore::store::ProposalContext;
 use crate::raftstore::{Error, Result};
-use crate::util;
-use crate::util::worker::Scheduler;
+use tikv_util::worker::Scheduler;
 
 use super::keys::{self, enc_end_key, enc_start_key};
 use super::metrics::*;
@@ -134,7 +133,7 @@ impl EntryCache {
         // Cache either is empty or contains latest log. Hence we don't need to fetch log
         // from rocksdb anymore.
         assert!(end_idx == limit_idx || fetched_size > max_size);
-        let (first, second) = util::slices_in_range(&self.cache, start_idx, end_idx);
+        let (first, second) = tikv_util::slices_in_range(&self.cache, start_idx, end_idx);
         ents.extend_from_slice(first);
         ents.extend_from_slice(second);
     }
@@ -1474,6 +1473,7 @@ pub fn maybe_upgrade_from_2_to_3(
     kv_path: &str,
     kv_db_opts: DBOptions,
     kv_cfg: &config::DbConfig,
+    cache: &Option<Cache>,
 ) -> Result<()> {
     use engine::WriteOptions;
 
@@ -1496,7 +1496,7 @@ pub fn maybe_upgrade_from_2_to_3(
     let t = Instant::now();
 
     // Create v2.0.x kv engine.
-    let kv_cfs_opts = kv_cfg.build_cf_opts_v2();
+    let kv_cfs_opts = kv_cfg.build_cf_opts_v2(cache);
     let mut kv_engine = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts)?;
 
     // Move meta data from kv engine to raft engine.
@@ -1615,7 +1615,6 @@ mod tests {
     use crate::raftstore::store::worker::RegionRunner;
     use crate::raftstore::store::worker::RegionTask;
     use crate::raftstore::store::{bootstrap_store, initial_region, prepare_bootstrap_cluster};
-    use crate::util::worker::{Scheduler, Worker};
     use engine::rocks::util::new_engine;
     use engine::rocks::WriteBatch;
     use engine::Engines;
@@ -1631,6 +1630,7 @@ mod tests {
     use std::sync::*;
     use std::time::Duration;
     use tempdir::*;
+    use tikv_util::worker::{Scheduler, Worker};
 
     use super::*;
 

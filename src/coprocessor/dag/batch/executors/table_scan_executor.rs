@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::TableScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
-use crate::util::collections::HashMap;
+use crate::storage::{FixtureStore, Store};
+use tikv_util::collections::HashMap;
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -24,6 +25,20 @@ pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
         super::util::ranges_iter::PointRangeEnable,
     >,
 );
+
+impl
+    BatchTableScanExecutor<
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
+        FixtureStore,
+    >
+{
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &TableScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
+    }
+}
 
 impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     pub fn new(
@@ -90,8 +105,8 @@ impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
     }
 
     #[inline]
@@ -158,7 +173,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
 
@@ -171,25 +186,26 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
 
             // Columns before `handle_index` (if any) should be raw.
             for _ in 0..handle_index {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
             // For PK handle, we construct a decoded `VectorValue` because it is directly
             // stored as i64, without a datum flag, at the end of key.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                expect_rows,
+                scan_rows,
                 EvalType::Int,
             ));
             // Columns after `handle_index` (if any) should also be raw.
             for _ in handle_index + 1..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
         } else {
             // PK is unspecified in schema. All column should be in raw format.
             for _ in 0..columns_len {
-                columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+                columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
             }
         }
 
+        assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
     }
 
@@ -200,7 +216,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::coprocessor::codec::{datum, table};
-        use crate::util::codec::number;
+        use tikv_util::codec::number;
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
@@ -305,7 +321,7 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -657,9 +673,9 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        // 0 is none because our output index is 1
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        // 0 remains Default because our output index is 1
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -667,8 +683,8 @@ mod tests {
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -678,8 +694,8 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 2);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(2, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
     }

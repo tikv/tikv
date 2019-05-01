@@ -3,6 +3,7 @@
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
@@ -11,14 +12,39 @@ use crate::coprocessor::codec::data_type::ScalarValue;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
 use crate::coprocessor::{Error, Result};
-use crate::util::codec::number;
 
 /// Helper to build an `RpnExpression`.
-///
-/// TODO: Deprecate it in Coprocessor V2 DAG interface.
-pub struct RpnExpressionBuilder;
+pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
+    /// Checks whether the given expression definition tree is supported.
+    pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
+        EvalType::try_from(c.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))?;
+
+        match c.get_tp() {
+            ExprType::ScalarFunc => {
+                let sig = c.get_sig();
+                super::super::map_pb_sig_to_rpn_func(sig)?;
+                for n in c.get_children() {
+                    RpnExpressionBuilder::check_expr_tree_supported(n)?;
+                }
+            }
+            ExprType::Null => {}
+            ExprType::Int64 => {}
+            ExprType::Uint64 => {}
+            ExprType::String | ExprType::Bytes => {}
+            ExprType::Float32 | ExprType::Float64 => {}
+            ExprType::MysqlTime => {}
+            ExprType::MysqlDuration => {}
+            ExprType::MysqlDecimal => {}
+            ExprType::MysqlJson => {}
+            ExprType::ColumnRef => {}
+            _ => return Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
+
+        Ok(())
+    }
+
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,
@@ -55,6 +81,72 @@ impl RpnExpressionBuilder {
             max_columns,
         )?;
         Ok(RpnExpression::from(expr_nodes))
+    }
+
+    /// Creates a new builder instance.
+    ///
+    /// Only used in tests. Normal logic should use `build_from_expr_tree`.
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Pushes a `FnCall` node.
+    #[cfg(test)]
+    pub fn push_fn_call(
+        mut self,
+        func: impl RpnFunction,
+        return_field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::FnCall {
+            func: Box::new(func),
+            field_type: return_field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
+    /// field type that matches the field type of the given value.
+    #[cfg(test)]
+    pub fn push_constant(mut self, value: impl Into<ScalarValue>) -> Self {
+        let value = value.into();
+        let field_type = value
+            .eval_type()
+            .into_certain_field_type_tp_for_test()
+            .into();
+        let node = RpnExpressionNode::Constant { value, field_type };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node.
+    #[cfg(test)]
+    pub fn push_constant_with_field_type(
+        mut self,
+        value: impl Into<ScalarValue>,
+        field_type: impl Into<FieldType>,
+    ) -> Self {
+        let node = RpnExpressionNode::Constant {
+            value: value.into(),
+            field_type: field_type.into(),
+        };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `ColumnRef` node.
+    #[cfg(test)]
+    pub fn push_column_ref(mut self, offset: usize) -> Self {
+        let node = RpnExpressionNode::ColumnRef { offset };
+        self.0.push(node);
+        self
+    }
+
+    /// Builds the `RpnExpression`.
+    #[cfg(test)]
+    pub fn build(self) -> RpnExpression {
+        RpnExpression::from(self.0)
     }
 }
 
@@ -317,7 +409,7 @@ mod tests {
 
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::Result;
-    use crate::util::codec::number::NumberEncoder;
+    use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[derive(Debug, Clone, Copy)]

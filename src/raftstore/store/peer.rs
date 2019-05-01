@@ -37,10 +37,10 @@ use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
-use crate::util::collections::HashMap;
-use crate::util::time::{duration_to_sec, monotonic_raw_now};
-use crate::util::worker::Scheduler;
-use crate::util::{escape, MustConsumeVec};
+use tikv_util::collections::HashMap;
+use tikv_util::time::{duration_to_sec, monotonic_raw_now};
+use tikv_util::worker::Scheduler;
+use tikv_util::{escape, MustConsumeVec};
 
 use super::cmd_resp;
 use super::local_metrics::{RaftMessageMetrics, RaftReadyMetrics};
@@ -1723,10 +1723,11 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        self.raft_group
-            .status()
+        let status = self.raft_group.status();
+        status
             .progress
             .values()
+            .chain(status.learner_progress.values())
             .map(|pr| pr.matched)
             .min()
             .unwrap_or_default()

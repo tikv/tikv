@@ -2,20 +2,20 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::grpc::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use engine::rocks::util::compact_files_in_range;
 use engine::rocks::DB;
 use futures::sync::mpsc;
 use futures::{future, Future, Stream};
 use futures_cpupool::{Builder, CpuPool};
+use grpcio::{ClientStreamingSink, RequestStream, RpcContext, UnarySink};
 use kvproto::import_sstpb::*;
 use kvproto::import_sstpb_grpc::*;
 use kvproto::raft_cmdpb::*;
 
 use crate::raftstore::store::Callback;
 use crate::server::transport::RaftStoreRouter;
-use crate::util::future::paired_future_callback;
-use crate::util::time::Instant;
+use tikv_util::future::paired_future_callback;
+use tikv_util::time::Instant;
 
 use super::import_mode::*;
 use super::metrics::*;

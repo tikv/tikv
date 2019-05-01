@@ -13,9 +13,9 @@ use std::{cmp, i32, i64, mem, u32, u64};
 use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
 
-use crate::util::codec::number::{self, NumberEncoder};
-use crate::util::codec::BytesSlice;
-use crate::util::escape;
+use tikv_util::codec::number::{self, NumberEncoder};
+use tikv_util::codec::BytesSlice;
+use tikv_util::escape;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Res<T> {
@@ -918,6 +918,11 @@ impl Decimal {
         self.result_frac_cnt = 0;
         self.negative = false;
         self.word_buf[0] = 0;
+    }
+
+    /// Creates a new decimal which is zero.
+    pub fn zero() -> Decimal {
+        Decimal::new(1, 0, false)
     }
 
     /// Given a precision count 'prec', get:
