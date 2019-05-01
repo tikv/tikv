@@ -689,7 +689,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "glob"
-version = "0.2.11"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -980,7 +980,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#44d2a52a469c2db43cb998a983bfc09f57ea21ff"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#0826c1f101a5b1c18acd945decab91c8da0c85d9"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -989,7 +989,7 @@ dependencies = [
  "libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "lz4-sys 1.8.0 (git+https://github.com/busyjay/lz4-rs.git?branch=adjust-build)",
  "snappy-sys 0.1.0 (git+https://github.com/busyjay/rust-snappy.git?branch=static-link)",
- "zstd-sys 1.4.9+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)",
+ "zstd-sys 1.4.10+zstd.1.4.0 (git+https://github.com/gyscos/zstd-rs.git)",
 ]
 
 [[package]]
@@ -1690,7 +1690,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/pingcap/rust-rocksdb.git#44d2a52a469c2db43cb998a983bfc09f57ea21ff"
+source = "git+https://github.com/pingcap/rust-rocksdb.git#0826c1f101a5b1c18acd945decab91c8da0c85d9"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2699,11 +2699,11 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.4.9+zstd.1.3.8"
-source = "git+https://github.com/gyscos/zstd-rs.git#d51f87c668932670b9aced48d1b750506c211f11"
+version = "1.4.10+zstd.1.4.0"
+source = "git+https://github.com/gyscos/zstd-rs.git#071020d16b6fd58d496e389495a8de06f769d808"
 dependencies = [
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
- "glob 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
+ "glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2775,7 +2775,7 @@ dependencies = [
 "checksum futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4"
 "checksum fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 "checksum gcc 0.3.54 (registry+https://github.com/rust-lang/crates.io-index)" = "5e33ec290da0d127825013597dbdfc28bee4964690c7ce1166cbc2a7bd08b1bb"
-"checksum glob 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)" = "8be18de09a56b60ed0edf84bc9df007e30040691af7acd1c41874faac5895bfb"
+"checksum glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 "checksum grpcio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "b5cef8e7d071d3e48349528932590b2a4c6fc8b3e20cec1e3bdc52c4d831e89a"
 "checksum grpcio-compiler 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)" = "373a14f0f994d4c235770f4bb5558be00626844db130a82a70142b8fc5996fc3"
 "checksum grpcio-sys 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)" = "456f8b46b47028e75726587987ead25144ac14c7c9e79f28bbb71436eca67d68"
@@ -2983,4 +2983,4 @@ dependencies = [
 "checksum ws2_32-sys 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "d59cefebd0c892fa2dd6de581e937301d8552cb44489cdff035c6187cb63fa5e"
 "checksum xdg 2.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d089681aa106a86fade1b0128fb5daf07d5867a509ab036d99988dec80429a57"
 "checksum zipf 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a4b6916023b585291387096ec195b2f2d372344993dfceed51c8efb6cde84b12"
-"checksum zstd-sys 1.4.9+zstd.1.3.8 (git+https://github.com/gyscos/zstd-rs.git)" = "<none>"
+"checksum zstd-sys 1.4.10+zstd.1.4.0 (git+https://github.com/gyscos/zstd-rs.git)" = "<none>"
