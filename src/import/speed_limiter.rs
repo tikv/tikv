@@ -147,12 +147,11 @@ impl<C: Clock> SpeedLimiter<C> {
 mod metronome {
     use std::cmp::Ordering;
     use std::collections::BinaryHeap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use crossbeam::atomic::AtomicCell;
-    use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
-    use crossbeam::thread::{scope, Scope};
+    use crossbeam::{scope, Scope};
+    use crossbeam_channel::{after, bounded, select, unbounded, Receiver, Sender};
 
     struct Sleep {
         end: Duration,
@@ -187,7 +186,7 @@ mod metronome {
     }
 
     pub struct Metronome {
-        now: Arc<AtomicCell<Duration>>,
+        now: Arc<Mutex<Duration>>,
         tick_recv: Receiver<ThreadState>,
     }
 
@@ -198,7 +197,7 @@ mod metronome {
     impl Metronome {
         pub fn new() -> (Self, Sleeper) {
             let (tick_send, tick_recv) = unbounded();
-            let now = Arc::new(AtomicCell::new(Duration::from_secs(0)));
+            let now = Arc::new(Mutex::new(Duration::from_secs(0)));
             (
                 Metronome {
                     now: Arc::clone(&now),
@@ -210,7 +209,7 @@ mod metronome {
 
         pub fn run(&self, mut threads: usize) {
             let mut sleepers = BinaryHeap::with_capacity(threads);
-            for state in self.tick_recv.iter() {
+            while let Some(state) = self.tick_recv.recv() {
                 match state {
                     ThreadState::Ended => {
                         threads -= 1;
@@ -227,8 +226,13 @@ mod metronome {
                     // we could then pop the earliest item, and jump the time to
                     // that point.
                     if let Some(call) = sleepers.pop() {
-                        self.now.store(call.end);
-                        call.wakeup_send.send_timeout((), TIMEOUT).unwrap();
+                        {
+                            *self.now.lock().unwrap() = call.end;
+                        }
+                        select! {
+                            send(call.wakeup_send, ()) => {},
+                            recv(after(TIMEOUT)) => panic!("timed out"),
+                        }
                     } else {
                         // sleepers is empty meaning all threads are completed.
                         // just quit the loop.
@@ -240,29 +244,34 @@ mod metronome {
     }
 
     pub struct Sleeper {
-        now: Arc<AtomicCell<Duration>>,
+        now: Arc<Mutex<Duration>>,
         tick_send: Sender<ThreadState>,
     }
 
     impl Sleeper {
         pub fn now(&self) -> Duration {
-            self.now.load()
+            *self.now.lock().unwrap()
         }
 
         pub fn sleep(&self, d: Duration) {
             let (wakeup_send, wakeup_recv) = bounded(0);
-            let end = self.now.load() + d;
-            self.tick_send
-                .send_timeout(ThreadState::Sleep(Sleep { end, wakeup_send }), TIMEOUT)
-                .unwrap();
-            wakeup_recv.recv_timeout(TIMEOUT).unwrap();
+            let end = { *self.now.lock().unwrap() + d };
+            let state = ThreadState::Sleep(Sleep { end, wakeup_send });
+            select! {
+                send(self.tick_send, state) => {},
+                recv(after(TIMEOUT)) => panic!("timed out"),
+            }
+            select! {
+                recv(wakeup_recv) => {},
+                recv(after(TIMEOUT)) => panic!("timed out"),
+            }
         }
 
         pub fn spawn<'env, F>(&'env self, sc: &Scope<'env>, f: F)
         where
             F: FnOnce() + Send + 'env,
         {
-            sc.spawn(move |_| {
+            sc.spawn(move || {
                 let _thread_ender = ThreadEnder {
                     tick_send: &self.tick_send,
                 };
@@ -275,11 +284,9 @@ mod metronome {
         tick_send: &'env Sender<ThreadState>,
     }
 
-    impl Drop for ThreadEnder<'_> {
+    impl<'env> Drop for ThreadEnder<'env> {
         fn drop(&mut self) {
-            self.tick_send
-                .send_timeout(ThreadState::Ended, TIMEOUT)
-                .unwrap();
+            self.tick_send.send(ThreadState::Ended);
         }
     }
 
@@ -288,7 +295,7 @@ mod metronome {
         let (metronome, sleeper) = Metronome::new();
 
         scope(|sc| {
-            sc.spawn(|_| metronome.run(2));
+            sc.spawn(|| metronome.run(2));
             sleeper.spawn(sc, || {
                 assert_eq!(sleeper.now(), Duration::from_secs(0));
                 sleeper.sleep(Duration::from_secs(200));
@@ -303,7 +310,7 @@ mod metronome {
                 sleeper.sleep(Duration::from_secs(250));
                 assert_eq!(sleeper.now(), Duration::from_secs(400));
             });
-        }).unwrap();
+        });
 
         assert_eq!(sleeper.now(), Duration::from_secs(500));
     }
@@ -323,9 +330,9 @@ mod metronome {
             let (metronome, sleeper) = Metronome::new();
 
             scope(|sc| {
-                sc.spawn(|_| metronome.run(1));
+                sc.spawn(|| metronome.run(1));
                 sleeper.spawn(sc, || panic!("expected failure"));
-            }).unwrap();
+            });
         });
 
         panic::take_hook();
@@ -360,7 +367,7 @@ mod tests {
         let speed_limit = SpeedLimiter::<Sleeper>::new(512.0, sleeper);
 
         scope(|sc| {
-            sc.spawn(|_| metronome.run(1));
+            sc.spawn(|| metronome.run(1));
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 50);
                 assert_eq!(speed_limit.clock.now(), Duration::from_secs(0));
@@ -375,7 +382,7 @@ mod tests {
                 speed_limit.take("", 55);
                 assert_eq!(speed_limit.clock.now(), Duration::from_secs(0));
             });
-        }).unwrap();
+        });
 
         assert_eq!(speed_limit.clock.now(), Duration::from_secs(0));
     }
@@ -386,7 +393,7 @@ mod tests {
         let speed_limit = SpeedLimiter::<Sleeper>::new(512.0, sleeper);
 
         scope(|sc| {
-            sc.spawn(|_| metronome.run(1));
+            sc.spawn(|| metronome.run(1));
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 200);
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(0));
@@ -405,7 +412,7 @@ mod tests {
                 speed_limit.take("", 205);
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_750));
             });
-        }).unwrap();
+        });
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_750));
     }
@@ -421,7 +428,7 @@ mod tests {
         // [ 201 ] -> [ 203 ] -> [ 205 ]
 
         scope(|sc| {
-            sc.spawn(|_| metronome.run(2));
+            sc.spawn(|| metronome.run(2));
 
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 200);
@@ -454,7 +461,7 @@ mod tests {
                 speed_limit.clock.sleep(Duration::from_nanos(1));
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_751));
             });
-        }).unwrap();
+        });
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_574_218_751));
     }
@@ -471,7 +478,7 @@ mod tests {
         // [ 101 ]    [ 103 ]
 
         scope(|sc| {
-            sc.spawn(|_| metronome.run(2));
+            sc.spawn(|| metronome.run(2));
 
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 300);
@@ -512,7 +519,7 @@ mod tests {
                 speed_limit.clock.sleep(Duration::from_nanos(1));
                 assert_eq!(speed_limit.clock.now(), Duration::from_nanos(1_966_796_876));
             });
-        }).unwrap();
+        });
 
         assert_eq!(speed_limit.clock.now(), Duration::from_nanos(3_351_562_500));
     }
@@ -525,7 +532,7 @@ mod tests {
         // ensure the speed limiter won't forget to enforce until a long pause
         // i.e. we're observing the _maximum_ speed, not the _average_ speed.
         scope(|sc| {
-            sc.spawn(|_| metronome.run(1));
+            sc.spawn(|| metronome.run(1));
 
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 400);
@@ -552,7 +559,7 @@ mod tests {
                     Duration::from_nanos(11_566_406_250)
                 );
             });
-        }).unwrap();
+        });
 
         assert_eq!(
             speed_limit.clock.now(),
@@ -567,7 +574,7 @@ mod tests {
 
         // ensure we could still send something much higher than the speed limit
         scope(|sc| {
-            sc.spawn(|_| metronome.run(1));
+            sc.spawn(|| metronome.run(1));
 
             speed_limit.clock.spawn(sc, || {
                 speed_limit.take("", 5000);
@@ -582,7 +589,7 @@ mod tests {
                     Duration::from_nanos(19_533_203_125)
                 );
             });
-        }).unwrap();
+        });
 
         assert_eq!(
             speed_limit.clock.now(),
