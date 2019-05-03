@@ -253,7 +253,6 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
-            Command::Pause { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
@@ -2398,7 +2397,7 @@ mod tests {
         storage
             .async_pause(
                 Context::new(),
-                vec![],
+                vec![Key::from_raw(b"y")],
                 1000,
                 expect_ok_callback(tx.clone(), 3),
             )
