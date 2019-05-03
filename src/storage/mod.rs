@@ -253,6 +253,7 @@ impl Command {
             Command::MvccByKey { .. } |
             Command::MvccByStartTs { .. } => true,
             Command::ResolveLock { ref key_locks, .. } => key_locks.is_empty(),
+            Command::Pause { ref keys, .. } => keys.is_empty(),
             _ => false,
         }
     }
