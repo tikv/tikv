@@ -5,13 +5,14 @@ use std::borrow::Cow;
 use chrono::offset::TimeZone;
 use chrono::Datelike;
 
-use super::{EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::error::Error;
 use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use crate::coprocessor::codec::mysql::time::weekmode::WeekMode;
 use crate::coprocessor::codec::mysql::{Duration as MyDuration, Time, TimeType};
 use crate::coprocessor::codec::Datum;
 use crate::coprocessor::dag::expr::SqlMode;
+
+use super::{EvalContext, Result, ScalarFunc};
 
 fn handle_incorrect_datetime_error(ctx: &mut EvalContext, t: Cow<'_, Time>) -> Result<()> {
     Error::handle_invalid_time_error(ctx, Error::incorrect_datetime_value(&format!("{}", t)))
@@ -439,6 +440,24 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn sub_duration_and_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, MyDuration>>> {
+        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
+        let s = ::std::str::from_utf8(&arg1)?;
+        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
+        let res = match arg0.into_owned().checked_sub(&arg1) {
+            Some(res) => res,
+            None => return Err(overflow),
+        };
+        Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
     pub fn sub_time_datetime_null<'a>(
         &self,
         _ctx: &mut EvalContext,
@@ -496,13 +515,15 @@ fn month_to_period(month: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tipb::expression::{Expr, ScalarFuncSig};
+
     use crate::coprocessor::codec::mysql::{Duration, Time};
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::*;
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
-    use std::sync::Arc;
-    use tipb::expression::{Expr, ScalarFuncSig};
 
     fn expr_build(ctx: &mut EvalContext, sig: ScalarFuncSig, children: &[Expr]) -> Result<Datum> {
         let f = scalar_func_expr(sig, children);
@@ -1719,6 +1740,74 @@ mod tests {
             test_ok_case_two_arg(
                 &mut ctx,
                 ScalarFuncSig::SubDurationAndDuration,
+                arg1,
+                arg2,
+                exp,
+            );
+        }
+    }
+
+    #[test]
+    fn test_sub_duration_and_string() {
+        let cases = vec![
+            ("03:00:01.999997", "02:00:00.999998", "01:00:00.999999"),
+            ("24:00:00", "00:00:01", "23:59:59"),
+            ("24:00:00", "00:00:01", "235959"),
+            ("136:00:00", "1 02:00:00", "110:00:00"),
+            ("-84:00:00", "1 02:00:00", "-110:00:00"),
+            ("00:00:00", "-00:00:01", "00:00:01"),
+            ("00:00:02", "-00:00:01", "00:00:03"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::SubDurationAndString,
+                Datum::Dur(Duration::parse(arg1.as_ref(), 6).unwrap()),
+                Datum::Bytes(arg2.as_bytes().to_vec()),
+                Datum::Dur(Duration::parse(exp.as_ref(), 6).unwrap()),
+            );
+        }
+
+        let zero_duration = Datum::Dur(Duration::zero());
+        let zero_duration_string = Datum::Bytes(Vec::new());
+        let cases = vec![
+            (
+                Datum::Dur(Duration::parse(b"1 01:00:00", 6).unwrap()),
+                Datum::Null,
+                Datum::Null,
+            ),
+            (
+                Datum::Null,
+                Datum::Bytes(b"11:30:45.123456".to_vec()),
+                Datum::Null,
+            ),
+            (Datum::Null, Datum::Null, Datum::Null),
+            (
+                zero_duration.clone(),
+                zero_duration_string.clone(),
+                zero_duration.clone(),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                Datum::Bytes(b"01:00:00".to_vec()),
+                zero_duration.clone(),
+            ),
+            (
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+                zero_duration_string.clone(),
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            ),
+            (
+                zero_duration.clone(),
+                Datum::Bytes(b"-01:00:00".to_vec()),
+                Datum::Dur(Duration::parse(b"01:00:00", 6).unwrap()),
+            ),
+        ];
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::SubDurationAndString,
                 arg1,
                 arg2,
                 exp,

@@ -3,14 +3,16 @@
 use std::borrow::Cow;
 use std::usize;
 
+use tipb::expression::ScalarFuncSig;
+
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
-use tipb::expression::ScalarFuncSig;
+
+use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
+use crate::coprocessor::codec::Datum;
 
 use super::builtin_compare::CmpOp;
 use super::{Error, EvalContext, Result, ScalarFunc};
-use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
     pub fn check_args(sig: ScalarFuncSig, args: usize) -> Result<()> {
@@ -126,6 +128,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
+            | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::PeriodAdd
             | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
@@ -453,7 +456,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDateStringDecimal
             | ScalarFuncSig::SubDateStringInt
             | ScalarFuncSig::SubDateStringString
-            | ScalarFuncSig::SubDurationAndString
             | ScalarFuncSig::SubStringAndDuration
             | ScalarFuncSig::SubStringAndString
             | ScalarFuncSig::SubTimeDurationNull
@@ -1030,6 +1032,7 @@ dispatch_call! {
         AddTimeDurationNull => add_time_duration_null,
 
         SubDurationAndDuration => sub_duration_and_duration,
+        SubDurationAndString => sub_duration_and_string,
     }
     JSON_CALLS {
         CastIntAsJson => cast_int_as_json,
@@ -1059,9 +1062,11 @@ dispatch_call! {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::dag::expr::{Error, ScalarFunc};
     use std::usize;
+
     use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::dag::expr::{Error, ScalarFunc};
 
     #[test]
     fn test_check_args() {
@@ -1176,6 +1181,7 @@ mod tests {
                     ScalarFuncSig::SubDatetimeAndDuration,
                     ScalarFuncSig::SubDatetimeAndString,
                     ScalarFuncSig::SubDurationAndDuration,
+                    ScalarFuncSig::SubDurationAndString,
                     ScalarFuncSig::PeriodAdd,
                     ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2Args,
@@ -1544,7 +1550,6 @@ mod tests {
             ScalarFuncSig::SubDateStringDecimal,
             ScalarFuncSig::SubDateStringInt,
             ScalarFuncSig::SubDateStringString,
-            ScalarFuncSig::SubDurationAndString,
             ScalarFuncSig::SubStringAndDuration,
             ScalarFuncSig::SubStringAndString,
             ScalarFuncSig::SubTimeDurationNull,
