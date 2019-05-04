@@ -728,6 +728,12 @@ impl Debugger {
 
                     // currently we can't modify block_cache_size via set_options_cf
                     if config_name == "block_cache_size" {
+                        if self.shared_block_cache {
+                            return Err(Error::InvalidArgument(format!(
+                                "shared block cache is enabled, change cache size through \
+                                 block_cache.capacity in storage module instead"
+                            )));
+                        }
                         self.modify_block_cache_size(db, cf, config_value)?
                     } else {
                         let handle = box_try!(get_cf_handle(rocksdb, cf));
