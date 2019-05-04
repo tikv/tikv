@@ -508,6 +508,9 @@ pub struct Storage<E: Engine> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    // Whether shared block cache is enabled.
+    shared_block_cache: bool,
 }
 
 impl<E: Engine> Clone for Storage<E> {
@@ -527,6 +530,7 @@ impl<E: Engine> Clone for Storage<E> {
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            shared_block_cache: self.shared_block_cache,
         }
     }
 }
@@ -608,6 +612,7 @@ impl<E: Engine> Storage<E> {
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            shared_block_cache: config.block_cache.shared,
         })
     }
 
@@ -622,6 +627,10 @@ impl<E: Engine> Storage<E> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn has_shared_block_cache(&self) -> bool {
+        self.shared_block_cache
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing

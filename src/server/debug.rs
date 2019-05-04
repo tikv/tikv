@@ -131,11 +131,15 @@ impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger {
     engines: Engines,
+    shared_block_cache: bool,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines) -> Debugger {
-        Debugger { engines }
+    pub fn new(engines: Engines, shared_block_cache: bool) -> Debugger {
+        Debugger {
+            engines,
+            shared_block_cache,
+        }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -1523,7 +1527,8 @@ mod tests {
         );
 
         let engines = Engines::new(Arc::clone(&engine), engine);
-        Debugger::new(engines)
+        let shared_block_cache = false;
+        Debugger::new(engines, shared_block_cache)
     }
 
     impl Debugger {
