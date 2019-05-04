@@ -115,7 +115,7 @@ pub struct Executor<E: Engine> {
     pool: Option<threadpool::Scheduler<SchedContext<E>>>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<worker::Scheduler<Msg>>,
-    // If the task releases some locks, we wake up waiters waiting for it.
+    // If the task releases some locks, we wake up waiters waiting for them.
     lm_scheduler: Option<LockManagerScheduler>,
 }
 
@@ -259,7 +259,13 @@ impl<E: Engine> Executor<E> {
         let msg = match process_write_impl(task.cmd, snapshot, lm_scheduler, &mut statistics) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
-            Ok((ctx, pr, to_be_write, rows, lock_info)) => {
+            Ok(WriteResult {
+                ctx,
+                to_be_write,
+                rows,
+                pr,
+                lock_info,
+            }) => {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "write"])
                     .inc();
@@ -466,19 +472,21 @@ fn process_read_impl<E: Engine>(
     }
 }
 
+struct WriteResult {
+    ctx: Context,
+    to_be_write: Vec<Modify>,
+    rows: usize,
+    pr: ProcessResult,
+    lock_info: Option<(lock_manager::Lock, u64)>,
+}
+
 fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
     lm_scheduler: LockManagerScheduler,
     statistics: &mut Statistics,
-) -> Result<(
-    Context,
-    ProcessResult,
-    Vec<Modify>,
-    usize,
-    Option<(lock_manager::Lock, u64)>,
-)> {
-    let (pr, modifies, rows, ctx, lock_info) = match cmd {
+) -> Result<WriteResult> {
+    let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
         Command::Prewrite {
             ctx,
             mutations,
@@ -491,10 +499,11 @@ fn process_write_impl<S: Snapshot>(
             let mut locks = vec![];
             let rows = mutations.len();
             for (i, m) in mutations.into_iter().enumerate() {
-                // TODO: refactor: if api is changed, many codes should be adjusted.
-                if !options.is_pessimistic_lock.is_empty() {
-                    options.is_pessimistic_lock[0] = options.is_pessimistic_lock[i];
-                }
+                options.prewrite_pessimistic_lock = if options.is_pessimistic_lock.is_empty() {
+                    false
+                } else {
+                    options.is_pessimistic_lock[i]
+                };
                 match txn.prewrite(m, &primary, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -546,7 +555,7 @@ fn process_write_impl<S: Snapshot>(
                 let modifies = txn.into_modifies();
                 (pr, modifies, rows, ctx, None)
             } else {
-                let lock = lock_manager::extract_lock(&locks[0]);
+                let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
                 // Wait for lock released
                 (pr, vec![], 0, ctx, Some((lock, for_update_ts)))
@@ -664,6 +673,7 @@ fn process_write_impl<S: Snapshot>(
                     },
                 }
             };
+
             (pr, modifies, rows, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
@@ -673,7 +683,13 @@ fn process_write_impl<S: Snapshot>(
         _ => panic!("unsupported write command"),
     };
 
-    Ok((ctx, pr, modifies, rows, lock_info))
+    Ok(WriteResult {
+        ctx,
+        to_be_write,
+        rows,
+        pr,
+        lock_info,
+    })
 }
 
 fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {

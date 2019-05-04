@@ -549,7 +549,7 @@ mod tests {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             let mut options = Options::default();
-            options.is_pessimistic_lock.push(true);
+            options.prewrite_pessimistic_lock = true;
             txn.prewrite(m, pk, &options).unwrap();
             self.write(txn.into_modifies());
         }
@@ -793,13 +793,22 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.pessimistic_lock(Key::from_raw(k), k, 45, 45);
+        engine.prewrite_pessimistic_lock(m, k, 45);
+        engine.commit(k, 45, 50);
+
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
-        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // Let's assume `45_40 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
-        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Commit versions: [45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 45).unwrap().unwrap();
+        assert_eq!(commit_ts, 50);
+        assert_eq!(write_type, WriteType::Put);
+
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
@@ -852,14 +861,19 @@ mod tests {
         engine.commit(k, 10, 11);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 12);
+        engine.pessimistic_lock(Key::from_raw(k), k, 12, 12);
+        engine.prewrite_pessimistic_lock(m, k, 12);
+        engine.commit(k, 12, 13);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 14);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
-        // Commit versions: [11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
         let write = reader.get_write(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
@@ -881,53 +895,10 @@ mod tests {
 
         let write = reader.get_write(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 10);
-    }
+        assert_eq!(write.start_ts, 12);
 
-    fn must_get(engine: &RegionEngine, key: &[u8], ts: u64, value: &[u8]) {
-        let snap = RegionSnapshot::from_raw(Arc::clone(&engine.db), engine.region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
-        assert_eq!(reader.get(&Key::from_raw(key), ts).unwrap().unwrap(), value);
-    }
-
-    fn must_get_err(engine: &RegionEngine, key: &[u8], ts: u64) {
-        let snap = RegionSnapshot::from_raw(Arc::clone(&engine.db), engine.region.clone());
-        let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
-        reader.get(&Key::from_raw(key), ts).unwrap_err();
-    }
-
-    #[test]
-    fn test_read_with_pessimistic_lock() {
-        let path = TempDir::new("_test_storage_mvcc_reader_read_with_pessimistic_lock").expect("");
-        let path = path.path().to_str().unwrap();
-        let region = make_region(1, vec![], vec![]);
-        let db = open_db(path, true);
-        let mut engine = RegionEngine::new(Arc::clone(&db), region.clone());
-
-        let key = b"k1";
-        let mutation = Mutation::Put((Key::from_raw(key), b"v1".to_vec()));
-        engine.prewrite(mutation, key, 1);
-        engine.commit(key, 1, 100);
-
-        engine.pessimistic_lock(Key::from_raw(key), key, 10, 101);
-
-        // Pessimistic lock doesn't block reads.
-        must_get(&engine, key, 102, b"v1");
-
-        let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
-        engine.prewrite_pessimistic_lock(mutation, key, 10);
-        must_get_err(&engine, key, 102);
-
-        engine.commit(key, 10, 120);
-        must_get(&engine, key, 102, b"v1");
-        must_get(&engine, key, 121, b"v2");
-        engine.pessimistic_lock(Key::from_raw(key), key, 110, 123);
-        must_get(&engine, key, 124, b"v2");
-        must_get(&engine, key, 108, b"v1");
-
-        let mutation = Mutation::Put((Key::from_raw(key), b"v2".to_vec()));
-        engine.prewrite_pessimistic_lock(mutation, key, 110);
-        must_get(&engine, key, 108, b"v1");
-        must_get_err(&engine, key, 112);
+        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 12);
     }
 }

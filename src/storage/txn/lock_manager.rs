@@ -20,7 +20,7 @@ pub struct Lock {
     hash: u64,
 }
 
-pub fn extract_lock(res: &Result<(), StorageError>) -> Lock {
+pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {
         Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { key, ts, .. }))) => Lock {
             ts: *ts,
@@ -99,6 +99,7 @@ impl WaitTable {
         }
     }
 
+    #[allow(unused)]
     fn size(&self) -> usize {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
@@ -146,19 +147,19 @@ impl WaitTable {
     }
 }
 
-#[derive(Clone)]
-pub struct LockManagerScheduler(FutureScheduler<Task>);
-
 fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) {
     if let Err(Stopped(task)) = scheduler.schedule(task) {
         error!("failed to send task to lock_manager: {}", task);
         match task {
             Task::WaitFor { cb, pr, .. } => execute_callback(cb, pr),
-            // TODO: how to handle Timeout error?
+            Task::Timeout { .. } => panic!("schedule timeout msg failed"),
             _ => (),
         }
     }
 }
+
+#[derive(Clone)]
+pub struct LockManagerScheduler(FutureScheduler<Task>);
 
 impl LockManagerScheduler {
     pub fn new(scheduler: FutureScheduler<Task>) -> Self {
@@ -224,7 +225,7 @@ impl LockManager {
         if self.wait_table.add_waiter(lock.ts, waiter) {
             let scheduler = self.scheduler.clone();
             let when = Instant::now() + Duration::from_millis(timeout);
-            // TODO: cancel timer when wake up?
+            // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .and_then(move |_| {
                     notify_scheduler(&scheduler, Task::Timeout { start_ts, lock });
@@ -330,7 +331,7 @@ mod tests {
     use test_util::KvGenerator;
 
     #[test]
-    fn test_extract_lock() {
+    fn test_extract_lock_from_result() {
         let raw_key = b"key".to_vec();
         let key = Key::from_raw(&raw_key);
         let ts = 100;
@@ -340,7 +341,7 @@ mod tests {
             ts,
             ttl: 0,
         }));
-        let lock = extract_lock(&Err(case));
+        let lock = extract_lock_from_result(&Err(case));
         assert_eq!(lock.ts, ts);
         assert_eq!(lock.hash, gen_key_hash(&key));
     }

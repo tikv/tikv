@@ -8,5 +8,5 @@ publish = false
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
-kvproto = { git = "https://github.com/youjiali1995/kvproto.git", branch="pessimistic-dev" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 futures = "0.1"

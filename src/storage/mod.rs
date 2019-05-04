@@ -100,7 +100,6 @@ pub enum Command {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
-        is_first_lock: bool,
         options: Options,
     },
     Commit {
@@ -377,12 +376,10 @@ impl Command {
                     }
                 }
             }
-            Command::PessimisticLock { ref keys, .. } => {
-                for k in keys {
-                    bytes += k.as_encoded().len();
-                }
-            }
-            Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            Command::PessimisticLock { ref keys, .. }
+            | Command::Commit { ref keys, .. }
+            | Command::Rollback { ref keys, .. }
+            | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
@@ -394,11 +391,6 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
-            }
-            Command::Pause { ref keys, .. } => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
             }
             _ => {}
         }
@@ -412,7 +404,9 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub is_first_lock: bool,
     pub is_pessimistic_lock: Vec<bool>,
+    pub prewrite_pessimistic_lock: bool,
 }
 
 impl Options {
@@ -422,7 +416,9 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            is_first_lock: false,
             is_pessimistic_lock: vec![],
+            prewrite_pessimistic_lock: false,
         }
     }
 
@@ -939,7 +935,6 @@ impl<E: Engine> Storage<E> {
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
-        is_first_lock: bool,
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
@@ -956,7 +951,6 @@ impl<E: Engine> Storage<E> {
             primary,
             start_ts,
             for_update_ts,
-            is_first_lock,
             options,
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;

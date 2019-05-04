@@ -224,17 +224,61 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+    fn must_prewrite_put_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut options = Options::default();
+        options.prewrite_pessimistic_lock = is_pessimistic_lock;
         txn.prewrite(
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             pk,
-            &Options::default(),
+            &options,
         )
         .unwrap();
         write(engine, &ctx, txn.into_modifies());
+    }
+
+    pub fn must_prewrite_put<E: Engine>(engine: &E, key: &[u8], value: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_put_impl(engine, key, value, pk, ts, false);
+    }
+
+    pub fn must_prewrite_pessimistic_put<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+    ) {
+        must_prewrite_put_impl(engine, key, value, pk, ts, true);
+    }
+
+    fn must_prewrite_put_err_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut options = Options::default();
+        options.prewrite_pessimistic_lock = is_pessimistic_lock;
+        txn.prewrite(
+            Mutation::Put((Key::from_raw(key), value.to_vec())),
+            pk,
+            &options,
+        )
+        .unwrap_err();
     }
 
     pub fn must_prewrite_put_err<E: Engine>(
@@ -244,28 +288,42 @@ pub mod tests {
         pk: &[u8],
         ts: u64,
     ) {
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, false);
+    }
+
+    pub fn must_prewrite_pessimistic_put_err<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        value: &[u8],
+        pk: &[u8],
+        ts: u64,
+    ) {
+        must_prewrite_put_err_impl(engine, key, value, pk, ts, true);
+    }
+
+    fn must_prewrite_delete_impl<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        pk: &[u8],
+        ts: u64,
+        is_pessimistic_lock: bool,
+    ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(
-            Mutation::Put((Key::from_raw(key), value.to_vec())),
-            pk,
-            &Options::default(),
-        )
-        .unwrap_err();
+        let mut options = Options::default();
+        options.prewrite_pessimistic_lock = is_pessimistic_lock;
+        txn.prewrite(Mutation::Delete(Key::from_raw(key)), pk, &options)
+            .unwrap();
+        engine.write(&ctx, txn.into_modifies()).unwrap();
     }
 
     pub fn must_prewrite_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
-        let ctx = Context::new();
-        let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.prewrite(
-            Mutation::Delete(Key::from_raw(key)),
-            pk,
-            &Options::default(),
-        )
-        .unwrap();
-        engine.write(&ctx, txn.into_modifies()).unwrap();
+        must_prewrite_delete_impl(engine, key, pk, ts, false);
+    }
+
+    pub fn must_prewrite_pessimistic_delete<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {
+        must_prewrite_delete_impl(engine, key, pk, ts, true);
     }
 
     pub fn must_prewrite_lock<E: Engine>(engine: &E, key: &[u8], pk: &[u8], ts: u64) {

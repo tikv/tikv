@@ -1276,6 +1276,7 @@ fn future_pessimistic_lock<E: Engine>(
         .collect();
     let mut options = Options::default();
     options.lock_ttl = req.get_lock_ttl();
+    options.is_first_lock = req.get_is_first_lock();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_pessimistic_lock(
@@ -1284,7 +1285,6 @@ fn future_pessimistic_lock<E: Engine>(
         req.take_primary_lock(),
         req.get_start_version(),
         req.get_for_update_ts(),
-        req.get_is_first_lock(),
         options,
         cb,
     );
@@ -1752,7 +1752,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             lock_info.set_lock_ttl(ttl);
             key_error.set_locked(lock_info);
         }
-        // failed in prewrite
+        // failed in prewrite or pessimistic lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
             conflict_start_ts,
@@ -1774,7 +1774,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
-        // failed in commit
+        // failed in commit or prewrite pessimistic-lock
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
