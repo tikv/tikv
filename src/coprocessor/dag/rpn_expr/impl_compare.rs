@@ -48,15 +48,11 @@ impl<C: Comparer> Clone for RpnFnCompare<C> {
     }
 }
 
-unsafe impl<C: Comparer> Send for RpnFnCompare<C> {}
-
-unsafe impl<C: Comparer> Sync for RpnFnCompare<C> {}
-
 // ======
 
 impl_template_fn! { 2 arg @ RpnFnCompare<C>, C: Comparer }
 
-pub trait Comparer: 'static {
+pub trait Comparer: 'static + Send + Sync {
     type T: Evaluable;
 
     fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
@@ -90,7 +86,7 @@ impl<F: CmpOp> Comparer for RealComparer<F> {
     }
 }
 
-pub trait CmpOp: 'static {
+pub trait CmpOp: 'static + Send + Sync {
     #[inline]
     fn compare_null() -> Option<i64> {
         None
