@@ -10,6 +10,7 @@ use tipb::expression::{Expr, ExprType};
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -139,6 +140,10 @@ impl AggExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -248,6 +253,10 @@ impl Executor for HashAggExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
+    }
 }
 
 impl Executor for StreamAggExecutor {
@@ -295,6 +304,10 @@ impl Executor for StreamAggExecutor {
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 }
 
