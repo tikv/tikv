@@ -709,6 +709,10 @@ impl Debugger {
                         "shared block cache is disabled"
                     )));
                 }
+                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
+                // the size through any of them. Here we change it through default CF in kvdb.
+                // A better way to do it is to hold the cache reference somewhere, and use it to
+                // change cache size.
                 self.modify_block_cache_size(DBType::KV, CF_DEFAULT, config_value)
             }
             MODULE::KVDB | MODULE::RAFTDB => {
