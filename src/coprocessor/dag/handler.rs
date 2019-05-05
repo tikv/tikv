@@ -18,7 +18,7 @@ pub struct DAGRequestHandler {
     batch_row_limit: usize,
     /// To construct ExecutionSummary target.
     number_of_executors: usize,
-    collect_execution_summary: bool,
+    collect_exec_summary: bool,
 }
 
 impl DAGRequestHandler {
@@ -28,7 +28,7 @@ impl DAGRequestHandler {
         output_offsets: Vec<u32>,
         batch_row_limit: usize,
         number_of_executors: usize,
-        collect_execution_summary: bool,
+        collect_exec_summary: bool,
     ) -> Self {
         Self {
             deadline,
@@ -36,7 +36,7 @@ impl DAGRequestHandler {
             output_offsets,
             batch_row_limit,
             number_of_executors,
-            collect_execution_summary,
+            collect_exec_summary,
         }
     }
 
@@ -89,7 +89,7 @@ impl RequestHandler for DAGRequestHandler {
                     self.executor
                         .collect_output_counts(sel_resp.mut_output_counts());
 
-                    if self.collect_execution_summary {
+                    if self.collect_exec_summary {
                         let mut summary_per_executor =
                             vec![ExecSummary::default(); self.number_of_executors];
                         self.executor
