@@ -226,11 +226,13 @@ impl SSTWriter {
 
         let mut default_opts = cfg.defaultcf.build_opt();
         default_opts.set_env(Arc::clone(&env));
+        default_opts.compression_per_level(&cfg.defaultcf.compression_per_level);
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         let mut write_opts = cfg.writecf.build_opt();
         write_opts.set_env(Arc::clone(&env));
+        write_opts.compression_per_level(&cfg.writecf.compression_per_level);
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
