@@ -34,7 +34,11 @@ max-write-buffer-number = 8
 # the algorithm at level-0 is using to compress KV data.
 # the algorithm at level-6 is using to compress SST files.
 # the algorithms at level-1 ~ level-5 are not used for now.
-compression-per-level = ["lz4", "no", "no", "no", "no", "no", "zstd"]
+compression-per-level = ["lz4", "no", "no", "no", "no", "no", "lz4"]
+
+[rocksdb.writecf]
+compression-per-level = ["lz4", "no", "no", "no", "no", "no", "lz4"]
+
 
 [import]
 # the directory to store importing kv data.
