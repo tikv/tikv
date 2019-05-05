@@ -195,7 +195,7 @@ impl DAGBuilder {
     /// other executors and never receive rows from other executors.
     ///
     /// The inner-most executor must be a table scan executor or an index scan executor.
-    fn build_normal_first_executor<S: Store + 'static, _C: ExecSummaryCollector + 'static>(
+    fn build_normal_first_executor<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         mut first: executor::Executor,
         store: S,
         ranges: Vec<KeyRange>,
@@ -204,6 +204,7 @@ impl DAGBuilder {
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 let ex = Box::new(ScanExecutor::table_scan(
+                    C::new(0),
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -214,6 +215,7 @@ impl DAGBuilder {
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
                 let ex = Box::new(ScanExecutor::index_scan(
+                    C::new(0),
                     first.take_idx_scan(),
                     ranges,
                     store,
