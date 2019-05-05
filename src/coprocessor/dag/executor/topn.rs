@@ -8,12 +8,12 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -146,6 +146,10 @@ impl Executor for TopNExecutor {
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
     }
 }
 
