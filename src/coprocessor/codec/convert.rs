@@ -197,6 +197,7 @@ pub fn bytes_to_f64(ctx: &mut EvalContext, bytes: &[u8]) -> Result<f64> {
     let s = str::from_utf8(bytes)?.trim();
     let vs = get_valid_float_prefix(ctx, s)?;
 
+    // FIXME: The implementation is not exactly the same as TiDB's `StrToFloat`.
     bytes_to_f64_without_context(vs.as_bytes())
 }
 

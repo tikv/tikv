@@ -8,8 +8,11 @@ use super::summable::Summable;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::rpn_expr::impl_cast::get_cast_fn;
+use crate::coprocessor::dag::rpn_expr::types::RpnExpressionNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
+use cop_datatype::builder::FieldTypeBuilder;
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
@@ -30,12 +33,7 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
         // Check whether or not the children's field type is supported. Currently we only support
         // Double and Decimal and does not support other types (which need casting).
         let child = &aggr_def.get_children()[0];
-        let eval_type = EvalType::try_from(child.get_field_type().tp())
-            .map_err(|e| Error::Other(box_err!(e)))?;
-        match eval_type {
-            EvalType::Real | EvalType::Decimal => {}
-            _ => return Err(box_err!("Cast from {:?} is not supported", eval_type)),
-        }
+        box_try!(EvalType::try_from(child.get_field_type().tp()));
 
         // Check whether parameter expression is supported.
         RpnExpressionBuilder::check_expr_tree_supported(child)?;
@@ -48,6 +46,7 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
         mut aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,
+        schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -68,20 +67,49 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
         });
         out_schema.push(aggr_def.take_field_type());
 
-        // Currently we don't support casting in `check_supported`, so we can directly use the
-        // built expression.
-        out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
-            child,
-            time_zone,
-            max_columns,
-        )?);
-
-        // Choose a type-aware AVG implementation based on eval type.
+        // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
+        // TODO: This logic should be performed by TiDB.
+        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, max_columns)?;
         match eval_type {
-            EvalType::Real => Ok(Box::new(AggrFnAvg::<Real>::new())),
-            EvalType::Decimal => Ok(Box::new(AggrFnAvg::<Decimal>::new())),
-            _ => unreachable!(),
+            EvalType::Decimal | EvalType::Real => {
+                // No need to cast.
+            }
+            EvalType::Int => {
+                let new_field_type = FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::NewDecimal)
+                    .flen(cop_datatype::MAX_DECIMAL_WIDTH)
+                    .build();
+                // It is an implementation fault if this function call returns error,
+                // so let's panic.
+                let func = get_cast_fn(exp.ret_field_type(schema), &new_field_type).unwrap();
+                exp.push(RpnExpressionNode::FnCall {
+                    func,
+                    field_type: new_field_type,
+                });
+            }
+            _ => {
+                let new_field_type = FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::Double)
+                    .flen(cop_datatype::MAX_DECIMAL_WIDTH)
+                    .decimal(cop_datatype::UNSPECIFIED_LENGTH)
+                    .build();
+                let func = get_cast_fn(exp.ret_field_type(schema), &new_field_type).unwrap();
+                exp.push(RpnExpressionNode::FnCall {
+                    func,
+                    field_type: new_field_type,
+                });
+            }
         }
+        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(schema).tp()).unwrap();
+        out_exp.push(exp);
+
+        // Choose a type-aware AVG implementation based on the eval type after rewriting exp.
+        Ok(match rewritten_eval_type {
+            EvalType::Decimal => Box::new(AggrFnAvg::<Decimal>::new()),
+            EvalType::Real => Box::new(AggrFnAvg::<Real>::new()),
+            // If we meet unexpected types after rewriting, it is an implementation fault.
+            _ => unreachable!(),
+        })
     }
 }
 

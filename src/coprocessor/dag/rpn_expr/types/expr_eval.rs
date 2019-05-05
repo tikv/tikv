@@ -132,14 +132,16 @@ impl RpnExpression {
 
         let mut stack = Vec::with_capacity(self.len());
 
-        // First loop: ensure referred columns are decoded.
+        // We iterate two times. The first time we decode all referred columns. The second time
+        // we evaluate. This is to make Rust's borrow checker happy because there will be
+        // mutable reference during the first iteration and we can't keep these references.
+
         for node in self.as_ref() {
             if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
                 columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
             }
         }
 
-        // Second loop: evaluate RPN expressions.
         for node in self.as_ref() {
             match node {
                 RpnExpressionNode::Constant {

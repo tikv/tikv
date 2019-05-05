@@ -7,7 +7,7 @@ use crate::coprocessor::dag::aggr_fn::AggrFunction;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
 
-/// Parse a specific aggregate function definition from protobuf.
+/// Parse a specific aggregate function definition from ProtoBuf.
 ///
 /// All aggregate function implementations should include an impl for this trait as well as
 /// add a match arm in `map_pb_sig_to_aggr_func_parser` so that the aggregate function can be
@@ -23,6 +23,9 @@ pub trait Parser {
     /// RPN expression (maybe wrapped by some casting according to types) will be appended in
     /// `out_exp`.
     ///
+    /// The parser may choose particular aggregate function implementation based on the data
+    /// type, so `schema` is also needed in case of data type depending on the column.
+    ///
     /// # Panic
     ///
     /// May panic if the aggregate function definition is not supported by this parser.
@@ -31,12 +34,13 @@ pub trait Parser {
         aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,
+        schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>>;
 }
 
-/// Parse all aggregate function definition from protobuf.
+/// Parse all aggregate function definition from ProtoBuf.
 pub struct AggrDefinitionParser;
 
 #[inline]
@@ -76,10 +80,18 @@ impl AggrDefinitionParser {
         aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,
+        schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp()).unwrap();
-        parser.parse(aggr_def, time_zone, max_columns, out_schema, out_exp)
+        parser.parse(
+            aggr_def,
+            time_zone,
+            max_columns,
+            schema,
+            out_schema,
+            out_exp,
+        )
     }
 }

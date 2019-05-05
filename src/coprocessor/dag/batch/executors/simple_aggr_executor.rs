@@ -123,6 +123,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
             Expr,
             &Tz,
             usize,
+            &[FieldType],
             &mut Vec<FieldType>,
             &mut Vec<RpnExpression>,
         ) -> Result<Box<dyn AggrFunction>>,
@@ -185,6 +186,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             Expr,
             &Tz,
             usize,
+            &[FieldType],
             &mut Vec<FieldType>,
             &mut Vec<RpnExpression>,
         ) -> Result<Box<dyn AggrFunction>>,
@@ -199,6 +201,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         let mut ordered_schema = Vec::with_capacity(aggr_len * 2);
         let mut ordered_aggr_fn_input_exprs = Vec::with_capacity(aggr_len * 2);
 
+        let schema = src.schema();
+        let schema_len = schema.len();
+
         for def in aggr_definitions {
             let aggr_output_len = ordered_schema.len();
             let aggr_input_len = ordered_aggr_fn_input_exprs.len();
@@ -206,7 +211,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             let aggr_fn = parse_aggr_definition(
                 def,
                 &config.tz,
-                src.schema().len(),
+                schema_len,
+                schema,
                 &mut ordered_schema,
                 &mut ordered_aggr_fn_input_exprs,
             )?;
@@ -495,7 +501,7 @@ mod tests {
         let mut exec = BatchSimpleAggregationExecutor::new_for_test(
             src_exec,
             vec![Expr::new()],
-            |_, _, _, out_schema, out_exp| {
+            |_, _, _, _, out_schema, out_exp| {
                 out_schema.push(FieldTypeTp::LongLong.into());
                 out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
                 Ok(Box::new(AggrFnFoo))

@@ -19,7 +19,7 @@ pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
-        EvalType::try_from(c.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
@@ -217,12 +217,6 @@ where
     }
 }
 
-/// TODO: Remove this helper function when we use Failure which can simplify the code.
-#[inline]
-fn get_eval_type(tree_node: &Expr) -> Result<EvalType> {
-    EvalType::try_from(tree_node.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))
-}
-
 #[inline]
 fn handle_node_column_ref(
     tree_node: Expr,
@@ -283,7 +277,7 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
+    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),

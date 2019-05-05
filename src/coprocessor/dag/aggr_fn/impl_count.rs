@@ -35,6 +35,8 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
         mut aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,
+        // We use the same structure for all data types, so this parameter is not needed.
+        _schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
