@@ -696,7 +696,7 @@ impl Debugger {
         config_value: &str,
     ) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
-        return match module {
+        match module {
             MODULE::STORAGE => {
                 if config_name != "block_cache.capacity" {
                     return Err(Error::InvalidArgument(format!(
@@ -705,9 +705,9 @@ impl Debugger {
                     )));
                 }
                 if !self.shared_block_cache {
-                    return Err(Error::InvalidArgument(format!(
-                        "shared block cache is disabled"
-                    )));
+                    return Err(Error::InvalidArgument(
+                        "shared block cache is disabled".to_string(),
+                    ));
                 }
                 // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
                 // the size through any of them. Here we change it through default CF in kvdb.
@@ -733,10 +733,11 @@ impl Debugger {
                     // currently we can't modify block_cache_size via set_options_cf
                     if config_name == "block_cache_size" {
                         if self.shared_block_cache {
-                            return Err(Error::InvalidArgument(format!(
+                            return Err(Error::InvalidArgument(
                                 "shared block cache is enabled, change cache size through \
                                  block_cache.capacity in storage module instead"
-                            )));
+                                    .to_string(),
+                            ));
                         }
                         self.modify_block_cache_size(db, cf, config_value)?
                     } else {
@@ -759,7 +760,7 @@ impl Debugger {
                 Ok(())
             }
             _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        };
+        }
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
