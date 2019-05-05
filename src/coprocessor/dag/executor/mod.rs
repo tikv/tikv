@@ -13,6 +13,7 @@ use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
 use crate::coprocessor::util;
 use crate::coprocessor::*;
@@ -238,6 +239,7 @@ pub trait Executor {
     fn next(&mut self) -> Result<Option<Row>>;
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>);
     fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics);
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]);
     fn get_len_of_columns(&self) -> usize;
 
     /// Only executors with eval computation need to implement `take_eval_warnings`

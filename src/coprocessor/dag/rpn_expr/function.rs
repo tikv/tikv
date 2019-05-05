@@ -1,8 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO
-#![allow(dead_code)]
-
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
@@ -353,22 +350,34 @@ impl Helper {
 /// arguments.
 #[macro_export]
 macro_rules! impl_template_fn {
-    (0 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 0, eval_0_arg }
+    (0 arg @ $name:ty) => {
+        impl_template_fn! { @inner $name, 0, eval_0_arg, }
     };
-    (1 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 1, eval_1_arg }
+    (0 arg @ $name:ty, $($generics:tt)*) => {
+        impl_template_fn! { @inner $name, 0, eval_0_arg, <$($generics)*> }
     };
-    (2 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 2, eval_2_args }
+    (1 arg @ $name:ty) => {
+        impl_template_fn! { @inner $name, 1, eval_1_arg, }
     };
-    (3 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 3, eval_3_args }
+    (1 arg @ $name:ty, $($generics:tt)*) => {
+        impl_template_fn! { @inner $name, 1, eval_1_arg, <$($generics)*> }
     };
-    (@inner $name:ident, $args:expr, $eval_fn:ident) => {
-        impl tikv_util::AssertCopy for $name {}
+    (2 arg @ $name:ty) => {
+        impl_template_fn! { @inner $name, 2, eval_2_args, }
+    };
+    (2 arg @ $name:ty, $($generics:tt)*) => {
+        impl_template_fn! { @inner $name, 2, eval_2_args, <$($generics)*> }
+    };
+    (3 arg @ $name:ty) => {
+        impl_template_fn! { @inner $name, 3, eval_3_args, }
+    };
+    (3 arg @ $name:ty, $($generics:tt)*) => {
+        impl_template_fn! { @inner $name, 3, eval_3_args, <$($generics)*> }
+    };
+    (@inner $name:ty, $args:expr, $eval_fn:ident, $($generics:tt)*) => {
+        impl$($generics)* tikv_util::AssertCopy for $name {}
 
-        impl $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
+        impl$($generics)* $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
             #[inline]
             fn name(&self) -> &'static str {
                 stringify!($name)
