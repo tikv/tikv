@@ -440,24 +440,6 @@ impl ScalarFunc {
     }
 
     #[inline]
-    pub fn sub_duration_and_string<'a, 'b: 'a>(
-        &'b self,
-        ctx: &mut EvalContext,
-        row: &'a [Datum],
-    ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
-        let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
-        let s = ::std::str::from_utf8(&arg1)?;
-        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
-        let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
-        let res = match arg0.into_owned().checked_sub(&arg1) {
-            Some(res) => res,
-            None => return Err(overflow),
-        };
-        Ok(Some(Cow::Owned(res)))
-    }
-
-    #[inline]
     pub fn sub_time_datetime_null<'a>(
         &self,
         _ctx: &mut EvalContext,
@@ -479,6 +461,24 @@ impl ScalarFunc {
             None => return Err(Error::overflow("DURATION", &format!("({} - {})", &d0, &d1))),
         };
         let res = MyDuration::from_nanos(diff, d0.fsp().max(d1.fsp()) as i8)?;
+        Ok(Some(Cow::Owned(res)))
+    }
+
+    #[inline]
+    pub fn sub_duration_and_string<'a, 'b: 'a>(
+        &'b self,
+        ctx: &mut EvalContext,
+        row: &'a [Datum],
+    ) -> Result<Option<Cow<'a, MyDuration>>> {
+        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
+        let s = ::std::str::from_utf8(&arg1)?;
+        let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
+        let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
+        let res = match arg0.into_owned().checked_sub(&arg1) {
+            Some(res) => res,
+            None => return Err(overflow),
+        };
         Ok(Some(Cow::Owned(res)))
     }
 }
