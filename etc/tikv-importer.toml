@@ -55,8 +55,9 @@ num-import-jobs = 24
 # stream-channel-window = 128
 # maximum number of open engines
 max-open-engines = 8
+# speed limit of uploading SST to TiKV (unit: byte/s)
+upload-speed-limit = "512MB"
 # minimum ratio of target store available space: store_available_space / store_capacity
 # Importer will pause to upload SST to target store if its available ratio less than
 # this value, and give the store some time window to balance regions.
 min-available-ratio = 0.05
-
