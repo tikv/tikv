@@ -16,18 +16,7 @@ pub struct AggrFnDefinitionParserCount;
 impl super::parser::Parser for AggrFnDefinitionParserCount {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::Count);
-        if aggr_def.get_children().len() != 1 {
-            return Err(box_err!(
-                "Expect 1 parameter, but got {}",
-                aggr_def.get_children().len()
-            ));
-        }
-
-        // Only check whether or not the children expr is supported.
-        let child = &aggr_def.get_children()[0];
-        RpnExpressionBuilder::check_expr_tree_supported(child)?;
-
-        Ok(())
+        super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
     fn parse(
