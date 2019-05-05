@@ -130,8 +130,9 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..self.count {
             let dir = TempDir::new("test_cluster").unwrap();
             let kv_path = dir.path().join("kv");
+            let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
-            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),

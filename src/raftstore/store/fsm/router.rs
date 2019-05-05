@@ -472,7 +472,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::fsm::batch::tests::Message;
     use crate::raftstore::store::fsm::batch::{self, tests::*};
-    use crossbeam::channel::{SendError, TrySendError};
+    use crossbeam::channel::{RecvTimeoutError, SendError, TryRecvError, TrySendError};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use std::time::Duration;
@@ -495,8 +495,9 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        let (control_tx, control_fsm) = new_runner(10);
-        let control_dropped = control_fsm.dropped.clone();
+        let (control_tx, mut control_fsm) = new_runner(10);
+        let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
+        control_fsm.sender = Some(control_drop_tx);
         let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
@@ -517,14 +518,15 @@ mod tests {
         // Control mailbox should be connected.
         router
             .send_control(Some(Box::new(move |_: &mut Runner| {
-                let (sender, runner) = new_runner(10);
-                let dropped = runner.dropped.clone();
+                let (sender, mut runner) = new_runner(10);
+                let (tx1, rx1) = mpsc::unbounded();
+                runner.sender = Some(tx1);
                 let mailbox = BasicMailbox::new(sender, runner);
-                tx.send(dropped).unwrap();
                 router_.register(1, mailbox);
+                tx.send(rx1).unwrap();
             })))
             .unwrap();
-        let dropped = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let runner_drop_rx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         // Registered mailbox should be connected.
         router.force_send(1, noop()).unwrap();
@@ -567,9 +569,12 @@ mod tests {
         assert_eq!(c, sent_cnt + 1);
 
         // close should release resources.
-        assert!(!dropped.load(Ordering::SeqCst));
+        assert_eq!(runner_drop_rx.try_recv(), Err(TryRecvError::Empty));
         router.close(1);
-        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            runner_drop_rx.recv_timeout(Duration::from_secs(3)),
+            Err(RecvTimeoutError::Disconnected)
+        );
         match router.send(1, unreachable()) {
             Err(TrySendError::Disconnected(_)) => (),
             Ok(_) => panic!("send should fail."),
@@ -579,9 +584,12 @@ mod tests {
             Err(SendError(_)) => (),
             Ok(_) => panic!("send should fail."),
         }
-        assert!(!control_dropped.load(Ordering::SeqCst));
+        assert_eq!(control_drop_rx.try_recv(), Err(TryRecvError::Empty));
         system.shutdown();
-        assert!(control_dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            control_drop_rx.recv_timeout(Duration::from_secs(3)),
+            Err(RecvTimeoutError::Disconnected)
+        );
     }
 
     #[bench]
