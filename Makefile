@@ -91,10 +91,6 @@ prof_release:
 fail_release:
 	FAIL_POINT=1 make release
 
-# unlike test, this target will trace tests and output logs when fail test is detected.
-trace_test:
-	env CI=true SKIP_FORMAT_CHECK=true FAIL_POINT=1 ${PROJECT_DIR}/ci-build/test.sh
-
 test:
         # When SIP is enabled, DYLD_LIBRARY_PATH will not work in subshell, so we have to set it
         # again here. LOCAL_DIR is defined in .travis.yml.
@@ -147,7 +143,7 @@ ci-build:
 	make format && git diff-index --quiet HEAD -- || (git diff; echo Please format the code using make format; exit 1)
 	make clippy || (echo Please fix clippy errors which can be viewed by using make clippy; exit 1)
 	make audit || (echo Audit failed, please fix errors; exit 1)
-	LOG_LEVEL=INFO RUST_BACKTRACE=1 ROCKSDB_SYS_SSE=1 RUST_LOG=cargo::core::compiler::fingerprint=debug cargo test --features "default portable sse" --no-run --message-format=json --all --exclude tikv_fuzz > test.json
+	env RUSTFLAGS=-Dwarnings LOG_LEVEL=INFO RUST_BACKTRACE=1 FAIL_POINT=1 RUST_LOG=cargo::core::compiler::fingerprint=debug cargo test --features "default portable sse" --no-run --message-format=json --all --exclude tikv_fuzz > test.json
 	bash scripts/check-bins-for-jemalloc.sh
 	bash scripts/check-sse4_2.sh
 
