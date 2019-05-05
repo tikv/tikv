@@ -474,10 +474,15 @@ impl ScalarFunc {
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
-        let overflow = Error::overflow("DURATION", &format!("({} + {})", &arg0, &arg1));
+        let arg3 = arg0.clone();
         let res = match arg0.into_owned().checked_sub(&arg1) {
             Some(res) => res,
-            None => return Err(overflow),
+            None => {
+                return Err(Error::overflow(
+                    "DURATION",
+                    &format!("({} + {})", &arg3, &arg1),
+                ))
+            }
         };
         Ok(Some(Cow::Owned(res)))
     }
