@@ -3,7 +3,6 @@
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
-
 use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
