@@ -76,7 +76,7 @@ impl<F: CmpOp> Comparer for RealComparer<F> {
             (None, _) | (_, None) => Ok(F::compare_partial_null()),
             (Some(lhs), Some(rhs)) => lhs
                 .partial_cmp(rhs)
-                // FIXME: It is wired to be a codec error.
+                // FIXME: It is weird to be a codec error.
                 // FIXME: This should never happen because special numbers like NaN and Inf are not
                 // allowed at all.
                 .ok_or_else(|| {
@@ -256,7 +256,7 @@ mod tests {
                 .push_param(arg1)
                 .evaluate(sig)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
         }
     }
 }
