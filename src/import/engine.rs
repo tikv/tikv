@@ -23,9 +23,9 @@ use crate::storage::mvcc::{Write, WriteType};
 use crate::storage::types::Key;
 use engine::rocks::util::{new_engine_opt, CFOptions};
 use engine::rocks::{
-    BlockBasedOptions, Cache, ColumnFamilyOptions, DBCompressionType, DBIterator, DBOptions, Env,
-    EnvOptions, ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter,
-    Writable, WriteBatch as RawBatch, DB,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, DBIterator, DBOptions, Env, EnvOptions,
+    ExternalSstFileInfo, LRUCacheOptions, ReadOptions, SequentialFile, SstFileWriter, Writable,
+    WriteBatch as RawBatch, DB,
 };
 use engine::{CF_DEFAULT, CF_WRITE};
 use tikv_util::config::MB;
@@ -236,13 +236,15 @@ impl SSTWriter {
         // Here is where we set table_properties_collector_factory, so that we can collect
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt(&cache);
-        Self::tune_config(Arc::clone(&env), &mut default_opts);
+        default_opts.set_env(Arc::clone(&env));
+        default_opts.compression_per_level(&db_cfg.defaultcf.compression_per_level);
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt(&cache);
-        Self::tune_config(Arc::clone(&env), &mut write_opts);
+        write_opts.set_env(Arc::clone(&env));
+        write_opts.compression_per_level(&db_cfg.writecf.compression_per_level);
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
@@ -254,12 +256,6 @@ impl SSTWriter {
             write,
             write_entries: 0,
         })
-    }
-
-    fn tune_config(env: Arc<Env>, cf_opts: &mut ColumnFamilyOptions) {
-        use DBCompressionType::{Lz4, No};
-        cf_opts.set_env(env);
-        cf_opts.compression_per_level(&[No, No, No, No, No, No, Lz4]);
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
