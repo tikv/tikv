@@ -18,6 +18,7 @@ use crate::coprocessor::Error;
 pub fn map_pb_sig_to_rpn_func(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>, Error> {
     match value {
         ScalarFuncSig::LogicalAnd => Ok(Box::new(impl_op::RpnFnLogicalAnd)),
+        ScalarFuncSig::LogicalOr => Ok(Box::new(impl_op::RpnFnLogicalOr)),
         v => Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             v
