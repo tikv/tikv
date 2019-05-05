@@ -569,7 +569,7 @@ impl Peer {
             // If follower keeps receiving data from leader, then it's safe to stop
             // ticking, as leader will make sure it has the latest logs.
             // Checking term to make sure campaign has finished and the leader starts
-            // doing its job, it's not required but a safe options to
+            // doing its job, it's not required but a safe options.
             state != GroupState::Chaos
                 && self.raft_group.raft.leader_id != raft::INVALID_ID
                 && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
