@@ -16,6 +16,7 @@ portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
+batch-test = []
 
 [lib]
 name = "tikv"

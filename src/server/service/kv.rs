@@ -1125,12 +1125,15 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::Test(req)) => {
-            let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
-            let resp = future_test(req)
-                .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Test))
-                .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-            response_batch_commands_request(id, resp, tx, timer);
+        Some(BatchCommandsRequest_Request_oneof_cmd::Test(_req)) => {
+            #[cfg(feature = "batch-test")]
+            {
+                let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+                let resp = future_test(_req)
+                    .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Test))
+                    .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                response_batch_commands_request(id, resp, tx, timer);
+            };
         }
     }
 }
@@ -1636,6 +1639,7 @@ fn future_cop<E: Engine>(
         .map_err(|_| unreachable!())
 }
 
+#[cfg(feature = "batch-test")]
 fn future_test(
     req: BatchCommandTestRequest,
 ) -> impl Future<Item = BatchCommandTestResponse, Error = Error> {
