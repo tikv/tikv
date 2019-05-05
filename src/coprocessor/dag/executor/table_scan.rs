@@ -5,6 +5,7 @@ use tikv_util::collections::HashSet;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::exec_summary::ExecSummaryCollector;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -55,8 +56,9 @@ impl InnerExecutor for TableInnerExecutor {
     }
 }
 
-impl<S: Store> ScanExecutor<S, TableInnerExecutor> {
+impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, TableInnerExecutor> {
     pub fn table_scan(
+        summary_collector: C,
         mut meta: TableScan,
         key_ranges: Vec<KeyRange>,
         store: S,
@@ -64,6 +66,7 @@ impl<S: Store> ScanExecutor<S, TableInnerExecutor> {
     ) -> Result<Self> {
         let inner = TableInnerExecutor::new(&meta);
         Self::new(
+            summary_collector,
             inner,
             meta.get_desc(),
             meta.take_columns().to_vec(),
@@ -74,7 +77,7 @@ impl<S: Store> ScanExecutor<S, TableInnerExecutor> {
     }
 }
 
-pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
+pub type TableScanExecutor<C, S> = ScanExecutor<C, S, TableInnerExecutor>;
 
 #[cfg(test)]
 mod tests {
@@ -91,6 +94,7 @@ mod tests {
         tests::{get_range, TestStore},
         Executor,
     };
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     const TABLE_ID: i64 = 1;
     const KEY_NUMBER: usize = 10;
@@ -143,9 +147,14 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
-                .unwrap();
+        let mut table_scanner = super::TableScanExecutor::table_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.table_scan,
+            wrapper.ranges,
+            store,
+            true,
+        )
+        .unwrap();
 
         let row = table_scanner.next().unwrap().unwrap().take_origin();
         assert_eq!(row.handle, handle as i64);
@@ -180,9 +189,14 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
-                .unwrap();
+        let mut table_scanner = super::TableScanExecutor::table_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.table_scan,
+            wrapper.ranges,
+            store,
+            true,
+        )
+        .unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = table_scanner.next().unwrap().unwrap().take_origin();
@@ -216,9 +230,14 @@ mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut table_scanner =
-            super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
-                .unwrap();
+        let mut table_scanner = super::TableScanExecutor::table_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.table_scan,
+            wrapper.ranges,
+            store,
+            true,
+        )
+        .unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
