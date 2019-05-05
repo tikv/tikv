@@ -2,12 +2,14 @@
 
 use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
-use super::{Executor, ExecutorMetrics, Row};
-use crate::coprocessor::codec::table;
-use crate::coprocessor::{Error, Result};
-use crate::storage::{Key, Store};
 use kvproto::coprocessor::KeyRange;
 use tipb::schema::ColumnInfo;
+
+use super::{Executor, ExecutorMetrics, Row};
+use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::{Error, Result};
+use crate::storage::{Key, Store};
 
 // an InnerExecutor is used in ScanExecutor,
 // hold the different logics between table scan and index scan
@@ -168,6 +170,10 @@ impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
             }
             self.first_collect = false;
         }
+    }
+
+    fn collect_execution_summaries(&mut self, _target: &mut [ExecSummary]) {
+        // Do nothing for now.
     }
 
     fn get_len_of_columns(&self) -> usize {
