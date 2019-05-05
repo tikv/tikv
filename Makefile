@@ -66,7 +66,7 @@ dev: format clippy
 	@env FAIL_POINT=1 make test
 
 build:
-	cargo build  --no-default-features --features "${ENABLE_FEATURES}"
+	cargo build --no-default-features --features "${ENABLE_FEATURES}"
 
 ctl:
 	cargo build --release --no-default-features --features "${ENABLE_FEATURES}" --bin tikv-ctl
@@ -112,7 +112,6 @@ test:
 		export MALLOC_CONF=prof:true,prof_active:false && \
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
-	bash scripts/check-bins-for-jemalloc.sh
 
 bench:
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
@@ -144,7 +143,13 @@ clean:
 expression: format clippy
 	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo test --features "${ENABLE_FEATURES}" "coprocessor::dag::expr" --no-default-features -- --nocapture
 
-
+ci-build:
+	make format && git diff-index --quiet HEAD -- || (git diff; echo Please format the code using make format; exit 1)
+	make clippy || (echo Please fix clippy errors which can be viewed by using make clippy; exit 1)
+	make audit || (echo Audit failed, please fix errors; exit 1)
+	LOG_LEVEL=INFO RUST_BACKTRACE=1 ROCKSDB_SYS_SSE=1 RUST_LOG=cargo::core::compiler::fingerprint=debug cargo test --features "default portable sse" --no-run --message-format=json --all --exclude tikv_fuzz > test.json
+	bash scripts/check-bins-for-jemalloc.sh
+	bash scripts/check-sse4_2.sh
 
 # The below x- targets are temporary, for experimenting with new profiles,
 # specifically in pursuit of compile time speedups.
