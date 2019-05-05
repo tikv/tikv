@@ -18,7 +18,11 @@ impl RpnFnLogicalAnd {
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
-        // Intentionally not merging `None` and `Some(0)` conditions to be clear.
+        // The mapping from Rust to SQL logic is:
+        //
+        // * None => null
+        // * Some(0) => false
+        // * Some(x != 0) => true
         Ok(match (arg0, arg1) {
             (Some(0), _) | (_, Some(0)) => Some(0),
             (None, _) | (_, None) => None,
@@ -39,21 +43,12 @@ impl RpnFnLogicalOr {
         arg0: &Option<i64>,
         arg1: &Option<i64>,
     ) -> Result<Option<i64>> {
-        // Rule 1. As long as there is `Some(x)` where x is not 0, the result is `1`.
-        // Rule 2. As long as there is `None`, the result is `None`.
-        // Rule 3. For the rest, the result is `0`.
-        Ok(match arg0 {
-            None => match arg1 {
-                None => None,
-                Some(0) => None,
-                Some(_) => Some(1),
-            },
-            Some(0) => match arg1 {
-                None => None,
-                Some(0) => Some(0),
-                Some(_) => Some(1),
-            },
-            Some(_) => Some(1),
+        // This is a standard Kleene OR used in SQL where
+        // `null OR false == null` and `null OR true == true`
+        Ok(match (arg0, arg1) {
+            (Some(0), Some(0)) => Some(0),
+            (None, None) | (None, Some(0)) | (Some(0), None) => None,
+            _ => Some(1),
         })
     }
 }
