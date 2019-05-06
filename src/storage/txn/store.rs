@@ -1,5 +1,8 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::collections::{btree_map, BTreeMap};
+use std::sync::Arc;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
@@ -8,6 +11,7 @@ use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
+use owning_ref::{ArcRef, OwningHandle};
 
 pub trait Store: Send {
     type Scanner: Scanner;
@@ -161,31 +165,16 @@ impl<S: Snapshot> SnapshotStore<S> {
 }
 
 /// A Store that reads on fixtures.
+#[derive(Clone)]
 pub struct FixtureStore {
-    data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
-}
-
-impl Clone for FixtureStore {
-    fn clone(&self) -> Self {
-        let data = self
-            .data
-            .iter()
-            .map(|(k, v)| {
-                let owned_k = k.clone();
-                let owned_v = match v {
-                    Ok(v) => Ok(v.clone()),
-                    Err(e) => Err(e.maybe_clone().unwrap()),
-                };
-                (owned_k, owned_v)
-            })
-            .collect();
-        Self { data }
-    }
+    data: ArcRef<BTreeMap<Key, Result<Vec<u8>>>>,
 }
 
 impl FixtureStore {
-    pub fn new(data: std::collections::BTreeMap<Key, Result<Vec<u8>>>) -> Self {
-        FixtureStore { data }
+    pub fn new(data: BTreeMap<Key, Result<Vec<u8>>>) -> Self {
+        FixtureStore {
+            data: Arc::new(data).into(),
+        }
     }
 }
 
@@ -232,50 +221,46 @@ impl Store for FixtureStore {
             }
         });
 
-        let mut vec: Vec<_> = self
-            .data
-            .range((lower, upper))
-            .map(|(k, v)| {
-                let owned_k = k.clone();
-                let owned_v = if key_only {
-                    match v {
-                        Ok(_v) => Ok(vec![]),
-                        Err(e) => Err(e.maybe_clone().unwrap()),
-                    }
-                } else {
-                    match v {
-                        Ok(v) => Ok(v.clone()),
-                        Err(e) => Err(e.maybe_clone().unwrap()),
-                    }
-                };
-                (owned_k, owned_v)
-            })
-            .collect();
-
-        if desc {
-            vec.reverse();
-        }
-
         Ok(FixtureStoreScanner {
-            // TODO: Remove clone when GATs is available. See rust-lang/rfcs#1598.
-            data: vec.into_iter(),
+            key_only,
+            desc,
+            handle: OwningHandle::new_with_fn(self.data.clone(), |m| unsafe {
+                Box::new((*m).range((lower, upper)))
+            }),
         })
     }
 }
 
 /// A Scanner that scans on fixtures.
+// TODO: Replace it using GATs when available, to avoid `Arc` cost.
+#[allow(clippy::type_complexity)]
 pub struct FixtureStoreScanner {
-    data: std::vec::IntoIter<(Key, Result<Vec<u8>>)>,
+    key_only: bool,
+    desc: bool,
+    handle: OwningHandle<
+        ArcRef<BTreeMap<Key, Result<Vec<u8>>>>,
+        Box<btree_map::Range<'static, Key, Result<Vec<u8>>>>,
+    >,
 }
 
 impl Scanner for FixtureStoreScanner {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
-        let value = self.data.next();
+        let value = if !self.desc {
+            self.handle.next()
+        } else {
+            self.handle.next_back()
+        };
         match value {
             None => Ok(None),
-            Some((k, Ok(v))) => Ok(Some((k, v))),
-            Some((_k, Err(e))) => Err(e),
+            Some((k, Ok(v))) => {
+                if !self.key_only {
+                    Ok(Some((k.clone(), v.clone())))
+                } else {
+                    Ok(Some((k.clone(), Vec::new())))
+                }
+            }
+            Some((_k, Err(e))) => Err(e.maybe_clone().unwrap()),
         }
     }
 
