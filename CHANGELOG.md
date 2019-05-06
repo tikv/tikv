@@ -4,6 +4,9 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [2.1.9]
 - Fix potential quorum changes when transferring leader (https://github.com/pingcap/raft-rs/issues/221)
+- Fix the Importer bug that some SST files fail to be imported but it still returns successful import result [#4566](https://github.com/tikv/tikv/pull/4566)
+- Support setting a speed limit in Importer when uploading SST files to TiKV [#4607](https://github.com/tikv/tikv/pull/4607)
+- Change Importer RocksDB SST compression method to `lz4` to reduce CPU consumption [#4624](https://github.com/tikv/tikv/pull/4624)
 
 ## [2.1.8]
 - Fix the issue of wrong statistics of the read traffic [#4441](https://github.com/tikv/tikv/pull/4441)
