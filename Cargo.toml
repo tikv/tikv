@@ -166,6 +166,7 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/cop_codegen",
   "components/log_wrappers",
   "components/tikv_util",
 ]
