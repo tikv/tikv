@@ -15,19 +15,15 @@ const PREFIX_COMPAT: [u8; 12] = [0x00; 12];
 
 impl ScalarFunc {
     pub fn int_any_value(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_int(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_int(ctx, row))
     }
 
     pub fn real_any_value(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_real(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_real(ctx, row))
     }
 
     pub fn string_any_value<'a, 'b: 'a>(
@@ -35,11 +31,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, [u8]>>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_string(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_string(ctx, row))
     }
 
     pub fn time_any_value<'a, 'b: 'a>(
@@ -47,11 +41,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Time>>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_time(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_time(ctx, row))
     }
 
     pub fn decimal_any_value<'a, 'b: 'a>(
@@ -59,11 +51,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Decimal>>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_decimal(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_decimal(ctx, row))
     }
 
     pub fn json_any_value<'a, 'b: 'a>(
@@ -71,11 +61,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_json(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_json(ctx, row))
     }
 
     pub fn duration_any_value<'a, 'b: 'a>(
@@ -83,11 +71,9 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Duration>>> {
-        if self.children.is_empty() {
-            Ok(None)
-        } else {
-            self.children[0].eval_duration(ctx, row)
-        }
+        self.children
+            .first()
+            .map_or(Ok(None), |child| child.eval_duration(ctx, row))
     }
 
     pub fn is_ipv4(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -235,251 +221,138 @@ impl ScalarFunc {
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::codec::data_type::Duration;
+    use crate::coprocessor::codec::mysql::json::Json;
+    use crate::coprocessor::codec::mysql::Decimal;
+    use crate::coprocessor::codec::mysql::Time;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
+    macro_rules! test_any_value {
+        ($cases: expr, $case_type: ty, Datum::$type_of_datum: ident, $maker_for_case_ele: expr, ScalarFuncSig::$sig_of_scalar_func: ident) => {{
+            let cases: $case_type = $cases;
+
+            let mut ctx = EvalContext::default();
+            for (n1, n2, n3, n4, expected) in cases {
+                let input1 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n1)));
+                let input2 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n2)));
+                let input3 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n3)));
+                let input4 = datum_expr(Datum::$type_of_datum($maker_for_case_ele(n4)));
+
+                let op = scalar_func_expr(
+                    ScalarFuncSig::$sig_of_scalar_func,
+                    &[input1, input2, input3, input4],
+                );
+                let op = Expression::build(&ctx, op).unwrap();
+                let got = op.eval(&mut ctx, &[]).unwrap();
+                let exp = Datum::from($maker_for_case_ele(expected));
+                assert_eq!(got, exp);
+            }
+            let op = scalar_func_expr(ScalarFuncSig::$sig_of_scalar_func, &[]);
+            let op = Expression::build(&ctx, op).unwrap();
+            let got = op.eval(&mut ctx, &[]);
+            match got {
+                Ok(x) => assert_eq!(x, Datum::Null),
+                _ => panic!("test failed, expect Ok(Datum::Null)"),
+            }
+        }};
+    }
+
     #[test]
     fn test_int_any_value() {
-        let cases = vec![
-            // input, expected
-            (1i64, 2i64, 3i64, 4i64, 1i64),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::I64(n1));
-            let input2 = datum_expr(Datum::I64(n2));
-            let input3 = datum_expr(Datum::I64(n3));
-            let input4 = datum_expr(Datum::I64(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::IntAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::IntAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+        test_any_value!(
+            vec![(1i64, 2i64, 3i64, 4i64, 1i64)],
+            Vec<(i64, i64, i64, i64, i64)>,
+            Datum::I64,
+            |x| x,
+            ScalarFuncSig::IntAnyValue
+        );
     }
 
     #[test]
     fn test_real_any_value() {
-        let cases = vec![
-            // input, expected
-            (1.2f64, 2.3f64, 3f64, 4f64, 1.2f64),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::F64(n1));
-            let input2 = datum_expr(Datum::F64(n2));
-            let input3 = datum_expr(Datum::F64(n3));
-            let input4 = datum_expr(Datum::F64(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::RealAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::RealAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+        test_any_value!(
+            vec![(1.2f64, 2.3f64, 3f64, 4f64, 1.2f64)],
+            Vec<(f64, f64, f64, f64, f64)>,
+            Datum::F64,
+            |x| x,
+            ScalarFuncSig::RealAnyValue
+        );
     }
 
     #[test]
     fn test_string_any_value() {
-        let cases = vec![
-            // input, expected
-            ("abc", "def", "ojk", "hij", "abc"),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::Bytes(n1.as_bytes().to_vec()));
-            let input2 = datum_expr(Datum::Bytes(n2.as_bytes().to_vec()));
-            let input3 = datum_expr(Datum::Bytes(n3.as_bytes().to_vec()));
-            let input4 = datum_expr(Datum::Bytes(n4.as_bytes().to_vec()));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::StringAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected.as_bytes().to_vec());
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::StringAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+        test_any_value!(
+            vec![("abc", "def", "ojk", "hij", "abc")],
+            Vec<(&str, &str, &str, &str, &str)>,
+            Datum::Bytes,
+            |x: &str| x.as_bytes().to_vec(),
+            ScalarFuncSig::StringAnyValue
+        );
     }
 
     #[test]
     fn test_duration_any_value() {
-        let cases = vec![
-            // input, expected
-            (
+        test_any_value!(
+            vec![(
                 Duration::from_nanos(10, 0).unwrap(),
                 Duration::from_nanos(11, 0).unwrap(),
                 Duration::from_nanos(12, 0).unwrap(),
                 Duration::from_nanos(13, 0).unwrap(),
                 Duration::from_nanos(10, 0).unwrap(),
-            ),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::Dur(n1));
-            let input2 = datum_expr(Datum::Dur(n2));
-            let input3 = datum_expr(Datum::Dur(n3));
-            let input4 = datum_expr(Datum::Dur(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::DurationAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::DurationAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+            )],
+            Vec<(Duration, Duration, Duration, Duration, Duration)>,
+            Datum::Dur,
+            |x| x,
+            ScalarFuncSig::DurationAnyValue
+        );
     }
 
     #[test]
     fn test_json_any_value() {
-        use crate::coprocessor::codec::mysql::json::Json;
-
-        let cases = vec![
-            // input, expected
-            (
+        test_any_value!(
+            vec![(
                 Json::U64(1),
                 Json::U64(2),
                 Json::U64(3),
                 Json::U64(4),
                 Json::U64(1),
-            ),
-        ];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::Json(n1));
-            let input2 = datum_expr(Datum::Json(n2));
-            let input3 = datum_expr(Datum::Json(n3));
-            let input4 = datum_expr(Datum::Json(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::JSONAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::JSONAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+            )],
+            Vec<(Json, Json, Json, Json, Json)>,
+            Datum::Json,
+            |x| x,
+            ScalarFuncSig::JSONAnyValue
+        );
     }
 
     #[test]
     fn test_time_any_value() {
-        use crate::coprocessor::codec::mysql::Time;
-        let cases = vec![(
-            Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
-            Time::parse_datetime("1000-01-01 00:00:01", 0, &Tz::utc()).unwrap(),
-            Time::parse_datetime("1000-01-01 00:00:02", 0, &Tz::utc()).unwrap(),
-            Time::parse_datetime("1000-01-01 00:00:03", 0, &Tz::utc()).unwrap(),
-            Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
-        )];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::Time(n1));
-            let input2 = datum_expr(Datum::Time(n2));
-            let input3 = datum_expr(Datum::Time(n3));
-            let input4 = datum_expr(Datum::Time(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::TimeAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::TimeAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+        test_any_value!(
+            vec![(
+                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:01", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:02", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:03", 0, &Tz::utc()).unwrap(),
+                Time::parse_datetime("1000-01-01 00:00:00", 0, &Tz::utc()).unwrap(),
+            )],
+            Vec<(Time, Time, Time, Time, Time)>,
+            Datum::Time,
+            |x| x,
+            ScalarFuncSig::TimeAnyValue
+        );
     }
 
     #[test]
     fn test_decimal_any_value() {
-        use crate::coprocessor::codec::mysql::Decimal;
-        let cases: Vec<(Decimal, Decimal, Decimal, Decimal, Decimal)> =
-            vec![(10.into(), 20.into(), 30.into(), 40.into(), 10.into())];
-
-        let mut ctx = EvalContext::default();
-        for (n1, n2, n3, n4, expected) in cases {
-            let input1 = datum_expr(Datum::Dec(n1));
-            let input2 = datum_expr(Datum::Dec(n2));
-            let input3 = datum_expr(Datum::Dec(n3));
-            let input4 = datum_expr(Datum::Dec(n4));
-
-            let op = scalar_func_expr(
-                ScalarFuncSig::DecimalAnyValue,
-                &[input1, input2, input3, input4],
-            );
-            let op = Expression::build(&ctx, op).unwrap();
-            let got = op.eval(&mut ctx, &[]).unwrap();
-            let exp = Datum::from(expected);
-            assert_eq!(got, exp);
-        }
-        let op = scalar_func_expr(ScalarFuncSig::DecimalAnyValue, &[]);
-        let op = Expression::build(&ctx, op).unwrap();
-        let got = op.eval(&mut ctx, &[]);
-        match got {
-            Ok(x) => assert_eq!(x, Datum::Null),
-            _ => panic!("test failed, except Ok(Datum::Null)"),
-        }
+        test_any_value!(
+            vec![(10.into(), 20.into(), 30.into(), 40.into(), 10.into())],
+            Vec<(Decimal, Decimal, Decimal, Decimal, Decimal)>,
+            Datum::Dec,
+            |x| x,
+            ScalarFuncSig::DecimalAnyValue
+        );
     }
 
     #[test]
