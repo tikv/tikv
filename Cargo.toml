@@ -180,21 +180,45 @@ members = [
 ]
 
 [profile.dev]
-opt-level = 0  # Controls the --opt-level the compiler builds with
-debug = true   # Controls whether the compiler passes `-g`
+opt-level = 0
+debug = true
 codegen-units = 4
+lto = false
+incremental = true
+panic = 'unwind'
+debug-assertions = false
+overflow-checks = false
+rpath = false
 
 # The release profile, used for `cargo build --release`
 [profile.release]
-lto = true
 opt-level = 3
 debug = true
-# TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
-codegen-units = 1
+codegen-units = 1 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
+lto = true
+incremental = false
+panic = 'unwind'
+debug-assertions = false
+overflow-checks = false
+rpath = false
+
+[profile.test]
+opt-level = 0
+debug = 2
+codegen-units = 16
+lto = false
+incremental = true
+debug-assertions = true
+overflow-checks = true
+rpath = false
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
-lto = false
 opt-level = 3
 debug = true
 codegen-units = 1
+lto = false
+incremental = false
+debug-assertions = false
+overflow-checks = false
+rpath = false
