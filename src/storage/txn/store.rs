@@ -3,6 +3,8 @@
 use std::collections::{btree_map, BTreeMap};
 use std::sync::Arc;
 
+use owning_ref::OwningHandle;
+
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
@@ -11,7 +13,6 @@ use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
-use owning_ref::{ArcRef, OwningHandle};
 
 pub trait Store: Send {
     type Scanner: Scanner;
@@ -167,13 +168,13 @@ impl<S: Snapshot> SnapshotStore<S> {
 /// A Store that reads on fixtures.
 #[derive(Clone)]
 pub struct FixtureStore {
-    data: ArcRef<BTreeMap<Key, Result<Vec<u8>>>>,
+    data: Arc<BTreeMap<Key, Result<Vec<u8>>>>,
 }
 
 impl FixtureStore {
     pub fn new(data: BTreeMap<Key, Result<Vec<u8>>>) -> Self {
         FixtureStore {
-            data: Arc::new(data).into(),
+            data: Arc::new(data),
         }
     }
 }
@@ -238,7 +239,7 @@ pub struct FixtureStoreScanner {
     key_only: bool,
     desc: bool,
     handle: OwningHandle<
-        ArcRef<BTreeMap<Key, Result<Vec<u8>>>>,
+        Arc<BTreeMap<Key, Result<Vec<u8>>>>,
         Box<btree_map::Range<'static, Key, Result<Vec<u8>>>>,
     >,
 }
