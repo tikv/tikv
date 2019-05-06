@@ -635,6 +635,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
                     |_| unreachable!()
                 );
+                // This can happen only when the peer is about to be destroyed
+                // or the node is shutting down. So it's OK to not to clean up
+                // registry.
                 if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                     info!(
                         "failed to schedule peer tick";
