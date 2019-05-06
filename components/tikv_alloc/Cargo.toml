@@ -48,4 +48,4 @@ features = ["bundled"]
 
 [dependencies.compile_warning]
 version = "0.1"
-path = "./compile_warning" 
+path = "../compile_warning" 

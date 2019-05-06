@@ -77,6 +77,7 @@
 //! jemalloc is configured for profiling if you pass
 //! `--features=mem-profiling` to cargo for eather `tikv_alloc` or
 //! `tikv`.
+mod default;
 
 #[cfg(any(windows, fuzzing))]
 use compile_warning::compile_warning;
@@ -87,9 +88,6 @@ extern crate log;
 
 #[cfg(not(any(feature = "jemalloc", feature = "tcmalloc", feature = "system-alloc")))]
 compile_error!("Features must be enabled for this crate.");
-
-#[cfg(all(unix, not(fuzzing), not(feature = "jemalloc")))]
-mod default;
 
 pub type AllocStats = Vec<(&'static str, usize)>;
 
@@ -104,7 +102,7 @@ mod imp;
 mod imp;
 
 #[cfg(any(windows, fuzzing))]
-compile_warning!("Memory allocation uses System alloc on Windows");
+compile_warning!("Memory allocation uses System alloc on Windows or Fuzzing");
 #[cfg(any(windows, fuzzing, features))]
 #[path = "system.rs"]
 mod imp;

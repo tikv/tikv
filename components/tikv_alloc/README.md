@@ -4,9 +4,9 @@
 // Jemallocator
 $ cargo build
 // Tcmalloc
-$ cargo build --features="tcmalloc"
+$ cargo build --no-default-features --features="tcmalloc"
 // System Allocator
-$ cargo build --features="system-alloc"
+$ cargo build --no-default-features --features="system-alloc"
 ```
 
 Or:

@@ -168,6 +168,7 @@ members = [
   "components/cop_datatype",
   "components/log_wrappers",
   "components/tikv_util",
+  "components/compile_warning",
 ]
 
 [profile.dev]
