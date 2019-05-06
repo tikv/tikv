@@ -470,17 +470,16 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, MyDuration>>> {
-        let arg0: Cow<'a, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let arg0 = *try_opt!(self.children[0].eval_duration(ctx, row));
         let arg1: Cow<'a, [u8]> = try_opt!(self.children[1].eval_string(ctx, row));
         let s = ::std::str::from_utf8(&arg1)?;
         let arg1 = MyDuration::parse(&arg1, Time::parse_fsp(s))?;
-        let arg3 = arg0.clone();
-        let res = match arg0.into_owned().checked_sub(&arg1) {
+        let res = match arg0.checked_sub(&arg1) {
             Some(res) => res,
             None => {
                 return Err(Error::overflow(
                     "DURATION",
-                    &format!("({} + {})", &arg3, &arg1),
+                    &format!("({} - {})", &arg0, &arg1),
                 ))
             }
         };
