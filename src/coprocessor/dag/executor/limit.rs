@@ -3,6 +3,7 @@
 use tipb::executor::Limit;
 
 use super::ExecutorMetrics;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::executor::{Executor, Row};
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::Result;
@@ -57,6 +58,10 @@ impl<'a> Executor for LimitExecutor<'a> {
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
     }
 }
 

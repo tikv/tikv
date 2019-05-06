@@ -10,6 +10,7 @@ use tipb::executor::{IndexScan, TableScan};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
+use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::storage::RocksEngine;
 
@@ -24,6 +25,7 @@ fn bench_table_scan_next(
     b.iter_with_setup(
         || {
             let mut executor = TableScanExecutor::table_scan(
+                ExecSummaryCollectorDisabled,
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
@@ -414,6 +416,7 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                     ranges.push(table.get_record_range_one(i));
                 }
                 let mut executor = TableScanExecutor::table_scan(
+                    ExecSummaryCollectorDisabled,
                     meta.clone(),
                     ranges,
                     store.to_fixture_store(),
@@ -470,6 +473,7 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut executor = TableScanExecutor::table_scan(
+                    ExecSummaryCollectorDisabled,
                     meta.clone(),
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
@@ -503,6 +507,7 @@ fn bench_index_scan_next(
     b.iter_with_setup(
         || {
             let mut executor = IndexScanExecutor::index_scan(
+                ExecSummaryCollectorDisabled,
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),

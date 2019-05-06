@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
@@ -77,6 +78,10 @@ impl Executor for SelectionExecutor {
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
     }
 }
 
