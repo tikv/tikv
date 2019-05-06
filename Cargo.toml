@@ -173,6 +173,7 @@ members = [
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
 codegen-units = 4
+panic = 'abort'
 
 # The release profile, used for `cargo build --release`
 [profile.release]
@@ -181,6 +182,7 @@ opt-level = 3
 debug = true
 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
 codegen-units = 1
+panic = 'abort'
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
