@@ -97,9 +97,9 @@ mod profiling {
             if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
                 error!("failed to activate profiling: {}", e);
                 return Err(ProfError::JemallocError(e));
-            };
+            }
         }
-        return Ok(());
+        Ok(())
     }
 
     pub fn deactivate_prof() -> ProfResult<()> {
@@ -107,9 +107,9 @@ mod profiling {
             if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, false) {
                 error!("failed to deactivate profiling: {}", e);
                 return Err(ProfError::JemallocError(e));
-            };
+            }
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Dump the profile to the `path`.
