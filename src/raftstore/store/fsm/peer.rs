@@ -326,7 +326,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.stopped {
             return;
         }
-        trace!("tick"; "tick" => ?tick, "peer_id" => self.fsm.peer_id(), "region_id" => self.region_id());
+        trace!(
+            "tick";
+            "tick" => ?tick,
+            "peer_id" => self.fsm.peer_id(),
+            "region_id" => self.region_id(),
+        );
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
@@ -596,13 +601,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if is_zero_duration(&timeout) {
             return;
         }
-        trace!("schedule tick"; "tick" => ?tick, "timeout" => ?timeout, "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
+        trace!(
+            "schedule tick";
+            "tick" => ?tick,
+            "timeout" => ?timeout,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.tick_registry.insert(tick);
 
         let region_id = self.region_id();
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
+                self.fsm.tick_registry.remove(tick);
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
