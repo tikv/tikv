@@ -450,6 +450,365 @@ mod tests {
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
+    /// == Call #1 ==
+    /// NULL         1.0         abc         1
+    /// 7.0          2.0         NULL        NULL
+    /// NULL         NULL        ""          NULL
+    /// NULL         4.5         HelloWorld  NULL
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// 1.5          4.5         aaaaa       5
+    /// (drained)
+    fn make_src_executor_using_fixture() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeTp::Double.into(), // this column is not used
+                FieldTypeTp::Double.into(),
+                FieldTypeTp::VarString.into(),
+                FieldTypeTp::LongLong.into(), // this column is not used
+            ],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None, Some(7.0), None, None]),
+                        VectorValue::Real(vec![Some(1.0), Some(2.0), None, Some(4.5)]),
+                        VectorValue::Bytes(vec![
+                            Some(b"abc".to_vec()),
+                            None,
+                            Some(vec![]),
+                            Some(b"HelloWorld".to_vec()),
+                        ]),
+                        VectorValue::Int(vec![Some(1), None, None, None]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![Some(1.5)]),
+                        VectorValue::Real(vec![Some(4.5)]),
+                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
+                        VectorValue::Int(vec![Some(5)]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
+
+    #[test]
+    fn test_it_works_unit() {
+        /// Aggregate function `Foo` accepts a Bytes column, returns a Int datum.
+        ///
+        /// The returned data is the sum of the length of all accepted bytes datums.
+        #[derive(Debug, AggrFunction)]
+        #[aggr_function(state = AggrFnFooState::new())]
+        struct AggrFnFoo;
+
+        #[derive(Debug)]
+        struct AggrFnFooState {
+            len: usize,
+        }
+
+        impl AggrFnFooState {
+            pub fn new() -> Self {
+                Self { len: 0 }
+            }
+        }
+
+        impl ConcreteAggrFunctionState for AggrFnFooState {
+            type ParameterType = Bytes;
+            type ResultTargetType = Vec<Option<i64>>;
+
+            fn update_concrete(
+                &mut self,
+                _ctx: &mut EvalContext,
+                value: &Option<Self::ParameterType>,
+            ) -> Result<()> {
+                if let Some(value) = value {
+                    self.len += value.len();
+                }
+                Ok(())
+            }
+
+            fn push_result_concrete(
+                &self,
+                _ctx: &mut EvalContext,
+                target: &mut Self::ResultTargetType,
+            ) -> Result<()> {
+                target.push(Some(self.len as i64));
+                Ok(())
+            }
+        }
+
+        /// `Foo` returns a Int datum.
+        fn push_foo_output_schema(output: &mut Vec<FieldType>) {
+            output.push(FieldTypeTp::LongLong.into());
+        }
+
+        /// Aggregate function `Bar` accepts a Real column, returns `(a: Int, b: Int, c: Real)`,
+        /// where `a` is the number of rows including nulls, `b` is the number of rows excluding
+        /// nulls, `c` is the sum of all values.
+        #[derive(Debug, AggrFunction)]
+        #[aggr_function(state = AggrFnBarState::new())]
+        struct AggrFnBar;
+
+        #[derive(Debug)]
+        struct AggrFnBarState {
+            rows_with_null: usize,
+            rows_without_null: usize,
+            sum: f64,
+        }
+
+        impl AggrFnBarState {
+            pub fn new() -> Self {
+                Self {
+                    rows_with_null: 0,
+                    rows_without_null: 0,
+                    sum: 0.0,
+                }
+            }
+        }
+
+        impl ConcreteAggrFunctionState for AggrFnBarState {
+            type ParameterType = Real;
+            type ResultTargetType = [VectorValue];
+
+            fn update_concrete(
+                &mut self,
+                _ctx: &mut EvalContext,
+                value: &Option<Self::ParameterType>,
+            ) -> Result<()> {
+                self.rows_with_null += 1;
+                if let Some(value) = value {
+                    self.rows_without_null += 1;
+                    self.sum += value;
+                }
+                Ok(())
+            }
+
+            fn push_result_concrete(
+                &self,
+                _ctx: &mut EvalContext,
+                target: &mut Self::ResultTargetType,
+            ) -> Result<()> {
+                target[0].push_int(Some(self.rows_with_null as i64));
+                target[1].push_int(Some(self.rows_without_null as i64));
+                target[2].push_real(Some(self.sum));
+                Ok(())
+            }
+        }
+
+        /// `Bar` returns `(a: Int, b: Int, c: Real)`.
+        fn push_bar_output_schema(output: &mut Vec<FieldType>) {
+            output.push(FieldTypeTp::LongLong.into());
+            output.push(FieldTypeTp::Long.into());
+            output.push(FieldTypeTp::Double.into());
+        }
+
+        // This test creates a simple aggregation executor with the following aggregate functions:
+        // - Foo("abc")
+        // - Foo(NULL)
+        // - Bar(42.5)
+        // - Bar(NULL)
+        // - Foo(col_2)
+        // - Bar(col_1)
+        // As a result, there should be 12 output columns.
+
+        let src_exec = make_src_executor_using_fixture();
+
+        // As a unit test, let's use the most simple way to build the executor. No complex parsers
+        // involved.
+
+        let aggr_definitions: Vec<_> = (0..6)
+            .map(|index| {
+                let mut exp = Expr::new();
+                exp.mut_val().push(index as u8);
+                exp
+            })
+            .collect();
+
+        let mut exec = BatchSimpleAggregationExecutor::new_for_test(
+            src_exec,
+            aggr_definitions,
+            |def, _, _, _, out_schema, out_exp| {
+                match def.get_val()[0] {
+                    0 => {
+                        // Foo("abc") -> Int
+                        push_foo_output_schema(out_schema);
+                        out_exp.push(
+                            RpnExpressionBuilder::new()
+                                .push_constant(b"abc".to_vec())
+                                .build(),
+                        );
+                        Ok(Box::new(AggrFnFoo))
+                    }
+                    1 => {
+                        // Foo(NULL) -> Int
+                        push_foo_output_schema(out_schema);
+                        out_exp.push(
+                            RpnExpressionBuilder::new()
+                                .push_constant(ScalarValue::Bytes(None))
+                                .build(),
+                        );
+                        Ok(Box::new(AggrFnFoo))
+                    }
+                    2 => {
+                        // Bar(42.5) -> (Int, Int, Real)
+                        push_bar_output_schema(out_schema);
+                        out_exp.push(RpnExpressionBuilder::new().push_constant(42.5f64).build());
+                        Ok(Box::new(AggrFnBar))
+                    }
+                    3 => {
+                        // Bar(NULL) -> (Int, Int, Real)
+                        push_bar_output_schema(out_schema);
+                        out_exp.push(
+                            RpnExpressionBuilder::new()
+                                .push_constant(ScalarValue::Real(None))
+                                .build(),
+                        );
+                        Ok(Box::new(AggrFnBar))
+                    }
+                    4 => {
+                        // Foo(col_2) -> Int
+                        push_foo_output_schema(out_schema);
+                        out_exp.push(RpnExpressionBuilder::new().push_column_ref(2).build());
+                        Ok(Box::new(AggrFnFoo))
+                    }
+                    5 => {
+                        // Bar(col_1) -> (Int, Int, Real)
+                        push_bar_output_schema(out_schema);
+                        out_exp.push(RpnExpressionBuilder::new().push_column_ref(1).build());
+                        Ok(Box::new(AggrFnBar))
+                    }
+                    _ => unreachable!(),
+                }
+            },
+        );
+
+        // The scan rows parameter has no effect for mock executor. We don't care.
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 1);
+        assert_eq!(r.data.columns_len(), 12);
+        // Foo("abc") for 5 rows, so it is 5*3.
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(15)]);
+        // Foo(NULL) for 5 rows, so it is 0.
+        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(0)]);
+        // Bar(42.5) for 5 rows, so it is (5, 5, 42.5*5).
+        assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.data[4].decoded().as_real_slice(), &[Some(212.5)]);
+        // Bar(NULL) for 5 rows, so it is (5, 0, 0).
+        assert_eq!(r.data[5].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.data[7].decoded().as_real_slice(), &[Some(0.0)]);
+        // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
+        assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(18)]);
+        // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
+        assert_eq!(r.data[9].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.data[10].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.data[11].decoded().as_real_slice(), &[Some(12.0)]);
+        assert!(r.is_drained.unwrap());
+    }
+
+    #[test]
+    fn test_it_works_integration() {
+        use tipb::expression::ExprType;
+        use tipb_helper::ExprDefinitionBuilder;
+
+        // This test creates a simple aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - COUNT(4.5)
+        // - COUNT(NULL)
+        // - COUNT(col_1)
+        // - AVG(42.5)
+        // - AVG(NULL)
+        // - AVG(col_0)
+        // As a result, there should be 10 output columns.
+
+        let src_exec = make_src_executor_using_fixture();
+        let aggr_definitions = vec![
+            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefinitionBuilder::constant_int(1))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefinitionBuilder::constant_real(4.5))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefinitionBuilder::constant_null(
+                    FieldTypeTp::NewDecimal,
+                ))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefinitionBuilder::column_ref(1, FieldTypeTp::Double))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push(ExprDefinitionBuilder::constant_real(42.5))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::NewDecimal)
+                .push(ExprDefinitionBuilder::constant_null(
+                    FieldTypeTp::NewDecimal,
+                ))
+                .build(),
+            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push(ExprDefinitionBuilder::column_ref(0, FieldTypeTp::Double))
+                .build(),
+        ];
+        let mut exec = BatchSimpleAggregationExecutor::new_for_test(
+            src_exec,
+            aggr_definitions,
+            AggrDefinitionParser::parse,
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 1);
+        assert_eq!(r.data.columns_len(), 10);
+        // COUNT(1) for 5 rows, so it is 5.
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(5)]);
+        // COUNT(4.5) for 5 rows, so it is 5.
+        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(5)]);
+        // COUNT(NULL) for 5 rows, so it is 0.
+        assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(0)]);
+        // COUNT([1.0, 2.0, NULL, 4.5, 4.5]) => 4
+        assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(4)]);
+        // AVG(42.5) for 5 rows, so it is (5, 212.5). Notice that AVG returns sum.
+        assert_eq!(r.data[4].decoded().as_int_slice(), &[Some(5)]);
+        assert_eq!(r.data[5].decoded().as_real_slice(), &[Some(212.5)]);
+        // AVG(NULL) for 5 rows, so it is (0, NULL).
+        assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
+        assert_eq!(r.data[7].decoded().as_decimal_slice(), &[None]);
+        // Foo([NULL, 7.0, NULL, NULL, 1.5]) => (2, 8.5)
+        assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(2)]);
+        assert_eq!(r.data[9].decoded().as_real_slice(), &[Some(8.5)]);
+        assert!(r.is_drained.unwrap());
+    }
+
     #[test]
     fn test_no_row() {
         #[derive(Debug, AggrFunction)]
@@ -509,7 +868,6 @@ mod tests {
         );
 
         let r = exec.next_batch(1);
-        // The scan rows parameter has no effect for mock executor. We don't care.
         assert_eq!(r.data.rows_len(), 0);
         assert!(!r.is_drained.unwrap());
 
