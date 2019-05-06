@@ -17,7 +17,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use crate::storage::{Key, Value};
+use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -175,13 +175,14 @@ impl TestEngineBuilder {
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
         let cfg_rocksdb = crate::config::DbConfig::default();
+        let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();

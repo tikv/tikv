@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
