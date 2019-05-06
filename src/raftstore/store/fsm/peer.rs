@@ -65,7 +65,7 @@ pub struct DestroyPeerJob {
 
 pub struct PeerFsm {
     peer: Peer,
-    /// A registry for all scheduled ticks. This can avoid schedule ticks twice accidentally.
+    /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     stopped: bool,
     has_ready: bool,
