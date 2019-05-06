@@ -8,6 +8,7 @@ use tipb::schema::ColumnInfo;
 
 use tikv::coprocessor::codec::datum::{Datum, DatumEncoder};
 use tikv::coprocessor::dag::batch::interface::*;
+use tikv::coprocessor::dag::exec_summary::ExecSummary;
 use tikv::coprocessor::dag::executor::{Executor, ExecutorMetrics, Row};
 
 use super::bencher::Bencher;
@@ -171,6 +172,11 @@ impl Executor for EncodedFixtureNormalExecutor {
 
     #[inline]
     fn collect_metrics_into(&mut self, _metrics: &mut ExecutorMetrics) {
+        // DO NOTHING
+    }
+
+    #[inline]
+    fn collect_execution_summaries(&mut self, _target: &mut [ExecSummary]) {
         // DO NOTHING
     }
 

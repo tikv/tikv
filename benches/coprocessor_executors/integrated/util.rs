@@ -63,7 +63,10 @@ impl<T: TxnStore + 'static> IntegratedBencher for NormalBencher<T> {
         store: &Store<RocksEngine>,
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            tikv::coprocessor::dag::builder::DAGBuilder::build_normal(
+            tikv::coprocessor::dag::builder::DAGBuilder::build_normal::<
+                _,
+                ExecSummaryCollectorDisabled,
+            >(
                 black_box(executors.to_vec()),
                 black_box(ToTxnStore::<T>::to_store(store)),
                 black_box(ranges.to_vec()),

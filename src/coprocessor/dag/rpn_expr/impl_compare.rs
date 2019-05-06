@@ -52,13 +52,9 @@ impl<C: Comparer> Clone for RpnFnCompare<C> {
     }
 }
 
-unsafe impl<C: Comparer> Send for RpnFnCompare<C> {}
-
-unsafe impl<C: Comparer> Sync for RpnFnCompare<C> {}
-
 // ======
 
-pub trait Comparer: 'static {
+pub trait Comparer: 'static + Send + Sync {
     type T: Evaluable;
 
     fn compare(lhs: &Option<Self::T>, rhs: &Option<Self::T>) -> Result<Option<i64>>;
@@ -96,7 +92,7 @@ impl<F: CmpOp> Comparer for RealComparer<F> {
             (None, _) | (_, None) => Ok(F::compare_partial_null()),
             (Some(lhs), Some(rhs)) => lhs
                 .partial_cmp(rhs)
-                // FIXME: It is wired to be a codec error.
+                // FIXME: It is weird to be a codec error.
                 // FIXME: This should never happen because special numbers like NaN and Inf are not
                 // allowed at all.
                 .ok_or_else(|| {
@@ -179,7 +175,7 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
     }
 }
 
-pub trait CmpOp: 'static {
+pub trait CmpOp: 'static + Send + Sync {
     #[inline]
     fn compare_null() -> Option<i64> {
         None
@@ -276,80 +272,174 @@ mod tests {
 
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum TestCaseCmpOp {
+        GT,
+        GE,
+        LT,
+        LE,
+        EQ,
+        NE,
+        NullEQ,
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn generate_numeric_compare_cases(
+    ) -> Vec<(Option<f64>, Option<f64>, TestCaseCmpOp, Option<i64>)> {
+        vec![
+            (None, None, TestCaseCmpOp::GT, None),
+            (Some(3.5), None, TestCaseCmpOp::GT, None),
+            (Some(-2.1), None, TestCaseCmpOp::GT, None),
+            (None, Some(3.5), TestCaseCmpOp::GT, None),
+            (None, Some(-2.1), TestCaseCmpOp::GT, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::GT, Some(1)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::GT, Some(0)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::GT, Some(0)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::GT, Some(0)),
+            (None, None, TestCaseCmpOp::GE, None),
+            (Some(3.5), None, TestCaseCmpOp::GE, None),
+            (Some(-2.1), None, TestCaseCmpOp::GE, None),
+            (None, Some(3.5), TestCaseCmpOp::GE, None),
+            (None, Some(-2.1), TestCaseCmpOp::GE, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::GE, Some(1)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::GE, Some(0)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::GE, Some(1)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::GE, Some(1)),
+            (None, None, TestCaseCmpOp::LT, None),
+            (Some(3.5), None, TestCaseCmpOp::LT, None),
+            (Some(-2.1), None, TestCaseCmpOp::LT, None),
+            (None, Some(3.5), TestCaseCmpOp::LT, None),
+            (None, Some(-2.1), TestCaseCmpOp::LT, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::LT, Some(0)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::LT, Some(1)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::LT, Some(0)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::LT, Some(0)),
+            (None, None, TestCaseCmpOp::LE, None),
+            (Some(3.5), None, TestCaseCmpOp::LE, None),
+            (Some(-2.1), None, TestCaseCmpOp::LE, None),
+            (None, Some(3.5), TestCaseCmpOp::LE, None),
+            (None, Some(-2.1), TestCaseCmpOp::LE, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::LE, Some(0)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::LE, Some(1)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::LE, Some(1)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::LE, Some(1)),
+            (None, None, TestCaseCmpOp::EQ, None),
+            (Some(3.5), None, TestCaseCmpOp::EQ, None),
+            (Some(-2.1), None, TestCaseCmpOp::EQ, None),
+            (None, Some(3.5), TestCaseCmpOp::EQ, None),
+            (None, Some(-2.1), TestCaseCmpOp::EQ, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::EQ, Some(0)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::EQ, Some(0)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::EQ, Some(1)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::EQ, Some(1)),
+            (None, None, TestCaseCmpOp::NE, None),
+            (Some(3.5), None, TestCaseCmpOp::NE, None),
+            (Some(-2.1), None, TestCaseCmpOp::NE, None),
+            (None, Some(3.5), TestCaseCmpOp::NE, None),
+            (None, Some(-2.1), TestCaseCmpOp::NE, None),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::NE, Some(1)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::NE, Some(1)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::NE, Some(0)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::NE, Some(0)),
+            (None, None, TestCaseCmpOp::NullEQ, Some(1)),
+            (Some(3.5), None, TestCaseCmpOp::NullEQ, Some(0)),
+            (Some(-2.1), None, TestCaseCmpOp::NullEQ, Some(0)),
+            (None, Some(3.5), TestCaseCmpOp::NullEQ, Some(0)),
+            (None, Some(-2.1), TestCaseCmpOp::NullEQ, Some(0)),
+            (Some(3.5), Some(-2.1), TestCaseCmpOp::NullEQ, Some(0)),
+            (Some(-2.1), Some(3.5), TestCaseCmpOp::NullEQ, Some(0)),
+            (Some(3.5), Some(3.5), TestCaseCmpOp::NullEQ, Some(1)),
+            (Some(-2.1), Some(-2.1), TestCaseCmpOp::NullEQ, Some(1)),
+        ]
+    }
+
     #[test]
-    fn test_compare_signed_int() {
-        let test_cases = vec![
-            (None, None, ScalarFuncSig::GTInt, None),
-            (Some(1), None, ScalarFuncSig::GTInt, None),
-            (Some(-1), None, ScalarFuncSig::GTInt, None),
-            (None, Some(1), ScalarFuncSig::GTInt, None),
-            (None, Some(-1), ScalarFuncSig::GTInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::GTInt, Some(1)),
-            (Some(-1), Some(1), ScalarFuncSig::GTInt, Some(0)),
-            (Some(1), Some(1), ScalarFuncSig::GTInt, Some(0)),
-            (Some(-1), Some(-1), ScalarFuncSig::GTInt, Some(0)),
-            (None, None, ScalarFuncSig::GEInt, None),
-            (Some(1), None, ScalarFuncSig::GEInt, None),
-            (Some(-1), None, ScalarFuncSig::GEInt, None),
-            (None, Some(1), ScalarFuncSig::GEInt, None),
-            (None, Some(-1), ScalarFuncSig::GEInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::GEInt, Some(1)),
-            (Some(-1), Some(1), ScalarFuncSig::GEInt, Some(0)),
-            (Some(1), Some(1), ScalarFuncSig::GEInt, Some(1)),
-            (Some(-1), Some(-1), ScalarFuncSig::GEInt, Some(1)),
-            (None, None, ScalarFuncSig::LTInt, None),
-            (Some(1), None, ScalarFuncSig::LTInt, None),
-            (Some(-1), None, ScalarFuncSig::LTInt, None),
-            (None, Some(1), ScalarFuncSig::LTInt, None),
-            (None, Some(-1), ScalarFuncSig::LTInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::LTInt, Some(0)),
-            (Some(-1), Some(1), ScalarFuncSig::LTInt, Some(1)),
-            (Some(1), Some(1), ScalarFuncSig::LTInt, Some(0)),
-            (Some(-1), Some(-1), ScalarFuncSig::LTInt, Some(0)),
-            (None, None, ScalarFuncSig::LEInt, None),
-            (Some(1), None, ScalarFuncSig::LEInt, None),
-            (Some(-1), None, ScalarFuncSig::LEInt, None),
-            (None, Some(1), ScalarFuncSig::LEInt, None),
-            (None, Some(-1), ScalarFuncSig::LEInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::LEInt, Some(0)),
-            (Some(-1), Some(1), ScalarFuncSig::LEInt, Some(1)),
-            (Some(1), Some(1), ScalarFuncSig::LEInt, Some(1)),
-            (Some(-1), Some(-1), ScalarFuncSig::LEInt, Some(1)),
-            (None, None, ScalarFuncSig::EQInt, None),
-            (Some(1), None, ScalarFuncSig::EQInt, None),
-            (Some(-1), None, ScalarFuncSig::EQInt, None),
-            (None, Some(1), ScalarFuncSig::EQInt, None),
-            (None, Some(-1), ScalarFuncSig::EQInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::EQInt, Some(0)),
-            (Some(-1), Some(1), ScalarFuncSig::EQInt, Some(0)),
-            (Some(1), Some(1), ScalarFuncSig::EQInt, Some(1)),
-            (Some(-1), Some(-1), ScalarFuncSig::EQInt, Some(1)),
-            (None, None, ScalarFuncSig::NEInt, None),
-            (Some(1), None, ScalarFuncSig::NEInt, None),
-            (Some(-1), None, ScalarFuncSig::NEInt, None),
-            (None, Some(1), ScalarFuncSig::NEInt, None),
-            (None, Some(-1), ScalarFuncSig::NEInt, None),
-            (Some(1), Some(-1), ScalarFuncSig::NEInt, Some(1)),
-            (Some(-1), Some(1), ScalarFuncSig::NEInt, Some(1)),
-            (Some(1), Some(1), ScalarFuncSig::NEInt, Some(0)),
-            (Some(-1), Some(-1), ScalarFuncSig::NEInt, Some(0)),
-            (None, None, ScalarFuncSig::NullEQInt, Some(1)),
-            (Some(1), None, ScalarFuncSig::NullEQInt, Some(0)),
-            (Some(-1), None, ScalarFuncSig::NullEQInt, Some(0)),
-            (None, Some(1), ScalarFuncSig::NullEQInt, Some(0)),
-            (None, Some(-1), ScalarFuncSig::NullEQInt, Some(0)),
-            (Some(1), Some(-1), ScalarFuncSig::NullEQInt, Some(0)),
-            (Some(-1), Some(1), ScalarFuncSig::NullEQInt, Some(0)),
-            (Some(1), Some(1), ScalarFuncSig::NullEQInt, Some(1)),
-            (Some(-1), Some(-1), ScalarFuncSig::NullEQInt, Some(1)),
-        ];
-        for (arg0, arg1, sig, expect_output) in test_cases {
+    fn test_compare_real() {
+        for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
+            let sig = match cmp_op {
+                TestCaseCmpOp::GT => ScalarFuncSig::GTReal,
+                TestCaseCmpOp::GE => ScalarFuncSig::GEReal,
+                TestCaseCmpOp::LT => ScalarFuncSig::LTReal,
+                TestCaseCmpOp::LE => ScalarFuncSig::LEReal,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EQReal,
+                TestCaseCmpOp::NE => ScalarFuncSig::NEReal,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQReal,
+            };
             let output = RpnFnScalarEvaluator::new()
                 .push_param(arg0)
                 .push_param(arg1)
                 .evaluate(sig)
                 .unwrap();
-            assert_eq!(output, expect_output);
+            assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
+        }
+    }
+
+    #[test]
+    fn test_compare_duration() {
+        fn map_double_to_duration(v: f64) -> Duration {
+            let d = std::time::Duration::from_millis((v.abs() * 1000.0) as u64);
+            let is_neg = v < 0.0;
+            Duration::new(d, is_neg, 4).unwrap()
+        }
+
+        for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
+            let sig = match cmp_op {
+                TestCaseCmpOp::GT => ScalarFuncSig::GTDuration,
+                TestCaseCmpOp::GE => ScalarFuncSig::GEDuration,
+                TestCaseCmpOp::LT => ScalarFuncSig::LTDuration,
+                TestCaseCmpOp::LE => ScalarFuncSig::LEDuration,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EQDuration,
+                TestCaseCmpOp::NE => ScalarFuncSig::NEDuration,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQDuration,
+            };
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0.map(map_double_to_duration))
+                .push_param(arg1.map(map_double_to_duration))
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
+        }
+    }
+
+    #[test]
+    fn test_compare_decimal() {
+        for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
+            let sig = match cmp_op {
+                TestCaseCmpOp::GT => ScalarFuncSig::GTDecimal,
+                TestCaseCmpOp::GE => ScalarFuncSig::GEDecimal,
+                TestCaseCmpOp::LT => ScalarFuncSig::LTDecimal,
+                TestCaseCmpOp::LE => ScalarFuncSig::LEDecimal,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EQDecimal,
+                TestCaseCmpOp::NE => ScalarFuncSig::NEDecimal,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQDecimal,
+            };
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0.map(|v| Decimal::from_f64(v).unwrap()))
+                .push_param(arg1.map(|v| Decimal::from_f64(v).unwrap()))
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
+        }
+    }
+
+    #[test]
+    fn test_compare_signed_int() {
+        for (arg0, arg1, cmp_op, expect_output) in generate_numeric_compare_cases() {
+            let sig = match cmp_op {
+                TestCaseCmpOp::GT => ScalarFuncSig::GTInt,
+                TestCaseCmpOp::GE => ScalarFuncSig::GEInt,
+                TestCaseCmpOp::LT => ScalarFuncSig::LTInt,
+                TestCaseCmpOp::LE => ScalarFuncSig::LEInt,
+                TestCaseCmpOp::EQ => ScalarFuncSig::EQInt,
+                TestCaseCmpOp::NE => ScalarFuncSig::NEInt,
+                TestCaseCmpOp::NullEQ => ScalarFuncSig::NullEQInt,
+            };
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0.map(|v| v as i64))
+                .push_param(arg1.map(|v| v as i64))
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}, {:?}, {:?}", arg0, arg1, sig);
         }
     }
 

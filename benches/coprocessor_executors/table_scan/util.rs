@@ -28,11 +28,12 @@ fn create_table_scan_executor<TargetTxnStore: TxnStore>(
     columns: &[ColumnInfo],
     ranges: &[KeyRange],
     store: &Store<RocksEngine>,
-) -> TableScanExecutor<TargetTxnStore> {
+) -> TableScanExecutor<ExecSummaryCollectorDisabled, TargetTxnStore> {
     let mut req = TableScan::new();
     req.set_columns(RepeatedField::from_slice(columns));
 
     let mut executor = TableScanExecutor::table_scan(
+        ExecSummaryCollectorDisabled,
         black_box(req),
         black_box(ranges.to_vec()),
         black_box(ToTxnStore::<TargetTxnStore>::to_store(store)),
