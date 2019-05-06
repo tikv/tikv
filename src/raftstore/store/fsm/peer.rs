@@ -735,27 +735,37 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state == GroupState::Idle {
-            if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
-                self.register_raft_base_tick();
-                self.fsm.missing_ticks += 1;
-            }
-            return;
-        }
-        let res = self.fsm.peer.check_before_tick(&self.ctx.cfg);
-        if self.fsm.missing_ticks > 0 {
-            for _ in 0..self.fsm.missing_ticks {
-                if self.fsm.peer.raft_group.tick() {
-                    self.fsm.has_ready = true;
+        let mut res = None;
+        if self.ctx.cfg.hibernate_regions {
+            if self.fsm.group_state == GroupState::Idle {
+                if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
+                    self.register_raft_base_tick();
+                    self.fsm.missing_ticks += 1;
                 }
+                return;
             }
-            self.fsm.missing_ticks = 0;
+            res = Some(self.fsm.peer.check_before_tick(&self.ctx.cfg));
+            if self.fsm.missing_ticks > 0 {
+                for _ in 0..self.fsm.missing_ticks {
+                    if self.fsm.peer.raft_group.tick() {
+                        self.fsm.has_ready = true;
+                    }
+                }
+                self.fsm.missing_ticks = 0;
+            }
         }
         if self.fsm.peer.raft_group.tick() {
             self.fsm.has_ready = true;
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
+        let res = match res {
+            None => {
+                self.register_raft_base_tick();
+                return;
+            }
+            Some(res) => res,
+        };
         if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
             self.register_raft_base_tick();
         } else {
@@ -2661,22 +2671,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
-        if self.fsm.group_state == GroupState::Idle {
-            self.fsm.peer.ping();
-            self.register_pd_heartbeat_tick();
-            if !self.fsm.peer.is_leader() {
-                // If leader is able to receive messge but can't send out any,
-                // follower should be able to start an election.
-                self.fsm.group_state = GroupState::PreChaos;
-            } else {
-                self.fsm.has_ready = true;
+        if self.ctx.cfg.hibernate_regions {
+            if self.fsm.group_state == GroupState::Idle {
+                self.fsm.peer.ping();
+                self.register_pd_heartbeat_tick();
+                if !self.fsm.peer.is_leader() {
+                    // If leader is able to receive messge but can't send out any,
+                    // follower should be able to start an election.
+                    self.fsm.group_state = GroupState::PreChaos;
+                } else {
+                    self.fsm.has_ready = true;
+                }
+            } else if self.fsm.group_state == GroupState::PreChaos {
+                self.fsm.group_state = GroupState::Chaos;
+            } else if self.fsm.group_state == GroupState::Chaos {
+                // Register tick if it's not yet. Only when it fails to receive ping from leader
+                // after two stale check can a follower actually tick.
+                self.register_raft_base_tick();
             }
-        } else if self.fsm.group_state == GroupState::PreChaos {
-            self.fsm.group_state = GroupState::Chaos;
-        } else if self.fsm.group_state == GroupState::Chaos {
-            // Register tick if it's not yet. Only when it fails to receive ping from leader
-            // after two stale check can a follower actually tick.
-            self.register_raft_base_tick();
         }
 
         // If this peer detects the leader is missing for a long long time,
