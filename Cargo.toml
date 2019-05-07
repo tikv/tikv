@@ -16,6 +16,7 @@ system-alloc = ["tikv_alloc/system-alloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
+profiling = ["profiler/profiling"]
 no-fail = ["fail/no_fail"]
 
 [lib]
@@ -116,7 +117,9 @@ hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
+profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
+cop_codegen = { path = "components/cop_codegen" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
@@ -166,6 +169,7 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/cop_codegen",
   "components/log_wrappers",
   "components/tikv_util",
   "components/compile_warning",
