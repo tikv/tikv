@@ -197,3 +197,46 @@ pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
     let t = Time::from_packed_u64(u, time_type, fsp, &tz)?;
     fuzz_time(t, cursor)
 }
+
+// Duration
+fn fuzz_duration(
+    t: tikv::coprocessor::codec::mysql::Duration,
+    mut cursor: Cursor<&[u8]>,
+) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::DurationEncoder;
+    let _ = t.fsp();
+    let mut u = t;
+    u.set_fsp(cursor.read_as_u8()?);
+    let _ = t.hours();
+    let _ = t.minutes();
+    let _ = t.secs();
+    let _ = t.micro_secs();
+    let _ = t.nano_secs();
+    let _ = t.to_secs();
+    let _ = t.is_zero();
+    let _ = t.to_decimal();
+    let u = t;
+    u.round_frac(cursor.read_as_i8()?)?;
+    let mut v = Vec::new();
+    let _ = v.encode_duration(&t);
+    Ok(())
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let nanos = cursor.read_as_i64()?;
+    let fsp = cursor.read_as_i8()?;
+    fuzz_duration(Duration::from_nanos(nanos, fsp)?, cursor)
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Error> {
+    use std::io::Read;
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let fsp = cursor.read_as_i8()?;
+    let mut buf: [u8; 32] = [b' '; 32];
+    cursor.read_exact(&mut buf)?;
+    let d = Duration::parse(&buf, fsp)?;
+    fuzz_duration(d, cursor)
+}

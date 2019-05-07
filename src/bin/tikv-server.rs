@@ -158,12 +158,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    // Create block cache.
+    let cache = cfg.storage.block_cache.build_shared_cache();
+
     // Create raft engine.
     let mut raft_db_opts = cfg.raftdb.build_opt();
     if let Some(ref ec) = encrypted_env {
         raft_db_opts.set_env(ec.clone());
     }
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
     let raft_engine = rocks::util::new_engine_opt(
         raft_db_path.to_str().unwrap(),
         raft_db_opts,
@@ -184,12 +187,13 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     //     db_path.to_str().unwrap(),
     //     kv_db_opts.clone(),
     //     &cfg.rocksdb,
+    //     &cache,
     // ) {
     //     fatal!("failed to upgrade from v2.x to v3.x: {:?}", e);
     // };
 
     // Create kv engine, storage.
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
@@ -198,7 +202,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let storage_read_pool = storage::readpool_impl::build_read_pool(
         &cfg.readpool.storage.build_config(),
         pd_sender.clone(),
-        "storage-read",
     );
 
     let storage = create_raft_storage(
@@ -232,7 +235,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
         &cfg.readpool.coprocessor.build_config(),
         pd_sender.clone(),
-        "cop",
     );
     let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(

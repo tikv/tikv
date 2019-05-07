@@ -5,6 +5,13 @@
 
 //! This module provides aggregate functions for batch executors.
 
+mod impl_avg;
+mod impl_count;
+mod parser;
+mod summable;
+
+pub use self::parser::AggrDefinitionParser;
+
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;

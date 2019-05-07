@@ -497,7 +497,8 @@ pub fn create_test_engine(
                 cmpacted_handler,
                 Some(dummpy_filter),
             ));
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+            let cache = cfg.storage.block_cache.build_shared_cache();
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
