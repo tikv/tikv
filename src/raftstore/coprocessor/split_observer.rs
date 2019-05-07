@@ -1,20 +1,9 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::{AdminObserver, Coprocessor, ObserverContext, Result as CopResult};
 use crate::coprocessor::codec::table;
-use crate::util::codec::bytes::{self, encode_bytes};
-use crate::util::escape;
+use tikv_util::codec::bytes::{self, encode_bytes};
+use tikv_util::escape;
 
 use crate::raftstore::store::util;
 use kvproto::metapb::Region;
@@ -65,7 +54,11 @@ impl SplitObserver {
         }
     }
 
-    fn on_split(&self, ctx: &mut ObserverContext, splits: &mut Vec<SplitRequest>) -> Result<()> {
+    fn on_split(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        splits: &mut Vec<SplitRequest>,
+    ) -> Result<()> {
         let (mut i, mut j) = (0, 0);
         let mut last_valid_key: Option<Vec<u8>> = None;
         let region_id = ctx.region().get_id();
@@ -119,7 +112,7 @@ impl Coprocessor for SplitObserver {}
 impl AdminObserver for SplitObserver {
     fn pre_propose_admin(
         &self,
-        ctx: &mut ObserverContext,
+        ctx: &mut ObserverContext<'_>,
         req: &mut AdminRequest,
     ) -> CopResult<()> {
         match req.get_cmd_type() {
@@ -176,10 +169,10 @@ mod tests {
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::raftstore::coprocessor::AdminObserver;
     use crate::raftstore::coprocessor::ObserverContext;
-    use crate::util::codec::bytes::encode_bytes;
     use byteorder::{BigEndian, WriteBytesExt};
     use kvproto::metapb::Region;
     use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, SplitRequest};
+    use tikv_util::codec::bytes::encode_bytes;
 
     fn new_split_request(key: &[u8]) -> AdminRequest {
         let mut req = AdminRequest::new();

@@ -1,16 +1,6 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::mvcc::{Lock, LockType, Write};
 use crate::storage::{Cursor, Iterator, Key, Statistics, Value};
@@ -81,8 +71,15 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek(&seek_key, &mut statistics.data)?;
-    assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
+    if !default_cursor.valid()?
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_load_data_by_write",
+        ));
+    }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }
@@ -101,8 +98,15 @@ where
     assert!(write.short_value.is_none());
     let seek_key = user_key.clone().append_ts(write.start_ts);
     default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
-    assert!(default_cursor.valid());
-    assert!(default_cursor.key(&mut statistics.data) == seek_key.as_encoded().as_slice());
+    if !default_cursor.valid()?
+        || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
+    {
+        return Err(default_not_found_error(
+            user_key.to_raw()?,
+            write,
+            "near_reverse_load_data_by_write",
+        ));
+    }
     statistics.data.processed += 1;
     Ok(default_cursor.value(&mut statistics.data).to_vec())
 }

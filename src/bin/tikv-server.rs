@@ -1,28 +1,12 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-#[cfg(unix)]
-extern crate nix;
-extern crate rocksdb;
-extern crate serde_json;
-#[cfg(unix)]
-extern crate signal;
 #[macro_use(
     kv,
     slog_kv,
+    slog_crit,
     slog_error,
     slog_warn,
     slog_info,
@@ -32,7 +16,6 @@ extern crate signal;
     slog_record_static
 )]
 extern crate slog;
-extern crate slog_async;
 #[macro_use]
 extern crate slog_global;
 
@@ -47,30 +30,33 @@ use std::path::Path;
 use std::process;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::usize;
 
 use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
+use engine::rocks;
+use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::pd::{PdClient, RpcClient};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm;
-use tikv::raftstore::store::{new_compaction_listener, Engines, SnapManagerBuilder};
-use tikv::server::readpool::ReadPool;
+use tikv::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
-use tikv::util::rocksdb_util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
-use tikv::util::security::{self, SecurityManager};
-use tikv::util::time::Monitor;
-use tikv::util::worker::{Builder, FutureWorker};
-use tikv::util::{self as tikv_util, check_environment_variables, rocksdb_util};
+use tikv_util::security::SecurityManager;
+use tikv_util::time::Monitor;
+use tikv_util::worker::{Builder, FutureWorker};
+use tikv_util::{self as tikv_util, check_environment_variables};
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -109,9 +95,9 @@ fn pre_start(cfg: &TiKvConfig) {
     check_system_config(&cfg);
     check_environment_variables();
 
-    if cfg.panic_when_key_exceed_bound {
-        info!("panic-when-key-exceed-bound is on");
-        tikv_util::set_panic_when_key_exceed_bound(true);
+    if cfg.panic_when_unexpected_key_or_data {
+        info!("panic-when-unexpected-key-or-data is on");
+        tikv_util::set_panic_when_unexpected_key_or_data(true);
     }
 }
 
@@ -161,7 +147,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create encrypted env from cipher file
     let encrypted_env = if !cfg.security.cipher_file.is_empty() {
-        match security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
+        match encrypted_env_from_cipher_file(&cfg.security.cipher_file, None) {
             Err(e) => fatal!(
                 "failed to create encrypted env from cipher file, err {:?}",
                 e
@@ -172,45 +158,60 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         None
     };
 
+    // Create block cache.
+    let cache = cfg.storage.block_cache.build_shared_cache();
+
+    // Create raft engine.
+    let mut raft_db_opts = cfg.raftdb.build_opt();
+    if let Some(ref ec) = encrypted_env {
+        raft_db_opts.set_env(ec.clone());
+    }
+    let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
+    let raft_engine = rocks::util::new_engine_opt(
+        raft_db_path.to_str().unwrap(),
+        raft_db_opts,
+        raft_db_cf_opts,
+    )
+    .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s));
+
     // Create kv engine, storage.
     let mut kv_db_opts = cfg.rocksdb.build_opt();
     kv_db_opts.add_event_listener(compaction_listener);
-    if encrypted_env.is_some() {
-        kv_db_opts.set_env(encrypted_env.as_ref().unwrap().clone());
+    if let Some(ec) = encrypted_env {
+        kv_db_opts.set_env(ec);
     }
-    let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
-    let kv_engine = Arc::new(
-        rocksdb_util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
-            .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s)),
+
+    // Before create kv engine we need to check whether it needs to upgrade from v2.x to v3.x.
+    // if let Err(e) = tikv::raftstore::store::maybe_upgrade_from_2_to_3(
+    //     &raft_engine,
+    //     db_path.to_str().unwrap(),
+    //     kv_db_opts.clone(),
+    //     &cfg.rocksdb,
+    //     &cache,
+    // ) {
+    //     fatal!("failed to upgrade from v2.x to v3.x: {:?}", e);
+    // };
+
+    // Create kv engine, storage.
+    let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
+    let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
+        .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+
+    let storage_read_pool = storage::readpool_impl::build_read_pool(
+        &cfg.readpool.storage.build_config(),
+        pd_sender.clone(),
     );
-    let storage_read_pool =
-        ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-            storage::ReadPoolContext::new(pd_sender.clone())
-        });
+
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,
         storage_read_pool,
-        Some(Arc::clone(&kv_engine)),
+        Some(engines.kv.clone()),
         Some(raft_router.clone()),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
-
-    // Create raft engine.
-    let mut raft_db_opts = cfg.raftdb.build_opt();
-    if encrypted_env.is_some() {
-        raft_db_opts.set_env(encrypted_env.unwrap());
-    }
-    let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
-    let raft_engine = Arc::new(
-        rocksdb_util::new_engine_opt(
-            raft_db_path.to_str().unwrap(),
-            raft_db_opts,
-            raft_db_cf_opts,
-        )
-        .unwrap_or_else(|s| fatal!("failed to create raft engine: {}", s)),
-    );
-    let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
 
     // Create snapshot manager, server.
     let snap_mgr = SnapManagerBuilder::default()
@@ -225,15 +226,16 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let import_service = ImportSSTService::new(
         cfg.import.clone(),
         raft_router.clone(),
-        Arc::clone(&kv_engine),
+        engines.kv.clone(),
         Arc::clone(&importer),
     );
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
-    let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-        coprocessor::ReadPoolContext::new(pd_sender.clone())
-    });
+    let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
+        &cfg.readpool.coprocessor.build_config(),
+        pd_sender.clone(),
+    );
     let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
@@ -325,12 +327,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     metrics_flusher.stop();
 
-    node.stop()
-        .unwrap_or_else(|e| fatal!("failed to stop node: {}", e));
+    node.stop();
 
     region_info_accessor.stop();
 
-    if let Some(Err(e)) = worker.stop().map(|j| j.join()) {
+    if let Some(Err(e)) = worker.stop().map(JoinHandle::join) {
         info!(
             "ignore failure when stopping resolver";
             "err" => ?e
@@ -492,6 +493,7 @@ fn main() {
         "config" => serde_json::to_string(&config).unwrap(),
     );
 
+    config.write_into_metrics();
     // Do some prepare works before start.
     pre_start(&config);
 

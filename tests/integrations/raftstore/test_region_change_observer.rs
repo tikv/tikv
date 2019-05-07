@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::metapb::Region;
 use raft::StateRole;
@@ -22,7 +11,7 @@ use tikv::raftstore::coprocessor::{
     Coprocessor, ObserverContext, RegionChangeEvent, RegionChangeObserver,
 };
 use tikv::raftstore::store::util::{find_peer, new_peer};
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 struct TestObserver {
     sender: SyncSender<(Region, RegionChangeEvent)>,
@@ -31,7 +20,12 @@ struct TestObserver {
 impl Coprocessor for TestObserver {}
 
 impl RegionChangeObserver for TestObserver {
-    fn on_region_changed(&self, ctx: &mut ObserverContext, event: RegionChangeEvent, _: StateRole) {
+    fn on_region_changed(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        event: RegionChangeEvent,
+        _: StateRole,
+    ) {
         self.sender.send((ctx.region().clone(), event)).unwrap();
     }
 }
@@ -48,14 +42,14 @@ fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
         cluster
             .sim
             .wl()
-            .post_create_coprocessor_host(box move |id, host| {
+            .post_create_coprocessor_host(Box::new(move |id, host| {
                 if id == 1 {
                     let (sender, receiver) = sync_channel(10);
                     host.registry
-                        .register_region_change_observer(1, box TestObserver { sender });
+                        .register_region_change_observer(1, Box::new(TestObserver { sender }));
                     tx.send(receiver).unwrap();
                 }
-            });
+            }));
         r1 = cluster.run_conf_change();
 
         // Only one node has node_id = 1

@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::mem;
 use std::thread;
@@ -19,25 +8,21 @@ use std::u64;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 use prometheus::local::LocalHistogramVec;
 
-use crate::storage::engine::{CbContext, Modify, Result as EngineResult};
+use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
+use crate::storage::txn::{scheduler::Msg, Error, Result};
 use crate::storage::{
-    Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-    Statistics, StatisticsSummary, StorageCb,
+    metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
+    ScanMode, Snapshot, Statistics, StatisticsSummary, StorageCb, Value,
 };
-use crate::storage::{Key, MvccInfo, Value};
-use crate::util::collections::HashMap;
-use crate::util::threadpool::{
+use tikv_util::collections::HashMap;
+use tikv_util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
 };
-use crate::util::worker::ScheduleError;
-use crate::util::time::SlowTimer;
-
-use super::super::metrics::*;
-use super::scheduler::Msg;
-use super::{Error, Result};
+use tikv_util::time::SlowTimer;
+use tikv_util::worker::ScheduleError;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.

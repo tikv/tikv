@@ -1,41 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor as coppb;
 use tipb::schema::ColumnInfo;
 
 use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::*;
-
-/// A `RequestHandler` that always produces errors.
-pub struct ErrorRequestHandler {
-    error: Option<Error>,
-}
-
-impl ErrorRequestHandler {
-    pub fn new(error: Error) -> ErrorRequestHandler {
-        ErrorRequestHandler { error: Some(error) }
-    }
-}
-
-impl RequestHandler for ErrorRequestHandler {
-    fn handle_request(&mut self) -> Result<coppb::Response> {
-        Err(self.error.take().unwrap())
-    }
-    fn handle_streaming_request(&mut self) -> Result<(Option<coppb::Response>, bool)> {
-        Err(self.error.take().unwrap())
-    }
-}
 
 /// Convert the key to the smallest key which is larger than the key given.
 pub fn convert_to_prefix_next(key: &mut Vec<u8>) {

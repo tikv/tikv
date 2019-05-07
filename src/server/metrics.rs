@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -123,6 +112,12 @@ lazy_static! {
     pub static ref RAFT_MESSAGE_DELAY_FLUSH_COUNTER: IntCounter = register_int_counter!(
         "tikv_server_raft_message_delay_flush_total",
         "Total number of raft messages flushed delay"
+    )
+    .unwrap();
+    pub static ref CONFIG_ROCKSDB_GAUGE: GaugeVec = register_gauge_vec!(
+        "tikv_config_rocksdb",
+        "Config information of rocksdb",
+        &["cf", "name"]
     )
     .unwrap();
 }

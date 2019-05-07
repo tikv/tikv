@@ -1,6 +1,9 @@
 ![tikv_logo](images/tikv-logo.png)
 
-[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/) [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master) ![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
+[![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
+![GitHub release](https://img.shields.io/github/release/tikv/tikv.svg)
+[![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
 
 TiKV ("Ti" stands for Titanium) is an open source distributed transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical Key-Value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
@@ -13,10 +16,6 @@ TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io/) (CNC
 ---
 
 With the implementation of the Raft consensus algorithm in Rust and consensus state stored in RocksDB, TiKV guarantees data consistency. [Placement Driver (PD)](https://github.com/pingcap/pd/), which is introduced to implement auto-sharding, enables automatic data migration. The transaction model is similar to Google's Percolator with some performance improvements. TiKV also provides snapshot isolation (SI), snapshot isolation with lock (SQL: `SELECT ... FOR UPDATE`), and externally consistent reads and writes in distributed transactions.
-
-TiKV is hosted by the [Cloud Native Computing Foundation](https://cncf.io) (CNCF). If you are a
-company that wants to help shape the evolution of cloud native technologies, consider joining the CNCF. For details about who's involved and how TiKV plays a role, read the CNCF
-[announcement](https://www.cncf.io/blog/2018/08/28/cncf-to-host-tikv-in-the-sandbox/).
 
 TiKV has the following key features:
 
@@ -183,7 +182,7 @@ The TiKV team actively develops and maintains a bunch of dependencies used in Ti
 
 ## Communication
 
-Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT). Here is an excerpt:
+Communication within the TiKV community abides by [TiKV Code of Conduct](./CODE_OF_CONDUCT.md). Here is an excerpt:
 
 > In the interest of fostering an open and welcoming environment, we as
 contributors and maintainers pledge to making participation in our project and
@@ -205,7 +204,13 @@ Join the TiKV community on [Slack](https://join.slack.com/t/tikv-wg/shared_invit
 
 ### WeChat
 
-The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [tl@pingcap.com], with your personal information (WeChat ID, and other basic information) included. We will invite you in right away.
+The TiKV community is also available on WeChat, a very popular messaging and social media application in China. If you want to join our WeChat group, send a request mail to [zhangyanqing@pingcap.com](mailto:zhangyanqing@pingcap.com), with your personal information that includes the following:
+
+- WeChat ID (**Required**)
+- PR you submitted to TiKV Repos (**Required**)
+- Other basic information
+
+We will invite you in right away.
 
 ## License
 

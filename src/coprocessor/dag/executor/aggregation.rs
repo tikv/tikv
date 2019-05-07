@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::mem;
@@ -18,9 +7,10 @@ use std::sync::Arc;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, ExprType};
 
-use crate::util::collections::{OrderMap, OrderMapEntry};
+use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -150,6 +140,10 @@ impl AggExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -259,6 +253,10 @@ impl Executor for HashAggExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
+    }
 }
 
 impl Executor for StreamAggExecutor {
@@ -306,6 +304,10 @@ impl Executor for StreamAggExecutor {
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 }
 
@@ -401,35 +403,20 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use kvproto::kvrpcpb::IsolationLevel;
     use protobuf::RepeatedField;
-    use tipb::executor::TableScan;
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
+    use super::super::index_scan::tests::IndexTestWrapper;
+    use super::super::index_scan::IndexScanExecutor;
+    use super::super::tests::*;
+    use super::*;
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
+    use crate::coprocessor::dag::scanner::tests::Data;
     use crate::storage::SnapshotStore;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::collections::HashMap;
-
-    use super::super::index_scan::tests::IndexTestWrapper;
-    use super::super::index_scan::IndexScanExecutor;
-    use super::super::scanner::tests::{get_range, new_col_info, Data, TestStore};
-    use super::super::table_scan::TableScanExecutor;
-    use super::super::topn::tests::gen_table_data;
-    use super::*;
-
-    #[inline]
-    fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
-        let mut expr = Expr::new();
-        expr.set_tp(tp);
-        if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
-        } else {
-            expr.mut_children().push(child.unwrap());
-        }
-        expr
-    }
+    use tikv_util::collections::HashMap;
 
     fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
         let mut group_by = Vec::with_capacity(col_ids.len());
@@ -520,8 +507,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -551,8 +545,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -600,8 +601,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::new(wrapper.scan, wrapper.ranges, store, unique, true).unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -726,17 +734,9 @@ mod tests {
                 Datum::F64(7.0),
             ],
         ];
-        let table_data = gen_table_data(tid, &cis, &raw_data);
-        let mut test_store = TestStore::new(&table_data);
-        // init table scan meta
-        let mut table_scan = TableScan::new();
-        table_scan.set_table_id(tid);
-        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
-        // init TableScan Exectutor
+
         let key_ranges = vec![get_range(tid, i64::MIN, i64::MAX)];
-        let (snapshot, start_ts) = test_store.get_snapshot();
-        let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let ts_ect = TableScanExecutor::new(table_scan, key_ranges, store, true).unwrap();
+        let ts_ect = gen_table_scan_executor(tid, cis, &raw_data, Some(key_ranges));
 
         // init aggregation meta
         let mut aggregation = Aggregation::default();
@@ -752,12 +752,8 @@ mod tests {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init the hash aggregation executor
-        let mut aggr_ect = HashAggExecutor::new(
-            aggregation,
-            Arc::new(EvalConfig::default()),
-            Box::new(ts_ect),
-        )
-        .unwrap();
+        let mut aggr_ect =
+            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {

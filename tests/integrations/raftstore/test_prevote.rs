@@ -1,22 +1,11 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{atomic::AtomicBool, mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
 use raft::eraftpb::MessageType;
-use tikv::util::HandyRwLock;
+use tikv_util::HandyRwLock;
 
 use test_raftstore::*;
 
@@ -48,7 +37,7 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
 // Validate that prevote is used in elections after partition or reboot of some nodes.
 fn test_prevote<T: Simulator>(
     cluster: &mut Cluster<T>,
-    failure_type: FailureType,
+    failure_type: FailureType<'_>,
     leader_after_failure_id: impl Into<Option<u64>>,
     detect_during_failure: impl Into<Option<(u64, bool)>>,
     detect_during_recovery: impl Into<Option<(u64, bool)>>,
@@ -101,7 +90,9 @@ fn test_prevote<T: Simulator>(
         }
         FailureType::Reboot(peers) => {
             cluster.clear_send_filters();
-            peers.iter().for_each(|&peer| cluster.run_node(peer));
+            peers.iter().for_each(|&peer| {
+                cluster.run_node(peer).unwrap();
+            });
         }
     };
 
@@ -225,7 +216,7 @@ fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
 
     // Given some nodes A, B, C, D, E, we partition the cluster such that D, E are isolated from the rest.
     cluster.run();
-    // Choose a predictable leader so we don't accidently partition the leader.
+    // Choose a predictable leader so we don't accidentally partition the leader.
     cluster.must_transfer_leader(region, new_peer(1, 1));
     cluster.partition(vec![1, 2, 3], vec![4, 5]);
 

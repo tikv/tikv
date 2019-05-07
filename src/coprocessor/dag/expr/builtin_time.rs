@@ -1,15 +1,9 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
+
+use std::borrow::Cow;
+
+use chrono::offset::TimeZone;
+use chrono::Datelike;
 
 use super::{EvalContext, Result, ScalarFunc};
 use crate::coprocessor::codec::error::Error;
@@ -17,9 +11,7 @@ use crate::coprocessor::codec::mysql::time::extension::DateTimeExtension;
 use crate::coprocessor::codec::mysql::time::weekmode::WeekMode;
 use crate::coprocessor::codec::mysql::{Duration as MyDuration, Time, TimeType};
 use crate::coprocessor::codec::Datum;
-use chrono::offset::TimeZone;
-use chrono::Datelike;
-use std::borrow::Cow;
+use crate::coprocessor::dag::expr::SqlMode;
 
 fn handle_incorrect_datetime_error(ctx: &mut EvalContext, t: Cow<'_, Time>) -> Result<()> {
     Error::handle_invalid_time_error(ctx, Error::incorrect_datetime_value(&format!("{}", t)))
@@ -58,25 +50,25 @@ impl ScalarFunc {
 
     #[inline]
     pub fn hour(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.hours() as i64))
     }
 
     #[inline]
     pub fn minute(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.minutes() as i64))
     }
 
     #[inline]
     pub fn second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.secs() as i64))
     }
 
     #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let dur: Cow<MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
+        let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(i64::from(dur.micro_secs())))
     }
 
@@ -88,7 +80,7 @@ impl ScalarFunc {
     ) -> Result<Option<i64>> {
         let t: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            if ctx.cfg.mode_no_zero_date_mode() {
+            if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
                 return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
@@ -104,7 +96,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, [u8]>>> {
         let t: Cow<'a, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         let month = t.get_time().month() as usize;
-        if t.is_zero() && ctx.cfg.mode_no_zero_date_mode() {
+        if t.is_zero() && ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         } else if month == 0 || t.is_zero() {
             return Ok(None);
@@ -132,9 +124,9 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_month(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            if ctx.cfg.mode_no_zero_date_mode() {
+            if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
                 return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
@@ -145,7 +137,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_week(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -155,7 +147,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn day_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -165,9 +157,9 @@ impl ScalarFunc {
 
     #[inline]
     pub fn year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
-            if ctx.cfg.mode_no_zero_date_mode() {
+            if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE) {
                 return handle_incorrect_datetime_error(ctx, t).map(|_| None);
             }
             return Ok(Some(0));
@@ -198,7 +190,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -209,7 +201,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_without_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -219,7 +211,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_day(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -229,7 +221,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn week_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -240,7 +232,7 @@ impl ScalarFunc {
 
     #[inline]
     pub fn year_week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -265,7 +257,7 @@ impl ScalarFunc {
         ctx: &mut EvalContext,
         row: &[Datum],
     ) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -322,9 +314,27 @@ impl ScalarFunc {
         Ok(None)
     }
 
+    pub fn period_add(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let p = try_opt!(self.children[0].eval_int(ctx, row));
+        if p == 0 {
+            return Ok(Some(0));
+        }
+        let n = try_opt!(self.children[1].eval_int(ctx, row));
+        let (month, _) = (i64::from(period_to_month(p as u64) as i32)).overflowing_add(n);
+        Ok(Some(month_to_period(u64::from(month as u32)) as i64))
+    }
+
+    pub fn period_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let p1 = try_opt!(self.children[0].eval_int(ctx, row));
+        let p2 = try_opt!(self.children[1].eval_int(ctx, row));
+        Ok(Some(
+            period_to_month(p1 as u64) as i64 - period_to_month(p2 as u64) as i64,
+        ))
+    }
+
     #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let t: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
             return handle_incorrect_datetime_error(ctx, t).map(|_| None);
         }
@@ -333,11 +343,11 @@ impl ScalarFunc {
     }
 
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
-        let lhs: Cow<Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if lhs.invalid_zero() {
             return handle_incorrect_datetime_error(ctx, lhs).map(|_| None);
         }
-        let rhs: Cow<Time> = try_opt!(self.children[1].eval_time(ctx, row));
+        let rhs: Cow<'_, Time> = try_opt!(self.children[1].eval_time(ctx, row));
         if rhs.invalid_zero() {
             return handle_incorrect_datetime_error(ctx, rhs).map(|_| None);
         }
@@ -454,6 +464,36 @@ impl ScalarFunc {
     }
 }
 
+#[inline]
+fn period_to_month(period: u64) -> u64 {
+    if period == 0 {
+        return 0;
+    }
+    let (year, month) = (period / 100, period % 100);
+    if year < 70 {
+        (year + 2000) * 12 + month - 1
+    } else if year < 100 {
+        (year + 1900) * 12 + month - 1
+    } else {
+        year * 12 + month - 1
+    }
+}
+
+#[inline]
+fn month_to_period(month: u64) -> u64 {
+    if month == 0 {
+        return 0;
+    }
+    let year = month / 12;
+    if year < 70 {
+        (year + 2000) * 100 + month % 12 + 1
+    } else if year < 100 {
+        (year + 1900) * 100 + month % 12 + 1
+    } else {
+        year * 100 + month % 12 + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::coprocessor::codec::mysql::{Duration, Time};
@@ -473,7 +513,7 @@ mod tests {
     fn test_ok_case_zero_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, exp: Datum) {
         match expr_build(ctx, sig, &[]) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
@@ -481,15 +521,14 @@ mod tests {
         let children = &[datum_expr(arg)];
         match expr_build(ctx, sig, children) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
     fn test_err_case_one_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg: Datum) {
         let children = &[datum_expr(arg)];
-        match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(got, Datum::Null),
-            Err(_) => assert!(true),
+        if let Ok(got) = expr_build(ctx, sig, children) {
+            assert_eq!(got, Datum::Null);
         }
     }
 
@@ -503,15 +542,14 @@ mod tests {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
         match expr_build(ctx, sig, children) {
             Ok(got) => assert_eq!(got, exp),
-            Err(_) => assert!(false, "eval failed"),
+            Err(_) => panic!("eval failed"),
         }
     }
 
     fn test_err_case_two_arg(ctx: &mut EvalContext, sig: ScalarFuncSig, arg1: Datum, arg2: Datum) {
         let children = &[datum_expr(arg1), datum_expr(arg2)];
-        match expr_build(ctx, sig, children) {
-            Ok(got) => assert_eq!(got, Datum::Null),
-            Err(_) => assert!(true),
+        if let Ok(got) = expr_build(ctx, sig, children) {
+            assert_eq!(got, Datum::Null);
         }
     }
 
@@ -575,9 +613,8 @@ mod tests {
         );
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_two_arg(
             &mut ctx,
@@ -606,9 +643,8 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Date, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
             &mut ctx,
@@ -685,9 +721,8 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Month, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
             &mut ctx,
@@ -760,9 +795,8 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::MonthName, Datum::Null);
         //  test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
             &mut ctx,
@@ -824,9 +858,8 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::DayOfMonth, Datum::Null);
         //  test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_NO_ZERO_DATE_MODE)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
             &mut ctx,
@@ -954,9 +987,8 @@ mod tests {
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::Year, Datum::Null);
         // test zero case
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT);
-        cfg.set_sql_mode(MODE_NO_ZERO_DATE_MODE);
-        cfg.set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT);
+        cfg.set_sql_mode(SqlMode::NO_ZERO_DATE | SqlMode::STRICT_ALL_TABLES);
         ctx = EvalContext::new(Arc::new(cfg));
         test_err_case_one_arg(
             &mut ctx,
@@ -1344,6 +1376,71 @@ mod tests {
     }
 
     #[test]
+    fn test_period_add() {
+        let cases = vec![
+            (2, 222, 201808),
+            (0, 222, 0),
+            (196802, 14, 196904),
+            (6901, 13, 207002),
+            (7001, 13, 197102),
+            (200212, 9223372036854775807, 200211),
+            (9223372036854775807, 0, 27201459511),
+            (9223372036854775807, 9223372036854775807, 27201459510),
+            (201611, 2, 201701),
+            (201611, 3, 201702),
+            (201611, -13, 201510),
+            (1611, 3, 201702),
+            (7011, 3, 197102),
+            (12323, 10, 12509),
+            (0, 3, 0),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::PeriodAdd,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
+    }
+
+    #[test]
+    fn test_period_diff() {
+        let cases = vec![
+            (213002, 7010, 1912),
+            (213002, 215810, -344),
+            (2202, 9601, 313),
+            (202202, 9601, 313),
+            (200806, 6907, -733),
+            (201611, 201611, 0),
+            (200802, 200703, 11),
+            (0, 999999999, -120000086),
+            (9999999, 0, 1200086),
+            (411, 200413, -2),
+            (197000, 207700, -1284),
+            (201701, 201611, 2),
+            (201702, 201611, 3),
+            (201510, 201611, -13),
+            (201702, 1611, 3),
+            (197102, 7011, 3),
+            (12509, 12323, 10),
+            (12509, 12323, 10),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg1, arg2, exp) in cases {
+            test_ok_case_two_arg(
+                &mut ctx,
+                ScalarFuncSig::PeriodDiff,
+                Datum::I64(arg1),
+                Datum::I64(arg2),
+                Datum::I64(exp),
+            );
+        }
+    }
+
+    #[test]
     fn test_to_days() {
         let cases = vec![
             ("950501", 728779),
@@ -1420,9 +1517,8 @@ mod tests {
         }
 
         let mut cfg = EvalConfig::new();
-        cfg.set_by_flags(FLAG_IN_UPDATE_OR_DELETE_STMT)
-            .set_sql_mode(MODE_ERROR_FOR_DIVISION_BY_ZERO)
-            .set_strict_sql_mode(true);
+        cfg.set_flag(Flag::IN_UPDATE_OR_DELETE_STMT)
+            .set_sql_mode(SqlMode::ERROR_FOR_DIVISION_BY_ZERO | SqlMode::STRICT_ALL_TABLES);
 
         test_err_case_two_arg(&mut ctx, ScalarFuncSig::DateDiff, Datum::Null, Datum::Null);
     }

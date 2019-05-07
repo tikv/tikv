@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ffi::CString;
 use std::i64;
@@ -20,19 +9,19 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
-use crate::grpc::{
-    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
-};
-use crate::util::collections::{HashMap, HashMapEntry};
-use crate::util::mpsc::batch::{self, Sender as BatchSender};
-use crate::util::security::SecurityManager;
-use crate::util::timer::GLOBAL_TIMER_HANDLE;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
+use grpcio::{
+    ChannelBuilder, Environment, Error as GrpcError, RpcStatus, RpcStatusCode, WriteFlags,
+};
 use kvproto::raft_serverpb::RaftMessage;
 use kvproto::tikvpb::BatchRaftMessage;
 use kvproto::tikvpb_grpc::TikvClient;
 use protobuf::RepeatedField;
+use tikv_util::collections::{HashMap, HashMapEntry};
+use tikv_util::mpsc::batch::{self, Sender as BatchSender};
+use tikv_util::security::SecurityManager;
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio_timer::timer::Handle;
 
 const MAX_GRPC_RECV_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -92,7 +81,8 @@ impl Conn {
                 match r {
                     Ok(_) => {
                         info!("batch_raft RPC finished success");
-                        box future::ok(()) as Box<dyn Future<Item = (), Error = GrpcError> + Send>
+                        Box::new(future::ok(()))
+                            as Box<dyn Future<Item = (), Error = GrpcError> + Send>
                     }
                     Err(GrpcError::RpcFinished(Some(RpcStatus { status, .. })))
                         if status == RpcStatusCode::Unimplemented =>
@@ -113,18 +103,18 @@ impl Conn {
                                 stream::iter_ok::<_, GrpcError>(grpc_msgs)
                             })
                             .flatten();
-                        box sink.send_all(msgs).map(|_| ()).then(move |r| {
+                        Box::new(sink.send_all(msgs).map(|_| ()).then(move |r| {
                             drop(receiver);
                             match r {
                                 Ok(_) => info!("raft RPC finished success"),
                                 Err(ref e) => error!("raft RPC finished fail"; "err" => ?e),
                             };
                             r
-                        })
+                        }))
                     }
                     Err(e) => {
                         error!("batch_raft RPC finished fail"; "err" => ?e);
-                        box future::err(e)
+                        Box::new(future::err(e))
                     }
                 }
             });

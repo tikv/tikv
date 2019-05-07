@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::*;
 use std::sync::*;
@@ -22,12 +11,13 @@ use rand::Rng;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
 
+use engine::Peekable;
 use test_raftstore::*;
 use tikv::raftstore::store::*;
 use tikv::raftstore::Result;
 use tikv::server::transport::RaftStoreRouter;
-use tikv::util::config::*;
-use tikv::util::HandyRwLock;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
@@ -93,7 +83,7 @@ fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     );
 
     // week up
-    cluster.run_node(last_leader.get_store_id());
+    cluster.run_node(last_leader.get_store_id()).unwrap();
 
     must_get_equal(
         &cluster.engines[&last_leader.get_store_id()].kv,
@@ -118,7 +108,7 @@ fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     // avoid TIMEWAIT
     sleep_ms(500);
 
-    cluster.start();
+    cluster.start().unwrap();
 
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
@@ -161,7 +151,7 @@ fn test_multi_random_restart<T: Simulator>(
         cluster.must_put(&key, &value);
         assert_eq!(cluster.get(&key), Some(value.to_vec()));
 
-        cluster.run_node(id);
+        cluster.run_node(id).unwrap();
 
         // verify whether data is actually being replicated and waiting for node online.
         must_get_equal(&cluster.get_engine(id), &key, &value);
@@ -461,11 +451,11 @@ fn test_node_leader_change_with_log_overlap() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 called_.store(true, Ordering::SeqCst);
                 assert!(resp.response.get_header().has_error());
                 assert!(resp.response.get_header().get_error().has_stale_command());
-            }),
+            })),
         )
         .unwrap();
 
@@ -713,9 +703,9 @@ fn test_node_dropped_proposal() {
         .get_node_router(1)
         .send_command(
             put_req,
-            Callback::Write(box move |resp: WriteResponse| {
+            Callback::Write(Box::new(move |resp: WriteResponse| {
                 let _ = tx.send(resp.response);
-            }),
+            })),
         )
         .unwrap();
 

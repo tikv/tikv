@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::thread;
 use std::time::Duration;
@@ -22,8 +11,8 @@ use test_raftstore::*;
 use test_storage::*;
 use tikv::storage::config::Config;
 use tikv::storage::{self, AutoGCConfig, Engine, Key, Mutation};
-use tikv::storage::{engine, mvcc, txn};
-use tikv::util::HandyRwLock;
+use tikv::storage::{kv, mvcc, txn};
+use tikv_util::HandyRwLock;
 
 fn new_raft_storage() -> (
     Cluster<ServerCluster>,
@@ -151,7 +140,7 @@ fn test_raft_storage_store_not_match() {
     ctx.set_peer(peer);
     assert!(storage.get(ctx.clone(), &key, 20).is_err());
     let res = storage.get(ctx.clone(), &key, 20);
-    if let storage::Error::Txn(txn::Error::Engine(engine::Error::Request(ref e))) =
+    if let storage::Error::Txn(txn::Error::Engine(kv::Error::Request(ref e))) =
         *res.as_ref().err().unwrap()
     {
         assert!(e.has_store_not_match());
@@ -197,7 +186,7 @@ fn test_engine_leader_change_twice() {
     // Term not match.
     cluster.must_transfer_leader(region.get_id(), peers[0].clone());
     let res = engine.put(&ctx, Key::from_raw(b"a"), b"a".to_vec());
-    if let engine::Error::Request(ref e) = *res.as_ref().err().unwrap() {
+    if let kv::Error::Request(ref e) = *res.as_ref().err().unwrap() {
         assert!(e.has_stale_command());
     } else {
         panic!("expect stale command, but got {:?}", res);
@@ -293,7 +282,7 @@ fn test_auto_gc() {
             region_info_accessors.remove(id).unwrap(),
             *id,
         );
-        cfg.post_a_round_of_gc = Some(box move || tx.send(()).unwrap());
+        cfg.post_a_round_of_gc = Some(Box::new(move || tx.send(()).unwrap()));
         storage.start_auto_gc(cfg);
     }
 

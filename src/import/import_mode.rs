@@ -1,18 +1,7 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine::rocks::DB;
 use kvproto::import_sstpb::*;
-use rocksdb::DB;
 
 use super::Result;
 
@@ -129,10 +118,13 @@ impl ImportModeCFOptions {
     }
 
     fn set_options(&self, db: &DB, cf_name: &str) -> Result<()> {
+        use crate::server::CONFIG_ROCKSDB_GAUGE;
         let cf = db.cf_handle(cf_name).unwrap();
         let cf_opts = db.get_options_cf(cf);
         cf_opts.set_block_cache_capacity(self.block_cache_size)?;
-
+        CONFIG_ROCKSDB_GAUGE
+            .with_label_values(&[cf_name, "block_cache_size"])
+            .set(self.block_cache_size as f64);
         let opts = [
             (
                 "level0_stop_writes_trigger".to_owned(),
@@ -154,6 +146,13 @@ impl ImportModeCFOptions {
 
         let tmp_opts: Vec<_> = opts.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         db.set_options_cf(cf, tmp_opts.as_slice())?;
+        for (key, value) in &opts {
+            if let Ok(v) = value.parse::<f64>() {
+                CONFIG_ROCKSDB_GAUGE
+                    .with_label_values(&[cf_name, key])
+                    .set(v);
+            }
+        }
         Ok(())
     }
 }
@@ -162,7 +161,7 @@ impl ImportModeCFOptions {
 mod tests {
     use super::*;
 
-    use crate::util::rocksdb_util::new_engine;
+    use engine::rocks::util::new_engine;
     use tempdir::TempDir;
 
     fn check_import_options(

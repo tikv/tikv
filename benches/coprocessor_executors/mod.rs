@@ -1,24 +1,7 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #[macro_use]
 extern crate criterion;
-extern crate protobuf;
-
-extern crate kvproto;
-extern crate test_coprocessor;
-extern crate tikv;
-extern crate tipb;
 
 use criterion::{black_box, Bencher, Criterion};
 
@@ -27,6 +10,7 @@ use tipb::executor::{IndexScan, TableScan};
 
 use test_coprocessor::*;
 use tikv::coprocessor::codec::Datum;
+use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::Executor;
 use tikv::storage::RocksEngine;
 
@@ -40,7 +24,8 @@ fn bench_table_scan_next(
 
     b.iter_with_setup(
         || {
-            let mut executor = TableScanExecutor::new(
+            let mut executor = TableScanExecutor::table_scan(
+                ExecSummaryCollectorDisabled,
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),
@@ -430,9 +415,14 @@ fn bench_table_scan_multi_point_range(c: &mut Criterion) {
                 for i in 0..1001 {
                     ranges.push(table.get_record_range_one(i));
                 }
-                let mut executor =
-                    TableScanExecutor::new(meta.clone(), ranges, store.to_fixture_store(), false)
-                        .unwrap();
+                let mut executor = TableScanExecutor::table_scan(
+                    ExecSummaryCollectorDisabled,
+                    meta.clone(),
+                    ranges,
+                    store.to_fixture_store(),
+                    false,
+                )
+                .unwrap();
                 // There is a step of building scanner in the first `next()` which cost time,
                 // so we next() before hand.
                 executor.next().unwrap().unwrap();
@@ -482,7 +472,8 @@ fn bench_table_scan_multi_rows(c: &mut Criterion) {
 
         b.iter_with_setup(
             || {
-                let mut executor = TableScanExecutor::new(
+                let mut executor = TableScanExecutor::table_scan(
+                    ExecSummaryCollectorDisabled,
                     meta.clone(),
                     vec![table.get_record_range_all()],
                     store.to_fixture_store(),
@@ -515,7 +506,8 @@ fn bench_index_scan_next(
 
     b.iter_with_setup(
         || {
-            let mut executor = IndexScanExecutor::new(
+            let mut executor = IndexScanExecutor::index_scan(
+                ExecSummaryCollectorDisabled,
                 meta.clone(),
                 ranges.to_vec(),
                 store.to_fixture_store(),

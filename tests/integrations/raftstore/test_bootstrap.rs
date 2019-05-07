@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,14 +8,15 @@ use tempdir::TempDir;
 use kvproto::metapb;
 use kvproto::raft_serverpb::RegionLocalState;
 
+use engine::rocks;
+use engine::Engines;
+use engine::*;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
-use tikv::raftstore::store::{bootstrap_store, fsm, keys, Engines, Peekable, SnapManager};
+use tikv::raftstore::store::{bootstrap_store, fsm, keys, SnapManager};
 use tikv::server::Node;
-use tikv::storage::{ALL_CFS, CF_RAFT};
-use tikv::util::rocksdb_util;
-use tikv::util::worker::{FutureWorker, Worker};
+use tikv_util::worker::{FutureWorker, Worker};
 
 fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // assume that there is a node  bootstrap the cluster and add region in pd successfully
@@ -34,11 +24,11 @@ fn test_bootstrap_idempotent<T: Simulator>(cluster: &mut Cluster<T>) {
     // now  at same time start the another node, and will recive cluster is not bootstrap
     // it will try to bootstrap with a new region, but will failed
     // the region number still 1
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
     cluster.shutdown();
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
     cluster.check_regions_number(1);
 }
 
@@ -52,11 +42,11 @@ fn test_node_bootstrap_with_prepared_data() {
     let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp_path = TempDir::new("test_cluster").unwrap();
     let engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
+        rocks::util::new_engine(tmp_path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap(),
     );
     let tmp_path_raft = tmp_path.path().join(Path::new("raft"));
     let raft_engine = Arc::new(
-        rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
+        rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
     let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
@@ -111,7 +101,7 @@ fn test_node_bootstrap_with_prepared_data() {
         .unwrap()
         .is_none());
     assert_eq!(pd_client.get_regions_number() as u32, 1);
-    node.stop().unwrap();
+    node.stop();
 }
 
 #[test]

@@ -1,29 +1,18 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use protobuf::Message;
-use rocksdb::Writable;
-
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
+use protobuf::Message;
 
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::Writable;
+use engine::CF_RAFT;
+use engine::{Iterable, Mutable, Peekable};
 use test_raftstore::*;
-use tikv::raftstore::store::{keys, Iterable, Mutable, Peekable};
-use tikv::storage::CF_RAFT;
-use tikv::util::rocksdb_util::get_cf_handle;
+use tikv::raftstore::store::keys;
 
 fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -156,7 +145,7 @@ fn test_fast_destroy<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.must_put(b"k2", b"v2");
 
     // start node again.
-    cluster.run_node(3);
+    cluster.run_node(3).unwrap();
 
     // add new peer in node 3
     pd_client.must_add_peer(1, new_peer(3, 4));
@@ -278,7 +267,7 @@ fn test_server_stale_meta() {
 
     // avoid TIMEWAIT
     sleep_ms(500);
-    cluster.start();
+    cluster.start().unwrap();
 
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&engine_3, b"k1", b"v1");

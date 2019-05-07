@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -18,12 +7,10 @@ use std::path::{Path, PathBuf};
 
 use crc::crc32::{self, Hasher32};
 use kvproto::import_sstpb::*;
-use rocksdb::{IngestExternalFileOptions, DB};
 use uuid::Uuid;
 
-use crate::util::rocksdb_util::{
-    get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion,
-};
+use engine::rocks::util::{get_cf_handle, prepare_sst_for_ingestion, validate_sst_for_ingestion};
+use engine::rocks::{IngestExternalFileOptions, DB};
 
 use super::{Error, Result};
 
@@ -197,7 +184,7 @@ pub struct ImportPath {
 }
 
 impl fmt::Debug for ImportPath {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportPath")
             .field("save", &self.save)
             .field("temp", &self.temp)
@@ -280,7 +267,7 @@ impl Drop for ImportFile {
 }
 
 impl fmt::Debug for ImportFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImportFile")
             .field("meta", &self.meta)
             .field("path", &self.path)
@@ -313,10 +300,7 @@ fn path_to_sst_meta<P: AsRef<Path>>(path: P) -> Result<SSTMeta> {
     if !file_name.ends_with(SST_SUFFIX) {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
-    let elems: Vec<_> = file_name
-        .trim_right_matches(SST_SUFFIX)
-        .split('_')
-        .collect();
+    let elems: Vec<_> = file_name.trim_end_matches(SST_SUFFIX).split('_').collect();
     if elems.len() != 4 {
         return Err(Error::InvalidSSTPath(path.to_owned()));
     }
@@ -335,7 +319,7 @@ mod tests {
     use super::*;
     use crate::import::test_helpers::*;
 
-    use crate::util::rocksdb_util::new_engine;
+    use engine::rocks::util::new_engine;
     use tempdir::TempDir;
 
     #[test]

@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod arrow;
 
@@ -125,8 +114,8 @@ fn bench_chunk_iter_tidb(b: &mut Bencher) {
                 _ => unreachable!(),
             };
         }
-        assert_eq!(col1, 262144);
-        assert!(!(523776.0 - col2).is_normal());
+        assert_eq!(col1, 262_144);
+        assert!(!(523_776.0 - col2).is_normal());
     });
 }
 
@@ -161,7 +150,7 @@ fn bench_chunk_iter_offical(b: &mut Bencher) {
                 _ => unreachable!(),
             };
         }
-        assert_eq!(col1, 262144);
-        assert!(!(523776.0 - col2).is_normal());
+        assert_eq!(col1, 262_144);
+        assert!(!(523_776.0 - col2).is_normal());
     });
 }

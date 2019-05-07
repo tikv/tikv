@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::marker::PhantomData;
 use std::sync::atomic::*;
@@ -27,8 +16,8 @@ use raft::eraftpb::MessageType;
 use tikv::raftstore::store::{Callback, CasualMessage, SignificantMsg, Transport};
 use tikv::raftstore::{DiscardReason, Error, Result};
 use tikv::server::transport::*;
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::{Either, HandyRwLock};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::{Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -262,13 +251,13 @@ impl PartitionFilterFactory {
 impl FilterFactory for PartitionFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if self.s1.contains(&node_id) {
-            return vec![box PartitionFilter {
+            return vec![Box::new(PartitionFilter {
                 node_ids: self.s2.clone(),
-            }];
+            })];
         }
-        return vec![box PartitionFilter {
+        return vec![Box::new(PartitionFilter {
             node_ids: self.s1.clone(),
-        }];
+        })];
     }
 }
 
@@ -285,11 +274,11 @@ impl IsolationFilterFactory {
 impl FilterFactory for IsolationFilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
         if node_id == self.node_id {
-            return vec![box DropPacketFilter { rate: 100 }];
+            return vec![Box::new(DropPacketFilter { rate: 100 })];
         }
-        vec![box PartitionFilter {
+        vec![Box::new(PartitionFilter {
             node_ids: vec![self.node_id],
-        }]
+        })]
     }
 }
 

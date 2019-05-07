@@ -1,26 +1,16 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::engine::Iterable;
-use crate::raftstore::store::keys;
-use crate::raftstore::store::util::MAX_DELETE_BATCH_SIZE;
-use crate::util::worker::Runnable;
-
-use rocksdb::{Writable, WriteBatch, DB};
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+use crate::raftstore::store::keys;
+use engine::rocks::Writable;
+use engine::util::MAX_DELETE_BATCH_SIZE;
+use engine::Iterable;
+use engine::{WriteBatch, DB};
+use tikv_util::worker::Runnable;
 
 pub struct Task {
     pub raft_engine: Arc<DB>,
@@ -34,7 +24,7 @@ pub struct TaskRes {
 }
 
 impl Display for Task {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "GC Raft Log Task [region: {}, from: {}, to: {}]",
@@ -84,19 +74,19 @@ impl Runner {
             info!("no need to gc"; "region_id" => region_id);
             return Ok(0);
         }
-        let mut raft_wb = WriteBatch::new();
+        let raft_wb = WriteBatch::new();
         for idx in first_idx..end_idx {
             let key = keys::raft_log_key(region_id, idx);
             box_try!(raft_wb.delete(&key));
             if raft_wb.data_size() >= MAX_DELETE_BATCH_SIZE {
                 // Avoid large write batch to reduce latency.
-                raft_engine.write(raft_wb).unwrap();
-                raft_wb = WriteBatch::new();
+                raft_engine.write(&raft_wb).unwrap();
+                raft_wb.clear();
             }
         }
         // TODO: disable WAL here.
         if !raft_wb.is_empty() {
-            raft_engine.write(raft_wb).unwrap();
+            raft_engine.write(&raft_wb).unwrap();
         }
         Ok(end_idx - first_idx)
     }
@@ -141,8 +131,8 @@ impl Runnable<Task> for Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::CF_DEFAULT;
-    use crate::util::rocksdb_util::new_engine;
+    use engine::rocks::util::new_engine;
+    use engine::CF_DEFAULT;
     use std::sync::mpsc;
     use std::time::Duration;
     use tempdir::TempDir;
@@ -163,7 +153,7 @@ mod tests {
             let k = keys::raft_log_key(region_id, i);
             raft_wb.put(&k, b"entry").unwrap();
         }
-        raft_db.write(raft_wb).unwrap();
+        raft_db.write(&raft_wb).unwrap();
 
         let tbls = vec![
             (

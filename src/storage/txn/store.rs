@@ -1,23 +1,10 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
-use crate::storage::mvcc::{
-    BackwardScanner, BackwardScannerBuilder, ForwardScanner, ForwardScannerBuilder,
-};
 use crate::storage::mvcc::{Error as MvccError, MvccReader};
+use crate::storage::mvcc::{Scanner as MvccScanner, ScannerBuilder};
 use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
@@ -69,7 +56,7 @@ pub struct SnapshotStore<S: Snapshot> {
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
-    type Scanner = StoreScanner<S>;
+    type Scanner = MvccScanner<S>;
 
     #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
@@ -112,32 +99,17 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         key_only: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
-    ) -> Result<StoreScanner<S>> {
+    ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
+        let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts, desc)
+            .range(lower_bound, upper_bound)
+            .omit_value(key_only)
+            .fill_cache(self.fill_cache)
+            .isolation_level(self.isolation_level)
+            .build()?;
 
-        let (forward_scanner, backward_scanner) = if !desc {
-            let forward_scanner = ForwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                .range(lower_bound, upper_bound)
-                .omit_value(key_only)
-                .fill_cache(self.fill_cache)
-                .isolation_level(self.isolation_level)
-                .build()?;
-            (Some(forward_scanner), None)
-        } else {
-            let backward_scanner =
-                BackwardScannerBuilder::new(self.snapshot.clone(), self.start_ts)
-                    .range(lower_bound, upper_bound)
-                    .omit_value(key_only)
-                    .fill_cache(self.fill_cache)
-                    .isolation_level(self.isolation_level)
-                    .build()?;
-            (None, Some(backward_scanner))
-        };
-        Ok(StoreScanner {
-            forward_scanner,
-            backward_scanner,
-        })
+        Ok(scanner)
     }
 }
 
@@ -188,37 +160,27 @@ impl<S: Snapshot> SnapshotStore<S> {
     }
 }
 
-pub struct StoreScanner<S: Snapshot> {
-    forward_scanner: Option<ForwardScanner<S>>,
-    backward_scanner: Option<BackwardScanner<S>>,
-}
-
-impl<S: Snapshot> Scanner for StoreScanner<S> {
-    #[inline]
-    fn next(&mut self) -> Result<Option<(Key, Value)>> {
-        // TODO: Verify that these branches can be optimized away in `scan()`.
-        if let Some(scanner) = self.forward_scanner.as_mut() {
-            Ok(scanner.read_next()?)
-        } else {
-            Ok(self.backward_scanner.as_mut().unwrap().read_next()?)
-        }
-    }
-
-    #[inline]
-    fn take_statistics(&mut self) -> Statistics {
-        if self.forward_scanner.is_some() {
-            return self.forward_scanner.as_mut().unwrap().take_statistics();
-        }
-        if self.backward_scanner.is_some() {
-            return self.backward_scanner.as_mut().unwrap().take_statistics();
-        }
-        unreachable!();
-    }
-}
-
 /// A Store that reads on fixtures.
 pub struct FixtureStore {
     data: std::collections::BTreeMap<Key, Result<Vec<u8>>>,
+}
+
+impl Clone for FixtureStore {
+    fn clone(&self) -> Self {
+        let data = self
+            .data
+            .iter()
+            .map(|(k, v)| {
+                let owned_k = k.clone();
+                let owned_v = match v {
+                    Ok(v) => Ok(v.clone()),
+                    Err(e) => Err(e.maybe_clone().unwrap()),
+                };
+                (owned_k, owned_v)
+            })
+            .collect();
+        Self { data }
+    }
 }
 
 impl FixtureStore {
@@ -328,8 +290,7 @@ mod tests {
     use super::Error;
     use super::{FixtureStore, Scanner, SnapshotStore, Store};
 
-    use crate::raftstore::store::engine::IterOption;
-    use crate::storage::engine::{
+    use crate::storage::kv::{
         Engine, Result as EngineResult, RocksEngine, RocksSnapshot, ScanMode,
     };
     use crate::storage::mvcc::Error as MvccError;
@@ -338,6 +299,7 @@ mod tests {
         CfName, Cursor, Iterator, Key, KvPair, Mutation, Options, Snapshot, Statistics,
         TestEngineBuilder, Value,
     };
+    use engine::IterOption;
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     const KEY_PREFIX: &str = "key_prefix";
@@ -447,6 +409,9 @@ mod tests {
         }
         fn valid(&self) -> bool {
             true
+        }
+        fn status(&self) -> EngineResult<()> {
+            Ok(())
         }
         fn validate_key(&self, _: &Key) -> EngineResult<()> {
             Ok(())

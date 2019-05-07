@@ -1,21 +1,9 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
 use std::result::Result;
 
-use crate::raftstore::coprocessor::config::SPLIT_SIZE_MB;
-use crate::util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
@@ -29,6 +17,8 @@ pub struct Config {
     pub region_split_size: ReadableSize,
     pub stream_channel_window: usize,
     pub max_open_engines: usize,
+    pub upload_speed_limit: ReadableSize,
+    pub min_available_ratio: f64,
 }
 
 impl Default for Config {
@@ -39,9 +29,11 @@ impl Default for Config {
             num_import_jobs: 8,
             num_import_sst_jobs: 2,
             max_prepare_duration: ReadableDuration::minutes(5),
-            region_split_size: ReadableSize::mb(SPLIT_SIZE_MB),
+            region_split_size: ReadableSize::mb(512),
             stream_channel_window: 128,
             max_open_engines: 8,
+            upload_speed_limit: ReadableSize::mb(512),
+            min_available_ratio: 0.05,
         }
     }
 }
@@ -65,6 +57,12 @@ impl Config {
         }
         if self.max_open_engines == 0 {
             return Err("import.max_open_engines can not be 0".into());
+        }
+        if self.upload_speed_limit.0 == 0 {
+            return Err("import.upload_speed_limit cannot be 0".into());
+        }
+        if self.min_available_ratio < 0.0 {
+            return Err("import.min_available_ratio can not less than 0.02".into());
         }
         Ok(())
     }

@@ -1,26 +1,15 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::batch::{Fsm, FsmScheduler};
-use crate::util::collections::HashMap;
-use crate::util::mpsc;
-use crate::util::Either;
 use crossbeam::channel::{SendError, TrySendError};
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tikv_util::collections::HashMap;
+use tikv_util::mpsc;
+use tikv_util::Either;
 
 // The FSM is notified.
 const NOTIFYSTATE_NOTIFIED: usize = 0;
@@ -289,16 +278,18 @@ where
             }
         }
 
-        let mailbox = 'fetch_box: {
+        let mailbox = {
             let mut boxes = self.normals.lock().unwrap();
-            if let Some(mailbox) = boxes.get_mut(&addr) {
-                break 'fetch_box mailbox.clone();
+            match boxes.get_mut(&addr) {
+                Some(mailbox) => mailbox.clone(),
+                None => {
+                    drop(boxes);
+                    if !connected {
+                        caches.remove(&addr);
+                    }
+                    return CheckDoResult::NotExist;
+                }
             }
-            drop(boxes);
-            if !connected {
-                caches.remove(&addr);
-            }
-            return CheckDoResult::NotExist;
         };
 
         let res = f(&mailbox);
@@ -473,7 +464,7 @@ mod tests {
     use super::*;
     use crate::raftstore::store::fsm::batch::tests::Message;
     use crate::raftstore::store::fsm::batch::{self, tests::*};
-    use crossbeam::channel::{SendError, TrySendError};
+    use crossbeam::channel::{RecvTimeoutError, SendError, TryRecvError, TrySendError};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use std::time::Duration;
@@ -496,8 +487,9 @@ mod tests {
 
     #[test]
     fn test_basic() {
-        let (control_tx, control_fsm) = new_runner(10);
-        let control_dropped = control_fsm.dropped.clone();
+        let (control_tx, mut control_fsm) = new_runner(10);
+        let (control_drop_tx, control_drop_rx) = mpsc::unbounded();
+        control_fsm.sender = Some(control_drop_tx);
         let (router, mut system) = batch::create_system(2, 2, control_tx, control_fsm);
         let builder = Builder::new();
         system.spawn("test".to_owned(), builder);
@@ -518,14 +510,15 @@ mod tests {
         // Control mailbox should be connected.
         router
             .send_control(Some(Box::new(move |_: &mut Runner| {
-                let (sender, runner) = new_runner(10);
-                let dropped = runner.dropped.clone();
+                let (sender, mut runner) = new_runner(10);
+                let (tx1, rx1) = mpsc::unbounded();
+                runner.sender = Some(tx1);
                 let mailbox = BasicMailbox::new(sender, runner);
-                tx.send(dropped).unwrap();
                 router_.register(1, mailbox);
+                tx.send(rx1).unwrap();
             })))
             .unwrap();
-        let dropped = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let runner_drop_rx = rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
         // Registered mailbox should be connected.
         router.force_send(1, noop()).unwrap();
@@ -568,9 +561,12 @@ mod tests {
         assert_eq!(c, sent_cnt + 1);
 
         // close should release resources.
-        assert!(!dropped.load(Ordering::SeqCst));
+        assert_eq!(runner_drop_rx.try_recv(), Err(TryRecvError::Empty));
         router.close(1);
-        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            runner_drop_rx.recv_timeout(Duration::from_secs(3)),
+            Err(RecvTimeoutError::Disconnected)
+        );
         match router.send(1, unreachable()) {
             Err(TrySendError::Disconnected(_)) => (),
             Ok(_) => panic!("send should fail."),
@@ -580,9 +576,12 @@ mod tests {
             Err(SendError(_)) => (),
             Ok(_) => panic!("send should fail."),
         }
-        assert!(!control_dropped.load(Ordering::SeqCst));
+        assert_eq!(control_drop_rx.try_recv(), Err(TryRecvError::Empty));
         system.shutdown();
-        assert!(control_dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            control_drop_rx.recv_timeout(Duration::from_secs(3)),
+            Err(RecvTimeoutError::Disconnected)
+        );
     }
 
     #[bench]

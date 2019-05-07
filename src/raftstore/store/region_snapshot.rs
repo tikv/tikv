@@ -1,27 +1,19 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
+use engine::{
+    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
+    SyncSnapshot,
+};
 use kvproto::metapb::Region;
-use rocksdb::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use std::cmp;
 use std::sync::Arc;
 
-use crate::raftstore::store::engine::{IterOption, Peekable, Snapshot, SyncSnapshot};
+use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
-use crate::util::{panic_when_key_exceed_bound, set_panic_mark};
-
-use super::metrics::*;
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 /// Snapshot of a region.
 ///
@@ -71,8 +63,9 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -88,8 +81,9 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -112,7 +106,10 @@ impl RegionSnapshot {
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
-        util::get_region_properties_cf(&self.snap.get_db(), cf, self.get_region())
+        let start = keys::enc_start_key(&self.region);
+        let end = keys::enc_end_key(&self.region);
+        let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
+        Ok(prop)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
@@ -134,14 +131,24 @@ impl Clone for RegionSnapshot {
 }
 
 impl Peekable for RegionSnapshot {
-    fn get_value(&self, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
     }
 
-    fn get_value_cf(&self, cf: &str, key: &[u8]) -> Result<Option<DBVector>> {
-        util::check_key_in_region(key, &self.region)?;
+    fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
+        engine::util::check_key_in_range(
+            key,
+            self.region.get_id(),
+            self.region.get_start_key(),
+            self.region.get_end_key(),
+        )?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
     }
@@ -158,35 +165,35 @@ pub struct RegionIterator {
     end_key: Vec<u8>,
 }
 
-fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
-    let lower_bound = match iter_opt.lower_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::max(k, region_start_key)
+    if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
+            iter_opt.set_vec_lower_bound(region_start_key);
         }
-        _ => region_start_key,
-    };
-    iter_opt.set_lower_bound(lower_bound);
+    } else {
+        iter_opt.set_vec_lower_bound(region_start_key);
+    }
 }
 
-fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
-    let upper_bound = match iter_opt.upper_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::min(k, region_end_key)
+    if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
+            iter_opt.set_vec_upper_bound(region_end_key);
         }
-        _ => region_end_key,
-    };
-    iter_opt.set_upper_bound(upper_bound);
+    } else {
+        iter_opt.set_vec_upper_bound(region_end_key);
+    }
 }
 
-// we use rocksdb's style iterator, doesn't need to impl std iterator.
+// we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
@@ -205,8 +212,8 @@ impl RegionIterator {
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
@@ -308,10 +315,20 @@ impl RegionIterator {
     }
 
     #[inline]
+    pub fn status(&self) -> Result<()> {
+        self.iter
+            .status()
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
+    }
+
+    #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
-            KEY_NOT_IN_REGION.inc();
-            if panic_when_key_exceed_bound() {
+            CRITICAL_ERROR
+                .with_label_values(&["key not in region"])
+                .inc();
+            if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
                 panic!("key exceed bound: {:?}", e);
             } else {
@@ -328,16 +345,19 @@ mod tests {
     use std::sync::Arc;
 
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::Writable;
     use tempdir::TempDir;
 
-    use crate::raftstore::store::engine::*;
     use crate::raftstore::store::keys::*;
-    use crate::raftstore::store::{Engines, PeerStorage};
+    use crate::raftstore::store::PeerStorage;
     use crate::raftstore::Result;
-    use crate::storage::{CFStatistics, Cursor, Key, ScanMode, ALL_CFS, CF_DEFAULT};
-    use crate::util::rocksdb_util::{self, compact_files_in_range};
-    use crate::util::{escape, worker};
+    use crate::storage::{CFStatistics, Cursor, Key, ScanMode};
+    use engine::rocks;
+    use engine::rocks::util::compact_files_in_range;
+    use engine::rocks::Writable;
+    use engine::Engines;
+    use engine::*;
+    use engine::{ALL_CFS, CF_DEFAULT};
+    use tikv_util::{escape, worker};
 
     use super::*;
 
@@ -347,18 +367,19 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         Engines::new(
             Arc::new(
-                rocksdb_util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
+                rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
                     .unwrap(),
             ),
             Arc::new(
-                rocksdb_util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
+                rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             ),
         )
     }
 
     fn new_peer_storage(engines: Engines, r: &Region) -> PeerStorage {
-        PeerStorage::new(engines, r, worker::dummy_scheduler(), 0, "".to_owned()).unwrap()
+        let (sched, _) = worker::dummy_scheduler();
+        PeerStorage::new(engines, r, sched, 0, "".to_owned()).unwrap()
     }
 
     fn load_default_dataset(engines: Engines) -> (PeerStorage, DataSet) {
@@ -437,18 +458,10 @@ mod tests {
         r.set_end_key(b"key4".to_vec());
         let store = new_peer_storage(engines.clone(), &r);
 
-        let (key1, value1) = (b"key1", 2u64);
-        engines.kv.put_u64(&data_key(key1), value1).expect("");
-        let (key2, value2) = (b"key2", 2i64);
-        engines.kv.put_i64(&data_key(key2), value2).expect("");
         let key3 = b"key3";
         engines.kv.put_msg(&data_key(key3), &r).expect("");
 
         let snap = RegionSnapshot::new(&store);
-        let v1 = snap.get_u64(key1).expect("");
-        assert_eq!(v1, Some(value1));
-        let v2 = snap.get_i64(key2).expect("");
-        assert_eq!(v2, Some(value2));
         let v3 = snap.get_msg(key3).expect("");
         assert_eq!(v3, Some(r));
 
@@ -477,8 +490,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| v.to_vec()),
-                upper_bound.map(|v| v.to_vec()),
+                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -631,7 +644,11 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(IterOption::new(None, Some(b"a5".to_vec()), true));
+        let mut iter = snap.iter(IterOption::new(
+            None,
+            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+            true,
+        ));
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -753,7 +770,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();
-        iter_opt.set_lower_bound(b"a3".to_vec());
+        iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last());
         let mut res = vec![];

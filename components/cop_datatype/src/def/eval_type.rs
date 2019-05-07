@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
 
@@ -29,8 +18,26 @@ pub enum EvalType {
     Json,
 }
 
+impl EvalType {
+    /// Converts `EvalType` into one of the compatible `FieldTypeTp`s.
+    ///
+    /// This function should be only useful in test scenarios that only cares about `EvalType` but
+    /// accepts a `FieldTypeTp`.
+    pub fn into_certain_field_type_tp_for_test(self) -> crate::FieldTypeTp {
+        match self {
+            EvalType::Int => crate::FieldTypeTp::LongLong,
+            EvalType::Real => crate::FieldTypeTp::Double,
+            EvalType::Decimal => crate::FieldTypeTp::NewDecimal,
+            EvalType::Bytes => crate::FieldTypeTp::String,
+            EvalType::DateTime => crate::FieldTypeTp::DateTime,
+            EvalType::Duration => crate::FieldTypeTp::Duration,
+            EvalType::Json => crate::FieldTypeTp::JSON,
+        }
+    }
+}
+
 impl fmt::Display for EvalType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, f)
     }
 }

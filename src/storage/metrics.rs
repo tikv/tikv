@@ -1,17 +1,41 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use prometheus::*;
+use prometheus_static_metric::*;
+
+make_static_metric! {
+    pub label_enum CommandKind {
+        prewrite,
+        commit,
+        cleanup,
+        rollback,
+        scan_lock,
+        resolve_lock,
+        gc,
+        unsafe_destroy_range,
+        delete_range,
+        pause,
+        key_mvcc,
+        start_ts_mvcc,
+        raw_get,
+        raw_batch_get,
+        raw_scan,
+        raw_batch_scan,
+        raw_put,
+        raw_batch_put,
+        raw_delete,
+        raw_delete_range,
+        raw_batch_delete,
+    }
+
+    pub struct SchedDurationVec: Histogram {
+        "type" => CommandKind,
+    }
+
+    pub struct KvCommandCounterVec: IntCounter {
+        "type" => CommandKind,
+    }
+}
 
 lazy_static! {
     pub static ref KV_COMMAND_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -20,6 +44,8 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
+        KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
     pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_stage_total",
         "Total number of commands on each stage.",
@@ -43,6 +69,8 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
+        SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
     pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_latch_wait_duration_seconds",
         "Bucketed histogram of latch wait",

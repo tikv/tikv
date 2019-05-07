@@ -1,18 +1,6 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-extern crate serde_json;
-
+use std::borrow::ToOwned;
 use std::io;
 use std::io::prelude::*;
 use std::process::{Command, Stdio};
@@ -61,7 +49,7 @@ pub fn load_test_jsons() -> io::Result<Vec<String>> {
     download_and_extract_file(url).map(|raw: String| {
         raw.split('\n')
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_owned())
+            .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
     })
 }
@@ -95,7 +83,7 @@ fn bench_encode_text(b: &mut Bencher) {
     b.iter(|| {
         for j in &jsons {
             buf.clear();
-            serde_json::to_writer(&mut buf, j).unwrap();
+            ::serde_json::to_writer(&mut buf, j).unwrap();
         }
     });
 }

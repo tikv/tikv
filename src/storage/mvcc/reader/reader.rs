@@ -1,25 +1,16 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::raftstore::store::engine::IterOption;
-use crate::storage::engine::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::raftstore::coprocessor::properties::MvccProperties;
+use crate::storage::kv::{Cursor, ScanMode, Snapshot, Statistics};
+use crate::storage::mvcc::default_not_found_error;
 use crate::storage::mvcc::lock::{Lock, LockType};
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
-use crate::storage::{Key, Value, CF_LOCK, CF_WRITE};
-use crate::util::rocksdb_util::properties::MvccProperties;
+use crate::storage::{Key, Value};
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
+use engine::{CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
-use std::u64;
+use tikv_util::keybuilder::KeyBuilder;
 
 const GC_MAX_ROW_VERSIONS_THRESHOLD: u64 = 100;
 
@@ -77,9 +68,9 @@ impl<S: Snapshot> MvccReader<S> {
         self.key_only = key_only;
     }
 
-    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Value> {
+    pub fn load_data(&mut self, key: &Key, ts: u64) -> Result<Option<Value>> {
         if self.key_only {
-            return Ok(vec![]);
+            return Ok(Some(vec![]));
         }
         if self.scan_mode.is_some() && self.data_cursor.is_none() {
             let iter_opt = IterOption::new(None, None, self.fill_cache);
@@ -88,16 +79,12 @@ impl<S: Snapshot> MvccReader<S> {
 
         let k = key.clone().append_ts(ts);
         let res = if let Some(ref mut cursor) = self.data_cursor {
-            match cursor.get(&k, &mut self.statistics.data)? {
-                None => panic!("key {} not found, ts {}", key, ts),
-                Some(v) => v.to_vec(),
-            }
+            cursor
+                .get(&k, &mut self.statistics.data)?
+                .map(|v| v.to_vec())
         } else {
             self.statistics.data.get += 1;
-            match self.snapshot.get(&k)? {
-                None => panic!("key {} not found, ts: {}", key, ts),
-                Some(v) => v,
-            }
+            self.snapshot.get(&k)?
         };
 
         self.statistics.data.processed += 1;
@@ -181,10 +168,9 @@ impl<S: Snapshot> MvccReader<S> {
         if !ok {
             return Ok(None);
         }
-        let write_key = Key::from_encoded(cursor.key(&mut self.statistics.write).to_vec());
-        let commit_ts = write_key.decode_ts()?;
-        let k = write_key.truncate_ts()?;
-        if &k != key {
+        let write_key = cursor.key(&mut self.statistics.write);
+        let commit_ts = Key::decode_ts_from(write_key)?;
+        if !Key::is_user_key_eq(write_key, key.as_encoded()) {
             return Ok(None);
         }
         let write = Write::parse(cursor.value(&mut self.statistics.write))?;
@@ -205,7 +191,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok(ts);
         }
 
-        if ts == u64::MAX && key.to_raw()? == lock.primary {
+        if ts == std::u64::MAX && key.to_raw()? == lock.primary {
             // when ts==u64::MAX(which means to get latest committed version for
             // primary key),and current key is the primary key, returns the latest
             // commit version's value
@@ -234,7 +220,12 @@ impl<S: Snapshot> MvccReader<S> {
                 }
                 return Ok(write.short_value.take());
             }
-            return self.load_data(key, write.start_ts).map(Some);
+            match self.load_data(key, write.start_ts)? {
+                None => {
+                    return Err(default_not_found_error(key.to_raw()?, write, "get"));
+                }
+                Some(v) => return Ok(Some(v)),
+            }
         }
         Ok(None)
     }
@@ -280,11 +271,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_data_cursor(&mut self) -> Result<()> {
         if self.data_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self.snapshot.iter(iter_opt, self.get_scan_mode(true))?;
             self.data_cursor = Some(iter);
         }
@@ -293,11 +280,7 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_write_cursor(&mut self) -> Result<()> {
         if self.write_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                self.fill_cache,
-            );
+            let iter_opt = self.gen_iter_opt();
             let iter = self
                 .snapshot
                 .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
@@ -308,17 +291,30 @@ impl<S: Snapshot> MvccReader<S> {
 
     fn create_lock_cursor(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
-            let iter_opt = IterOption::new(
-                self.lower_bound.as_ref().cloned(),
-                self.upper_bound.as_ref().cloned(),
-                true,
-            );
+            let mut iter_opt = self.gen_iter_opt();
+            iter_opt.fill_cache(true);
             let iter = self
                 .snapshot
                 .iter_cf(CF_LOCK, iter_opt, self.get_scan_mode(true))?;
             self.lock_cursor = Some(iter);
         }
         Ok(())
+    }
+
+    fn gen_iter_opt(&self) -> IterOption {
+        let l_bound = if let Some(ref b) = self.lower_bound {
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        let u_bound = if let Some(ref b) = self.upper_bound {
+            let builder = KeyBuilder::from_slice(b.as_slice(), DATA_KEY_PREFIX_LEN, 0);
+            Some(builder)
+        } else {
+            None
+        };
+        IterOption::new(l_bound, u_bound, true)
     }
 
     // Return the first committed key which start_ts equals to ts
@@ -362,7 +358,7 @@ impl<S: Snapshot> MvccReader<S> {
             return Ok((vec![], false));
         }
         let mut locks = Vec::with_capacity(limit);
-        while cursor.valid() {
+        while cursor.valid()? {
             let key = Key::from_encoded_slice(cursor.key(&mut self.statistics.lock));
             let lock = Lock::parse(cursor.value(&mut self.statistics.lock))?;
             if filter(&lock) {
@@ -416,13 +412,11 @@ impl<S: Snapshot> MvccReader<S> {
         }
         let mut v = vec![];
         while ok {
-            let cur_key = Key::from_encoded_slice(cursor.key(&mut self.statistics.data));
-            let ts = cur_key.decode_ts()?;
-            let cur_key_without_ts = cur_key.truncate_ts()?;
-            if cur_key_without_ts.as_encoded().as_slice() == key.as_encoded().as_slice() {
+            let cur_key = cursor.key(&mut self.statistics.data);
+            let ts = Key::decode_ts_from(cur_key)?;
+            if Key::is_user_key_eq(cur_key, key.as_encoded()) {
                 v.push((ts, cursor.value(&mut self.statistics.data).to_vec()));
-            }
-            if cur_key_without_ts.as_encoded().as_slice() != key.as_encoded().as_slice() {
+            } else {
                 break;
             }
             ok = cursor.next(&mut self.statistics.data);
@@ -491,20 +485,21 @@ impl<S: Snapshot> MvccReader<S> {
 
 #[cfg(test)]
 mod tests {
+    use crate::raftstore::coprocessor::properties::{
+        MvccProperties, MvccPropertiesCollectorFactory,
+    };
     use crate::raftstore::store::keys;
     use crate::raftstore::store::RegionSnapshot;
-    use crate::storage::engine::Modify;
+    use crate::storage::kv::Modify;
     use crate::storage::mvcc::write::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
-    use crate::storage::{Key, Mutation, Options, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{
-        self as rocksdb_util,
-        properties::{MvccProperties, MvccPropertiesCollectorFactory},
-        CFOptions,
-    };
+    use crate::storage::{Key, Mutation, Options};
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{self, ColumnFamilyOptions, DBOptions};
+    use engine::rocks::{Writable, WriteBatch, DB};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::kvrpcpb::IsolationLevel;
     use kvproto::metapb::{Peer, Region};
-    use rocksdb::{self, Writable, WriteBatch, DB};
     use std::sync::Arc;
     use std::u64;
     use tempdir::TempDir;
@@ -582,55 +577,55 @@ mod tests {
                 match rev {
                     Modify::Put(cf, k, v) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.put_cf(handle, &k, &v).unwrap();
                     }
                     Modify::Delete(cf, k) => {
                         let k = keys::data_key(k.as_encoded());
-                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.delete_cf(handle, &k).unwrap();
                     }
                     Modify::DeleteRange(cf, k1, k2) => {
                         let k1 = keys::data_key(k1.as_encoded());
                         let k2 = keys::data_key(k2.as_encoded());
-                        let handle = rocksdb_util::get_cf_handle(db, cf).unwrap();
+                        let handle = rocks::util::get_cf_handle(db, cf).unwrap();
                         wb.delete_range_cf(handle, &k1, &k2).unwrap();
                     }
                 }
             }
-            db.write(wb).unwrap();
+            db.write(&wb).unwrap();
         }
 
         fn flush(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.flush_cf(cf, true).unwrap();
             }
         }
 
         fn compact(&mut self) {
             for cf in ALL_CFS {
-                let cf = rocksdb_util::get_cf_handle(&self.db, cf).unwrap();
+                let cf = rocks::util::get_cf_handle(&self.db, cf).unwrap();
                 self.db.compact_range_cf(cf, None, None);
             }
         }
     }
 
     fn open_db(path: &str, with_properties: bool) -> Arc<DB> {
-        let db_opts = rocksdb::DBOptions::new();
-        let mut cf_opts = rocksdb::ColumnFamilyOptions::new();
+        let db_opts = DBOptions::new();
+        let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_write_buffer_size(32 * 1024 * 1024);
         if with_properties {
             let f = Box::new(MvccPropertiesCollectorFactory::default());
             cf_opts.add_table_properties_collector_factory("tikv.test-collector", f);
         }
         let cfs_opts = vec![
-            CFOptions::new(CF_DEFAULT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_RAFT, rocksdb::ColumnFamilyOptions::new()),
-            CFOptions::new(CF_LOCK, rocksdb::ColumnFamilyOptions::new()),
+            CFOptions::new(CF_DEFAULT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_RAFT, ColumnFamilyOptions::new()),
+            CFOptions::new(CF_LOCK, ColumnFamilyOptions::new()),
             CFOptions::new(CF_WRITE, cf_opts),
         ];
-        Arc::new(rocksdb_util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
+        Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap())
     }
 
     fn make_region(id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Region {

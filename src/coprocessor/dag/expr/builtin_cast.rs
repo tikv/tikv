@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::convert::TryInto;
@@ -23,6 +12,7 @@ use crate::coprocessor::codec::convert::{self, convert_float_to_int, convert_flo
 use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
+use crate::coprocessor::dag::expr::Flag;
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -52,7 +42,7 @@ impl ScalarFunc {
         };
 
         if overflow {
-            if !ctx.cfg.overflow_as_warning {
+            if !ctx.cfg.flag.contains(Flag::OVERFLOW_AS_WARNING) {
                 return Err(Error::overflow("CastDecimalAsInt", &format!("{}", val)));
             }
             ctx.warnings
@@ -420,7 +410,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Time>>> {
         let val = try_opt!(self.children[0].eval_duration(ctx, row));
         let mut val =
-            Time::from_duration(ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
+            Time::from_duration(&ctx.cfg.tz, self.field_type.tp().try_into()?, val.as_ref())?;
         val.round_frac(self.field_type.decimal() as i8)?;
         Ok(Some(Cow::Owned(val)))
     }
@@ -689,15 +679,18 @@ impl ScalarFunc {
         Ok(s)
     }
 
-    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+    fn produce_time_with_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
+        let mut t = Time::parse_datetime(s, self.field_type.decimal() as i8, &ctx.cfg.tz)?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
 
-    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<Time>> {
-        let mut t =
-            Time::parse_datetime_from_float_string(s, self.field_type.decimal() as i8, ctx.cfg.tz)?;
+    fn produce_time_with_float_str(&self, ctx: &mut EvalContext, s: &str) -> Result<Cow<'_, Time>> {
+        let mut t = Time::parse_datetime_from_float_string(
+            s,
+            self.field_type.decimal() as i8,
+            &ctx.cfg.tz,
+        )?;
         t.set_time_type(self.field_type.tp().try_into()?)?;
         Ok(Cow::Owned(t))
     }
@@ -738,7 +731,7 @@ mod tests {
         self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
     };
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::FLAG_OVERFLOW_AS_WARNING;
+    use crate::coprocessor::dag::expr::ctx::Flag;
     use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
     use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
 
@@ -850,7 +843,7 @@ mod tests {
             assert!(res.is_none());
         }
 
-        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+        let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
         let cases = vec![
             (
                 ScalarFuncSig::CastDecimalAsInt,
@@ -1795,7 +1788,7 @@ mod tests {
         let time = Time::parse_utc_datetime(time_str, mysql::DEFAULT_FSP).unwrap();
         let time_stamp = {
             let t = time.to_packed_u64();
-            Time::from_packed_u64(t, TimeType::Timestamp, mysql::DEFAULT_FSP, tz).unwrap()
+            Time::from_packed_u64(t, TimeType::Timestamp, mysql::DEFAULT_FSP, &tz).unwrap()
         };
         let date = {
             let mut t = time.clone();
@@ -1908,7 +1901,7 @@ mod tests {
 
             // test with overflow as warning
             let mut ctx =
-                EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+                EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
             assert_eq!(res, exp);
@@ -1980,7 +1973,7 @@ mod tests {
             let ex = scalar_func_expr(ScalarFuncSig::CastStringAsInt, &[col_expr]);
             // test with overflow as warning && in select stmt
             let mut cfg = EvalConfig::new();
-            cfg.set_overflow_as_warning(true).set_in_select_stmt(true);
+            cfg.set_flag(Flag::OVERFLOW_AS_WARNING | Flag::IN_SELECT_STMT);
             let mut ctx = EvalContext::new(Arc::new(cfg));
             let e = Expression::build(&ctx, ex.clone()).unwrap();
             let res = e.eval_int(&mut ctx, &cols).unwrap().unwrap();
@@ -2008,7 +2001,7 @@ mod tests {
     //     let ex = scalar_func_expr(ScalarFuncSig::CastIntAsDuration, &[col_expr]);
 
     //     // test with overflow as warning
-    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flags(FLAG_OVERFLOW_AS_WARNING)));
+    //     let mut ctx = EvalContext::new(Arc::new(EvalConfig::from_flag(Flag::OVERFLOW_AS_WARNING)));
     //     let e = Expression::build(&ctx, ex.clone()).unwrap();
     //     let res = e.eval_duration(&mut ctx, &cols).unwrap();
     //     assert!(res.is_none());

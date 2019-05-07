@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -18,7 +7,7 @@ use std::time::Instant;
 use libc::{getpid, pid_t};
 
 use crate::server::load_statistics::ThreadLoad;
-use crate::util::metrics::{cpu_total, get_thread_ids};
+use tikv_util::metrics::{cpu_total, get_thread_ids};
 
 use procinfo::pid;
 
@@ -111,9 +100,14 @@ mod tests {
     use super::*;
 
     #[test]
+    // FIXME(#4364) Flaky test - on CI gets 0 cpu usages, but passes locally.
+    #[ignore]
     fn test_thread_load_statistic() {
         // OS thread name is truncated to 16 bytes, including the last '\0'.
-        let thread_name = thread::current().name().unwrap()[0..15].to_owned();
+        let t = thread::current();
+        let thread_name = t.name().unwrap();
+        let end = ::std::cmp::min(thread_name.len(), 15);
+        let thread_name = thread_name[..end].to_owned();
 
         let load = Arc::new(ThreadLoad::with_threshold(80));
         let mut stats = ThreadLoadStatistics::new(2, &thread_name, Arc::clone(&load));

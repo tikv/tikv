@@ -1,27 +1,43 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use super::{BufferReader, BufferWriter};
 use super::{Error, Result};
 
-const MAX_VARINT64_LENGTH: usize = 10;
+pub const MAX_VARINT64_LENGTH: usize = 10;
+pub const U64_SIZE: usize = 8;
+pub const I64_SIZE: usize = 8;
+pub const F64_SIZE: usize = 8;
 
 /// Byte encoding and decoding utility for primitive number types.
 pub struct NumberCodec;
 
 impl NumberCodec {
+    /// Encodes an unsigned 8 bit integer `v` to `buf`,
+    /// which is memory-comparable in ascending order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 1`.
+    #[inline]
+    pub fn encode_u8(buf: &mut [u8], v: u8) {
+        assert!(!buf.is_empty());
+        buf[0] = v;
+    }
+
+    /// Decodes an unsigned 8 bit integer from `buf`,
+    /// which is previously encoded via `encode_u8`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `buf.len() < 1`.
+    #[inline]
+    pub fn decode_u8(buf: &[u8]) -> u8 {
+        assert!(!buf.is_empty());
+        buf[0]
+    }
+
     /// Encodes an unsigned 16 bit integer `v` to `buf`,
     /// which is memory-comparable in ascending order.
     ///
@@ -487,7 +503,18 @@ macro_rules! read {
     }};
 }
 
-pub trait BufferNumberDecoder: BufferReader {
+pub trait NumberDecoder: BufferReader {
+    /// Reads an unsigned 8 bit integer,
+    /// which is previously wrote via `write_u8`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BufferTooSmall` if buffer remaining size < 1.
+    #[inline]
+    fn read_u8(&mut self) -> Result<u8> {
+        read!(self, 1, decode_u8)
+    }
+
     /// Reads an unsigned 16 bit integer,
     /// which is previously wrote via `write_u16`.
     ///
@@ -690,8 +717,8 @@ pub trait BufferNumberDecoder: BufferReader {
     }
 }
 
-/// Any types who implemented `BufferReader` also implements `BufferNumberDecoder`.
-impl<T: BufferReader> BufferNumberDecoder for T {}
+/// Any types who implemented `BufferReader` also implements `NumberDecoder`.
+impl<T: BufferReader> NumberDecoder for T {}
 
 macro_rules! write {
     ($s:expr, $v:expr, $size:expr, $f:ident) => {{
@@ -707,7 +734,18 @@ macro_rules! write {
     }};
 }
 
-pub trait BufferNumberEncoder: BufferWriter {
+pub trait NumberEncoder: BufferWriter {
+    /// Writes an unsigned 8 bit integer `v`,
+    /// which is memory-comparable in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BufferTooSmall` if buffer remaining size < 1.
+    #[inline]
+    fn write_u8(&mut self, v: u8) -> Result<()> {
+        write!(self, v, 1, encode_u8)
+    }
+
     /// Writes an unsigned 16 bit integer `v`,
     /// which is memory-comparable in ascending order.
     ///
@@ -920,15 +958,56 @@ pub trait BufferNumberEncoder: BufferWriter {
         unsafe { self.advance_mut(encoded_bytes) };
         Ok(encoded_bytes)
     }
+
+    /// Writes all unsigned 8 bit integers ,
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BufferTooSmall` if buffer remaining size < values.len().
+    #[inline]
+    fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
+        let buf = unsafe { self.bytes_mut(values.len()) };
+        if buf.len() < values.len() {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[..values.len()].copy_from_slice(values);
+        unsafe {
+            self.advance_mut(values.len());
+        }
+        Ok(())
+    }
 }
 
-/// Any types who implemented `BufferWriter` also implements `BufferNumberEncoder`.
-impl<T: BufferWriter> BufferNumberEncoder for T {}
+/// Any types who implemented `BufferWriter` also implements `NumberEncoder`.
+impl<T: BufferWriter> NumberEncoder for T {}
 
 #[cfg(test)]
 mod tests {
     use protobuf::CodedOutputStream;
     use rand;
+    fn get_u8_samples() -> Vec<u8> {
+        vec![
+            (::std::i8::MIN as u8),
+            (::std::i8::MIN as u8).wrapping_add(1),
+            (::std::i8::MIN as u8).overflowing_sub(1).0,
+            (::std::i8::MAX as u8),
+            (::std::i8::MAX as u8).wrapping_add(1),
+            (::std::i8::MAX as u8).overflowing_sub(1).0,
+            (::std::u8::MIN as u8),
+            (::std::u8::MIN as u8).wrapping_add(1),
+            (::std::u8::MIN as u8).overflowing_sub(1).0,
+            (::std::u8::MAX as u8),
+            (::std::u8::MAX as u8).wrapping_add(1),
+            (::std::u8::MAX as u8).overflowing_sub(1).0,
+            2,
+            10,
+            20,
+            63,
+            64,
+            65,
+            129,
+        ]
+    }
 
     fn get_u16_samples() -> Vec<u16> {
         vec![
@@ -1070,20 +1149,20 @@ mod tests {
 
                 // Encode to a `Vec<u8>` without sufficient capacity
                 let mut buf: Vec<u8> = vec![];
-                super::BufferNumberEncoder::$buf_enc(&mut buf, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut buf, sample).unwrap();
                 assert_eq!(buf.as_slice(), base_buf.as_slice());
 
                 let mut buf: Vec<u8> = Vec::with_capacity(len - 1);
-                super::BufferNumberEncoder::$buf_enc(&mut buf, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut buf, sample).unwrap();
                 assert_eq!(buf.as_slice(), base_buf.as_slice());
 
                 // Encode to a `Vec<u8>` with sufficient capacity
                 let mut buf: Vec<u8> = Vec::with_capacity(len);
-                super::BufferNumberEncoder::$buf_enc(&mut buf, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut buf, sample).unwrap();
                 assert_eq!(buf.as_slice(), base_buf.as_slice());
 
                 let mut buf: Vec<u8> = Vec::with_capacity(len + 10);
-                super::BufferNumberEncoder::$buf_enc(&mut buf, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut buf, sample).unwrap();
                 assert_eq!(buf.as_slice(), base_buf.as_slice());
 
                 // Encode to a `Vec<u8>` that has previously written data
@@ -1094,7 +1173,7 @@ mod tests {
                     }
 
                     let mut buf = prefix.clone();
-                    super::BufferNumberEncoder::$buf_enc(&mut buf, sample).unwrap();
+                    super::NumberEncoder::$buf_enc(&mut buf, sample).unwrap();
                     assert_eq!(&buf.as_slice()[0..prefix.len()], prefix.as_slice());
                     assert_eq!(&buf.as_slice()[prefix.len()..], base_buf.as_slice());
                 }
@@ -1102,33 +1181,33 @@ mod tests {
                 // Encode to a `Cursor` (backed by Vec) without sufficient capacity
                 let buf: Vec<u8> = vec![];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 // Note that Vec capacity is not counted in Cursor.
                 let buf: Vec<u8> = Vec::with_capacity(len);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = vec![0; len - 1];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), len - 1);
 
                 // Encode to a `Cursor` (backed by Vec) with sufficient capacity
                 let buf: Vec<u8> = vec![0; len];
                 let mut cursor = std::io::Cursor::new(buf);
-                super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
                 assert_eq!(cursor.get_ref().as_slice(), base_buf.as_slice());
                 assert_eq!(cursor.position(), len as u64);
 
                 let buf: Vec<u8> = vec![0; len + 10];
                 let mut cursor = std::io::Cursor::new(buf);
-                super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
+                super::NumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
                 assert_eq!(&cursor.get_ref().as_slice()[0..len], base_buf.as_slice());
                 assert_eq!(cursor.position(), len as u64);
 
@@ -1144,7 +1223,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
+                        super::NumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
                         assert_eq!(
                             &cursor.get_ref().as_slice()[0..pos],
                             &payload.as_slice()[0..pos]
@@ -1165,7 +1244,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1175,19 +1254,19 @@ mod tests {
                 // Decode from a `Cursor` without sufficient capacity
                 let buf: Vec<u8> = vec![];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = Vec::with_capacity(len);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), 0);
 
                 let buf: Vec<u8> = vec![0; len - 1];
                 let mut cursor = std::io::Cursor::new(buf);
-                assert!(super::BufferNumberDecoder::$buf_dec(&mut cursor).is_err());
+                assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
                 assert_eq!(cursor.position(), 0);
                 assert_eq!(cursor.get_ref().len(), len - 1);
 
@@ -1195,19 +1274,13 @@ mod tests {
                 let mut buf: Vec<u8> = vec![0; len];
                 super::NumberCodec::$enc(buf.as_mut_slice(), sample);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert_eq!(
-                    super::BufferNumberDecoder::$buf_dec(&mut cursor).unwrap(),
-                    sample
-                );
+                assert_eq!(super::NumberDecoder::$buf_dec(&mut cursor).unwrap(), sample);
                 assert_eq!(cursor.position(), len as u64);
 
                 let mut buf: Vec<u8> = vec![0; len + 10];
                 super::NumberCodec::$enc(buf.as_mut_slice(), sample);
                 let mut cursor = std::io::Cursor::new(buf);
-                assert_eq!(
-                    super::BufferNumberDecoder::$buf_dec(&mut cursor).unwrap(),
-                    sample
-                );
+                assert_eq!(super::NumberDecoder::$buf_dec(&mut cursor).unwrap(), sample);
                 assert_eq!(cursor.position(), len as u64);
 
                 // Decode from a `Cursor` with existing data at beginning and end
@@ -1223,10 +1296,7 @@ mod tests {
                         super::NumberCodec::$enc(&mut buf.as_mut_slice()[pos..], sample);
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert_eq!(
-                            super::BufferNumberDecoder::$buf_dec(&mut cursor).unwrap(),
-                            sample
-                        );
+                        assert_eq!(super::NumberDecoder::$buf_dec(&mut cursor).unwrap(), sample);
                         assert_eq!(
                             &cursor.get_ref().as_slice()[0..pos],
                             &payload.as_slice()[0..pos]
@@ -1247,7 +1317,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::BufferNumberDecoder::$buf_dec(&mut cursor).is_err());
+                        assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1287,6 +1357,18 @@ mod tests {
             // 3. it must pass encode + decode
             test_codec!($samples, $enc, $dec, $buf_enc, $buf_dec,);
         };
+    }
+
+    #[test]
+    fn test_u8() {
+        test_mem_compare!(
+            get_u8_samples(),
+            true,
+            encode_u8,
+            decode_u8,
+            write_u8,
+            read_u8,
+        );
     }
 
     #[test]
@@ -1385,6 +1467,11 @@ mod tests {
             write_f64_desc,
             read_f64_desc,
         );
+    }
+
+    #[test]
+    fn test_u8_codec() {
+        test_codec!(get_u8_samples(), encode_u8, decode_u8, write_u8, read_u8,);
     }
 
     #[test]
@@ -1500,7 +1587,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1520,7 +1607,7 @@ mod tests {
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
                         let encoded_length =
-                            super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
+                            super::NumberEncoder::$buf_enc(&mut cursor, sample).unwrap();
                         assert_eq!(
                             &cursor.get_ref().as_slice()[0..pos],
                             &payload.as_slice()[0..pos]
@@ -1541,7 +1628,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::BufferNumberEncoder::$buf_enc(&mut cursor, sample).is_err());
+                        assert!(super::NumberEncoder::$buf_enc(&mut cursor, sample).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1557,7 +1644,7 @@ mod tests {
                         let buf = payload.clone();
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert!(super::BufferNumberDecoder::$buf_dec(&mut cursor).is_err());
+                        assert!(super::NumberDecoder::$buf_dec(&mut cursor).is_err());
                         // underlying buffer and position should be unchanged
                         assert_eq!(&cursor.get_ref().as_slice(), &payload.as_slice());
                         assert_eq!(cursor.position(), pos as u64);
@@ -1576,10 +1663,7 @@ mod tests {
 
                         let mut cursor = std::io::Cursor::new(buf);
                         cursor.set_position(pos as u64);
-                        assert_eq!(
-                            super::BufferNumberDecoder::$buf_dec(&mut cursor).unwrap(),
-                            sample
-                        );
+                        assert_eq!(super::NumberDecoder::$buf_dec(&mut cursor).unwrap(), sample);
                         assert_eq!(
                             &cursor.get_ref().as_slice()[0..pos],
                             &payload.as_slice()[0..pos]
@@ -1677,10 +1761,10 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `BufferNumberEncoder` over a `Cursor<&mut [u8]>`.
+    /// Encode u64 little endian using `NumberEncoder` over a `Cursor<&mut [u8]>`.
     #[bench]
     fn bench_encode_u64_le_buffer_encoder_slice(b: &mut test::Bencher) {
-        use super::BufferNumberEncoder;
+        use super::NumberEncoder;
 
         let mut buf: Vec<u8> = vec![0; 10];
         b.iter(|| {
@@ -1693,10 +1777,10 @@ mod benches {
         });
     }
 
-    /// Encode u64 little endian using `BufferNumberEncoder` over a `Vec<u8>`.
+    /// Encode u64 little endian using `NumberEncoder` over a `Vec<u8>`.
     #[bench]
     fn bench_encode_u64_le_buffer_encoder_vec(b: &mut test::Bencher) {
-        use super::BufferNumberEncoder;
+        use super::NumberEncoder;
 
         let mut buf: Vec<u8> = Vec::with_capacity(10);
         b.iter(|| {
@@ -1783,10 +1867,10 @@ mod benches {
         });
     }
 
-    /// Decode u64 little endian using `BufferNumberDecoder` over a `Cursor<&[u8]>`.
+    /// Decode u64 little endian using `NumberDecoder` over a `Cursor<&[u8]>`.
     #[bench]
     fn bench_decode_u64_le_buffer_decoder(b: &mut test::Bencher) {
-        use super::BufferNumberDecoder;
+        use super::NumberDecoder;
 
         let buf: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
         b.iter(|| {

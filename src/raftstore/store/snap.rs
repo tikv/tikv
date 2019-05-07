@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
@@ -24,34 +13,34 @@ use std::time::Instant;
 use std::{error, result, str, thread, time, u64};
 
 use crc::crc32::{self, Digest, Hasher32};
+use engine::rocks::util::{
+    get_fastest_supported_compression_type, prepare_sst_for_ingestion, validate_sst_for_ingestion,
+};
+use engine::rocks::Snapshot as DbSnapshot;
+use engine::rocks::{
+    self, CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter,
+    Writable, WriteBatch, DB,
+};
+use engine::Iterable;
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::metapb::Region;
 use kvproto::raft_serverpb::RaftSnapshotData;
 use kvproto::raft_serverpb::{SnapshotCFFile, SnapshotMeta};
 use protobuf::Message;
 use protobuf::RepeatedField;
 use raft::eraftpb::Snapshot as RaftSnapshot;
-use rocksdb::{
-    CFHandle, DBCompressionType, EnvOptions, IngestExternalFileOptions, SstFileWriter, Writable,
-    WriteBatch, DB,
-};
 
 use crate::raftstore::errors::Error as RaftStoreError;
-use crate::raftstore::store::engine::{Iterable, Snapshot as DbSnapshot};
 use crate::raftstore::store::keys::{self, enc_end_key, enc_start_key};
 use crate::raftstore::store::util::check_key_in_region;
 use crate::raftstore::store::{RaftRouter, StoreMsg};
 use crate::raftstore::Result as RaftStoreResult;
-use crate::storage::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use crate::util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
-use crate::util::collections::{HashMap, HashMapEntry as Entry};
-use crate::util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
-use crate::util::io_limiter::{IOLimiter, LimitWriter};
-use crate::util::rocksdb_util::{
-    self, get_fastest_supported_compression_type, prepare_sst_for_ingestion,
-    validate_sst_for_ingestion,
-};
-use crate::util::time::duration_to_sec;
-use crate::util::HandyRwLock;
+use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
+use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
+use tikv_util::collections::{HashMap, HashMapEntry as Entry};
+use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use tikv_util::time::duration_to_sec;
+use tikv_util::HandyRwLock;
 
 use crate::raftstore::store::metrics::{
     INGEST_SST_DURATION_SECONDS, SNAPSHOT_BUILD_TIME_HISTOGRAM, SNAPSHOT_CF_KV_COUNT,
@@ -149,7 +138,7 @@ impl SnapKey {
 }
 
 impl Display for SnapKey {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}_{}_{}", self.region_id, self.term, self.idx)
     }
 }
@@ -527,10 +516,7 @@ impl Snap {
     }
 
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
-        let size = get_file_size(&self.meta_file.path)?;
-        let mut file = File::open(&self.meta_file.path)?;
-        let mut buf = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut buf)?;
+        let buf = fs::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::new();
         snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
@@ -742,7 +728,7 @@ impl Snap {
                     }
                     size += l;
                     key_count += 1;
-                    self.add_kv(key, value)?;
+                    box_try!(self.add_kv(key, value));
                     Ok(true)
                 })?;
                 (key_count, size)
@@ -796,8 +782,8 @@ impl Snap {
             snap.scan_cf(cf, start_key, end_key, false, |key, value| {
                 cf_key_count += 1;
                 cf_size += key.len() + value.len();
-                file.encode_compact_bytes(key)?;
-                file.encode_compact_bytes(value)?;
+                box_try!(file.encode_compact_bytes(key));
+                box_try!(file.encode_compact_bytes(value));
                 Ok(true)
             })?;
             if cf_key_count > 0 {
@@ -818,14 +804,14 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
     options: &ApplyOptions,
     handle: &CFHandle,
 ) -> Result<()> {
-    let mut wb = WriteBatch::new();
+    let wb = WriteBatch::new();
     let mut batch_size = 0;
     loop {
         check_abort(&options.abort)?;
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
             if batch_size > 0 {
-                box_try!(options.db.write(wb));
+                box_try!(options.db.write(&wb));
             }
             break;
         }
@@ -835,8 +821,8 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
         batch_size += value.len();
         box_try!(wb.put_cf(handle, &key, &value));
         if batch_size >= options.write_batch_size {
-            box_try!(options.db.write(wb));
-            wb = WriteBatch::new();
+            box_try!(options.db.write(&wb));
+            wb.clear();
             batch_size = 0;
         }
     }
@@ -844,7 +830,7 @@ fn apply_plain_cf_file<D: CompactBytesFromFileDecoder>(
 }
 
 impl fmt::Debug for Snap {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Snap")
             .field("key", &self.key)
             .field("display_path", &self.display_path)
@@ -994,7 +980,7 @@ impl Snapshot for Snap {
             }
 
             check_abort(&options.abort)?;
-            let cf_handle = box_try!(rocksdb_util::get_cf_handle(&options.db, cf_file.cf));
+            let cf_handle = box_try!(rocks::util::get_cf_handle(&options.db, cf_file.cf));
             if plain_file_used(cf_file.cf) {
                 let file = box_try!(File::open(&cf_file.path));
                 apply_plain_cf_file(&mut BufReader::new(file), &options, cf_handle)?;
@@ -1507,12 +1493,16 @@ pub mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    use engine::rocks;
+    use engine::rocks::util::CFOptions;
+    use engine::rocks::{DBOptions, Env, DB};
+    use engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
     use protobuf::Message;
-    use rocksdb::{DBOptions, Env, DB};
     use std::path::PathBuf;
     use tempdir::TempDir;
 
@@ -1521,12 +1511,9 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::raftstore::store::engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
     use crate::raftstore::Result;
-    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{self, CFOptions};
 
     const TEST_STORE_ID: u64 = 1;
     const TEST_KEY: &[u8] = b"akey";
@@ -1539,7 +1526,7 @@ pub mod tests {
     type DBBuilder = fn(
         p: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>>;
 
     impl SnapshotDeleter for DummyDeleter {
@@ -1552,24 +1539,24 @@ pub mod tests {
     pub fn open_test_empty_db(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb_util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         Ok(Arc::new(db))
     }
 
     pub fn open_test_db(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
         let p = path.path().to_str().unwrap();
-        let db = rocksdb_util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
+        let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
         for (i, cf) in ALL_CFS.iter().enumerate() {
-            let handle = rocksdb_util::get_cf_handle(&db, cf)?;
+            let handle = rocks::util::get_cf_handle(&db, cf)?;
             let mut p = Peer::new();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
@@ -1581,7 +1568,7 @@ pub mod tests {
     pub fn get_test_db_for_regions(
         path: &TempDir,
         db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions>>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
     ) -> Result<Arc<DB>> {
         let kv = open_test_db(path, db_opt, cf_opts)?;
@@ -1590,14 +1577,14 @@ pub mod tests {
             let mut apply_state = RaftApplyState::new();
             apply_state.set_applied_index(10);
             apply_state.mut_truncated_state().set_index(10);
-            let handle = rocksdb_util::get_cf_handle(&kv, CF_RAFT)?;
+            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::apply_state_key(region_id), &apply_state)?;
 
             // Put region info into kv engine.
             let region = gen_test_region(region_id, 1, 1);
             let mut region_state = RegionLocalState::new();
             region_state.set_region(region);
-            let handle = rocksdb_util::get_cf_handle(&kv, CF_RAFT)?;
+            let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
         Ok(kv)
@@ -1641,7 +1628,7 @@ pub mod tests {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
             if p1.is_some() {
                 let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                if !p2.is_some() {
+                if p2.is_none() {
                     panic!("cf {}: expect key {:?} has value", cf, key);
                 }
                 let p1 = p1.unwrap();
@@ -1822,7 +1809,7 @@ pub mod tests {
         // Change arbitrarily the cf order of ALL_CFS at destination db.
         let dst_cfs = [CF_WRITE, CF_DEFAULT, CF_LOCK, CF_RAFT];
         let dst_db =
-            Arc::new(rocksdb_util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
+            Arc::new(rocks::util::new_engine(dst_db_path, db_opt, &dst_cfs, None).unwrap());
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
             region: region.clone(),
@@ -2493,7 +2480,7 @@ pub mod tests {
             .unwrap();
 
             // TODO: this size may change in different RocksDB version.
-            let snap_size = 1342;
+            let snap_size = 1438;
             let max_snap_count = (max_total_size + snap_size - 1) / snap_size;
             // The first snap_size is for region 100.
             // That snapshot won't be deleted because it's not for generating.

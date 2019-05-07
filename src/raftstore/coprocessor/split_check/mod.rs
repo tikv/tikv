@@ -1,31 +1,24 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod half;
 mod keys;
 mod size;
 mod table;
 
-use rocksdb::DB;
-
-use super::error::Result;
-use super::{KeyEntry, ObserverContext, SplitChecker};
+use engine::rocks::DB;
 use kvproto::metapb::Region;
 use kvproto::pdpb::CheckPolicy;
 
-pub use self::half::HalfCheckObserver;
-pub use self::keys::KeysCheckObserver;
-pub use self::size::SizeCheckObserver;
+use super::error::Result;
+use super::{KeyEntry, ObserverContext, SplitChecker};
+
+pub use self::half::{get_region_approximate_middle, HalfCheckObserver};
+pub use self::keys::{
+    get_region_approximate_keys, get_region_approximate_keys_cf, KeysCheckObserver,
+};
+pub use self::size::{
+    get_region_approximate_size, get_region_approximate_size_cf, SizeCheckObserver,
+};
 pub use self::table::TableCheckObserver;
 
 #[derive(Default)]

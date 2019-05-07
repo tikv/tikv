@@ -1,0 +1,41 @@
+[readpool.coprocessor]
+
+[readpool.storage]
+
+[server]
+
+[storage]
+
+[storage.block-cache]
+
+[pd]
+
+[metric]
+
+[raftstore]
+
+[coprocessor]
+
+[rocksdb]
+
+[rocksdb.titan]
+
+[rocksdb.defaultcf]
+block-cache-size = "1GB"
+
+[rocksdb.defaultcf.titan]
+
+[rocksdb.writecf]
+block-cache-size = "1GB"
+
+[rocksdb.lockcf]
+block-cache-size = "128MB"
+
+[raftdb]
+
+[raftdb.defaultcf]
+block-cache-size = "128MB"
+
+[security]
+
+[import]

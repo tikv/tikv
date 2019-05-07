@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
 //! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
@@ -35,20 +24,19 @@ mod endpoint;
 mod error;
 pub mod local_metrics;
 mod metrics;
-mod readpool_context;
+pub mod readpool_impl;
 mod statistics;
 mod tracker;
 pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
-pub use self::readpool_context::Context as ReadPoolContext;
 
 use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use crate::util::time::{Duration, Instant};
+use tikv_util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -79,7 +67,7 @@ pub trait RequestHandler: Send {
     where
         Self: 'static + Sized,
     {
-        box self
+        Box::new(self)
     }
 }
 
@@ -110,6 +98,10 @@ impl Deadline {
 
     /// Returns error if the deadline is exceeded.
     pub fn check_if_exceeded(&self) -> Result<()> {
+        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
+            Error::Outdated(Duration::from_secs(60), self.tag)
+        ));
+
         let now = Instant::now_coarse();
         if self.deadline <= now {
             let elapsed = now.duration_since(self.start_time);

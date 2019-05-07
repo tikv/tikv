@@ -1,22 +1,11 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::lock::{Lock, LockType};
 use super::metrics::*;
 use super::reader::MvccReader;
 use super::write::{Write, WriteType};
 use super::{Error, Result};
-use crate::storage::engine::{Modify, ScanMode, Snapshot};
+use crate::storage::kv::{Modify, ScanMode, Snapshot};
 use crate::storage::{
     is_short_value, Key, Mutation, Options, Statistics, Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
@@ -42,7 +31,7 @@ pub struct MvccTxn<S: Snapshot> {
 }
 
 impl<S: Snapshot> fmt::Debug for MvccTxn<S> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "txn @{}", self.start_ts)
     }
 }
@@ -170,7 +159,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             start_ts: self.start_ts,
                             conflict_start_ts: write.start_ts,
                             conflict_commit_ts: commit,
-                            key: key.to_raw()?,
+                            key: key.into_raw()?,
                             primary: primary.to_vec(),
                         });
                     }
@@ -179,7 +168,9 @@ impl<S: Snapshot> MvccTxn<S> {
                             || (write.write_type != WriteType::Delete
                                 && self.key_exist(&key, write.start_ts - 1)?)
                         {
-                            return Err(Error::AlreadyExist { key: key.to_raw()? });
+                            return Err(Error::AlreadyExist {
+                                key: key.into_raw()?,
+                            });
                         }
                     }
                 }
@@ -188,7 +179,7 @@ impl<S: Snapshot> MvccTxn<S> {
             if let Some(lock) = self.reader.load_lock(&key)? {
                 if lock.ts != self.start_ts {
                     return Err(Error::KeyIsLocked {
-                        key: key.to_raw()?,
+                        key: key.into_raw()?,
                         primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
@@ -234,7 +225,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
                             commit_ts,
-                            key: key.as_encoded().to_owned(),
+                            key: key.into_raw()?,
                         })
                     }
                     // Committed by concurrent transaction.
@@ -390,7 +381,7 @@ impl<S: Snapshot> MvccTxn<S> {
 mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
-    use crate::storage::engine::Engine;
+    use crate::storage::kv::Engine;
     use crate::storage::mvcc::tests::*;
     use crate::storage::mvcc::WriteType;
     use crate::storage::mvcc::{MvccReader, MvccTxn};
