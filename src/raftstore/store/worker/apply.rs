@@ -2083,12 +2083,13 @@ impl Runner {
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
         for apply in applys {
-            if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
+            let region_id = apply.region_id;
+            if apply.entries.is_empty() || core.merged_regions.contains(&region_id) {
                 continue;
             }
-            let mut delegate = match self.delegates.get_mut(&apply.region_id) {
+            let mut delegate = match self.delegates.get_mut(&region_id) {
                 None => {
-                    error!("[region {}] is missing", apply.region_id);
+                    error!("[region {}] is missing", region_id);
                     continue;
                 }
                 Some(e) => e.take().unwrap(),
@@ -2099,13 +2100,22 @@ impl Runner {
             {
                 let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
                 delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+                fail_point!(
+                    "skip_merge_tombstone_persist",
+                    { delegate.id() == 3 && delegate.region_id() == 1 },
+                    |_| { 
+                        ctx.delegates.remove(&region_id);
+                        ctx.cbs.drain(..);
+                        ()
+                    }
+                );
             }
 
             if delegate.pending_remove {
                 delegate.destroy();
-                self.delegates.remove(&apply.region_id);
+                self.delegates.remove(&region_id);
             } else {
-                *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+                *self.delegates.get_mut(&region_id).unwrap() = Some(delegate);
             }
         }
 
