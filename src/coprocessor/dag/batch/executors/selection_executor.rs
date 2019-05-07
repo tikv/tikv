@@ -145,6 +145,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
 mod tests {
     use super::*;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
@@ -152,34 +153,17 @@ mod tests {
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
-    use crate::coprocessor::dag::rpn_expr::RpnFunction;
 
     #[test]
     fn test_empty_rows() {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnFoo;
 
-        impl RpnFunction for FnFoo {
-            fn name(&self) -> &'static str {
-                "FnFoo"
-            }
-
-            fn args_len(&self) -> usize {
-                0
-            }
-
-            fn eval(
-                &self,
-                _rows: usize,
-                _context: &mut EvalContext,
-                _payload: RpnFnCallPayload<'_>,
-            ) -> Result<VectorValue> {
+        impl FnFoo {
+            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
                 // This function should never be called because we filter no rows
                 unreachable!()
-            }
-
-            fn box_clone(&self) -> Box<dyn RpnFunction> {
-                Box::new(*self)
             }
         }
 
@@ -327,7 +311,8 @@ mod tests {
     }
 
     /// This function returns 1 when the value is even, 0 otherwise.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 1)]
     struct FnIsEven;
 
     impl FnIsEven {
@@ -347,35 +332,6 @@ mod tests {
                 }
             };
             Ok(r)
-        }
-    }
-
-    impl RpnFunction for FnIsEven {
-        fn name(&self) -> &'static str {
-            "FnIsEven"
-        }
-
-        fn args_len(&self) -> usize {
-            1
-        }
-
-        fn eval(
-            &self,
-            rows: usize,
-            context: &mut EvalContext,
-            payload: RpnFnCallPayload<'_>,
-        ) -> Result<VectorValue> {
-            // This function should never be called because we filter no rows
-            crate::coprocessor::dag::rpn_expr::function::Helper::eval_1_arg(
-                rows,
-                Self::call,
-                context,
-                payload,
-            )
-        }
-
-        fn box_clone(&self) -> Box<dyn RpnFunction> {
-            Box::new(*self)
         }
     }
 
@@ -572,7 +528,8 @@ mod tests {
     #[test]
     fn test_predicate_error() {
         /// This function returns error when value is None.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
 
         impl FnFoo {
@@ -585,35 +542,6 @@ mod tests {
                     None => Err(Error::Other(box_err!("foo"))),
                     Some(v) => Ok(Some(*v)),
                 }
-            }
-        }
-
-        impl RpnFunction for FnFoo {
-            fn name(&self) -> &'static str {
-                "FnFoo"
-            }
-
-            fn args_len(&self) -> usize {
-                1
-            }
-
-            fn eval(
-                &self,
-                rows: usize,
-                context: &mut EvalContext,
-                payload: RpnFnCallPayload<'_>,
-            ) -> Result<VectorValue> {
-                // This function should never be called because we filter no rows
-                crate::coprocessor::dag::rpn_expr::function::Helper::eval_1_arg(
-                    rows,
-                    Self::call,
-                    context,
-                    payload,
-                )
-            }
-
-            fn box_clone(&self) -> Box<dyn RpnFunction> {
-                Box::new(*self)
             }
         }
 
