@@ -47,15 +47,6 @@ impl<E: Engine> SchedPool<E> {
     }
 }
 
-pub fn build_sched_pool(pool_size: usize, name_prefix: &str) -> FuturePool {
-    FuturePoolBuilder::new()
-        .pool_size(pool_size)
-        .name_prefix(name_prefix)
-        .on_tick(move || tls_flush())
-        .before_stop(move || tls_flush())
-        .build()
-}
-
 pub fn tls_add_statistics(cmd: &'static str, stat: &Statistics) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()

@@ -108,7 +108,7 @@ impl Task {
 
 pub struct Executor<E: Engine> {
     // We put time consuming tasks to the thread pool.
-    schedpool: Option<SchedPool<E>>,
+    sched_pool: Option<SchedPool<E>>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<worker::Scheduler<Msg>>,
 }
@@ -117,7 +117,7 @@ impl<E: Engine> Executor<E> {
     pub fn new(scheduler: worker::Scheduler<Msg>, pool: SchedPool<E>) -> Self {
         Executor {
             scheduler: Some(scheduler),
-            schedpool: Some(pool),
+            sched_pool: Some(pool),
         }
     }
 
@@ -126,7 +126,7 @@ impl<E: Engine> Executor<E> {
     }
 
     fn take_pool(&mut self) -> SchedPool<E> {
-        self.schedpool.take().unwrap()
+        self.sched_pool.take().unwrap()
     }
 
     /// Start the execution of the task.
@@ -175,10 +175,10 @@ impl<E: Engine> Executor<E> {
         if let Some(term) = cb_ctx.term {
             task.cmd.mut_context().set_term(term);
         }
-        let schedpool = self.take_pool();
-        let engine = schedpool.engine;
+        let sched_pool = self.take_pool();
+        let engine = sched_pool.engine;
         let readonly = task.cmd.readonly();
-        schedpool.pool.spawn(move || {
+        sched_pool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
 
             let read_duration = tikv_util::time::Instant::now_coarse();
