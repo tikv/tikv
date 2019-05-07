@@ -59,6 +59,13 @@ scheduler-concurrency = 123
 scheduler-worker-pool-size = 1
 scheduler-pending-write-threshold = "123KB"
 
+[storage.block-cache]
+shared = true
+capacity = "40GB"
+num-shard-bits = 10
+strict-capacity-limit = true
+high-pri-pool-ratio = 0.8
+
 [pd]
 endpoints = [
     "example.com:443",

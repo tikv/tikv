@@ -33,7 +33,7 @@ use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 
-pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{

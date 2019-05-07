@@ -134,6 +134,30 @@
 ## When the pending write bytes exceeds this threshold, the "scheduler too busy" error is displayed.
 # scheduler-pending-write-threshold = "100MB"
 
+[storage.block-cache]
+## Whether to create a shared block cache for all RocksDB column families.
+##
+## Block cache is used by RocksDB to cache uncompressed blocks. Big block cache can speed up read.
+## It is recommended to turn on shared block cache. Since only the total cache size need to be
+## set, it is easier to config. In most cases it should be able to auto-balance cache usage
+## between column families with standard LRU algorithm.
+##
+## The rest of config in the storage.block-cache session is effective only when shared block cache
+## is on.
+# shared = true
+
+## Size of the shared block cache. Normally it should be tuned to 30%-50% of system's total memory.
+## When the config is not set, it is decided by the sum of the following fields or their default
+## value:
+##   * rocksdb.defaultcf.block-cache-size or 25% of system's total memory
+##   * rocksdb.writecf.block-cache-size   or 15% of system's total memory
+##   * rocksdb.lockcf.block-cache-size    or  2% of system's total memory
+##   * raftdb.defaultcf.block-cache-size  or  2% of system's total memory
+##
+## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
+## Otherwise, the OOM problem might occur in TiKV.
+# capacity = "1GB"
+
 [pd]
 ## PD endpoints.
 # endpoints = []
@@ -509,13 +533,6 @@
 ## 3 : MinOverlappingRatio
 # compaction-pri = 3
 
-## Block cache used to cache uncompressed blocks.
-## Big block-cache can speed up read. Normally it should be tuned to 30%-50% system's total memory.
-## When the config is not set, TiKV sets the value to 40% of the system memory size.
-## To deploy multiple TiKV nodes on one physical machine, configure this parameter explicitly.
-## Otherwise, the OOM problem might occur in TiKV.
-# block-cache-size = "1GB"
-
 ## Indicating if we'd put index/filter blocks to the block cache.
 ## If not specified, each "table reader" object will pre-load index/filter block during table
 ## initialization.
@@ -605,13 +622,6 @@
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
 
-## In normal cases, this config should be tuned to 10%-30% of the system's total memory.
-## When this config is not set, TiKV sets it to 15% of the system memory size.
-## To deploy multiple TiKV nodes on a single physical machine, configure this parameter explicitly.
-## The related data of the version information (MVCC) and the index-related data are recorded in
-## Write CF. In scenarios that include many single table indexes, set this parameter value higher.
-# block-cache-size = "256MB"
-
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
@@ -630,7 +640,6 @@
 # min-write-buffer-number-to-merge = 1
 # max-bytes-for-level-base = "128MB"
 # target-file-size-base = "8MB"
-# block-cache-size = "256MB"
 # level0-file-num-compaction-trigger = 1
 # level0-slowdown-writes-trigger = 20
 # level0-stop-writes-trigger = 36
@@ -678,10 +687,6 @@
 ## Recommend to set it the same as `rocksdb.defaultcf.max-bytes-for-level-base`.
 # max-bytes-for-level-base = "512MB"
 # target-file-size-base = "8MB"
-
-## Generally, you can set it from 256MB to 2GB. In most cases, you can use the default value. But
-## if the system resources are adequate, you can set it higher.
-# block-cache-size = "256MB"
 
 # level0-file-num-compaction-trigger = 4
 # level0-slowdown-writes-trigger = 20

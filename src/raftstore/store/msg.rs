@@ -84,26 +84,28 @@ impl fmt::Debug for Callback {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PeerTick {
-    Raft,
-    RaftLogGc,
-    SplitRegionCheck,
-    PdHeartbeat,
-    CheckMerge,
-    CheckPeerStaleState,
+bitflags! {
+    pub struct PeerTicks: u8 {
+        const RAFT                   = 0b00000001;
+        const RAFT_LOG_GC            = 0b00000010;
+        const SPLIT_REGION_CHECK     = 0b00000100;
+        const PD_HEARTBEAT           = 0b00001000;
+        const CHECK_MERGE            = 0b00010000;
+        const CHECK_PEER_STALE_STATE = 0b00100000;
+    }
 }
 
-impl PeerTick {
+impl PeerTicks {
     #[inline]
     pub fn tag(self) -> &'static str {
         match self {
-            PeerTick::Raft => "raft",
-            PeerTick::RaftLogGc => "raft_log_gc",
-            PeerTick::SplitRegionCheck => "split_region_check",
-            PeerTick::PdHeartbeat => "pd_heartbeat",
-            PeerTick::CheckMerge => "check_merge",
-            PeerTick::CheckPeerStaleState => "check_peer_stale_state",
+            PeerTicks::RAFT => "raft",
+            PeerTicks::RAFT_LOG_GC => "raft_log_gc",
+            PeerTicks::SPLIT_REGION_CHECK => "split_region_check",
+            PeerTicks::PD_HEARTBEAT => "pd_heartbeat",
+            PeerTicks::CHECK_MERGE => "check_merge",
+            PeerTicks::CHECK_PEER_STALE_STATE => "check_peer_stale_state",
+            _ => unreachable!(),
         }
     }
 }
@@ -267,7 +269,7 @@ pub enum PeerMsg {
     RaftCommand(RaftCommand),
     /// Tick is periodical task. If target peer doesn't exist there is a potential
     /// that the raft node will not work anymore.
-    Tick(PeerTick),
+    Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
     ApplyRes { res: ApplyTaskRes },
     /// Message that can't be lost but rarely created. If they are lost, real bad
