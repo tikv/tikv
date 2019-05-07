@@ -62,6 +62,7 @@ const DEFAULT_KV_WB_SIZE: usize = 4 * 1024;
 const DEFAULT_RAFT_WB_SIZE: usize = 1024;
 const DEFAULT_APPLY_WB_SIZE: usize = 4 * 1024;
 const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
+const RAFT_WB_SHRINK_SIZE: usize = 256 * 1024;
 const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 
 pub struct PendingCmd {
@@ -427,7 +428,11 @@ impl ApplyContext {
             //
             // TODO: we need to flush apply states periodically to avoid
             // re-apply too many entries after restart.
-            self.raft_wb_mut().clear();
+            if self.raft_wb().data_size() > RAFT_WB_SHRINK_SIZE {
+                self.raft_wb = Some(WriteBatch::with_capacity(DEFAULT_RAFT_WB_SIZE));
+            } else {
+                self.raft_wb_mut().clear();
+            }
         }
         self.sync_log_hint = false;
         for cbs in self.cbs.drain(..) {
