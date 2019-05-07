@@ -118,6 +118,7 @@ vlog = "0.1.4"
 twoway = "0.2.0"
 profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
+cop_codegen = { path = "components/cop_codegen" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
@@ -167,6 +168,7 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/cop_codegen",
   "components/log_wrappers",
   "components/tikv_util",
 ]

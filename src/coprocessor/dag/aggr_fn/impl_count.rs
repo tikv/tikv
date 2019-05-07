@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cop_codegen::AggrFunction;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -63,20 +64,9 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
 }
 
 /// The COUNT aggregate function.
-#[derive(Debug)]
+#[derive(Debug, AggrFunction)]
+#[aggr_function(state = AggrFnStateCount::new())]
 pub struct AggrFnCount;
-
-impl super::AggrFunction for AggrFnCount {
-    #[inline]
-    fn name(&self) -> &'static str {
-        "AggrFnCount"
-    }
-
-    #[inline]
-    fn create_state(&self) -> Box<dyn super::AggrFunctionState> {
-        Box::new(AggrFnStateCount::new())
-    }
-}
 
 /// The state of the COUNT aggregate function.
 #[derive(Debug)]
