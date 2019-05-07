@@ -28,7 +28,6 @@ use protobuf::{Message, RepeatedField};
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 use raft::{Ready, StateRole};
-use rand::Rng;
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -80,6 +79,7 @@ pub enum GroupState {
 
 pub struct PeerFsm {
     peer: Peer,
+    /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
     missing_ticks: usize,
     group_state: GroupState,
@@ -357,7 +357,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.stopped {
             return;
         }
-        trace!("tick"; "tick" => ?tick, "peer_id" => self.fsm.peer_id(), "region_id" => self.region_id());
+        trace!(
+            "tick";
+            "tick" => ?tick,
+            "peer_id" => self.fsm.peer_id(),
+            "region_id" => self.region_id(),
+        );
         self.fsm.tick_registry.remove(tick);
         match tick {
             PeerTicks::RAFT => self.on_raft_base_tick(),
@@ -667,13 +672,20 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if is_zero_duration(&timeout) {
             return;
         }
-        trace!("schedule tick"; "tick" => ?tick, "timeout" => ?timeout, "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id());
+        trace!(
+            "schedule tick";
+            "tick" => ?tick,
+            "timeout" => ?timeout,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
         self.fsm.tick_registry.insert(tick);
 
         let region_id = self.region_id();
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
+                self.fsm.tick_registry.remove(tick);
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
@@ -694,6 +706,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
                     |_| unreachable!()
                 );
+                // This can happen only when the peer is about to be destroyed
+                // or the node is shutting down. So it's OK to not to clean up
+                // registry.
                 if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                     info!(
                         "failed to schedule peer tick";
@@ -2751,11 +2766,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn register_check_peer_stale_state_tick(&mut self) {
-        let mut millis = self.ctx.cfg.peer_stale_state_check_interval.0.as_millis() as u64;
-        millis += rand::thread_rng().gen_range(0, millis / 2);
         self.schedule_tick(
             PeerTicks::CHECK_PEER_STALE_STATE,
-            Duration::from_millis(millis),
+            self.ctx.cfg.peer_stale_state_check_interval.0,
         )
     }
 }
