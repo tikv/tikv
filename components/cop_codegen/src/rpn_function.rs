@@ -5,7 +5,6 @@
 pub struct RpnFunctionOpts {
     ident: syn::Ident,
     generics: syn::Generics,
-    #[darling(default)]
     args: usize,
 }
 
