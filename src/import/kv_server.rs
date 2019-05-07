@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::grpc::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
+use grpcio::{ChannelBuilder, EnvBuilder, Server as GrpcServer, ServerBuilder};
 use kvproto::import_kvpb_grpc::create_import_kv;
 
 use crate::config::TiKvConfig;

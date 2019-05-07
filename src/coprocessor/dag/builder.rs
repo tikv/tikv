@@ -14,7 +14,7 @@ use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
-use crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled;
+use crate::coprocessor::dag::exec_summary::*;
 use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
 use crate::coprocessor::*;
@@ -42,6 +42,10 @@ impl DAGBuilder {
                     let descriptor = ed.get_idx_scan();
                     BatchIndexScanExecutor::check_supported(&descriptor)?;
                 }
+                ExecType::TypeSelection => {
+                    let descriptor = ed.get_selection();
+                    BatchSelectionExecutor::check_supported(&descriptor)?;
+                }
                 ExecType::TypeLimit => {}
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
@@ -53,7 +57,7 @@ impl DAGBuilder {
     }
 
     // Note: `S` is `'static` because we have trait objects `Executor`.
-    pub fn build_batch<S: Store + 'static>(
+    pub fn build_batch<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         executor_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
@@ -65,6 +69,7 @@ impl DAGBuilder {
             .ok_or_else(|| Error::Other(box_err!("No executors")))?;
 
         let mut executor: Box<dyn BatchExecutor>;
+        let mut summary_slot_index = 0;
 
         match first_ed.get_tp() {
             ExecType::TypeTableScan => {
@@ -74,7 +79,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_tbl_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = Box::new(BatchTableScanExecutor::new(
-                    ExecSummaryCollectorDisabled,
+                    C::new(summary_slot_index),
                     store,
                     config.clone(),
                     columns_info,
@@ -88,7 +93,7 @@ impl DAGBuilder {
                 let mut descriptor = first_ed.take_idx_scan();
                 let columns_info = descriptor.take_columns().into_vec();
                 executor = Box::new(BatchIndexScanExecutor::new(
-                    ExecSummaryCollectorDisabled,
+                    C::new(summary_slot_index),
                     store,
                     config.clone(),
                     columns_info,
@@ -105,14 +110,28 @@ impl DAGBuilder {
             }
         }
 
-        for ed in executor_descriptors {
-            match ed.get_tp() {
+        for mut ed in executor_descriptors {
+            summary_slot_index += 1;
+
+            let new_executor: Box<dyn BatchExecutor> = match ed.get_tp() {
+                ExecType::TypeSelection => {
+                    COPR_EXECUTOR_COUNT.with_label_values(&["selection"]).inc();
+
+                    Box::new(BatchSelectionExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.take_selection().take_conditions().into_vec(),
+                    )?)
+                }
                 ExecType::TypeLimit => {
-                    executor = Box::new(BatchLimitExecutor::new(
-                        ExecSummaryCollectorDisabled,
+                    COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
+
+                    Box::new(BatchLimitExecutor::new(
+                        C::new(summary_slot_index),
                         executor,
                         ed.get_limit().get_limit() as usize,
-                    )?);
+                    )?)
                 }
                 _ => {
                     return Err(Error::Other(box_err!(
@@ -120,7 +139,8 @@ impl DAGBuilder {
                         first_ed.get_tp()
                     )));
                 }
-            }
+            };
+            executor = new_executor;
         }
 
         Ok(executor)
@@ -129,7 +149,7 @@ impl DAGBuilder {
     /// Builds a normal executor pipeline.
     ///
     /// Normal executors iterate rows one by one.
-    pub fn build_normal<S: Store + 'static>(
+    pub fn build_normal<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         exec_descriptors: Vec<executor::Executor>,
         store: S,
         ranges: Vec<KeyRange>,
@@ -140,8 +160,13 @@ impl DAGBuilder {
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
-        let mut src = Self::build_normal_first_executor(first, store, ranges, collect)?;
+
+        let mut src = Self::build_normal_first_executor::<_, C>(first, store, ranges, collect)?;
+        let mut summary_slot_index = 0;
+
         for mut exec in exec_descriptors {
+            summary_slot_index += 1;
+
             let curr: Box<dyn Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"));
@@ -164,7 +189,11 @@ impl DAGBuilder {
                 ExecType::TypeTopN => {
                     Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
                 }
-                ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+                ExecType::TypeLimit => Box::new(LimitExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_limit(),
+                    src,
+                )),
             };
             src = curr;
         }
@@ -175,7 +204,7 @@ impl DAGBuilder {
     /// other executors and never receive rows from other executors.
     ///
     /// The inner-most executor must be a table scan executor or an index scan executor.
-    fn build_normal_first_executor<S: Store + 'static>(
+    fn build_normal_first_executor<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         mut first: executor::Executor,
         store: S,
         ranges: Vec<KeyRange>,
@@ -184,6 +213,7 @@ impl DAGBuilder {
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 let ex = Box::new(ScanExecutor::table_scan(
+                    C::new(0),
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -194,6 +224,7 @@ impl DAGBuilder {
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
                 let ex = Box::new(ScanExecutor::index_scan(
+                    C::new(0),
                     first.take_idx_scan(),
                     ranges,
                     store,
@@ -217,18 +248,32 @@ impl DAGBuilder {
         deadline: Deadline,
         batch_row_limit: usize,
     ) -> Result<super::DAGRequestHandler> {
-        let executor = Self::build_normal(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            Arc::new(eval_cfg),
-            req.get_collect_range_counts(),
-        )?;
+        let executors_len = req.get_executors().len();
+
+        let executor = if req.get_collect_execution_summaries() {
+            Self::build_normal::<_, ExecSummaryCollectorEnabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                Arc::new(eval_cfg),
+                req.get_collect_range_counts(),
+            )?
+        } else {
+            Self::build_normal::<_, ExecSummaryCollectorDisabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                Arc::new(eval_cfg),
+                req.get_collect_range_counts(),
+            )?
+        };
         Ok(super::DAGRequestHandler::new(
             deadline,
             executor,
             req.take_output_offsets(),
             batch_row_limit,
+            executors_len,
+            req.get_collect_execution_summaries(),
         ))
     }
 
@@ -241,14 +286,24 @@ impl DAGBuilder {
     ) -> Result<super::batch_handler::BatchDAGHandler> {
         let ranges_len = ranges.len();
         let executors_len = req.get_executors().len();
+        let collect_exec_summary = req.get_collect_execution_summaries();
 
         let config = Arc::new(config);
-        let out_most_executor = super::builder::DAGBuilder::build_batch(
-            req.take_executors().into_vec(),
-            store,
-            ranges,
-            config.clone(),
-        )?;
+        let out_most_executor = if collect_exec_summary {
+            super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorEnabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                config.clone(),
+            )?
+        } else {
+            super::builder::DAGBuilder::build_batch::<_, ExecSummaryCollectorDisabled>(
+                req.take_executors().into_vec(),
+                store,
+                ranges,
+                config.clone(),
+            )?
+        };
 
         // Check output offsets
         let output_offsets = req.take_output_offsets();
@@ -268,8 +323,15 @@ impl DAGBuilder {
             out_most_executor,
             output_offsets,
             config,
-            ranges_len,
-            executors_len,
+            BatchExecuteStatistics::new(
+                if collect_exec_summary {
+                    executors_len
+                } else {
+                    0 // Avoid allocation for executor summaries when it is not needed
+                },
+                ranges_len,
+            ),
+            collect_exec_summary,
         ))
     }
 
@@ -304,7 +366,7 @@ impl DAGBuilder {
             let build_batch_result =
                 super::builder::DAGBuilder::check_build_batch(req.get_executors());
             if let Err(e) = build_batch_result {
-                debug!("Coprocessor request cannot be batched"; "reason" => %e);
+                info!("Coprocessor request cannot be batched"; "reason" => %e);
             } else {
                 is_batch = true;
             }
