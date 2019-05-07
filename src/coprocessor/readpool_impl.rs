@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 
 use crate::pd::PdTask;
-use crate::server::readpool::{self, Builder, ReadPool};
+use crate::server::readpool::{self, Builder, Config, ReadPool};
 use crate::storage::Engine;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
@@ -76,6 +76,15 @@ pub fn build_read_pool<E: Engine>(
             destroy_tls_engine_any();
             tls_flush(&pd_sender2)
         })
+        .build()
+}
+
+pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
+    let engine = Arc::new(Mutex::new(engine));
+
+    Builder::from_config(&Config::default_for_test())
+        .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
+        .before_stop(|| destroy_tls_engine_any())
         .build()
 }
 

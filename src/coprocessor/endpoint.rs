@@ -496,13 +496,16 @@ fn make_error_response(e: Error) -> coppb::Response {
 mod tests {
     use super::*;
 
-    use std::sync::{atomic, mpsc, Arc};
+    use std::sync::{atomic, mpsc, Arc, Mutex};
     use std::thread;
     use std::vec;
 
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
+    use crate::coprocessor::readpool_impl::{
+        build_read_pool_for_test, destroy_tls_engine_any, set_tls_engine_any,
+    };
     use crate::storage::TestEngineBuilder;
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -626,7 +629,7 @@ mod tests {
     #[test]
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // a normal request
@@ -661,7 +664,7 @@ mod tests {
     #[test]
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(
             &Config {
                 end_point_recursion_limit: 5,
@@ -698,7 +701,7 @@ mod tests {
     #[test]
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let mut req = coppb::Request::new();
@@ -714,7 +717,7 @@ mod tests {
     #[test]
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let mut req = coppb::Request::new();
@@ -730,15 +733,18 @@ mod tests {
 
     #[test]
     fn test_full() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let engine_lock = Arc::new(Mutex::new(engine.clone()));
         let read_pool = readpool::Builder::from_config(&readpool::Config {
             normal_concurrency: 1,
             max_tasks_per_worker_normal: 2,
             ..readpool::Config::default_for_test()
         })
         .name_prefix("cop-test-full")
+        .after_start(move || set_tls_engine_any(engine_lock.lock().unwrap().clone()))
+        .before_stop(|| destroy_tls_engine_any())
         .build();
-
-        let engine = TestEngineBuilder::new().build().unwrap();
 
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
@@ -785,7 +791,7 @@ mod tests {
     #[test]
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let handler_builder = Box::new(|_, _: &_| {
@@ -803,7 +809,7 @@ mod tests {
     #[test]
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // Fail immediately
@@ -847,7 +853,7 @@ mod tests {
     #[test]
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
@@ -865,7 +871,7 @@ mod tests {
     #[test]
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
 
         // handler returns `finished == true` should not be called again.
@@ -951,7 +957,7 @@ mod tests {
     #[test]
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
-        let read_pool = readpool::Builder::build_for_test();
+        let read_pool = build_read_pool_for_test(engine.clone());
         let cop = Endpoint::new(
             &Config {
                 end_point_stream_channel_size: 3,
@@ -1002,10 +1008,14 @@ mod tests {
         const PAYLOAD_SMALL: i64 = 3000;
         const PAYLOAD_LARGE: i64 = 6000;
 
-        let read_pool =
-            readpool::Builder::from_config(&readpool::Config::default_with_concurrency(1)).build();
-
         let engine = TestEngineBuilder::new().build().unwrap();
+
+        let engine_lock = Arc::new(Mutex::new(engine.clone()));
+        let read_pool =
+            readpool::Builder::from_config(&readpool::Config::default_with_concurrency(1))
+                .after_start(move || set_tls_engine_any(engine_lock.lock().unwrap().clone()))
+                .before_stop(|| destroy_tls_engine_any())
+                .build();
 
         let mut config = Config::default();
         config.end_point_request_max_handle_duration =
