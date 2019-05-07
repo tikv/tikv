@@ -6,6 +6,8 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 /// A trait for all RPN functions.
+///
+/// This trait can be auto derived by using `cop_codegen::RpnFunction`.
 pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
     /// The display name of the function.
     fn name(&self) -> &'static str;
@@ -342,72 +344,4 @@ impl Helper {
         }
         Ok(Ret::into_vector_value(result))
     }
-}
-
-/// Implements `RpnFunction` automatically for structure that accepts 0, 1, 2 or 3 arguments.
-///
-/// The structure must have a `call` member function accepting corresponding number of scalar
-/// arguments.
-#[macro_export]
-macro_rules! impl_template_fn {
-    (0 arg @ $name:ty) => {
-        impl_template_fn! { @inner $name, 0, eval_0_arg, }
-    };
-    (0 arg @ $name:ty, $($generics:tt)*) => {
-        impl_template_fn! { @inner $name, 0, eval_0_arg, <$($generics)*> }
-    };
-    (1 arg @ $name:ty) => {
-        impl_template_fn! { @inner $name, 1, eval_1_arg, }
-    };
-    (1 arg @ $name:ty, $($generics:tt)*) => {
-        impl_template_fn! { @inner $name, 1, eval_1_arg, <$($generics)*> }
-    };
-    (2 arg @ $name:ty) => {
-        impl_template_fn! { @inner $name, 2, eval_2_args, }
-    };
-    (2 arg @ $name:ty, $($generics:tt)*) => {
-        impl_template_fn! { @inner $name, 2, eval_2_args, <$($generics)*> }
-    };
-    (3 arg @ $name:ty) => {
-        impl_template_fn! { @inner $name, 3, eval_3_args, }
-    };
-    (3 arg @ $name:ty, $($generics:tt)*) => {
-        impl_template_fn! { @inner $name, 3, eval_3_args, <$($generics)*> }
-    };
-    (@inner $name:ty, $args:expr, $eval_fn:ident, $($generics:tt)*) => {
-        impl$($generics)* tikv_util::AssertCopy for $name {}
-
-        impl$($generics)* $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
-            #[inline]
-            fn name(&self) -> &'static str {
-                stringify!($name)
-            }
-
-            #[inline]
-            fn args_len(&self) -> usize {
-                $args
-            }
-
-            #[inline]
-            fn eval(
-                &self,
-                rows: usize,
-                context: &mut $crate::coprocessor::dag::expr::EvalContext,
-                payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload<'_>,
-            ) -> $crate::coprocessor::Result<$crate::coprocessor::codec::data_type::VectorValue>
-            {
-                $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(
-                    rows,
-                    Self::call,
-                    context,
-                    payload,
-                )
-            }
-
-            #[inline]
-            fn box_clone(&self) -> Box<dyn $crate::coprocessor::dag::rpn_expr::RpnFunction> {
-                Box::new(*self)
-            }
-        }
-    };
 }
