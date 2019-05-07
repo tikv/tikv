@@ -11,7 +11,7 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -201,7 +201,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
 
     for column in columns_info {
-        EvalType::try_from(column.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        box_try!(EvalType::try_from(column.tp()));
     }
     Ok(())
 }
