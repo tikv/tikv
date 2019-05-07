@@ -748,7 +748,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     fn initialize(&mut self) -> GCManagerResult<()> {
         info!("gc-manager is initializing");
         self.safe_point = 0;
-        self.wait_for_next_safe_point()?;
+        self.try_update_safe_point();
         info!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
@@ -1330,6 +1330,19 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 234);
 
         test_util.stop();
+    }
+
+    #[test]
+    fn test_gc_manager_initialize() {
+        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut gc_manager = test_util.gc_manager.take().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        test_util.add_next_safe_point(0);
+        test_util.add_next_safe_point(5);
+        gc_manager.initialize().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        assert!(gc_manager.try_update_safe_point());
+        assert_eq!(gc_manager.safe_point, 5);
     }
 
     #[test]
