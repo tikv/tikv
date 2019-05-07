@@ -198,7 +198,7 @@ where
                 "logger encountered error, TiKV cannot continue working";
                 "err" => %e,
             );
-            panic!("logger encountered error: {}", e);
+            panic!("logger encountered error");
         }
         Ok(())
     }
