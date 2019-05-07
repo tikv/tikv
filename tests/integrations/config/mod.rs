@@ -17,7 +17,7 @@ use tikv::raftstore::coprocessor::Config as CopConfig;
 use tikv::raftstore::store::Config as RaftstoreConfig;
 use tikv::server::config::GrpcCompressionType;
 use tikv::server::Config as ServerConfig;
-use tikv::storage::Config as StorageConfig;
+use tikv::storage::{BlockCacheConfig, Config as StorageConfig};
 use tikv_util::config::{ReadableDuration, ReadableSize};
 use tikv_util::security::SecurityConfig;
 
@@ -427,6 +427,13 @@ fn test_serde_custom_tikv_config() {
         scheduler_concurrency: 123,
         scheduler_worker_pool_size: 1,
         scheduler_pending_write_threshold: ReadableSize::kb(123),
+        block_cache: BlockCacheConfig {
+            shared: true,
+            capacity: Some(ReadableSize::gb(40)),
+            num_shard_bits: 10,
+            strict_capacity_limit: true,
+            high_pri_pool_ratio: 0.8,
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: true,
@@ -485,4 +492,21 @@ fn test_readpool_default_config() {
     let mut expected = TiKvConfig::default();
     expected.readpool.storage.high_concurrency = 1;
     assert_eq!(cfg, expected);
+}
+
+#[test]
+fn test_block_cache_backward_compatible() {
+    let content = read_file_in_project_dir("tests/integrations/config/test-cache-compatible.toml");
+    let mut cfg: TiKvConfig = toml::from_str(&content).unwrap();
+    assert!(cfg.storage.block_cache.shared);
+    assert!(cfg.storage.block_cache.capacity.is_none());
+    cfg.compatible_adjust();
+    assert!(cfg.storage.block_cache.capacity.is_some());
+    assert_eq!(
+        cfg.storage.block_cache.capacity.unwrap().0,
+        cfg.rocksdb.defaultcf.block_cache_size.0
+            + cfg.rocksdb.writecf.block_cache_size.0
+            + cfg.rocksdb.lockcf.block_cache_size.0
+            + cfg.raftdb.defaultcf.block_cache_size.0
+    );
 }

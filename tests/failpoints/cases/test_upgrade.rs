@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
-use engine::rocks::{self, DBOptions, Writable};
+use engine::rocks::{self, Cache, DBOptions, LRUCacheOptions, Writable};
 use engine::{Engines, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE, DB};
 use kvproto::metapb::Region;
@@ -14,6 +14,7 @@ use test_raftstore::*;
 use tikv::config::DbConfig;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use tikv_util::config::MB;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -123,6 +124,9 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
     let raft_engine =
         rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+    let mut cache_opts = LRUCacheOptions::new();
+    cache_opts.set_capacity((8 * MB) as _);
+    let lru_cache = Some(Cache::new_lru_cache(cache_opts));
 
     // No need to upgrade an empty node.
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
@@ -130,6 +134,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
+        &lru_cache,
     )
     .unwrap();
     // Check whether there is a kv engine.
@@ -201,6 +206,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
+        &lru_cache,
     );
     // `unwrap` or `unwrap_err` depends on whether we enable a fail point.
     if fp.is_empty() {
@@ -215,6 +221,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
+        &lru_cache,
     )
     .unwrap();
 

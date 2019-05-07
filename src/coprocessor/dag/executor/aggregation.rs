@@ -10,6 +10,7 @@ use tipb::expression::{Expr, ExprType};
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -139,6 +140,10 @@ impl AggExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
@@ -248,6 +253,10 @@ impl Executor for HashAggExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
+    }
 }
 
 impl Executor for StreamAggExecutor {
@@ -295,6 +304,10 @@ impl Executor for StreamAggExecutor {
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 }
 
@@ -393,17 +406,17 @@ mod tests {
     use tipb::expression::{Expr, ExprType};
     use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::datum::{self, Datum};
-    use crate::coprocessor::codec::mysql::decimal::Decimal;
-    use crate::coprocessor::codec::table;
-    use crate::storage::SnapshotStore;
-    use tikv_util::collections::HashMap;
-
     use super::super::index_scan::tests::IndexTestWrapper;
     use super::super::index_scan::IndexScanExecutor;
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::coprocessor::codec::mysql::decimal::Decimal;
+    use crate::coprocessor::codec::table;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::scanner::tests::Data;
+    use crate::storage::SnapshotStore;
+    use tikv_util::collections::HashMap;
 
     fn build_group_by(col_ids: &[i64]) -> Vec<Expr> {
         let mut group_by = Vec::with_capacity(col_ids.len());
@@ -494,9 +507,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -526,9 +545,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -576,9 +601,15 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+        let is_executor = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
