@@ -355,6 +355,7 @@ mod tests {
     #[test]
     fn test_eval_single_fn_call_node() {
         #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnFoo;
 
         impl FnFoo {
@@ -864,6 +865,7 @@ mod tests {
 
         /// FnB() returns 42.0.
         #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnB;
 
         impl FnB {
@@ -1113,6 +1115,7 @@ mod tests {
 
         /// FnC() returns: int(42)
         #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnC;
 
         impl FnC {
