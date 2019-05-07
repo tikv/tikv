@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::time::Duration;
 
 use prometheus::local::*;
 use tikv_util::collections::HashMap;
@@ -14,7 +15,7 @@ pub struct SchedLocalMetrics {
     stats: HashMap<&'static str, StatisticsSummary>,
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
-    command_keyread_duration: LocalHistogramVec,
+    command_keyread_histogram_vec: LocalHistogramVec,
 }
 
 thread_local! {
@@ -23,7 +24,7 @@ thread_local! {
             stats: HashMap::default(),
             processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
             processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
-            command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
+            command_keyread_histogram_vec: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
         }
     );
 }
@@ -55,7 +56,6 @@ pub fn build_sched_pool(pool_size: usize, name_prefix: &str) -> FuturePool {
         .build()
 }
 
-#[inline]
 pub fn tls_add_statistics(cmd: &'static str, stat: &Statistics) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
@@ -66,7 +66,6 @@ pub fn tls_add_statistics(cmd: &'static str, stat: &Statistics) {
     });
 }
 
-#[inline]
 pub fn tls_flush() {
     TLS_SCHED_METRICS.with(|m| {
         let mut sched_metrics = m.borrow_mut();
@@ -81,25 +80,23 @@ pub fn tls_flush() {
         }
         sched_metrics.processing_read_duration.flush();
         sched_metrics.processing_write_duration.flush();
-        sched_metrics.command_keyread_duration.flush();
+        sched_metrics.command_keyread_histogram_vec.flush();
     });
 }
 
-#[inline]
-pub fn tls_start_read_duration(cmd: &str) {
+pub fn tls_collect_read_duration(cmd: &str, duration: Duration) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
             .processing_read_duration
             .with_label_values(&[cmd])
-            .start_coarse_timer();
+            .observe(tikv_util::time::duration_to_sec(duration))
     });
 }
 
-#[inline]
-pub fn tls_collect_key_read_duration(cmd: &str, count: f64) {
+pub fn tls_collect_keyread_histogram_vec(cmd: &str, count: f64) {
     TLS_SCHED_METRICS.with(|m| {
         m.borrow_mut()
-            .command_keyread_duration
+            .command_keyread_histogram_vec
             .with_label_values(&[cmd])
             .observe(count);
     });

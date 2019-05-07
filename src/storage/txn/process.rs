@@ -21,7 +21,7 @@ use tikv_util::time::SlowTimer;
 use tikv_util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
-use super::sched_pool_impl::*;
+use super::sched_pool::*;
 use super::scheduler::Msg;
 use super::{Error, Result};
 
@@ -181,7 +181,7 @@ impl<E: Engine> Executor<E> {
         schedpool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
 
-            tls_start_read_duration(tag);
+            let read_duration = tikv_util::time::Instant::now_coarse();
 
             let region_id = task.region_id;
             let ts = task.ts;
@@ -200,6 +200,8 @@ impl<E: Engine> Executor<E> {
                 tag,
                 ts
             );
+
+            tls_collect_read_duration(tag, read_duration.elapsed());
             future::ok::<_, ()>(())
         });
     }
@@ -373,7 +375,7 @@ fn process_read_impl<E: Engine>(
                 locks.push(lock_info);
             }
 
-            tls_collect_key_read_duration(tag, locks.len() as f64);
+            tls_collect_keyread_histogram_vec(tag, locks.len() as f64);
 
             Ok(ProcessResult::Locks { locks })
         }
@@ -398,7 +400,7 @@ fn process_read_impl<E: Engine>(
             );
             statistics.add(reader.get_statistics());
             let (kv_pairs, has_remain) = result?;
-            tls_collect_key_read_duration(tag, kv_pairs.len() as f64);
+            tls_collect_keyread_histogram_vec(tag, kv_pairs.len() as f64);
 
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)

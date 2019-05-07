@@ -5,6 +5,9 @@ use prometheus_static_metric::*;
 
 make_static_metric! {
     pub label_enum CommandKind {
+        get,
+        batch_get,
+        scan,
         prewrite,
         commit,
         cleanup,

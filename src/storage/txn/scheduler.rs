@@ -35,7 +35,7 @@ use tikv_util::worker::{self, Runnable};
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
 use super::process::{execute_callback, Executor, ProcessResult, Task};
-use super::sched_pool_impl::*;
+use super::sched_pool::*;
 use super::Error;
 
 pub const CMD_BATCH_SIZE: usize = 256;
