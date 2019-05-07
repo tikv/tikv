@@ -5,9 +5,9 @@ use cop_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 /// A helper utility to build `tipb::expression::Expr` (a.k.a. expression definition) easily.
-pub struct ExprDefinitionBuilder(Expr);
+pub struct ExprDefBuilder(Expr);
 
-impl ExprDefinitionBuilder {
+impl ExprDefBuilder {
     pub fn constant_int(v: i64) -> Self {
         let mut expr = Expr::new();
         expr.set_tp(ExprType::Int64);
@@ -90,7 +90,7 @@ impl ExprDefinitionBuilder {
     }
 }
 
-impl Into<Expr> for ExprDefinitionBuilder {
+impl Into<Expr> for ExprDefBuilder {
     fn into(self) -> Expr {
         self.build()
     }
