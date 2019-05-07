@@ -8,6 +8,8 @@ lazy_static! {
     static ref PROFILER_MUTEX: Mutex<u32> = Mutex::new(0);
 }
 
+pub struct ProfilerGuard(MutexGuard<u32>);
+
 pub struct ProfilerLock(MutexFut<u32>);
 
 impl ProfilerLock {
@@ -19,7 +21,7 @@ impl ProfilerLock {
     }
 }
 
-impl Drop for ProfilerLock {
+impl Drop for ProfilerGuard {
     fn drop(&mut self) {
         match deactivate_prof() {
             _ => {} // TODO: handle error here
@@ -28,9 +30,11 @@ impl Drop for ProfilerLock {
 }
 
 impl Future for ProfilerLock {
-    type Item = MutexGuard<u32>;
+    type Item = ProfilerGuard;
     type Error = ();
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll()
+        self.0
+            .poll()
+            .map(|item| item.map(|guard| ProfilerGuard(guard)))
     }
 }

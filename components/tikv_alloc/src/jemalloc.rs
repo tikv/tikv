@@ -93,6 +93,7 @@ mod profiling {
     }
 
     pub fn activate_prof() -> ProfResult<()> {
+        info!("Start Profiler");
         unsafe {
             if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
                 error!("failed to activate profiling: {}", e);
@@ -103,6 +104,7 @@ mod profiling {
     }
 
     pub fn deactivate_prof() -> ProfResult<()> {
+        info!("Stop Profiler");
         unsafe {
             if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, false) {
                 error!("failed to deactivate profiling: {}", e);
