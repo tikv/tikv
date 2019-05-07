@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::prelude::BufferNumberEncoder;
+use codec::prelude::NumberEncoder;
 use cop_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
