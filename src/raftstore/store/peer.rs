@@ -877,7 +877,7 @@ impl Peer {
             // apply states even if there is no pending committed entry.
             // TODO: Instead of sharing the counter, we should apply snapshots
             //       in apply workers.
-            // TOOD: Add a test to make sure apply state will not be updated
+            // TODO: Add a test to make sure apply state will not be updated
             //       unexpectedly.
             && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
     }
