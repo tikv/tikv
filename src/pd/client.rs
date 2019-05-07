@@ -1,24 +1,13 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::grpc::{CallOption, EnvBuilder, WriteFlags};
 use futures::sync::mpsc;
 use futures::{future, Future, Sink, Stream};
+use grpcio::{CallOption, EnvBuilder, WriteFlags};
 use kvproto::metapb;
 use kvproto::pdpb::{self, Member};
 use protobuf::RepeatedField;
@@ -27,9 +16,9 @@ use super::metrics::*;
 use super::util::{check_resp_header, sync_request, validate_endpoints, Inner, LeaderClient};
 use super::{Error, PdClient, RegionInfo, RegionStat, Result, REQUEST_TIMEOUT};
 use crate::pd::{Config, PdFuture};
-use crate::util::security::SecurityManager;
-use crate::util::time::{duration_to_sec, time_now_sec};
-use crate::util::{Either, HandyRwLock};
+use tikv_util::security::SecurityManager;
+use tikv_util::time::{duration_to_sec, time_now_sec};
+use tikv_util::{Either, HandyRwLock};
 
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
@@ -525,5 +514,44 @@ impl PdClient for RpcClient {
         self.leader_client
             .request(req, executor, LEADER_CHANGE_RETRY)
             .execute()
+    }
+
+    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_store"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetStoreRequest::new();
+        req.set_header(self.header());
+        req.set_store_id(store_id);
+
+        let mut resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.get_store_opt(&req, Self::call_option())
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        let store = resp.get_store();
+        if store.get_state() != metapb::StoreState::Tombstone {
+            Ok(resp.take_stats())
+        } else {
+            Err(Error::StoreTombstone(format!("{:?}", store)))
+        }
+    }
+
+    fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        let _timer = PD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["get_operator"])
+            .start_coarse_timer();
+
+        let mut req = pdpb::GetOperatorRequest::new();
+        req.set_header(self.header());
+        req.set_region_id(region_id);
+
+        let resp = sync_request(&self.leader_client, LEADER_CHANGE_RETRY, |client| {
+            client.get_operator_opt(&req, Self::call_option())
+        })?;
+        check_resp_header(resp.get_header())?;
+
+        Ok(resp)
     }
 }

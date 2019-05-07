@@ -1,27 +1,16 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::grpc::{
+use futures::{Future, Sink, Stream};
+use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
-use futures::{Future, Sink, Stream};
 use tikv::pd::Error as PdError;
-use tikv::util::security::*;
+use tikv_util::security::*;
 
 use kvproto::pdpb::*;
 use kvproto::pdpb_grpc::{self, Pd};
@@ -384,6 +373,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _stream: RequestStream<SyncRegionRequest>,
         _sink: DuplexSink<SyncRegionResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn get_operator(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _stream: GetOperatorRequest,
+        _sink: UnarySink<GetOperatorResponse>,
     ) {
         unimplemented!()
     }

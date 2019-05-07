@@ -1,20 +1,10 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
 use super::{scan::InnerExecutor, Row, ScanExecutor};
 use crate::coprocessor::codec::table;
+use crate::coprocessor::dag::exec_summary::ExecSummaryCollector;
 use crate::coprocessor::{util, Result};
 use crate::storage::Store;
 use kvproto::coprocessor::KeyRange;
@@ -92,8 +82,9 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 }
 
-impl<S: Store> ScanExecutor<S, IndexInnerExecutor> {
+impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, IndexInnerExecutor> {
     pub fn index_scan(
+        summary_collector: C,
         mut meta: IndexScan,
         key_ranges: Vec<KeyRange>,
         store: S,
@@ -102,10 +93,19 @@ impl<S: Store> ScanExecutor<S, IndexInnerExecutor> {
     ) -> Result<Self> {
         let columns = meta.get_columns().to_vec();
         let inner = IndexInnerExecutor::new(&mut meta, unique);
-        Self::new(inner, meta.get_desc(), columns, key_ranges, store, collect)
+        Self::new(
+            summary_collector,
+            inner,
+            meta.get_desc(),
+            columns,
+            key_ranges,
+            store,
+            collect,
+        )
     }
 
     pub fn index_scan_with_cols_len(
+        summary_collector: C,
         cols: i64,
         key_ranges: Vec<KeyRange>,
         store: S,
@@ -116,11 +116,19 @@ impl<S: Store> ScanExecutor<S, IndexInnerExecutor> {
             pk_col: None,
             unique: false,
         };
-        Self::new(inner, false, vec![], key_ranges, store, false)
+        Self::new(
+            summary_collector,
+            inner,
+            false,
+            vec![],
+            key_ranges,
+            store,
+            false,
+        )
     }
 }
 
-pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
+pub type IndexScanExecutor<C, S> = ScanExecutor<C, S, IndexInnerExecutor>;
 
 #[cfg(test)]
 pub mod tests {
@@ -134,10 +142,11 @@ pub mod tests {
 
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::storage::SnapshotStore;
-    use crate::util::collections::HashMap;
+    use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::executor::Executor;
     use crate::coprocessor::dag::scanner::tests::Data;
 
@@ -303,9 +312,15 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+        let mut scanner = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            false,
+            false,
+        )
+        .unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
             let row = scanner.next().unwrap().unwrap().take_origin();
@@ -358,9 +373,15 @@ pub mod tests {
 
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
-                .unwrap();
+        let mut scanner = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            true,
+        )
+        .unwrap();
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin();
             assert_eq!(row.handle, handle as i64);
@@ -411,9 +432,15 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, false)
-                .unwrap();
+        let mut scanner = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            unique,
+            false,
+        )
+        .unwrap();
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
@@ -436,9 +463,15 @@ pub mod tests {
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
 
-        let mut scanner =
-            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, false, false)
-                .unwrap();
+        let mut scanner = IndexScanExecutor::index_scan(
+            ExecSummaryCollectorDisabled,
+            wrapper.scan,
+            wrapper.ranges,
+            store,
+            false,
+            false,
+        )
+        .unwrap();
 
         for handle in 0..KEY_NUMBER {
             let row = scanner.next().unwrap().unwrap().take_origin();

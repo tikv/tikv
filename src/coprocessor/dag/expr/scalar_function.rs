@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::usize;
@@ -137,6 +126,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
+            | ScalarFuncSig::PeriodAdd
+            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
@@ -435,8 +426,6 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
-            | ScalarFuncSig::PeriodAdd
-            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::RandomBytes
@@ -765,6 +754,8 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         DateDiff => date_diff,
+        PeriodAdd => period_add,
+        PeriodDiff => period_diff,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -1185,6 +1176,8 @@ mod tests {
                     ScalarFuncSig::SubDatetimeAndDuration,
                     ScalarFuncSig::SubDatetimeAndString,
                     ScalarFuncSig::SubDurationAndDuration,
+                    ScalarFuncSig::PeriodAdd,
+                    ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
                 ],
@@ -1524,8 +1517,6 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
-            ScalarFuncSig::PeriodAdd,
-            ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,

@@ -1,21 +1,11 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 // TODO: Maybe we can find a better place to put these interfaces, e.g. naming it as prelude?
 
 //! Batch executor common structures.
 
-pub use super::statistics::{BatchExecuteStatistics, ExecSummaryCollector};
+pub use super::super::exec_summary::ExecSummaryCollector;
+pub use super::statistics::BatchExecuteStatistics;
 
 use tipb::expression::FieldType;
 
@@ -38,7 +28,7 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
     /// See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult;
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
     /// Collects statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
@@ -57,8 +47,8 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows)
     }
 
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {

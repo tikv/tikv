@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! This is the core implementation of a batch system. Generally there will be two
 //! different kind of FSMs in TiKV's FSM system. One is normal FSM, which usually
@@ -17,10 +6,10 @@
 //! that controls how the former is created or metrics are collected.
 
 use super::router::{BasicMailbox, Router};
-use crate::util::mpsc;
 use crossbeam::channel::{self, SendError, TryRecvError};
 use std::borrow::Cow;
 use std::thread::{self, JoinHandle};
+use tikv_util::mpsc;
 
 /// `FsmScheduler` schedules `Fsm` for later handles.
 pub trait FsmScheduler {
@@ -467,7 +456,6 @@ pub mod tests {
     use super::*;
     use std::borrow::Cow;
     use std::boxed::FnBox;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -477,13 +465,7 @@ pub mod tests {
         is_stopped: bool,
         recv: mpsc::Receiver<Message>,
         mailbox: Option<BasicMailbox<Runner>>,
-        pub dropped: Arc<AtomicBool>,
-    }
-
-    impl Drop for Runner {
-        fn drop(&mut self) {
-            self.dropped.store(true, Ordering::SeqCst);
-        }
+        pub sender: Option<mpsc::Sender<()>>,
     }
 
     impl Fsm for Runner {
@@ -509,7 +491,7 @@ pub mod tests {
             is_stopped: false,
             recv: rx,
             mailbox: None,
-            dropped: Arc::default(),
+            sender: None,
         };
         (tx, Box::new(fsm))
     }
