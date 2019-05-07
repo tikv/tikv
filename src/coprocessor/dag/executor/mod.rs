@@ -263,6 +263,7 @@ pub trait Executor {
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
@@ -409,6 +410,15 @@ pub mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, true).unwrap())
+        Box::new(
+            TableScanExecutor::table_scan(
+                ExecSummaryCollectorDisabled,
+                table_scan,
+                key_ranges,
+                store,
+                true,
+            )
+            .unwrap(),
+        )
     }
 }

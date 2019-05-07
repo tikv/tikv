@@ -160,8 +160,13 @@ impl DAGBuilder {
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
+
         let mut src = Self::build_normal_first_executor::<_, C>(first, store, ranges, collect)?;
+        let mut summary_slot_index = 0;
+
         for mut exec in exec_descriptors {
+            summary_slot_index += 1;
+
             let curr: Box<dyn Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"));
@@ -184,7 +189,11 @@ impl DAGBuilder {
                 ExecType::TypeTopN => {
                     Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
                 }
-                ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+                ExecType::TypeLimit => Box::new(LimitExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_limit(),
+                    src,
+                )),
             };
             src = curr;
         }
@@ -195,7 +204,7 @@ impl DAGBuilder {
     /// other executors and never receive rows from other executors.
     ///
     /// The inner-most executor must be a table scan executor or an index scan executor.
-    fn build_normal_first_executor<S: Store + 'static, _C: ExecSummaryCollector + 'static>(
+    fn build_normal_first_executor<S: Store + 'static, C: ExecSummaryCollector + 'static>(
         mut first: executor::Executor,
         store: S,
         ranges: Vec<KeyRange>,
@@ -204,6 +213,7 @@ impl DAGBuilder {
         match first.get_tp() {
             ExecType::TypeTableScan => {
                 let ex = Box::new(ScanExecutor::table_scan(
+                    C::new(0),
                     first.take_tbl_scan(),
                     ranges,
                     store,
@@ -214,6 +224,7 @@ impl DAGBuilder {
             ExecType::TypeIndexScan => {
                 let unique = first.get_idx_scan().get_unique();
                 let ex = Box::new(ScanExecutor::index_scan(
+                    C::new(0),
                     first.take_idx_scan(),
                     ranges,
                     store,
