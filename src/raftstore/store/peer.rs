@@ -1701,22 +1701,30 @@ impl Peer {
             }
             let cmd: RaftCmdRequest =
                 util::parse_data_at(entry.get_data(), entry.get_index(), &self.tag);
-            if !cmd.has_admin_request() {
-                continue;
+            if cmd.has_admin_request() {
+                let cmd_type = cmd.get_admin_request().get_cmd_type();
+                match cmd_type {
+                    AdminCmdType::TransferLeader | AdminCmdType::InvalidAdmin => {}
+                    _ => {
+                        // Any command that can change epoch or log gap should be rejected.
+                        return Err(box_err!(
+                            "log gap contains admin request {:?}, skip merging.",
+                            cmd_type
+                        ));
+                    }
+                }
             }
-            let cmd_type = cmd.get_admin_request().get_cmd_type();
-            match cmd_type {
-                AdminCmdType::TransferLeader
-                | AdminCmdType::ComputeHash
-                | AdminCmdType::VerifyHash
-                | AdminCmdType::InvalidAdmin => continue,
-                _ => {}
+            // Make sure the tombstone state and apply state of source region are in a same batch
+            // when catching up logs, if not the last_index would smaller than applied index after
+            // restart. So rejecting the requests that would flush apply state.
+            for req in cmd.get_requests() {
+                if req.has_delete_range() {
+                    return Err(box_err!("log gap contains delete range, skip merging."));
+                }
+                if req.has_ingest_sst() {
+                    return Err(box_err!("log gap contains ingest sst, skip merging."));
+                }
             }
-            // Any command that can change epoch or log gap should be rejected.
-            return Err(box_err!(
-                "log gap contains admin request {:?}, skip merging.",
-                cmd_type
-            ));
         }
         if entry_size as f64 > self.cfg.raft_entry_max_size.0 as f64 * 0.9 {
             return Err(box_err!(
