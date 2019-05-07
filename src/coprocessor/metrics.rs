@@ -17,7 +17,7 @@ lazy_static! {
     pub static ref COPR_REQ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_duration_seconds",
         "Bucketed histogram of coprocessor request duration",
-        &["req", "prio"],
+        &["req", "priority"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref OUTDATED_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
@@ -29,13 +29,13 @@ lazy_static! {
     pub static ref COPR_REQ_HANDLE_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_handle_seconds",
         "Bucketed histogram of coprocessor handle request duration",
-        &["req", "prio"],
+        &["req", "priority"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref COPR_REQ_WAIT_TIME: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_request_wait_seconds",
         "Bucketed histogram of coprocessor request wait duration",
-        &["req", "prio"],
+        &["req", "priority"],
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref COPR_REQ_ERROR: IntCounterVec = register_int_counter_vec!(
@@ -46,27 +46,27 @@ lazy_static! {
     pub static ref COPR_SCAN_KEYS: HistogramVec = register_histogram_vec!(
         "tikv_coprocessor_scan_keys",
         "Bucketed histogram of coprocessor per request scan keys",
-        &["req", "prio"],
+        &["req", "priority"],
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
     pub static ref COPR_SCAN_DETAILS: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_scan_details",
         "Bucketed counter of coprocessor scan details for each CF",
-        &["req", "cf", "tag", "prio"]
+        &["req", "cf", "tag", "priority"]
     ).unwrap();
     pub static ref COPR_ROCKSDB_PERF_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_rocksdb_perf",
         "Total number of RocksDB internal operations from PerfContext",
-        &["req", "metric", "prio"]
+        &["req", "metric", "priority"]
     ).unwrap();
     pub static ref COPR_EXECUTOR_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_executor_count",
         "Total number of each executor",
-        &["type", "prio"]
+        &["type", "priority"]
     ).unwrap();
     pub static ref COPR_GET_OR_SCAN_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_coprocessor_get_or_scan_count",
         "Total number of rocksdb query of get or scan count",
-        &["type", "prio"]
+        &["type", "priority"]
     ).unwrap();
 }
