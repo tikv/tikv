@@ -744,29 +744,29 @@ mod tests {
         let src_exec = make_src_executor_using_fixture();
         let aggr_definitions = vec![
             ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_int(1))
+                .push_child(ExprDefinitionBuilder::constant_int(1))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_real(4.5))
+                .push_child(ExprDefinitionBuilder::constant_real(4.5))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_null(
+                .push_child(ExprDefinitionBuilder::constant_null(
                     FieldTypeTp::NewDecimal,
                 ))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::column_ref(1, FieldTypeTp::Double))
+                .push_child(ExprDefinitionBuilder::column_ref(1, FieldTypeTp::Double))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
-                .push(ExprDefinitionBuilder::constant_real(42.5))
+                .push_child(ExprDefinitionBuilder::constant_real(42.5))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::NewDecimal)
-                .push(ExprDefinitionBuilder::constant_null(
+                .push_child(ExprDefinitionBuilder::constant_null(
                     FieldTypeTp::NewDecimal,
                 ))
                 .build(),
             ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
-                .push(ExprDefinitionBuilder::column_ref(0, FieldTypeTp::Double))
+                .push_child(ExprDefinitionBuilder::column_ref(0, FieldTypeTp::Double))
                 .build(),
         ];
         let mut exec = BatchSimpleAggregationExecutor::new_for_test(
