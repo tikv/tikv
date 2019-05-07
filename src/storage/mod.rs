@@ -399,7 +399,8 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
-    pub txn_size: u64, // How many keys this transaction involved.
+    // How many keys this transaction involved.
+    pub txn_size: u64,
 }
 
 impl Options {
@@ -3840,6 +3841,66 @@ mod tests {
             .async_scan_locks(
                 Context::new(),
                 99,
+                vec![],
+                0,
+                expect_value_callback(tx.clone(), 0, vec![lock_a]),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Resolve lock for key 'a'.
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                99,
+                0,
+                vec![Key::from_raw(b"a")],
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        storage
+            .async_prewrite(
+                Context::new(),
+                vec![
+                    Mutation::Put((Key::from_raw(b"a"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"b"), b"foo".to_vec())),
+                    Mutation::Put((Key::from_raw(b"c"), b"foo".to_vec())),
+                ],
+                b"c".to_vec(),
+                101,
+                Options::default(),
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Commit key 'b' and key 'c' and left key 'a' still locked.
+        let resolve_keys = vec![Key::from_raw(b"b"), Key::from_raw(b"c")];
+        storage
+            .async_resolve_lock_lite(
+                Context::new(),
+                101,
+                102,
+                resolve_keys,
+                expect_ok_callback(tx.clone(), 0),
+            )
+            .unwrap();
+        rx.recv().unwrap();
+
+        // Check lock for key 'a'.
+        let lock_a = {
+            let mut lock = LockInfo::new();
+            lock.set_primary_lock(b"c".to_vec());
+            lock.set_lock_version(101);
+            lock.set_key(b"a".to_vec());
+            lock
+        };
+        storage
+            .async_scan_locks(
+                Context::new(),
+                101,
                 vec![],
                 0,
                 expect_value_callback(tx.clone(), 0, vec![lock_a]),

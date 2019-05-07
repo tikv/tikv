@@ -483,7 +483,10 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
-        _ => Lock::new(vec![]),
+        Command::ScanLock { .. }
+        | Command::DeleteRange { .. }
+        | Command::MvccByKey { .. }
+        | Command::MvccByStartTs { .. } => Lock::new(vec![]),
     }
 }
 
@@ -554,6 +557,12 @@ mod tests {
                     Key::from_raw(b"k"),
                     mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, 0),
                 )],
+            },
+            Command::ResolveLockLite {
+                ctx: Context::new(),
+                start_ts: 10,
+                commit_ts: 0,
+                resolve_keys: vec![Key::from_raw(b"k")],
             },
         ];
 
