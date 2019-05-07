@@ -19,7 +19,7 @@ pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
-        EvalType::try_from(c.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
@@ -91,22 +91,38 @@ impl RpnExpressionBuilder {
         Self(Vec::new())
     }
 
+    /// Pushes a `FnCall` node.
     #[cfg(test)]
     pub fn push_fn_call(
         mut self,
         func: impl RpnFunction,
-        field_type: impl Into<FieldType>,
+        return_field_type: impl Into<FieldType>,
     ) -> Self {
         let node = RpnExpressionNode::FnCall {
             func: Box::new(func),
-            field_type: field_type.into(),
+            field_type: return_field_type.into(),
         };
         self.0.push(node);
         self
     }
 
+    /// Pushes a `Constant` node. The field type will be auto inferred by choosing an arbitrary
+    /// field type that matches the field type of the given value.
     #[cfg(test)]
-    pub fn push_constant(
+    pub fn push_constant(mut self, value: impl Into<ScalarValue>) -> Self {
+        let value = value.into();
+        let field_type = value
+            .eval_type()
+            .into_certain_field_type_tp_for_test()
+            .into();
+        let node = RpnExpressionNode::Constant { value, field_type };
+        self.0.push(node);
+        self
+    }
+
+    /// Pushes a `Constant` node.
+    #[cfg(test)]
+    pub fn push_constant_with_field_type(
         mut self,
         value: impl Into<ScalarValue>,
         field_type: impl Into<FieldType>,
@@ -119,6 +135,7 @@ impl RpnExpressionBuilder {
         self
     }
 
+    /// Pushes a `ColumnRef` node.
     #[cfg(test)]
     pub fn push_column_ref(mut self, offset: usize) -> Self {
         let node = RpnExpressionNode::ColumnRef { offset };
@@ -126,6 +143,7 @@ impl RpnExpressionBuilder {
         self
     }
 
+    /// Builds the `RpnExpression`.
     #[cfg(test)]
     pub fn build(self) -> RpnExpression {
         RpnExpression::from(self.0)
@@ -193,12 +211,6 @@ where
     }
 }
 
-/// TODO: Remove this helper function when we use Failure which can simplify the code.
-#[inline]
-fn get_eval_type(tree_node: &Expr) -> Result<EvalType> {
-    EvalType::try_from(tree_node.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))
-}
-
 #[inline]
 fn handle_node_column_ref(
     tree_node: Expr,
@@ -259,7 +271,7 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
+    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
@@ -386,6 +398,7 @@ mod tests {
 
     use super::super::RpnFnCallPayload;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
@@ -394,10 +407,9 @@ mod tests {
     use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 1)]
     struct FnA;
-
-    impl_template_fn! { 1 arg @ FnA }
 
     impl FnA {
         fn call(
@@ -410,10 +422,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 2 float arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 2)]
     struct FnB;
-
-    impl_template_fn! { 2 arg @ FnB }
 
     impl FnB {
         fn call(
@@ -427,10 +438,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 int arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnC;
-
-    impl_template_fn! { 3 arg @ FnC }
 
     impl FnC {
         fn call(
@@ -445,10 +455,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 float arguments, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnD;
-
-    impl_template_fn! { 3 arg @ FnD }
 
     impl FnD {
         fn call(

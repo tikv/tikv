@@ -5,8 +5,10 @@
 
 //! This module provides aggregate functions for batch executors.
 
+mod impl_avg;
 mod impl_count;
 mod parser;
+mod summable;
 
 pub use self::parser::AggrDefinitionParser;
 
@@ -26,6 +28,8 @@ use crate::coprocessor::Result;
 ///
 /// 3. The caller finally calls `push_result()` to aggregate a summary value and push it into the
 ///    given data container.
+///
+/// This trait can be auto derived by using `cop_codegen::AggrFunction`.
 pub trait AggrFunction: std::fmt::Debug + Send + 'static {
     /// The display name of the function.
     fn name(&self) -> &'static str;
