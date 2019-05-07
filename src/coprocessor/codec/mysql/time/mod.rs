@@ -7,10 +7,8 @@ pub mod weekmode;
 use std::cmp::{min, Ordering};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::{mem, str};
 
-use byteorder::WriteBytesExt;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
@@ -20,7 +18,7 @@ use crate::coprocessor::codec::mysql::duration::{
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::{NumberDecoder, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
 pub use self::extension::*;
@@ -811,7 +809,7 @@ impl Display for Time {
     }
 }
 
-impl<T: Write> TimeEncoder for T {}
+impl<T: NumberEncoder> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
@@ -819,17 +817,17 @@ pub trait TimeEncoder: NumberEncoder {
         use num::ToPrimitive;
 
         if !v.is_zero() {
-            self.encode_u16(v.time.year() as u16)?;
+            self.write_u16(v.time.year() as u16)?;
             self.write_u8(v.time.month() as u8)?;
             self.write_u8(v.time.day() as u8)?;
             self.write_u8(v.time.hour() as u8)?;
             self.write_u8(v.time.minute() as u8)?;
             self.write_u8(v.time.second() as u8)?;
-            self.encode_u32(v.time.nanosecond() / 1000)?;
+            self.write_u32(v.time.nanosecond() / 1000)?;
         } else {
             let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
             let buf = vec![0; len];
-            self.write_all(&buf)?;
+            self.write_all_bytes(&buf)?;
         }
 
         let tp: FieldTypeTp = v.time_type.into();
@@ -843,7 +841,7 @@ impl Time {
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
         use num_traits::FromPrimitive;
 
-        let year = i32::from(number::decode_u16(data)?);
+        let year = i32::from(data.read_u16()?);
         let (month, day, hour, minute, second) = if data.len() >= 5 {
             (
                 u32::from(data[0]),
@@ -856,7 +854,7 @@ impl Time {
             return Err(Error::unexpected_eof());
         };
         *data = &data[5..];
-        let nanoseconds = 1000 * number::decode_u32(data)?;
+        let nanoseconds = 1000 * data.read_u32()?;
         let (tp, fsp) = if data.len() >= 2 {
             (
                 FieldTypeTp::from_u8(data[0]).unwrap_or(FieldTypeTp::Unspecified),

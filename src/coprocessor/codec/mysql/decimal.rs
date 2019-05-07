@@ -1,11 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use byteorder::WriteBytesExt;
 use num;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::io::Write;
 use std::ops::{Add, Deref, DerefMut, Div, Mul, Neg, Rem, Sub};
 use std::str::{self, FromStr};
 use std::{cmp, i32, i64, mem, u32, u64};
@@ -13,7 +11,7 @@ use std::{cmp, i32, i64, mem, u32, u64};
 use crate::coprocessor::codec::{convert, Error, Result, TEN_POW};
 use crate::coprocessor::dag::expr::EvalContext;
 
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::{NumberDecoder, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::escape;
 
@@ -1800,7 +1798,7 @@ macro_rules! write_u8 {
         if $written == 0 {
             b ^= 0x80;
         }
-        $writer.write_all(&[b])?;
+        $writer.write_all_bytes(&[b])?;
         $written += 1;
     }};
 }
@@ -1824,7 +1822,7 @@ macro_rules! write_word {
         if $written == 0 {
             data[0] ^= 0x80;
         }
-        ($writer).write_all(&data[..size as usize])?;
+        ($writer).write_all_bytes(&data[..size as usize])?;
         $written += size;
     }};
 }
@@ -1871,7 +1869,7 @@ pub trait DecimalEncoder: NumberEncoder {
     /// Encode decimal to comparable bytes.
     // TODO: resolve following warnings.
     fn encode_decimal(&mut self, d: &Decimal, prec: u8, frac: u8) -> Result<Res<()>> {
-        self.write_all(&[prec, frac])?;
+        self.write_all_bytes(&[prec, frac])?;
         let mut mask = if d.negative { u32::MAX } else { 0 };
         let mut int_cnt = prec - frac;
         let int_word_cnt = int_cnt / DIGITS_PER_WORD;
@@ -1986,13 +1984,13 @@ pub trait DecimalEncoder: NumberEncoder {
         self.write_u8(v.negative as u8)?;
         let len = word_cnt!(v.int_cnt) + word_cnt!(v.frac_cnt);
         for id in 0..len as usize {
-            self.encode_i32_le(v.word_buf[id] as i32)?;
+            self.write_i32_le(v.word_buf[id] as i32)?;
         }
         Ok(())
     }
 }
 
-impl<T: Write> DecimalEncoder for T {}
+impl<T: NumberEncoder> DecimalEncoder for T {}
 
 impl Decimal {
     /// `decode` decodes value encoded by `encode_decimal`.
@@ -2094,7 +2092,7 @@ impl Decimal {
         };
 
         for id in 0..WORD_BUF_LEN {
-            d.word_buf[id as usize] = number::decode_i32_le(data)? as u32;
+            d.word_buf[id as usize] = data.read_i32_le()? as u32;
         }
         Ok(d)
     }

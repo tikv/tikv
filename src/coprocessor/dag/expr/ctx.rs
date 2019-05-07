@@ -6,7 +6,7 @@ use std::{i64, mem, u64};
 use tipb::select;
 
 use super::{Error, Result};
-use crate::coprocessor::codec::mysql::Tz;
+use crate::coprocessor::codec::{error, mysql::Tz};
 
 bitflags! {
     /// Please refer to SQLMode in `mysql/const.go` in repo `pingcap/parser` for details.
@@ -250,7 +250,7 @@ impl EvalContext {
     }
 
     pub fn handle_invalid_time_error(&mut self, err: Error) -> Result<()> {
-        if err.code() != super::codec::error::ERR_TRUNCATE_WRONG_VALUE {
+        if err.code() != error::ERR_TRUNCATE_WRONG_VALUE {
             return Err(err);
         }
         let cfg = &self.cfg;

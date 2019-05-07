@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
+use codec::prelude::{NumberDecoder, NumberEncoder};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
-use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use time::{self, Tm};
 
@@ -299,19 +299,19 @@ impl Ord for Duration {
     }
 }
 
-impl<T: Write> DurationEncoder for T {}
+impl<T: NumberEncoder> DurationEncoder for T {}
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: &Duration) -> Result<()> {
-        self.encode_i64(v.to_nanos())?;
-        self.encode_i64(i64::from(v.fsp)).map_err(From::from)
+        self.write_i64(v.to_nanos())?;
+        self.write_i64(i64::from(v.fsp)).map_err(From::from)
     }
 }
 
 impl Duration {
     /// `decode` decodes duration encoded by `encode_duration`.
     pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
-        let nanos = number::decode_i64(data)?;
-        let fsp = number::decode_i64(data)?;
+        let nanos = data.read_i64()?;
+        let fsp = data.read_i64()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }

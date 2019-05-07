@@ -1,7 +1,5 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
-
 use cop_datatype::prelude::*;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 
@@ -12,7 +10,7 @@ use crate::coprocessor::codec::mysql::{
 };
 use crate::coprocessor::codec::Datum;
 
-use tikv_util::codec::number::{self, NumberEncoder};
+use codec::prelude::{NumberDecoder, NumberEncoder};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -203,7 +201,7 @@ impl Column {
 
     /// Append i64 datum to the column.
     pub fn append_i64(&mut self, v: i64) -> Result<()> {
-        self.data.encode_i64_le(v)?;
+        self.data.write_i64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -212,12 +210,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_i64_le(&mut data).map_err(Error::from)
+        data.read_i64_le().map_err(Error::from)
     }
 
     /// Append u64 datum to the column.
     pub fn append_u64(&mut self, v: u64) -> Result<()> {
-        self.data.encode_u64_le(v)?;
+        self.data.write_u64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -226,12 +224,12 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_u64_le(&mut data).map_err(Error::from)
+        data.read_u64_le().map_err(Error::from)
     }
 
     /// Append a f64 datum to the column.
     pub fn append_f64(&mut self, v: f64) -> Result<()> {
-        self.data.encode_f64_le(v)?;
+        self.data.write_f64_le(v)?;
         self.finish_append_fixed()
     }
 
@@ -240,7 +238,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        number::decode_f64_le(&mut data).map_err(Error::from)
+        data.read_f64_le().map_err(Error::from)
     }
 
     /// Called when the variant datum has been appended.
@@ -329,10 +327,10 @@ impl Column {
     #[cfg(test)]
     pub fn decode(buf: &mut BytesSlice<'_>, tp: &dyn FieldTypeAccessor) -> Result<Column> {
         use tikv_util::codec::read_slice;
-        let length = number::decode_u32_le(buf)? as usize;
+        let length = buf.read_u32_le()? as usize;
         let mut col = Column::new(tp, length);
         col.length = length;
-        col.null_cnt = number::decode_u32_le(buf)? as usize;
+        col.null_cnt = buf.read_u32_le()? as usize;
         let null_length = (col.length + 7) / 8 as usize;
         if col.null_cnt > 0 {
             col.null_bitmap = read_slice(buf, null_length)?.to_vec();
@@ -345,7 +343,7 @@ impl Column {
         } else {
             col.var_offsets.clear();
             for _ in 0..=length {
-                col.var_offsets.push(number::decode_i32_le(buf)? as usize);
+                col.var_offsets.push(buf.read_i32_le()? as usize);
             }
             col.var_offsets[col.length]
         };
@@ -358,28 +356,28 @@ impl Column {
 pub trait ColumnEncoder: NumberEncoder {
     fn encode_column(&mut self, col: &Column) -> Result<()> {
         // length
-        self.encode_u32_le(col.length as u32)?;
+        self.write_u32_le(col.length as u32)?;
         // null_cnt
-        self.encode_u32_le(col.null_cnt as u32)?;
+        self.write_u32_le(col.null_cnt as u32)?;
         // bitmap
         if col.null_cnt > 0 {
             let length = (col.length + 7) / 8;
-            self.write_all(&col.null_bitmap[0..length])?;
+            self.write_all_bytes(&col.null_bitmap[0..length])?;
         }
         // offsets
         if !col.is_fixed() {
             //let length = (col.length+1)*4;
             for v in &col.var_offsets {
-                self.encode_i32_le(*v as i32)?;
+                self.write_i32_le(*v as i32)?;
             }
         }
         // data
-        self.write_all(&col.data)?;
+        self.write_all_bytes(&col.data)?;
         Ok(())
     }
 }
 
-impl<T: Write> ColumnEncoder for T {}
+impl<T: NumberEncoder> ColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {

@@ -3,7 +3,7 @@
 use super::column::{Column, ColumnEncoder};
 use super::Result;
 use crate::coprocessor::codec::Datum;
-use std::io::Write;
+use codec::prelude::NumberEncoder;
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 use tipb::expression::FieldType;
@@ -94,7 +94,7 @@ pub trait ChunkEncoder: ColumnEncoder {
     }
 }
 
-impl<T: Write> ChunkEncoder for T {}
+impl<T: NumberEncoder> ChunkEncoder for T {}
 
 /// `Row` represents one row in the chunk.
 pub struct Row<'a> {

@@ -2,8 +2,8 @@
 
 use std::convert::{TryFrom, TryInto};
 
+use codec::prelude::NumberDecoder;
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::codec::number;
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
@@ -223,7 +223,7 @@ fn handle_node_column_ref(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     max_columns: usize,
 ) -> Result<()> {
-    let offset = number::decode_i64(&mut tree_node.get_val()).map_err(|_| {
+    let offset = tree_node.get_val().read_i64().map_err(|_| {
         Error::Other(box_err!(
             "Unable to decode column reference offset from the request"
         ))
@@ -337,14 +337,18 @@ fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
 
 #[inline]
 fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_i64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_i64()
         .map_err(|_| Error::Other(box_err!("Unable to decode int64 from the request")))?;
     Ok(ScalarValue::Int(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_uint64(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_u64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_u64()
         .map_err(|_| Error::Other(box_err!("Unable to decode uint64 from the request")))?;
     Ok(ScalarValue::Int(Some(value as i64)))
 }
@@ -356,7 +360,9 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = number::decode_f64(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .read_f64()
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
     Ok(ScalarValue::Real(Some(value)))
 }
@@ -367,7 +373,9 @@ fn extract_scalar_value_date_time(
     field_type: &FieldType,
     time_zone: &Tz,
 ) -> Result<ScalarValue> {
-    let v = number::decode_u64(&mut val.as_slice())
+    let v = val
+        .as_slice()
+        .read_u64()
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
     let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
@@ -377,7 +385,9 @@ fn extract_scalar_value_date_time(
 
 #[inline]
 fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
-    let n = number::decode_i64(&mut val.as_slice())
+    let n = val
+        .as_slice()
+        .read_i64()
         .map_err(|_| Error::Other(box_err!("Unable to decode duration from the request")))?;
     let value = Duration::from_nanos(n, MAX_FSP)
         .map_err(|_| Error::Other(box_err!("Unable to decode duration from the request")))?;
@@ -410,7 +420,7 @@ mod tests {
 
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::Result;
-    use tikv_util::codec::number::NumberEncoder;
+    use codec::prelude::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
     #[derive(Debug, Clone, Copy, RpnFunction)]
@@ -520,7 +530,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_b.mut_val().encode_i64(7).unwrap();
+            node_b.mut_val().write_i64(7).unwrap();
 
             // node c
             let mut node_c = Expr::new();
@@ -529,7 +539,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_c.mut_val().encode_i64(3).unwrap();
+            node_c.mut_val().write_i64(3).unwrap();
 
             // node d
             let mut node_d = Expr::new();
@@ -538,7 +548,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_d.mut_val().encode_i64(11).unwrap();
+            node_d.mut_val().write_i64(11).unwrap();
 
             // FnC
             let mut node_fn_c = Expr::new();
@@ -572,7 +582,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::Double);
-            node_e.mut_val().encode_f64(-1.5).unwrap();
+            node_e.mut_val().write_f64(-1.5).unwrap();
 
             // node f
             let mut node_f = Expr::new();
@@ -581,7 +591,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::Double);
-            node_f.mut_val().encode_f64(100.12).unwrap();
+            node_f.mut_val().write_f64(100.12).unwrap();
 
             // FnB
             let mut node_fn_b = Expr::new();
@@ -721,7 +731,7 @@ mod tests {
         // Col offset = 0. The minimum success max_columns is 1.
         let mut node = Expr::new();
         node.set_tp(ExprType::ColumnRef);
-        node.mut_val().encode_i64(0).unwrap();
+        node.mut_val().write_i64(0).unwrap();
         assert!(
             append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, 0).is_err()
         );
@@ -735,7 +745,7 @@ mod tests {
         // Col offset = 3. The minimum success max_columns is 4.
         let mut node = Expr::new();
         node.set_tp(ExprType::ColumnRef);
-        node.mut_val().encode_i64(3).unwrap();
+        node.mut_val().write_i64(3).unwrap();
         for i in 0..=3 {
             assert!(
                 append_rpn_nodes_recursively(node.clone(), &mut vec, &Tz::utc(), fn_mapper, i)
@@ -759,19 +769,19 @@ mod tests {
         node.mut_children().push({
             let mut n = Expr::new();
             n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(1).unwrap();
+            n.mut_val().write_i64(1).unwrap();
             n
         });
         node.mut_children().push({
             let mut n = Expr::new();
             n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(2).unwrap();
+            n.mut_val().write_i64(2).unwrap();
             n
         });
         node.mut_children().push({
             let mut n = Expr::new();
             n.set_tp(ExprType::ColumnRef);
-            n.mut_val().encode_i64(5).unwrap();
+            n.mut_val().write_i64(5).unwrap();
             n
         });
         for i in 0..=5 {

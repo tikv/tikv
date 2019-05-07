@@ -165,7 +165,7 @@ pub mod tests {
     use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
-    use tikv_util::codec::number::NumberEncoder;
+    use codec::prelude::NumberEncoder;
     use tikv_util::collections::HashMap;
 
     use super::super::tests::*;
@@ -175,7 +175,7 @@ pub mod tests {
         let mut item = ByItem::new();
         let mut expr = Expr::new();
         expr.set_tp(ExprType::ColumnRef);
-        expr.mut_val().encode_i64(offset).unwrap();
+        expr.mut_val().write_i64(offset).unwrap();
         item.set_expr(expr);
         item.set_desc(desc);
         item

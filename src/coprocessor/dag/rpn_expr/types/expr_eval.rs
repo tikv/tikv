@@ -1001,7 +1001,7 @@ mod tests {
         use tipb::expression::ScalarFuncSig;
         use tipb::expression::{Expr, ExprType};
 
-        use tikv_util::codec::number::NumberEncoder;
+        use codec::prelude::NumberEncoder;
 
         // We will build an expression tree from:
         //      FnD(
@@ -1093,7 +1093,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::Double);
-            node_col_1.mut_val().encode_i64(1).unwrap();
+            node_col_1.mut_val().write_i64(1).unwrap();
 
             // FnC
             let mut node_fn_c = Expr::new();
@@ -1125,7 +1125,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_const_1.mut_val().encode_i64(7).unwrap();
+            node_const_1.mut_val().write_i64(7).unwrap();
 
             // Col0
             let mut node_col_0 = Expr::new();
@@ -1134,7 +1134,7 @@ mod tests {
                 .mut_field_type()
                 .as_mut_accessor()
                 .set_tp(FieldTypeTp::LongLong);
-            node_col_0.mut_val().encode_i64(0).unwrap();
+            node_col_0.mut_val().write_i64(0).unwrap();
 
             // FnA
             let mut node_fn_a = Expr::new();

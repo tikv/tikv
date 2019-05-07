@@ -2,6 +2,7 @@
 
 use std::convert::{TryFrom, TryInto};
 
+use codec::prelude::{CompactByteDecoder, MemComparableByteDecoder, NumberDecoder};
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
@@ -9,7 +10,6 @@ use super::*;
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
-use tikv_util::codec::{bytes, number};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -253,31 +253,31 @@ impl VectorValue {
     ) -> Result<()> {
         #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
-            number::decode_i64(v)
+            v.read_i64()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as i64".to_owned()))
         }
 
         #[inline]
         fn decode_uint(v: &mut &[u8]) -> Result<u64> {
-            number::decode_u64(v)
+            v.read_u64()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as u64".to_owned()))
         }
 
         #[inline]
         fn decode_var_int(v: &mut &[u8]) -> Result<i64> {
-            number::decode_var_i64(v)
+            v.read_var_i64()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_i64".to_owned()))
         }
 
         #[inline]
         fn decode_var_uint(v: &mut &[u8]) -> Result<u64> {
-            number::decode_var_u64(v)
+            v.read_var_u64()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_u64".to_owned()))
         }
 
         #[inline]
         fn decode_float(v: &mut &[u8]) -> Result<f64> {
-            number::decode_f64(v)
+            v.read_f64()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as f64".to_owned()))
         }
 
@@ -289,13 +289,13 @@ impl VectorValue {
 
         #[inline]
         fn decode_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-            bytes::decode_bytes(v, false)
+            v.read_bytes()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as bytes".to_owned()))
         }
 
         #[inline]
         fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
-            bytes::decode_compact_bytes(v).map_err(|_| {
+            v.read_compact_bytes().map_err(|_| {
                 Error::InvalidDataType("Failed to decode data as compact bytes".to_owned())
             })
         }
@@ -521,10 +521,8 @@ impl VectorValue {
         field_type: &FieldType,
         output: &mut Vec<u8>,
     ) -> Result<()> {
-        use crate::coprocessor::codec::mysql::DecimalEncoder;
-        use crate::coprocessor::codec::mysql::JsonEncoder;
-        use tikv_util::codec::bytes::BytesEncoder;
-        use tikv_util::codec::number::NumberEncoder;
+        use crate::coprocessor::codec::mysql::{DecimalEncoder, JsonEncoder};
+        use codec::prelude::{CompactByteEncoder, NumberEncoder};
 
         match self {
             VectorValue::Int(ref vec) => {
@@ -536,10 +534,10 @@ impl VectorValue {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
                         if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
                             output.push(datum::UINT_FLAG);
-                            output.encode_u64(val as u64)?;
+                            output.write_u64(val as u64)?;
                         } else {
                             output.push(datum::INT_FLAG);
-                            output.encode_i64(val)?;
+                            output.write_i64(val)?;
                         }
                     }
                 }
@@ -552,7 +550,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         output.push(datum::FLOAT_FLAG);
-                        output.encode_f64(val)?;
+                        output.write_f64(val)?;
                     }
                 }
                 Ok(())
@@ -577,7 +575,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::COMPACT_BYTES_FLAG);
-                        output.encode_compact_bytes(val)?;
+                        output.write_compact_bytes(val)?;
                     }
                 }
                 Ok(())
@@ -589,7 +587,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::UINT_FLAG);
-                        output.encode_u64(val.to_packed_u64())?;
+                        output.write_u64(val.to_packed_u64())?;
                     }
                 }
                 Ok(())
@@ -601,7 +599,7 @@ impl VectorValue {
                     }
                     Some(ref val) => {
                         output.push(datum::DURATION_FLAG);
-                        output.encode_i64(val.to_nanos())?;
+                        output.write_i64(val.to_nanos())?;
                     }
                 }
                 Ok(())

@@ -216,7 +216,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         use crate::coprocessor::codec::{datum, table};
-        use tikv_util::codec::number;
+        use codec::prelude::NumberDecoder;
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
@@ -244,7 +244,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     return Err(box_err!("Unable to decode row: column id must be VAR_INT"));
                 }
                 remaining = &remaining[1..];
-                let column_id = box_try!(number::decode_var_i64(&mut remaining));
+                let column_id = box_try!(remaining.read_var_i64());
                 let (val, new_remaining) = datum::split_datum(remaining, false)?;
                 // Note: The produced columns may be not in the same length if there is error due
                 // to corrupted data. It will be handled in `ScanExecutor`.

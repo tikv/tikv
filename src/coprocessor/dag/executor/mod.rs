@@ -2,21 +2,26 @@
 
 use std::sync::Arc;
 
+use codec::prelude::NumberDecoder;
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeFlag;
 use kvproto::coprocessor::KeyRange;
 use tipb::expression::{Expr, ExprType};
 use tipb::schema::ColumnInfo;
 
-use tikv_util::codec::number;
 use tikv_util::collections::HashSet;
 
-use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
-use crate::coprocessor::codec::table::{self, RowColsDict};
-use crate::coprocessor::dag::exec_summary::ExecSummary;
-use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
-use crate::coprocessor::util;
-use crate::coprocessor::*;
+use crate::coprocessor::{
+    codec::{
+        datum::{self, Datum, DatumEncoder},
+        table::{self, RowColsDict},
+    },
+    dag::{
+        exec_summary::ExecSummary,
+        expr::{EvalContext, EvalWarnings},
+    },
+    util, Error, Result,
+};
 
 mod aggregate;
 mod aggregation;
@@ -55,7 +60,7 @@ impl ExprColumnRefVisitor {
 
     pub fn visit(&mut self, expr: &Expr) -> Result<()> {
         if expr.get_tp() == ExprType::ColumnRef {
-            let offset = box_try!(number::decode_i64(&mut expr.get_val())) as usize;
+            let offset = box_try!(expr.get_val().read_i64()) as usize;
             if offset >= self.cols_len {
                 return Err(Error::Other(box_err!(
                     "offset {} overflow, should be less than {}",
@@ -268,13 +273,13 @@ pub mod tests {
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
     use crate::storage::{Key, Mutation, Options};
+    use codec::prelude::NumberEncoder;
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::{
         coprocessor::KeyRange,
         kvrpcpb::{Context, IsolationLevel},
     };
     use protobuf::RepeatedField;
-    use tikv_util::codec::number::NumberEncoder;
     use tipb::{
         executor::TableScan,
         expression::{Expr, ExprType},
@@ -285,7 +290,7 @@ pub mod tests {
         let mut expr = Expr::new();
         expr.set_tp(tp);
         if tp == ExprType::ColumnRef {
-            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+            expr.mut_val().write_i64(id.unwrap()).unwrap();
         } else {
             expr.mut_children().push(child.unwrap());
         }

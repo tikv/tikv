@@ -1,9 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::convert::TryInto;
-use std::io::Write;
 use std::{cmp, u8};
 
+use codec::prelude::{NumberDecoder, NumberEncoder};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeTp;
 use kvproto::coprocessor::KeyRange;
@@ -13,7 +13,6 @@ use tipb::schema::ColumnInfo;
 use super::mysql::{Duration, Time};
 use super::{datum, Datum, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::escape;
@@ -32,19 +31,19 @@ pub const TABLE_PREFIX_KEY_LEN: usize = TABLE_PREFIX_LEN + ID_LEN;
 /// `TableEncoder` encodes the table record/index prefix.
 trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(RECORD_PREFIX_SEP).map_err(Error::from)
+        self.write_all_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_all_bytes(RECORD_PREFIX_SEP).map_err(Error::from)
     }
 
     fn append_table_index_prefix(&mut self, table_id: i64) -> Result<()> {
-        self.write_all(TABLE_PREFIX)?;
-        self.encode_i64(table_id)?;
-        self.write_all(INDEX_PREFIX_SEP).map_err(Error::from)
+        self.write_all_bytes(TABLE_PREFIX)?;
+        self.write_i64(table_id)?;
+        self.write_all_bytes(INDEX_PREFIX_SEP).map_err(Error::from)
     }
 }
 
-impl<T: Write> TableEncoder for T {}
+impl<T: NumberEncoder> TableEncoder for T {}
 
 /// Extracts table prefix from table record or index.
 #[inline]
@@ -85,7 +84,7 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &key[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    remaining.read_i64().map_err(Error::from)
 }
 
 /// `flatten` flattens the datum.
@@ -125,7 +124,7 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN);
     // can't panic
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
+    key.write_i64(handle).unwrap();
     key
 }
 
@@ -133,8 +132,8 @@ pub fn encode_row_key(table_id: i64, handle: i64) -> Vec<u8> {
 pub fn encode_column_key(table_id: i64, handle: i64, column_id: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(RECORD_ROW_KEY_LEN + ID_LEN);
     key.append_table_record_prefix(table_id).unwrap();
-    key.encode_i64(handle).unwrap();
-    key.encode_i64(column_id).unwrap();
+    key.write_i64(handle).unwrap();
+    key.write_i64(column_id).unwrap();
     key
 }
 
@@ -148,7 +147,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     let mut remaining = &encoded[TABLE_PREFIX.len()..];
-    number::decode_i64(&mut remaining)?;
+    remaining.read_i64()?;
 
     if !remaining.starts_with(RECORD_PREFIX_SEP) {
         return Err(invalid_type!(
@@ -158,7 +157,7 @@ pub fn decode_handle(encoded: &[u8]) -> Result<i64> {
     }
 
     remaining = &remaining[RECORD_PREFIX_SEP.len()..];
-    number::decode_i64(&mut remaining).map_err(Error::from)
+    remaining.read_i64().map_err(Error::from)
 }
 
 /// `truncate_as_row_key` truncate extra part of a tidb key and just keep the row key part.
@@ -171,8 +170,8 @@ pub fn truncate_as_row_key(key: &[u8]) -> Result<&[u8]> {
 pub fn encode_index_seek_key(table_id: i64, idx_id: i64, encoded: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(PREFIX_LEN + ID_LEN + encoded.len());
     key.append_table_index_prefix(table_id).unwrap();
-    key.encode_i64(idx_id).unwrap();
-    key.write_all(encoded).unwrap();
+    key.write_i64(idx_id).unwrap();
+    key.write_all_bytes(encoded).unwrap();
     key
 }
 

@@ -124,7 +124,7 @@ impl Error {
     }
 
     pub fn unexpected_eof() -> Error {
-        tikv_util::codec::Error::unexpected_eof().into()
+        io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into()
     }
 
     pub fn invalid_time_format(val: &str) -> Error {
@@ -164,6 +164,12 @@ impl From<FromUtf8Error> for Error {
 
 impl From<tikv_util::codec::Error> for Error {
     fn from(err: tikv_util::codec::Error) -> Error {
+        box_err!("codec:{:?}", err)
+    }
+}
+
+impl From<Box<codec::Error>> for Error {
+    fn from(err: Box<codec::Error>) -> Error {
         box_err!("codec:{:?}", err)
     }
 }

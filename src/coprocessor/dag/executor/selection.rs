@@ -94,7 +94,7 @@ mod tests {
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use crate::coprocessor::codec::datum::Datum;
-    use tikv_util::codec::number::NumberEncoder;
+    use codec::prelude::NumberEncoder;
 
     use super::super::tests::*;
     use super::*;
@@ -123,13 +123,13 @@ mod tests {
         expr.mut_children().push({
             let mut lhs = Expr::new();
             lhs.set_tp(ExprType::ColumnRef);
-            lhs.mut_val().encode_i64(offset).unwrap();
+            lhs.mut_val().write_i64(offset).unwrap();
             lhs
         });
         expr.mut_children().push({
             let mut rhs = Expr::new();
             rhs.set_tp(ExprType::Uint64);
-            rhs.mut_val().encode_u64(val).unwrap();
+            rhs.mut_val().write_u64(val).unwrap();
             rhs
         });
         expr
