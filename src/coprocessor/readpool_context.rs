@@ -40,9 +40,15 @@ impl Context {
         }
     }
 
-    pub fn collect(&mut self, region_id: u64, scan_tag: &str, metrics: ExecutorMetrics) {
+    pub fn collect(
+        &mut self,
+        region_id: u64,
+        scan_tag: &str,
+        priority: &str,
+        metrics: ExecutorMetrics,
+    ) {
         self.exec_local_metrics
-            .collect(scan_tag, region_id, metrics);
+            .collect(scan_tag, region_id, priority, metrics);
     }
 }
 
