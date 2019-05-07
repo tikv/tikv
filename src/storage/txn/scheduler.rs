@@ -32,11 +32,11 @@ use tikv_util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
 use tikv_util::worker::ScheduleError;
 
 use crate::storage::kv::Result as EngineResult;
+use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{
     execute_callback, Executor, MsgScheduler, ProcessResult, SchedContext, SchedContextFactory,
     Task,
 };
-use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
