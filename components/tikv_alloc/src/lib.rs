@@ -82,10 +82,15 @@
 #[macro_use]
 extern crate log;
 
+#[macro_use]
+extern crate lazy_static;
+
 pub mod error;
 
 #[cfg(not(all(unix, not(fuzzing), feature = "jemalloc")))]
 mod default;
+
+mod profiler_guard;
 
 pub type AllocStats = Vec<(&'static str, usize)>;
 
@@ -101,6 +106,7 @@ mod imp;
 mod imp;
 
 pub use crate::imp::*;
+pub use crate::profiler_guard::*;
 
 #[global_allocator]
 static ALLOC: imp::Allocator = imp::allocator();

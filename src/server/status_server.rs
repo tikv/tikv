@@ -47,30 +47,23 @@ impl StatusServer {
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
-        if let Err(e) = tikv_alloc::activate_prof() {
-            return Box::new(err(e));
-        }
+        let lock = match tikv_alloc::ProfilerLock::new() {
+            Err(e) => return Box::new(err(e)),
+            Ok(lock) => lock,
+        };
         info!("Start profiling {} seconds", seconds);
 
         let timer = GLOBAL_TIMER_HANDLE.clone();
-        Box::new(
+        Box::new(lock.then(move |guard| {
             timer
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
-                .then(|_| {
-                    if let Err(e) = tikv_alloc::deactivate_prof() {
-                        match e {
-                            ProfError::JemallocError(e) => {
-                                error!("jemalloc error {}", e); // TODO: return error through http
-                            }
-                            _ => error!("Unexpected error"),
-                        }
-                    }
-
+                .then(move |_| {
                     let tmp_dir = TempDir::new("").unwrap();
                     let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
                     let path = os_path.into_string().unwrap();
 
                     tikv_alloc::dump_prof(Some(&path));
+                    drop(guard);
                     tokio_fs::file::File::open(path)
                         .and_then(|file| {
                             let buf: Vec<u8> = Vec::new();
@@ -81,8 +74,8 @@ impl StatusServer {
                             ok(buf)
                         })
                         .map_err(|e| -> ProfError { e.into() })
-                }),
-        )
+                })
+        }))
     }
 
     pub fn dump_prof_to_resp(
