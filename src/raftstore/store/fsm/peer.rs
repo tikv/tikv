@@ -521,7 +521,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::StoreUnreachable { store_id } => {
                 if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
                 {
-                    self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    }
                 }
             }
         }

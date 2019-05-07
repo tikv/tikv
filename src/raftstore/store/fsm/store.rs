@@ -66,6 +66,7 @@ type Key = Vec<u8>;
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
+const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
     pub engine: Arc<DB>,
@@ -1915,8 +1916,8 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(10, |t| now.duration_since(*t).as_secs())
-            < 10
+            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            < UNREACHABLE_BACKOFF
         {
             return;
         }
