@@ -73,22 +73,32 @@ impl ExecLocalMetrics {
         }
     }
 
-    pub fn collect(&mut self, type_str: &str, region_id: u64, metrics: ExecutorMetrics) {
+    pub fn collect(
+        &mut self,
+        type_str: &str,
+        region_id: u64,
+        priority: &str,
+        metrics: ExecutorMetrics,
+    ) {
         let stats = &metrics.cf_stats;
         // cf statistics group by type
         for (cf, details) in stats.details() {
             for (tag, count) in details {
                 self.scan_details
-                    .with_label_values(&[type_str, cf, tag])
+                    .with_label_values(&[type_str, cf, tag, priority])
                     .inc_by(count as i64);
             }
         }
         // flow statistics group by region
         self.flow_stats.add(region_id, stats);
         // scan count
-        metrics.scan_counter.consume(&mut self.scan_counter);
+        metrics
+            .scan_counter
+            .consume(priority, &mut self.scan_counter);
         // exec count
-        metrics.executor_count.consume(&mut self.exec_counter);
+        metrics
+            .executor_count
+            .consume(priority, &mut self.exec_counter);
     }
 
     pub fn flush(&mut self) {

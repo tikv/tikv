@@ -199,52 +199,65 @@ impl Tracker {
         thread_ctx
             .basic_local_metrics
             .req_time
-            .with_label_values(&[self.req_ctx.tag])
+            .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
             .observe(time::duration_to_sec(self.req_time));
         thread_ctx
             .basic_local_metrics
             .wait_time
-            .with_label_values(&[self.req_ctx.tag])
+            .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
             .observe(time::duration_to_sec(self.wait_time));
         thread_ctx
             .basic_local_metrics
             .handle_time
-            .with_label_values(&[self.req_ctx.tag])
+            .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
             .observe(time::duration_to_sec(self.total_process_time));
         thread_ctx
             .basic_local_metrics
             .scan_keys
-            .with_label_values(&[self.req_ctx.tag])
+            .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
             .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
         thread_ctx.collect(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
+            self.req_ctx.priority,
             total_exec_metrics,
         );
         thread_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
+            .with_label_values(&[
+                self.req_ctx.tag,
+                "internal_key_skipped_count",
+                self.req_ctx.priority,
+            ])
             .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
         thread_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
+            .with_label_values(&[
+                self.req_ctx.tag,
+                "internal_delete_skipped_count",
+                self.req_ctx.priority,
+            ])
             .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
         thread_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
+            .with_label_values(&[
+                self.req_ctx.tag,
+                "block_cache_hit_count",
+                self.req_ctx.priority,
+            ])
             .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
         thread_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_count"])
+            .with_label_values(&[self.req_ctx.tag, "block_read_count", self.req_ctx.priority])
             .inc_by(self.total_perf_statistics.block_read_count as i64);
         thread_ctx
             .basic_local_metrics
             .rocksdb_perf_stats
-            .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
+            .with_label_values(&[self.req_ctx.tag, "block_read_byte", self.req_ctx.priority])
             .inc_by(self.total_perf_statistics.block_read_byte as i64);
         self.current_stage = TrackerState::Tracked;
     }

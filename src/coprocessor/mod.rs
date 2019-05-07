@@ -129,6 +129,9 @@ pub struct ReqContext {
 
     /// The transaction start_ts of the request
     pub txn_start_ts: Option<u64>,
+
+    /// The priority of the request
+    pub priority: &'static str,
 }
 
 impl ReqContext {
@@ -142,8 +145,14 @@ impl ReqContext {
         txn_start_ts: Option<u64>,
     ) -> Self {
         let deadline = Deadline::from_now(tag, max_handle_duration);
+        let priority = match context.priority {
+            kvrpcpb::CommandPri::Normal => "normal",
+            kvrpcpb::CommandPri::High => "high",
+            kvrpcpb::CommandPri::Low => "low",
+        };
         Self {
             tag,
+            priority,
             context,
             deadline,
             peer,

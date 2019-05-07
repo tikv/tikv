@@ -60,15 +60,15 @@ impl ScanCounter {
         other.point = 0;
     }
 
-    pub fn consume(self, metrics: &mut LocalIntCounterVec) {
+    pub fn consume(self, priority: &str, metrics: &mut LocalIntCounterVec) {
         if self.point > 0 {
             metrics
-                .with_label_values(&["point"])
+                .with_label_values(&["point", priority])
                 .inc_by(self.point as i64);
         }
         if self.range > 0 {
             metrics
-                .with_label_values(&["range"])
+                .with_label_values(&["range", priority])
                 .inc_by(self.range as i64);
         }
     }
@@ -96,20 +96,24 @@ impl ExecCounter {
         *other = ExecCounter::default();
     }
 
-    pub fn consume(self, metrics: &mut LocalIntCounterVec) {
+    pub fn consume(self, priority: &str, metrics: &mut LocalIntCounterVec) {
         metrics
-            .with_label_values(&["tblscan"])
+            .with_label_values(&["tblscan", priority])
             .inc_by(self.table_scan);
         metrics
-            .with_label_values(&["idxscan"])
+            .with_label_values(&["idxscan", priority])
             .inc_by(self.index_scan);
         metrics
-            .with_label_values(&["selection"])
+            .with_label_values(&["selection", priority])
             .inc_by(self.selection);
-        metrics.with_label_values(&["topn"]).inc_by(self.topn);
-        metrics.with_label_values(&["limit"]).inc_by(self.limit);
         metrics
-            .with_label_values(&["aggregation"])
+            .with_label_values(&["topn", priority])
+            .inc_by(self.topn);
+        metrics
+            .with_label_values(&["limit", priority])
+            .inc_by(self.limit);
+        metrics
+            .with_label_values(&["aggregation", priority])
             .inc_by(self.aggregation);
     }
 }
