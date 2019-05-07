@@ -173,57 +173,70 @@ impl Tracker {
             // req time
             cop_metrics
                 .local_copr_req_histogram_vec
-                .with_label_values(&[self.req_ctx.tag])
+                .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
                 .observe(time::duration_to_sec(self.req_time));
 
             // wait time
             cop_metrics
                 .local_copr_req_wait_time
-                .with_label_values(&[self.req_ctx.tag])
+                .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
                 .observe(time::duration_to_sec(self.wait_time));
 
             // handle time
             cop_metrics
                 .local_copr_req_handle_time
-                .with_label_values(&[self.req_ctx.tag])
+                .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
                 .observe(time::duration_to_sec(self.total_process_time));
 
             // scan keys
             cop_metrics
                 .local_copr_scan_keys
-                .with_label_values(&[self.req_ctx.tag])
+                .with_label_values(&[self.req_ctx.tag, self.req_ctx.priority])
                 .observe(total_exec_metrics.cf_stats.total_op_count() as f64);
 
             // rocksdb perf stats
             cop_metrics
                 .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_key_skipped_count"])
+                .with_label_values(&[
+                    self.req_ctx.tag,
+                    "internal_key_skipped_count",
+                    self.req_ctx.priority,
+                ])
                 .inc_by(self.total_perf_statistics.internal_key_skipped_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "internal_delete_skipped_count"])
+                .with_label_values(&[
+                    self.req_ctx.tag,
+                    "internal_delete_skipped_count",
+                    self.req_ctx.priority,
+                ])
                 .inc_by(self.total_perf_statistics.internal_delete_skipped_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_cache_hit_count"])
+                .with_label_values(&[
+                    self.req_ctx.tag,
+                    "block_cache_hit_count",
+                    self.req_ctx.priority,
+                ])
                 .inc_by(self.total_perf_statistics.block_cache_hit_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_count"])
+                .with_label_values(&[self.req_ctx.tag, "block_read_count", self.req_ctx.priority])
                 .inc_by(self.total_perf_statistics.block_read_count as i64);
 
             cop_metrics
                 .local_copr_rocksdb_perf_counter
-                .with_label_values(&[self.req_ctx.tag, "block_read_byte"])
+                .with_label_values(&[self.req_ctx.tag, "block_read_byte", self.req_ctx.priority])
                 .inc_by(self.total_perf_statistics.block_read_byte as i64);
         });
 
         tls_collect_executor_metrics(
             self.req_ctx.context.get_region_id(),
             self.req_ctx.tag,
+            self.req_ctx.priority,
             total_exec_metrics,
         );
 

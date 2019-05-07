@@ -95,7 +95,12 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     });
 }
 
-pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: ExecutorMetrics) {
+pub fn tls_collect_executor_metrics(
+    region_id: u64,
+    type_str: &str,
+    priority: &str,
+    metrics: ExecutorMetrics,
+) {
     let stats = &metrics.cf_stats;
     // cf statistics group by type
     for (cf, details) in stats.details() {
@@ -103,7 +108,7 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
             TLS_COP_METRICS.with(|m| {
                 m.borrow_mut()
                     .local_copr_scan_details
-                    .with_label_values(&[type_str, cf, tag])
+                    .with_label_values(&[type_str, cf, tag, priority])
                     .inc_by(count as i64);
             });
         }
@@ -116,8 +121,8 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
     // exec count
     let executor_count = metrics.executor_count;
     TLS_COP_METRICS.with(|m| {
-        scan_counter.consume(&mut m.borrow_mut().local_copr_get_or_scan_count);
-        executor_count.consume(&mut m.borrow_mut().local_copr_executor_count);
+        scan_counter.consume(priority, &mut m.borrow_mut().local_copr_get_or_scan_count);
+        executor_count.consume(priority, &mut m.borrow_mut().local_copr_executor_count);
     });
 }
 
