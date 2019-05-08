@@ -136,6 +136,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             Arc::clone(&env),
             Arc::clone(cfg),
             Arc::clone(security_mgr),
+            raft_router.clone(),
             Arc::clone(&thread_load),
             stats_pool.sender().clone(),
         )));
@@ -291,6 +292,10 @@ mod tests {
         fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
             self.tx.send(1).unwrap();
             Ok(())
+        }
+
+        fn broadcast_unreachable(&self, _: u64) {
+            let _ = self.tx.send(1);
         }
     }
 
