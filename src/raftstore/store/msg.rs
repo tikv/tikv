@@ -144,8 +144,14 @@ pub enum SignificantMsg {
         to_peer_id: u64,
         status: SnapshotStatus,
     },
+    StoreUnreachable {
+        store_id: u64,
+    },
     /// Reports `to_peer_id` is unreachable.
-    Unreachable { region_id: u64, to_peer_id: u64 },
+    Unreachable {
+        region_id: u64,
+        to_peer_id: u64,
+    },
 }
 
 /// Message that will be sent to a peer.
@@ -317,6 +323,9 @@ pub enum StoreMsg {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    StoreUnreachable {
+        store_id: u64,
+    },
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
@@ -331,6 +340,9 @@ impl fmt::Debug for StoreMsg {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            StoreMsg::StoreUnreachable { store_id } => {
+                write!(fmt, "Store {}  is unreachable", store_id)
+            }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {

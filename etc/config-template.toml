@@ -660,8 +660,8 @@
 # optimize-filters-for-hits = false
 
 [raftdb]
-# max-background-jobs = 2
-# max-sub-compactions = 1
+# max-background-jobs = 4
+# max-sub-compactions = 2
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
