@@ -1643,15 +1643,14 @@ fn future_cop<E: Engine>(
 fn future_test(
     req: BatchCommandTestRequest,
 ) -> impl Future<Item = BatchCommandTestResponse, Error = Error> {
-    tokio_timer::Delay::new(
-        std::time::Instant::now() + std::time::Duration::from_micros(req.get_delay_time()),
-    )
-    .map(move |_| {
-        let mut res = BatchCommandTestResponse::new();
-        res.set_test_id(req.get_test_id());
-        res
-    })
-    .map_err(|_| unreachable!())
+    tikv_util::timer::GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + std::time::Duration::from_micros(req.get_delay_time()))
+        .map(move |_| {
+            let mut res = BatchCommandTestResponse::new();
+            res.set_test_id(req.get_test_id());
+            res
+        })
+        .map_err(|_| unreachable!())
 }
 
 fn extract_region_error<T>(res: &storage::Result<T>) -> Option<RegionError> {
