@@ -53,12 +53,12 @@ pub struct Service<T: RaftStoreRouter> {
 
 impl<T: RaftStoreRouter> Service<T> {
     /// Constructs a new `Service` with `Engines` and a `RaftStoreRouter`.
-    pub fn new(engines: Engines, raft_router: T, shared_block_cache: bool) -> Service<T> {
+    pub fn new(engines: Engines, raft_router: T) -> Service<T> {
         let pool = Builder::new()
             .name_prefix(thd_name!("debugger"))
             .pool_size(1)
             .create();
-        let debugger = Debugger::new(engines, shared_block_cache);
+        let debugger = Debugger::new(engines);
         Service {
             pool,
             debugger,

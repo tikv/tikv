@@ -789,7 +789,8 @@ mod tests {
             }
         }
 
-        let engines = Engines::new(Arc::clone(&db), Arc::clone(&db));
+        let shared_block_cache = false;
+        let engines = Engines::new(Arc::clone(&db), Arc::clone(&db), shared_block_cache);
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");

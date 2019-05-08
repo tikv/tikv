@@ -101,10 +101,11 @@ fn new_debug_executor(
             let raft_db =
                 rocks::util::new_engine_opt(&raft_path, raft_db_opts, raft_db_cf_opts).unwrap();
 
-            Box::new(Debugger::new(
-                Engines::new(Arc::new(kv_db), Arc::new(raft_db)),
+            Box::new(Debugger::new(Engines::new(
+                Arc::new(kv_db),
+                Arc::new(raft_db),
                 cache.is_some(),
-            )) as Box<dyn DebugExecutor>
+            ))) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
         _ => unreachable!(),

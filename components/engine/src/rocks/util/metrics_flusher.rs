@@ -115,7 +115,8 @@ mod tests {
             rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
-        let engines = Engines::new(engine, raft_engine);
+        let shared_block_cache = false;
+        let engines = Engines::new(engine, raft_engine, shared_block_cache);
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));
 
         if let Err(e) = metrics_flusher.start() {

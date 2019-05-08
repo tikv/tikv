@@ -89,7 +89,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .build(),
         );
         let snap_worker = Worker::new("snap-handler");
-        let shared_block_cache = storage.has_shared_block_cache();
 
         let kv_service = KvService::new(
             storage,
@@ -115,8 +114,7 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 .register_service(create_tikv(kv_service));
             sb = security_mgr.bind(sb, &ip, addr.port());
             if let Some(engines) = debug_engines {
-                let debug_service =
-                    DebugService::new(engines, raft_router.clone(), shared_block_cache);
+                let debug_service = DebugService::new(engines, raft_router.clone());
                 sb = sb.register_service(create_debug(debug_service));
             }
             if let Some(service) = import_service {

@@ -131,15 +131,11 @@ impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
 #[derive(Clone)]
 pub struct Debugger {
     engines: Engines,
-    shared_block_cache: bool,
 }
 
 impl Debugger {
-    pub fn new(engines: Engines, shared_block_cache: bool) -> Debugger {
-        Debugger {
-            engines,
-            shared_block_cache,
-        }
+    pub fn new(engines: Engines) -> Debugger {
+        Debugger { engines }
     }
 
     pub fn get_engine(&self) -> &Engines {
@@ -704,7 +700,7 @@ impl Debugger {
                         config_name
                     )));
                 }
-                if !self.shared_block_cache {
+                if !self.engines.shared_block_cache {
                     return Err(Error::InvalidArgument(
                         "shared block cache is disabled".to_string(),
                     ));
@@ -732,7 +728,7 @@ impl Debugger {
 
                     // currently we can't modify block_cache_size via set_options_cf
                     if config_name == "block_cache_size" {
-                        if self.shared_block_cache {
+                        if self.engines.shared_block_cache {
                             return Err(Error::InvalidArgument(
                                 "shared block cache is enabled, change cache size through \
                                  block_cache.capacity in storage module instead"
@@ -1564,9 +1560,9 @@ mod tests {
             .unwrap(),
         );
 
-        let engines = Engines::new(Arc::clone(&engine), engine);
         let shared_block_cache = false;
-        Debugger::new(engines, shared_block_cache)
+        let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
+        Debugger::new(engines)
     }
 
     impl Debugger {
