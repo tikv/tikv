@@ -24,7 +24,7 @@ impl RpnExpressionBuilder {
         match c.get_tp() {
             ExprType::ScalarFunc => {
                 let sig = c.get_sig();
-                super::super::map_pb_sig_to_rpn_func(sig)?;
+                super::super::map_pb_sig_to_rpn_func(sig, c.get_children())?;
                 for n in c.get_children() {
                     RpnExpressionBuilder::check_expr_tree_supported(n)?;
                 }
@@ -70,7 +70,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -150,6 +150,12 @@ impl RpnExpressionBuilder {
     }
 }
 
+impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
+    fn as_ref(&self) -> &[RpnExpressionNode] {
+        self.0.as_ref()
+    }
+}
+
 /// Transforms eval tree nodes into RPN nodes.
 ///
 /// Suppose that we have a function call:
@@ -197,7 +203,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // TODO: We should check whether node types match the function signature. Otherwise there
     // will be panics when the expression is evaluated.
@@ -242,10 +248,10 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // Map pb func to `RpnFunction`.
-    let func = fn_mapper(tree_node.get_sig())?;
+    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
     let args = tree_node.take_children().into_vec();
     if func.args_len() != args.len() {
         return Err(box_err!(
@@ -474,7 +480,7 @@ mod tests {
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support FnA ~ FnD. So let's just hard code some
     /// substitute.
-    fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
         // FnA: CastIntAsInt
         // FnB: CastIntAsReal
         // FnC: CastIntAsString
