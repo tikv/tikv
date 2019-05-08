@@ -254,6 +254,8 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
 
+    /// If it fails to send messages to leader.
+    pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
@@ -358,6 +360,7 @@ impl Peer {
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
+            leader_unreachable: false,
             pending_remove: false,
             pending_merge_state: None,
             last_committed_prepare_merge_idx: 0,
@@ -555,8 +558,8 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_raft_status(&self) -> raft::Status {
-        self.raft_group.status()
+    pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
+        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -721,10 +724,14 @@ impl Peer {
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let truncated_idx = self.get_store().truncated_index();
 
-        let progresses = status.progress.iter().chain(&status.learner_progress);
+        if status.progress.is_none() {
+            return pending_peers;
+        }
+
+        let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
@@ -1515,39 +1522,29 @@ impl Peer {
             return Err(box_err!("ignore remove leader"));
         }
 
-        let mut status = self.raft_group.status();
-        let total = status.progress.len();
+        let status = self.raft_group.status_ref();
+        let total = status.progress.unwrap().voters().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
             return Ok(());
         }
+        let mut progress = status.progress.unwrap().clone();
 
         match change_type {
             ConfChangeType::AddNode => {
-                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
-                    // For promote learner to voter.
-                    progress.is_learner = false;
-                    status.progress.insert(peer.get_id(), progress);
-                } else {
-                    status.progress.insert(peer.get_id(), Progress::default());
+                if let Err(raft::Error::NotExists(_, _)) = progress.promote_learner(peer.get_id()) {
+                    let _ = progress.insert_voter(peer.get_id(), Progress::default());
                 }
             }
             ConfChangeType::RemoveNode => {
-                if peer.get_is_learner() {
-                    // If the node is a learner, we can return directly.
-                    return Ok(());
-                }
-                if status.progress.remove(&peer.get_id()).is_none() {
-                    // It's always safe to remove a unexisting node.
-                    return Ok(());
-                }
+                progress.remove(peer.get_id());
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
         }
-        let healthy = self.count_healthy_node(status.progress.values());
-        let quorum_after_change = raft::quorum(status.progress.len());
+        let healthy = self.count_healthy_node(progress.voters().values());
+        let quorum_after_change = raft::quorum(progress.voters().len());
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -1592,13 +1589,14 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> bool {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
+        let progress = status.progress.unwrap();
 
-        if !status.progress.contains_key(&peer_id) {
+        if !progress.voters().contains_key(&peer_id) {
             return false;
         }
 
-        for progress in status.progress.values() {
+        for progress in progress.voters().values() {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
@@ -1614,7 +1612,7 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= status.progress[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
+        last_index <= progress.voters()[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
@@ -1723,14 +1721,9 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        let status = self.raft_group.status();
-        status
-            .progress
-            .values()
-            .chain(status.learner_progress.values())
-            .map(|pr| pr.matched)
-            .min()
-            .unwrap_or_default()
+        self.raft_group.status_ref().progress.map_or(0, |p| {
+            p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
+        })
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -2097,7 +2090,9 @@ impl Peer {
                 "target_store_id" => to_store_id,
                 "err" => ?e,
             );
-
+            if to_peer_id == self.leader_id() {
+                self.leader_unreachable = true;
+            }
             // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
             if msg_type == eraftpb::MessageType::MsgSnapshot {
