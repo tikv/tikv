@@ -14,7 +14,7 @@ use std::cmp;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
 use engine::rocks::DB;

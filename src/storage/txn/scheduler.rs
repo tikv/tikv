@@ -274,7 +274,7 @@ impl<E: Engine> Scheduler<E> {
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
-            sched_pending_write_threshold: sched_pending_write_threshold,
+            sched_pending_write_threshold,
             worker_scheduler: worker_pool.scheduler(),
             high_priority_scheduler: high_priority_pool.scheduler(),
         });
