@@ -20,8 +20,8 @@ use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
 use tikv::server::resolve::{self, Task as ResolveTask};
-use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
@@ -59,7 +59,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient,
+    raft_client: RaftClient<RaftStoreBlackHole>,
     _stats_pool: tokio_threadpool::ThreadPool,
 }
 
@@ -77,6 +77,7 @@ impl ServerCluster {
             env,
             Arc::new(Config::default()),
             security_mgr,
+            RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
             stats_pool.sender().clone(),
         );
