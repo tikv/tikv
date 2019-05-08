@@ -73,7 +73,7 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.3", features = [ "secure" ] }
-raft = "0.4.2"
+raft = "0.4.3"
 crossbeam-channel = "0.2"
 crossbeam = "0.2"
 fxhash = "0.2"
