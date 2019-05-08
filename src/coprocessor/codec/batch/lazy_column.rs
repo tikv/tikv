@@ -9,7 +9,7 @@ use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::{Error, Result};
+use crate::coprocessor::codec::Result;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -191,8 +191,7 @@ impl LazyBatchColumn {
             return Ok(());
         }
 
-        let eval_type =
-            EvalType::try_from(field_type.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        let eval_type = box_try!(EvalType::try_from(field_type.tp()));
 
         let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
