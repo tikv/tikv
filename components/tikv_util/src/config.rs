@@ -142,13 +142,27 @@ impl FromStr for ReadableSize {
             return Err(format!("ASCII string is expected, but got {:?}", s));
         }
 
-        let unit = size_str
+        // size: digits and '.' as decimal separator
+        let size = size_str
             .to_string()
             .chars()
-            .filter(|c| char::is_ascii_alphabetic(c))
+            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
             .collect::<String>();
 
-        let unit = match unit.as_ref() {
+        // unit: alphabetic characters, i.e., no more digits etc expected
+        let (_, unit) = size_str.split_at(size.len());
+
+        let is_unit_invalid = unit
+            .to_string()
+            .trim()
+            .chars()
+            .find(|c| !char::is_ascii_alphabetic(c));
+
+        if is_unit_invalid.is_some() {
+            return Err(format!("invalid unit string: {:?}.", s));
+        }
+
+        let unit = match unit.trim() {
             "K" | "KB" | "KiB" => KB,
             "M" | "MB" | "MiB" => MB,
             "G" | "GB" | "GiB" => GB,
@@ -159,15 +173,9 @@ impl FromStr for ReadableSize {
                 return Err(format!(
                     "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
                     s
-                ))
+                ));
             }
         };
-
-        let size = size_str
-            .to_string()
-            .chars()
-            .filter(|c| char::is_ascii_digit(c) || *c == '.')
-            .collect::<String>();
 
         match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
@@ -890,7 +898,8 @@ mod tests {
         }
 
         let illegal_cases = vec![
-            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B", "1K24B", " 5_KB",
+            "4B7", "5M_",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
