@@ -1948,10 +1948,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
-        if exec_results.is_empty() {
-            return None;
-        }
-
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
