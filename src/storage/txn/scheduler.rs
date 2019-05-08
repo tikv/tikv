@@ -90,6 +90,8 @@ impl Display for Msg {
 
 // It stores context of a task.
 struct TaskContext {
+    task: Option<Task>,
+
     lock: Lock,
     cb: StorageCb,
     write_bytes: usize,
@@ -101,25 +103,28 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(lock: Lock, cb: StorageCb, cmd: &Command) -> TaskContext {
+    fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
+        let tag = task.cmd().tag();
+        let lock = gen_command_lock(latches, task.cmd());
         let write_bytes = if lock.is_write_lock() {
-            cmd.write_bytes()
+            task.cmd().write_bytes()
         } else {
             0
         };
 
         TaskContext {
+            task: Some(task),
             lock,
             cb,
             write_bytes,
-            tag: cmd.tag(),
+            tag,
             latch_timer: Some(
                 SCHED_LATCH_HISTOGRAM_VEC
-                    .with_label_values(&[cmd.tag()])
+                    .with_label_values(&[tag])
                     .start_coarse_timer(),
             ),
             _cmd_timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[cmd.tag()])
+                .with_label_values(&[tag])
                 .start_coarse_timer(),
         }
     }
@@ -131,7 +136,7 @@ impl TaskContext {
 
 struct SchedulerInner<E: Engine> {
     // slot_id -> `TaskContext`s in the slot
-    task_contexts: Vec<Mutex<HashMap<u64, (Option<Task>, TaskContext)>>>,
+    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
     // cmd id generator
     id_alloc: AtomicU64,
@@ -166,19 +171,14 @@ impl<E: Engine> SchedulerInner<E> {
 
     fn dequeue_task(&self, cid: u64) -> Task {
         let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
-        let task = tasks.get_mut(&cid).unwrap().0.take().unwrap();
+        let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
         assert_eq!(task.cid, cid);
         task
     }
 
     fn enqueue_task(&self, task: Task, callback: StorageCb) {
         let cid = task.cid;
-
-        let tctx = {
-            let cmd = task.cmd();
-            let lock = self.gen_lock(cmd);
-            TaskContext::new(lock, callback, cmd)
-        };
+        let tctx = TaskContext::new(task, &self.latches, callback);
 
         let running_write_bytes = self
             .running_write_bytes
@@ -187,13 +187,13 @@ impl<E: Engine> SchedulerInner<E> {
         SCHED_CONTEX_GAUGE.inc();
 
         let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
-        if tasks.insert(cid, (Some(task), tctx)).is_some() {
+        if tasks.insert(cid, tctx).is_some() {
             panic!("TaskContext cid={} shouldn't exist", cid);
         }
     }
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
-        let (_, tctx) = self.task_contexts[id_index(cid)]
+        let tctx = self.task_contexts[id_index(cid)]
             .lock()
             .unwrap()
             .remove(&cid)
@@ -213,20 +213,12 @@ impl<E: Engine> SchedulerInner<E> {
         self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
     }
 
-    /// Generates the lock for a command.
-    ///
-    /// Basically, read-only commands require no latches, write commands require latches hashed
-    /// by the referenced keys.
-    fn gen_lock(&self, cmd: &Command) -> Lock {
-        gen_command_lock(&self.latches, cmd)
-    }
-
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns `Some(TaskContext)` if successful; returns `None` otherwise.
     fn acquire_lock(&self, cid: u64) -> bool {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
-        let (_, tctx) = task_contexts.get_mut(&cid).unwrap();
+        let tctx = task_contexts.get_mut(&cid).unwrap();
         let acquired = self.latches.acquire(&mut tctx.lock, cid);
         tctx.on_schedule();
         acquired
