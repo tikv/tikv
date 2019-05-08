@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
 
 pub mod fixture;
@@ -17,6 +18,7 @@ fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
         &[table["id"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -30,6 +32,7 @@ fn bench_table_scan_datum_front(b: &mut criterion::Bencher, input: &Input) {
         &[table["col0"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -44,6 +47,7 @@ fn bench_table_scan_datum_multi_front(b: &mut criterion::Bencher, input: &Input)
         ],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -55,6 +59,7 @@ fn bench_table_scan_datum_end(b: &mut criterion::Bencher, input: &Input) {
         &[table["col99"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -67,6 +72,7 @@ fn bench_table_scan_datum_all(b: &mut criterion::Bencher, input: &Input) {
         &table.columns_info(),
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -78,6 +84,7 @@ fn bench_table_scan_long_datum_primary_key(b: &mut criterion::Bencher, input: &I
         &[table["id"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -89,6 +96,7 @@ fn bench_table_scan_long_datum_normal(b: &mut criterion::Bencher, input: &Input)
         &[table["foo"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -100,6 +108,7 @@ fn bench_table_scan_long_datum_long(b: &mut criterion::Bencher, input: &Input) {
         &[table["bar"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -115,6 +124,7 @@ fn bench_table_scan_long_datum_all(b: &mut criterion::Bencher, input: &Input) {
         ],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -127,6 +137,7 @@ fn bench_table_scan_datum_absent(b: &mut criterion::Bencher, input: &Input) {
         &[table["col0"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -139,6 +150,7 @@ fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &I
         &[table["col0"].as_column_info()],
         &[table.get_record_range_all()],
         &store,
+        (),
     );
 }
 
@@ -153,14 +165,14 @@ fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
 
     input
         .0
-        .bench(b, &[table["id"].as_column_info()], &ranges, &store);
+        .bench(b, &[table["id"].as_column_info()], &ranges, &store, ());
 }
 
 #[derive(Clone)]
-struct Input(Box<dyn util::TableScanBencher>);
+struct Input(Box<dyn ScanBencher<util::TableScanParam>>);
 
 impl Input {
-    pub fn new<T: util::TableScanBencher + 'static>(b: T) -> Self {
+    pub fn new<T: ScanBencher<util::TableScanParam> + 'static>(b: T) -> Self {
         Self(Box::new(b))
     }
 }

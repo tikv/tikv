@@ -186,12 +186,14 @@ fn bench_util_normal_fixture_executor_next_1024(b: &mut criterion::Bencher) {
 
 /// Checks whether our test utilities themselves are fast enough.
 pub fn bench(c: &mut criterion::Criterion) {
-    c.bench_function(
-        "util_batch_fixture_executor_next_1024",
-        bench_util_batch_fixture_executor_next_1024,
-    );
-    c.bench_function(
-        "util_normal_fixture_executor_next_1024",
-        bench_util_normal_fixture_executor_next_1024,
-    );
+    if crate::util::bench_level() >= 1 {
+        c.bench_function(
+            "util_batch_fixture_executor_next_1024",
+            bench_util_batch_fixture_executor_next_1024,
+        );
+        c.bench_function(
+            "util_normal_fixture_executor_next_1024",
+            bench_util_normal_fixture_executor_next_1024,
+        );
+    }
 }

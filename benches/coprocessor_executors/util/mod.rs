@@ -3,6 +3,7 @@
 pub mod bencher;
 pub mod executor_descriptor;
 pub mod fixture_executor;
+pub mod scan_bencher;
 pub mod store;
 
 use criterion::black_box;
