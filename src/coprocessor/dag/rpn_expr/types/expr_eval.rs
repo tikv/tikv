@@ -282,18 +282,7 @@ mod tests {
                 col
             },
         ]);
-        let schema = [
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = [FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
         (columns, schema)
     }
 
@@ -438,12 +427,7 @@ mod tests {
             col.mut_decoded().push_int(None);
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -495,12 +479,7 @@ mod tests {
 
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -579,12 +558,7 @@ mod tests {
             col.mut_decoded().push_real(Some(-4.3));
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-            ft
-        }];
+        let schema = &[FieldTypeTp::Double.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -628,12 +602,7 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
@@ -688,19 +657,7 @@ mod tests {
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         // FnFoo(col1, col0)
         let exp = RpnExpressionBuilder::new()
@@ -756,19 +713,7 @@ mod tests {
 
             col
         }]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -813,7 +758,6 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-
         let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
@@ -922,19 +866,7 @@ mod tests {
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
 
         // Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
         let exp = RpnExpressionBuilder::new()
@@ -1249,19 +1181,7 @@ mod tests {
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);
