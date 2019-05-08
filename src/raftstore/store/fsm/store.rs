@@ -32,7 +32,7 @@ use crate::raftstore::store::fsm::peer::{
 };
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    ApplyTaskRes, BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -66,6 +66,7 @@ type Key = Vec<u8>;
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
+const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
     pub engine: Arc<DB>,
@@ -608,10 +609,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 // TODO: we may need a way to optimize the message copy.
                 Ok(msg) => {
                     fail_point!(
-                        "pause_on_apply_res_1",
+                        "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
                             && match msg {
-                                PeerMsg::ApplyRes { .. } => true,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                } => true,
                                 _ => false,
                             },
                         |_| unreachable!()
@@ -1924,11 +1927,16 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             .store
             .last_unreachable_report
             .get(&store_id)
-            .map_or(10, |t| now.duration_since(*t).as_secs())
-            < 10
+            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            < UNREACHABLE_BACKOFF
         {
             return;
         }
+        info!(
+            "broadcasting unreachable";
+            "store_id" => self.fsm.store.id,
+            "unreachable_store_id" => store_id,
+        );
         self.fsm.store.last_unreachable_report.insert(store_id, now);
         // It's possible to acquire the lock and only send notification to
         // invovled regions. However loop over all the regions can take a

@@ -548,8 +548,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.report_snapshot_status(to_peer_id, status);
             }
             SignificantMsg::Unreachable { to_peer_id, .. } => {
-                self.fsm.peer.raft_group.report_unreachable(to_peer_id);
-                if to_peer_id == self.fsm.peer.leader_id() {
+                if self.fsm.peer.is_leader() {
+                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                } else if to_peer_id == self.fsm.peer.leader_id() {
                     self.fsm.group_state = GroupState::Chaos;
                     self.register_raft_base_tick();
                 }
@@ -557,8 +558,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             SignificantMsg::StoreUnreachable { store_id } => {
                 if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
                 {
-                    self.fsm.peer.raft_group.report_unreachable(peer_id);
-                    if peer_id == self.fsm.peer.leader_id() {
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    } else if peer_id == self.fsm.peer.leader_id() {
                         self.fsm.group_state = GroupState::Chaos;
                         self.register_raft_base_tick();
                     }
@@ -2355,6 +2357,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if !self.fsm.peer.get_store().is_cache_empty() {
             self.register_raft_gc_log_tick();
         }
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
