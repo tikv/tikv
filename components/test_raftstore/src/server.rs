@@ -19,7 +19,6 @@ use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
 use tikv::raftstore::store::{Callback, LocalReader, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::readpool;
 use tikv::server::resolve::{self, Task as ResolveTask};
 use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
@@ -29,7 +28,7 @@ use tikv::server::{
     ServerTransport,
 };
 
-use tikv::storage::RaftKv;
+use tikv::storage::{self, RaftKv};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
@@ -129,7 +128,8 @@ impl Simulator for ServerCluster {
 
         // Create storage.
         let pd_worker = FutureWorker::new("test-pd-worker");
-        let storage_read_pool = readpool::Builder::build_for_test();
+        let storage_read_pool =
+            storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let store = create_raft_storage(
             raft_engine.clone(),
             &cfg.storage,
@@ -156,7 +156,8 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = readpool::Builder::build_for_test();
+        let cop_read_pool =
+            coprocessor::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let cop = coprocessor::Endpoint::new(&server_cfg, raft_engine, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {

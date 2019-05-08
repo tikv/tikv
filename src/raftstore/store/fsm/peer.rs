@@ -2189,6 +2189,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we

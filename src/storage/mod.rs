@@ -456,7 +456,11 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
+        let engine = Arc::new(Mutex::new(self.engine.clone()));
+        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
+            .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
+            .before_stop(|| destroy_tls_engine_any())
+            .build();
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -628,7 +632,6 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Option<Value>, Error = Error> {
         const CMD: &str = "get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -636,10 +639,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -686,7 +686,6 @@ impl<E: Engine> Storage<E> {
         start_ts: u64,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "batch_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -694,10 +693,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -754,7 +750,6 @@ impl<E: Engine> Storage<E> {
         options: Options,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -762,10 +757,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1039,7 +1031,6 @@ impl<E: Engine> Storage<E> {
         key: Vec<u8>,
     ) -> impl Future<Item = Option<Vec<u8>>, Error = Error> {
         const CMD: &str = "raw_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -1047,10 +1038,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1098,7 +1086,6 @@ impl<E: Engine> Storage<E> {
         keys: Vec<Vec<u8>>,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_get";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -1106,10 +1093,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1386,7 +1370,6 @@ impl<E: Engine> Storage<E> {
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -1394,10 +1377,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1496,7 +1476,6 @@ impl<E: Engine> Storage<E> {
         reverse: bool,
     ) -> impl Future<Item = Vec<Result<KvPair>>, Error = Error> {
         const CMD: &str = "raw_batch_scan";
-        let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
         let res = self.read_pool.spawn_handle(priority, move || {
@@ -1504,10 +1483,7 @@ impl<E: Engine> Storage<E> {
             let command_duration = tikv_util::time::Instant::now_coarse();
 
             with_tls_engine_any(|engine_any| {
-                let engine = match engine_any {
-                    Some(e) => e.as_ref().downcast_ref().unwrap(),
-                    None => &engine,
-                };
+                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
