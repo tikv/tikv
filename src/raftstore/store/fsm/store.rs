@@ -1022,6 +1022,14 @@ impl RaftBatchSystem {
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
+        let router = Mutex::new(self.router.clone());
+        pd_client.handle_reconnect(move || {
+            router
+                .lock()
+                .unwrap()
+                .broadcast_normal(|| PeerMsg::HeartbeatPd);
+        });
+
         let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
 
         let tag = format!("raftstore-{}", store.get_id());
@@ -1078,6 +1086,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
+            cfg.pd_heartbeat_tick_interval.as_secs(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
 

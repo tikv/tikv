@@ -264,6 +264,8 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peer_ids: Vec<u64>,
     pub recent_added_peer: RecentAddedPeer,
 
     /// An inaccurate difference in region size since last reset.
@@ -352,6 +354,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
+            down_peer_ids: vec![],
             recent_added_peer: RecentAddedPeer::new(
                 cfg.raft_reject_transfer_leader_duration.as_secs(),
             ),
@@ -686,6 +689,7 @@ impl Peer {
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
+            self.peers_start_pending_time.clear();
             return;
         }
 
@@ -703,8 +707,9 @@ impl Peer {
     }
 
     /// Collects all down peers.
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
@@ -715,9 +720,11 @@ impl Peer {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(instant.elapsed().as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        self.down_peer_ids = down_peer_ids;
         down_peers
     }
 
@@ -759,13 +766,16 @@ impl Peer {
         pending_peers
     }
 
-    /// Returns `true` if any new peer catches up with the leader in replicating logs.
-    /// And updates `peers_start_pending_time` if needed.
+    /// Returns `true` if any peer recover from connectivity problem.
+    ///
+    /// A peer can become pending or down if it has not responded for a
+    /// long time. If it becomes normal again, PD need to be notified.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() {
+        if self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty() {
             return false;
         }
         if !self.is_leader() {
+            self.down_peer_ids = vec![];
             self.peers_start_pending_time = vec![];
             return false;
         }
@@ -787,6 +797,9 @@ impl Peer {
                     return true;
                 }
             }
+        }
+        if self.down_peer_ids.contains(&peer_id) {
+            return true;
         }
         false
     }
@@ -853,7 +866,6 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
-                    self.heartbeat_pd(ctx)
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -915,9 +927,12 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    pub fn handle_raft_ready_append<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+    ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
-            return;
+            return None;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -928,7 +943,7 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
+            return None;
         }
 
         if !self.pending_messages.is_empty() {
@@ -955,7 +970,7 @@ impl Peer {
                     "apply_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
                 );
-                return;
+                return None;
             }
 
             let mut snap_data = RaftSnapshotData::new();
@@ -997,7 +1012,7 @@ impl Peer {
                         "last_applying_index" => self.last_applying_idx,
                         "overlap_region" => ?r,
                     );
-                    return;
+                    return None;
                 }
             }
         }
@@ -1013,7 +1028,7 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return None;
         }
 
         debug!(
@@ -1055,7 +1070,7 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        Some((ready, invoke_ctx))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(
