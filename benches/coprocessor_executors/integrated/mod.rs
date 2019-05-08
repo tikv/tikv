@@ -221,11 +221,6 @@ pub fn bench(c: &mut criterion::Criterion) {
             inputs.clone(),
         );
         c.bench_function_over_inputs(
-            "select_where_column_from_table",
-            bench_select_where_column_from_table,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
             "select_where_func_from_table_selectivity_l",
             bench_select_where_func_from_table_selectivity_l,
             inputs.clone(),
@@ -243,6 +238,13 @@ pub fn bench(c: &mut criterion::Criterion) {
         c.bench_function_over_inputs(
             "select_count_1_where_func_from_table_selectivity_h",
             bench_select_count_1_where_func_from_table_selectivity_h,
+            inputs.clone(),
+        );
+    }
+    if crate::util::bench_level() >= 2 {
+        c.bench_function_over_inputs(
+            "select_where_column_from_table",
+            bench_select_where_column_from_table,
             inputs.clone(),
         );
     }
