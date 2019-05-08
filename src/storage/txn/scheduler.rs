@@ -41,7 +41,7 @@ use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
-const TASKS_SLOTS_NUM: usize = 1024;
+const TASKS_SLOTS_NUM: usize = 1 << 20;
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
