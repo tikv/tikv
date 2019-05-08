@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -13,9 +13,7 @@ use std::sync::Arc;
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::Writable;
-use engine::rocks::{Snapshot, WriteBatch, WriteOptions};
+use engine::rocks::{self, Snapshot, SyncSnapshot, Writable, WriteBatch, WriteOptions};
 use engine::Engines;
 use engine::{util as engine_util, Mutable, Peekable};
 use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
@@ -284,6 +282,7 @@ struct ApplyContext {
     router: ApplyRouter,
     notifier: Notifier,
     engines: Engines,
+    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
@@ -310,6 +309,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
         cfg: &Config,
@@ -321,6 +321,7 @@ impl ApplyContext {
             importer,
             region_scheduler,
             engines,
+            engine_snapshot,
             router,
             notifier,
             wb: None,
@@ -398,6 +399,26 @@ impl ApplyContext {
             self.wb_last_bytes = 0;
             self.wb_last_keys = 0;
         }
+        // Update snapshot cache.
+        loop {
+            let snapshot =
+                Box::into_raw(Box::new(Snapshot::new(self.engines.kv.clone()).into_sync()));
+            let snapshot_seq = unsafe { (*snapshot).get_sequence_number() };
+            let prev_snapshot = self.engine_snapshot.load(Ordering::Acquire);
+            let prev_snapshot_seq = unsafe { (*prev_snapshot).get_sequence_number() };
+            if prev_snapshot_seq >= snapshot_seq {
+                break;
+            }
+            if let Ok(_) = self.engine_snapshot.compare_exchange(
+                prev_snapshot,
+                snapshot,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                break;
+            }
+        }
+
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
@@ -2733,6 +2754,7 @@ pub struct Builder {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
+    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
     sender: Notifier,
     router: ApplyRouter,
 }
@@ -2750,6 +2772,7 @@ impl Builder {
             importer: builder.importer.clone(),
             region_scheduler: builder.region_scheduler.clone(),
             engines: builder.engines.clone(),
+            engine_snapshot: builder.engine_snapshot.clone(),
             sender,
             router,
         }
@@ -2768,6 +2791,7 @@ impl HandlerBuilder<ApplyFsm, ControlFsm> for Builder {
                 self.importer.clone(),
                 self.region_scheduler.clone(),
                 self.engines.clone(),
+                self.engine_snapshot.clone(),
                 self.router.clone(),
                 self.sender.clone(),
                 &self.cfg,

@@ -2225,6 +2225,26 @@ impl ReadExecutor {
         }
     }
 
+    pub fn from_snapshot(
+        snapshot: SyncSnapshot,
+        engine: Arc<DB>,
+        check_epoch: bool,
+        need_snapshot_time: bool,
+    ) -> Self {
+        let snapshot_time = if need_snapshot_time {
+            Some(monotonic_raw_now())
+        } else {
+            None
+        };
+        ReadExecutor {
+            check_epoch,
+            engine,
+            snapshot: Some(snapshot),
+            snapshot_time,
+            need_snapshot_time,
+        }
+    }
+
     #[inline]
     pub fn snapshot_time(&mut self) -> Option<Timespec> {
         self.maybe_update_snapshot();

@@ -1,8 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel::{TryRecvError, TrySendError};
-use engine::rocks;
-use engine::rocks::CompactionJobInfo;
+use engine::rocks::{self, CompactionJobInfo, SyncSnapshot};
 use engine::{WriteBatch, WriteOptions, DB};
 use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
@@ -14,7 +13,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
@@ -675,6 +674,7 @@ pub struct RaftPollerBuilder<T, C> {
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
     pub engines: Engines,
+    pub engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
     applying_snap_count: Arc<AtomicUsize>,
 }
 
@@ -928,6 +928,7 @@ impl RaftBatchSystem {
         meta: metapb::Store,
         mut cfg: Config,
         engines: Engines,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
@@ -963,6 +964,7 @@ impl RaftBatchSystem {
             cfg: Arc::new(cfg),
             store: meta,
             engines,
+            engine_snapshot,
             router: self.router.clone(),
             split_check_scheduler: workers.split_check_worker.scheduler(),
             region_scheduler: workers.region_worker.scheduler(),

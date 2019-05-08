@@ -28,7 +28,7 @@ use crate::util::signal_handler;
 use std::fs::File;
 use std::path::Path;
 use std::process;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -36,9 +36,9 @@ use std::time::Duration;
 use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
-use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use engine::rocks::{self, Snapshot};
 use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
@@ -192,7 +192,15 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-    let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+    let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+        Snapshot::new(engines.kv.clone()).into_sync(),
+    ))));
+    let local_reader = LocalReader::new(
+        engines.kv.clone(),
+        engine_snapshot.clone(),
+        store_meta.clone(),
+        router.clone(),
+    );
 
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
     let raft_engine = RaftKv::new(raft_router.clone());
@@ -263,6 +271,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     node.start(
         engines.clone(),
+        engine_snapshot,
         trans,
         snap_mgr,
         pd_worker,
