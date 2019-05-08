@@ -116,7 +116,6 @@ tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
-panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
@@ -136,6 +135,7 @@ version = "0.1.4"
 default-features = false
 
 [dev-dependencies]
+panic_hook = { path = "components/panic_hook" }
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }

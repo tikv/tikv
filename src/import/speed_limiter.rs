@@ -317,16 +317,7 @@ mod metronome {
 
     #[test]
     fn test_panic_not_deadlocking() {
-        // TODO: The TiKV CI doesn't support #[should_panic], it interprets
-        // *all* stack traces as failure even if the test is expected to fail,
-        // so we need insert a custom panic hook to silence the stack trace.
-        // Since set_hook requires a non-panicking thread we need to wrap the
-        // actual test case inside `catch_unwind`.
-        use std::panic;
-
-        panic::set_hook(Box::new(|_| {}));
-
-        let res = panic::catch_unwind(|| {
+        let res = panic_hook::recover_safe(|| {
             let (metronome, sleeper) = Metronome::new();
 
             scope(|sc| {
@@ -335,8 +326,6 @@ mod metronome {
             })
             .unwrap();
         });
-
-        panic::take_hook();
 
         assert!(res.is_err());
     }
