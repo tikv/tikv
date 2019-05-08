@@ -232,6 +232,7 @@ struct Stash {
     region: Option<Region>,
     exec_ctx: Option<ExecContext>,
     last_applied_index: u64,
+    for_merge_source: bool,
 }
 
 struct ApplyContextCore<'a> {
@@ -366,13 +367,13 @@ impl<'a> ApplyContextCore<'a> {
     /// the context is ready to switch to apply other `ApplyDelegate`.
     pub fn stash(&mut self, delegate: &mut ApplyDelegate) -> Stash {
         self.commit_opt(delegate, false);
-        self.for_merge_source = true;
         Stash {
             // last cbs should not be popped, because if the ApplyContext
             // is flushed, the callbacks can be flushed too.
             region: self.cbs.last().map(|cbs| cbs.region.clone()),
             exec_ctx: self.exec_ctx.take(),
             last_applied_index: self.last_applied_index,
+            for_merge_source: self.for_merge_source,
         }
     }
 
@@ -382,7 +383,7 @@ impl<'a> ApplyContextCore<'a> {
         if let Some(region) = stash.region {
             self.cbs.push(ApplyCallback::new(region));
         }
-        self.for_merge_source = false;
+        self.for_merge_source = stash.for_merge_source;
         self.exec_ctx = stash.exec_ctx;
         self.last_applied_index = stash.last_applied_index;
     }
@@ -1367,6 +1368,7 @@ impl ApplyDelegate {
             return;
         }
         let stash = ctx.stash(self);
+        self.for_merge_source = true;
         let mut delegate = match ctx.delegates.get_mut(&region_id) {
             None => panic!("{} source region {} not exist", self.tag, region_id),
             Some(e) => e.take().unwrap_or_else(|| {
