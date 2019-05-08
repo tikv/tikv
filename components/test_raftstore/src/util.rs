@@ -172,6 +172,7 @@ pub fn new_tikv_config(cluster_id: u64) -> TiKvConfig {
     TiKvConfig {
         storage: StorageConfig {
             scheduler_worker_pool_size: 1,
+            scheduler_concurrency: 10,
             ..StorageConfig::default()
         },
         server: new_server_config(cluster_id),
@@ -494,7 +495,8 @@ pub fn create_test_engine(
                 cmpacted_handler,
                 Some(dummpy_filter),
             ));
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+            let cache = cfg.storage.block_cache.build_shared_cache();
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),

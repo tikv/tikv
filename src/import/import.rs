@@ -17,6 +17,7 @@ use super::common::*;
 use super::engine::*;
 use super::metrics::*;
 use super::prepare::*;
+use super::speed_limiter::*;
 use super::stream::*;
 use super::{Config, Error, Result};
 
@@ -31,16 +32,22 @@ pub struct ImportJob<Client> {
     client: Client,
     engine: Arc<Engine>,
     counter: Arc<AtomicUsize>,
+    speed_limit: Arc<SpeedLimiter>,
 }
 
 impl<Client: ImportClient> ImportJob<Client> {
     pub fn new(cfg: Config, client: Client, engine: Engine) -> ImportJob<Client> {
+        let speed_limit = Arc::new(SpeedLimiter::new(
+            cfg.upload_speed_limit.0 as f64,
+            StandardClock,
+        ));
         ImportJob {
             tag: format!("[ImportJob {}]", engine.uuid()),
             cfg,
             client,
             engine: Arc::new(engine),
             counter: Arc::new(AtomicUsize::new(1)),
+            speed_limit,
         }
     }
 
@@ -78,6 +85,12 @@ impl<Client: ImportClient> ImportJob<Client> {
                 "retry_count" => %retry_count,
                 "current_round" => %i,
             );
+            if i == MAX_RETRY_TIMES - 1 {
+                res = Err(Error::ImportJobFailed(format!(
+                    "retry {} times still {} ranges failed",
+                    i, retry_count
+                )))
+            }
         }
         IMPORT_EACH_PHASE.with_label_values(&["import"]).set(0.0);
 
@@ -103,11 +116,12 @@ impl<Client: ImportClient> ImportJob<Client> {
         let client = self.client.clone();
         let engine = Arc::clone(&self.engine);
         let counter = Arc::clone(&self.counter);
+        let speed_limit = Arc::clone(&self.speed_limit);
 
         thread::Builder::new()
             .name("import-job".to_owned())
             .spawn(move || {
-                let job = SubImportJob::new(id, rx, client, engine, counter);
+                let job = SubImportJob::new(id, rx, client, engine, counter, speed_limit);
                 job.run(retry_ranges)
             })
             .unwrap()
@@ -215,6 +229,7 @@ struct SubImportJob<Client> {
     engine: Arc<Engine>,
     counter: Arc<AtomicUsize>,
     num_errors: Arc<AtomicUsize>,
+    speed_limit: Arc<SpeedLimiter>,
 }
 
 impl<Client: ImportClient> SubImportJob<Client> {
@@ -224,6 +239,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
         client: Client,
         engine: Arc<Engine>,
         counter: Arc<AtomicUsize>,
+        speed_limit: Arc<SpeedLimiter>,
     ) -> SubImportJob<Client> {
         SubImportJob {
             id,
@@ -232,6 +248,7 @@ impl<Client: ImportClient> SubImportJob<Client> {
             engine,
             counter,
             num_errors: Arc::new(AtomicUsize::new(0)),
+            speed_limit,
         }
     }
 
@@ -250,7 +267,8 @@ impl<Client: ImportClient> SubImportJob<Client> {
                 let sst = lazy_sst.into_sst_file()?;
                 let id = counter.fetch_add(1, Ordering::SeqCst);
                 let tag = format!("[ImportSSTJob {}:{}:{}]", engine.uuid(), sub_id, id);
-                let res = { ImportSSTJob::new(tag, sst, Arc::clone(&client)).run() };
+                let res =
+                    { ImportSSTJob::new(tag, sst, Arc::clone(&client), &self.speed_limit).run() };
                 // Entire range will be retried if any sst in this range failed,
                 // so there is no need for retry single sst
                 if res.is_err() {
@@ -267,15 +285,21 @@ impl<Client: ImportClient> SubImportJob<Client> {
 
 /// ImportSSTJob is responsible for importing `sst` to all replicas of the
 /// specific Region
-struct ImportSSTJob<Client> {
+struct ImportSSTJob<'a, Client> {
     tag: String,
     sst: SSTFile,
     client: Arc<Client>,
+    speed_limit: &'a SpeedLimiter,
 }
 
-impl<Client: ImportClient> ImportSSTJob<Client> {
-    fn new(tag: String, sst: SSTFile, client: Arc<Client>) -> Self {
-        ImportSSTJob { tag, sst, client }
+impl<'a, Client: ImportClient> ImportSSTJob<'a, Client> {
+    fn new(tag: String, sst: SSTFile, client: Arc<Client>, speed_limit: &'a SpeedLimiter) -> Self {
+        ImportSSTJob {
+            tag,
+            sst,
+            client,
+            speed_limit,
+        }
     }
 
     fn run(&mut self) -> Result<()> {
@@ -376,6 +400,9 @@ impl<Client: ImportClient> ImportSSTJob<Client> {
 
     fn upload(&self, region: &RegionInfo) -> Result<()> {
         for peer in region.get_peers() {
+            let size = self.sst.info.file_size;
+            self.speed_limit.take(&self.tag, size);
+
             let file = self.sst.info.open()?;
             let upload = UploadStream::new(self.sst.meta.clone(), file);
             let store_id = peer.get_store_id();

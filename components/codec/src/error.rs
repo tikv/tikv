@@ -12,6 +12,11 @@ quick_error! {
         BadPadding {
             description("Data padding is wrong")
         }
+        Io(err: std::io::Error) {
+            from()
+            cause(err)
+            description(err.description())
+        }
     }
 }
 

@@ -132,14 +132,16 @@ impl RpnExpression {
 
         let mut stack = Vec::with_capacity(self.len());
 
-        // First loop: ensure referred columns are decoded.
+        // We iterate two times. The first time we decode all referred columns. The second time
+        // we evaluate. This is to make Rust's borrow checker happy because there will be
+        // mutable reference during the first iteration and we can't keep these references.
+
         for node in self.as_ref() {
             if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
                 columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
             }
         }
 
-        // Second loop: evaluate RPN expressions.
         for node in self.as_ref() {
             match node {
                 RpnExpressionNode::Constant {
@@ -232,6 +234,7 @@ mod tests {
 
     use super::*;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 
@@ -246,9 +249,7 @@ mod tests {
     /// Single constant node
     #[test]
     fn test_eval_single_constant_node() {
-        let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
-            .build();
+        let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
@@ -353,10 +354,9 @@ mod tests {
     /// Single function call node (i.e. nullary function)
     #[test]
     fn test_eval_single_fn_call_node() {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnFoo;
-
-        impl_template_fn! { 0 arg @ FnFoo }
 
         impl FnFoo {
             fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
@@ -383,10 +383,9 @@ mod tests {
     #[test]
     fn test_eval_unary_function_scalar() {
         /// FnFoo(v) performs v * 2.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -399,7 +398,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -418,10 +417,9 @@ mod tests {
     #[test]
     fn test_eval_unary_function_vector() {
         /// FnFoo(v) performs v + 5.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -466,10 +464,9 @@ mod tests {
     #[test]
     fn test_eval_unary_function_raw_column() {
         /// FnFoo(v) performs v + 5.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -524,10 +521,9 @@ mod tests {
     #[test]
     fn test_eval_binary_function_scalar_scalar() {
         /// FnFoo(v) performs v1 + float(v2) - 1.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnFoo;
-
-        impl_template_fn! { 2 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -541,8 +537,8 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
-            .push_constant(3i64, FieldTypeTp::LongLong)
+            .push_constant(1.5f64)
+            .push_constant(3i64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -561,10 +557,9 @@ mod tests {
     #[test]
     fn test_eval_binary_function_vector_scalar() {
         /// FnFoo(v) performs v1 - v2.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnFoo;
-
-        impl_template_fn! { 2 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -593,7 +588,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -611,10 +606,9 @@ mod tests {
     #[test]
     fn test_eval_binary_function_scalar_vector() {
         /// FnFoo(v) performs v1 - float(v2).
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnFoo;
-
-        impl_template_fn! { 2 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -642,7 +636,7 @@ mod tests {
         }];
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(1.5f64)
             .push_column_ref(0)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
@@ -661,10 +655,9 @@ mod tests {
     #[test]
     fn test_eval_binary_function_vector_vector() {
         /// FnFoo(v) performs int(v1*2.5 - float(v2)*3.5).
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnFoo;
-
-        impl_template_fn! { 2 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -731,10 +724,9 @@ mod tests {
     #[test]
     fn test_eval_binary_function_raw_column() {
         /// FnFoo(v1, v2) performs v1 * v2.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnFoo;
-
-        impl_template_fn! { 2 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -798,10 +790,9 @@ mod tests {
     #[test]
     fn test_eval_ternary_function() {
         /// FnFoo(v) performs v1 - v2 * v3.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 3)]
         struct FnFoo;
-
-        impl_template_fn! { 3 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -827,7 +818,7 @@ mod tests {
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
-            .push_constant(3i64, FieldTypeTp::LongLong)
+            .push_constant(3i64)
             .push_column_ref(0)
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
@@ -856,10 +847,9 @@ mod tests {
     #[test]
     fn test_eval_comprehensive() {
         /// FnA(v1, v2, v3) performs v1 * v2 - v3.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 3)]
         struct FnA;
-
-        impl_template_fn! { 3 arg @ FnA }
 
         impl FnA {
             fn call(
@@ -874,10 +864,9 @@ mod tests {
         }
 
         /// FnB() returns 42.0.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnB;
-
-        impl_template_fn! { 0 arg @ FnB }
 
         impl FnB {
             fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<f64>> {
@@ -886,10 +875,9 @@ mod tests {
         }
 
         /// FnC(v1, v2) performs float(v2 - v1).
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnC;
-
-        impl_template_fn! { 2 arg @ FnC }
 
         impl FnC {
             fn call(
@@ -903,10 +891,9 @@ mod tests {
         }
 
         /// FnD(v1, v2) performs v1 + v2 * 2.
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnD;
-
-        impl_template_fn! { 2 arg @ FnD }
 
         impl FnD {
             fn call(
@@ -954,9 +941,9 @@ mod tests {
             .push_column_ref(0)
             .push_fn_call(FnB, FieldTypeTp::Double)
             .push_column_ref(1)
-            .push_constant(7i64, FieldTypeTp::LongLong)
+            .push_constant(7i64)
             .push_fn_call(FnD, FieldTypeTp::LongLong)
-            .push_constant(11i64, FieldTypeTp::LongLong)
+            .push_constant(11i64)
             .push_fn_call(FnC, FieldTypeTp::Double)
             .push_fn_call(FnA, FieldTypeTp::Double)
             .build();
@@ -985,10 +972,9 @@ mod tests {
     /// Unary function, but supplied zero arguments. Should panic.
     #[test]
     fn test_eval_fail_1() {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -1016,10 +1002,9 @@ mod tests {
     fn test_eval_fail_2() {
         /// FnFoo(v) performs v * 2.
 
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -1034,8 +1019,8 @@ mod tests {
         // FnFoo only accepts 1 parameter but we will give 2.
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(3.0f64, FieldTypeTp::Double)
-            .push_constant(1.5f64, FieldTypeTp::Double)
+            .push_constant(3.0f64)
+            .push_constant(1.5f64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -1052,10 +1037,9 @@ mod tests {
     fn test_eval_fail_3() {
         // Expects real argument, receives int argument.
 
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnFoo;
-
-        impl_template_fn! { 1 arg @ FnFoo }
 
         impl FnFoo {
             fn call(
@@ -1068,7 +1052,7 @@ mod tests {
         }
 
         let exp = RpnExpressionBuilder::new()
-            .push_constant(7i64, FieldTypeTp::LongLong)
+            .push_constant(7i64)
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
@@ -1097,10 +1081,9 @@ mod tests {
         //      )
 
         /// FnA(a: int, b: float, c: int) performs: float(a) - b * float(c)
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 3)]
         struct FnA;
-
-        impl_template_fn! { 3 arg @ FnA }
 
         impl FnA {
             fn call(
@@ -1115,10 +1098,9 @@ mod tests {
         }
 
         /// FnB(a: float, b: int) performs: a * (float(b) - 1.5)
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 2)]
         struct FnB;
-
-        impl_template_fn! { 2 arg @ FnB }
 
         impl FnB {
             fn call(
@@ -1132,10 +1114,9 @@ mod tests {
         }
 
         /// FnC() returns: int(42)
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnC;
-
-        impl_template_fn! { 0 arg @ FnC }
 
         impl FnC {
             fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<i64>> {
@@ -1144,10 +1125,9 @@ mod tests {
         }
 
         /// FnD(a: float) performs: int(a)
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 1)]
         struct FnD;
-
-        impl_template_fn! { 1 arg @ FnD }
 
         impl FnD {
             fn call(
@@ -1159,7 +1139,7 @@ mod tests {
             }
         }
 
-        fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
             // FnA: CastIntAsInt
             // FnB: CastIntAsReal
             // FnC: CastIntAsString

@@ -4,16 +4,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{thread, time};
 
-use crate::grpc::*;
 use futures::{Future, Stream};
+use grpcio::*;
 use kvproto::raft_serverpb::{Done, RaftMessage};
 use kvproto::tikvpb::BatchRaftMessage;
+use tikv::server::transport::RaftStoreBlackHole;
 use tikv::server::{load_statistics::ThreadLoad, Config, RaftClient};
 use tikv_util::security::{SecurityConfig, SecurityManager};
 
 use super::{mock_kv_service, MockKv, MockKvService};
 
-pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient {
+pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient<RaftStoreBlackHole> {
     let env = Arc::new(Environment::new(2));
     let cfg = Arc::new(Config::default());
     let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
@@ -22,6 +23,7 @@ pub fn get_raft_client(pool: &tokio_threadpool::ThreadPool) -> RaftClient {
         env,
         cfg,
         security_mgr,
+        RaftStoreBlackHole,
         grpc_thread_load,
         pool.sender().clone(),
     )
