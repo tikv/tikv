@@ -1,9 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::prelude::BufferNumberEncoder;
+use codec::prelude::NumberEncoder;
 use cop_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
+/// A helper utility to build `tipb::expression::Expr` (a.k.a. expression definition) easily.
 pub struct ExprDefBuilder(Expr);
 
 impl ExprDefBuilder {
@@ -78,11 +79,12 @@ impl ExprDefBuilder {
         Self(expr)
     }
 
-    pub fn push(mut self, child: impl Into<Expr>) -> Self {
+    pub fn push_child(mut self, child: impl Into<Expr>) -> Self {
         self.0.mut_children().push(child.into());
         self
     }
 
+    /// Builds the expression definition.
     pub fn build(self) -> Expr {
         self.0
     }

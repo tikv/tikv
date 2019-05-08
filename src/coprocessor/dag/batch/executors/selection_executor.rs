@@ -157,6 +157,7 @@ mod tests {
     #[test]
     fn test_empty_rows() {
         #[derive(Debug, Clone, Copy, RpnFunction)]
+        #[rpn_function(args = 0)]
         struct FnFoo;
 
         impl FnFoo {

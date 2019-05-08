@@ -13,8 +13,8 @@ fn bench_selection_column(b: &mut criterion::Bencher, input: &Input) {
 /// For SQLs like `WHERE a > b`.
 fn bench_selection_binary_func_column_column(b: &mut criterion::Bencher, input: &Input) {
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
-        .push(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
-        .push(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
         .build();
     input.bencher.bench(b, &[expr], input.src_rows);
 }
@@ -22,8 +22,8 @@ fn bench_selection_binary_func_column_column(b: &mut criterion::Bencher, input: 
 /// For SQLS like `WHERE a > 1`.
 fn bench_selection_binary_func_column_constant(b: &mut criterion::Bencher, input: &Input) {
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
-        .push(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
-        .push(ExprDefBuilder::constant_real(55.4))
+        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+        .push_child(ExprDefBuilder::constant_real(55.4))
         .build();
     input.bencher.bench(b, &[expr], input.src_rows);
 }
@@ -32,12 +32,12 @@ fn bench_selection_binary_func_column_constant(b: &mut criterion::Bencher, input
 fn bench_selection_multiple_predicate(b: &mut criterion::Bencher, input: &Input) {
     let exprs = [
         ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
-            .push(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
-            .push(ExprDefBuilder::constant_real(55.4))
+            .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+            .push_child(ExprDefBuilder::constant_real(55.4))
             .build(),
         ExprDefBuilder::scalar_func(ScalarFuncSig::LEInt, FieldTypeTp::LongLong)
-            .push(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-            .push(ExprDefBuilder::constant_int(42))
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+            .push_child(ExprDefBuilder::constant_int(42))
             .build(),
     ];
     input.bencher.bench(b, &exprs, input.src_rows);

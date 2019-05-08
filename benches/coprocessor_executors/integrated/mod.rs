@@ -18,7 +18,7 @@ fn bench_select_count_1_from_table(b: &mut criterion::Bencher, input: &Input) {
         table_scan(&[table["id"].as_column_info()]),
         simple_aggregate(
             &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefBuilder::constant_int(1))
+                .push_child(ExprDefBuilder::constant_int(1))
                 .build(),
         ),
     ];
@@ -36,7 +36,7 @@ fn bench_select_count_column_from_table(b: &mut criterion::Bencher, input: &Inpu
         table_scan(&[table["foo"].as_column_info()]),
         simple_aggregate(
             &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
                 .build(),
         ),
     ];
@@ -68,8 +68,8 @@ fn bench_select_where_func_from_table(b: &mut criterion::Bencher, input: &Input)
         table_scan(&[table["foo"].as_column_info()]),
         selection(&[
             ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
-                .push(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                .push(ExprDefBuilder::constant_int(42))
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::constant_int(42))
                 .build(),
         ]),
     ];
@@ -87,13 +87,13 @@ fn bench_select_count_where_func_from_table(b: &mut criterion::Bencher, input: &
         table_scan(&[table["foo"].as_column_info()]),
         selection(&[
             ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
-                .push(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                .push(ExprDefBuilder::constant_int(42))
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::constant_int(42))
                 .build(),
         ]),
         simple_aggregate(
             &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefBuilder::constant_int(1))
+                .push_child(ExprDefBuilder::constant_int(1))
                 .build(),
         ),
     ];
