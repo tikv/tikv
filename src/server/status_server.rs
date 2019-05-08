@@ -47,7 +47,7 @@ impl StatusServer {
     }
 
     pub fn dump_prof(seconds: u64) -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
-        let lock = match tikv_alloc::ProfilerLock::new() {
+        let lock = match tikv_alloc::ProfLock::new() {
             Err(e) => return Box::new(err(e)),
             Ok(lock) => lock,
         };
