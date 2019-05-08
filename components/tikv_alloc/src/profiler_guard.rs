@@ -14,8 +14,9 @@ pub struct ProfLock(MutexFut<u32>);
 
 impl ProfLock {
     pub fn new() -> ProfResult<ProfLock> {
+        let guard = PROFILER_MUTEX.lock();
         match activate_prof() {
-            Ok(_) => Ok(ProfLock(PROFILER_MUTEX.lock())),
+            Ok(_) => Ok(ProfLock(guard)),
             Err(e) => Err(e),
         }
     }
@@ -33,8 +34,6 @@ impl Future for ProfLock {
     type Item = ProfGuard;
     type Error = ();
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0
-            .poll()
-            .map(|item| item.map(|guard| ProfGuard(guard)))
+        self.0.poll().map(|item| item.map(|guard| ProfGuard(guard)))
     }
 }
