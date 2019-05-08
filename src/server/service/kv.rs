@@ -1644,7 +1644,7 @@ fn future_test(
     req: BatchCommandTestRequest,
 ) -> impl Future<Item = BatchCommandTestResponse, Error = Error> {
     tikv_util::timer::GLOBAL_TIMER_HANDLE
-        .delay(std::time::Instant::now() + std::time::Duration::from_micros(req.get_delay_time()))
+        .delay(std::time::Instant::now() + std::time::Duration::from_millis(req.get_delay_time()))
         .map(move |_| {
             let mut res = BatchCommandTestResponse::new();
             res.set_test_id(req.get_test_id());
