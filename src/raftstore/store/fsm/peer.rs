@@ -516,7 +516,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.report_snapshot_status(to_peer_id, status);
             }
             SignificantMsg::Unreachable { to_peer_id, .. } => {
-                self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                if self.fsm.peer.is_leader() {
+                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                }
+            }
+            SignificantMsg::StoreUnreachable { store_id } => {
+                if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
+                {
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    }
+                }
             }
         }
     }
@@ -571,6 +581,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             has_snapshot = true;
+        }
+        if self.fsm.peer.leader_unreachable {
+            // TODO: handle unreachable.
+            self.fsm.peer.leader_unreachable = false;
         }
         if is_merging && has_snapshot {
             // After applying a snapshot, merge is rollbacked implicitly.

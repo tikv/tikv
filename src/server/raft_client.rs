@@ -9,6 +9,7 @@ use std::time::Instant;
 use super::load_statistics::ThreadLoad;
 use super::metrics::*;
 use super::{Config, Result};
+use crate::server::transport::RaftStoreRouter;
 use crossbeam::channel::SendError;
 use futures::{future, stream, Future, Poll, Sink, Stream};
 use grpcio::{
@@ -38,8 +39,9 @@ struct Conn {
 }
 
 impl Conn {
-    fn new(
+    fn new<T: RaftStoreRouter + 'static>(
         env: Arc<Environment>,
+        router: T,
         addr: &str,
         cfg: &Config,
         security_mgr: &SecurityManager,
@@ -126,6 +128,7 @@ impl Conn {
                     REPORT_FAILURE_MSG_COUNTER
                         .with_label_values(&["unreachable", &*store_id.to_string()])
                         .inc();
+                    router.broadcast_unreachable(store_id);
                     warn!("batch_raft/raft RPC finally fail"; "to_addr" => addr, "err" => ?e);
                 })
                 .map(|_| ()),
@@ -139,8 +142,9 @@ impl Conn {
 }
 
 /// `RaftClient` is used for sending raft messages to other stores.
-pub struct RaftClient {
+pub struct RaftClient<T: 'static> {
     env: Arc<Environment>,
+    router: Mutex<T>,
     conns: HashMap<(String, usize), Conn>,
     pub addrs: HashMap<u64, String>,
     cfg: Arc<Config>,
@@ -154,16 +158,18 @@ pub struct RaftClient {
     timer: Handle,
 }
 
-impl RaftClient {
+impl<T: RaftStoreRouter> RaftClient<T> {
     pub fn new(
         env: Arc<Environment>,
         cfg: Arc<Config>,
         security_mgr: Arc<SecurityManager>,
+        router: T,
         grpc_thread_load: Arc<ThreadLoad>,
         stats_pool: tokio_threadpool::Sender,
-    ) -> RaftClient {
+    ) -> RaftClient<T> {
         RaftClient {
             env,
+            router: Mutex::new(router),
             conns: HashMap::default(),
             addrs: HashMap::default(),
             cfg,
@@ -181,6 +187,7 @@ impl RaftClient {
             HashMapEntry::Vacant(e) => {
                 let conn = Conn::new(
                     Arc::clone(&self.env),
+                    self.router.lock().unwrap().clone(),
                     addr,
                     &self.cfg,
                     &self.security_mgr,
