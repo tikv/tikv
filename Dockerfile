@@ -1,22 +1,23 @@
 FROM pingcap/rust as builder
 
-RUN mkdir -p /tikv 
 WORKDIR /tikv
 
 # Install Rust
 COPY rust-toolchain ./
-RUN rustup default nightly-2019-03-05
+RUN rustup default nightly-2019-04-25
 
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
 
-# Remove fuzz and test workspace
+# Remove fuzz and test workspace, remove profiler feature
 RUN sed -i '/fuzz/d' Cargo.toml && \
-    sed -i '/test\_/d' Cargo.toml 
+    sed -i '/test\_/d' Cargo.toml && \
+    sed -i '/profiler/d' Cargo.toml
 
 # Add components Cargo files
 # Notice: every time we add a new component, we must regenerate the dockerfile
 COPY ./components/codec/Cargo.toml ./components/codec/Cargo.toml
+COPY ./components/cop_codegen/Cargo.toml ./components/cop_codegen/Cargo.toml
 COPY ./components/cop_datatype/Cargo.toml ./components/cop_datatype/Cargo.toml
 COPY ./components/engine/Cargo.toml ./components/engine/Cargo.toml
 COPY ./components/log_wrappers/Cargo.toml ./components/log_wrappers/Cargo.toml
@@ -32,6 +33,7 @@ RUN mkdir -p ./src/bin && \
     echo 'fn main() {}' > ./src/bin/tikv-importer.rs && \
     echo '' > ./src/lib.rs && \
     mkdir ./components/codec/src && echo '' > ./components/codec/src/lib.rs && \
+    mkdir ./components/cop_codegen/src && echo '' > ./components/cop_codegen/src/lib.rs && \
     mkdir ./components/cop_datatype/src && echo '' > ./components/cop_datatype/src/lib.rs && \
     mkdir ./components/engine/src && echo '' > ./components/engine/src/lib.rs && \
     mkdir ./components/log_wrappers/src && echo '' > ./components/log_wrappers/src/lib.rs && \
@@ -40,6 +42,7 @@ RUN mkdir -p ./src/bin && \
     mkdir ./components/tikv_util/src && echo '' > ./components/tikv_util/src/lib.rs && \
     cargo build --no-default-features --release --features "jemalloc portable sse no-fail" && \
     rm -rf ./target/release/.fingerprint/codec-* && \
+    rm -rf ./target/release/.fingerprint/cop_codegen-* && \
     rm -rf ./target/release/.fingerprint/cop_datatype-* && \
     rm -rf ./target/release/.fingerprint/engine-* && \
     rm -rf ./target/release/.fingerprint/log_wrappers-* && \

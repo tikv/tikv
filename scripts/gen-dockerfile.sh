@@ -2,14 +2,13 @@
 dir="."
 output="./Dockerfile"
 
-if [ "$#" -eq 1 ]; then
+if [ "$#" -ge 1 ]; then
     output=$1
 fi
 
 cat <<EOT > ${output}
 FROM pingcap/rust as builder
 
-RUN mkdir -p /tikv 
 WORKDIR /tikv
 
 # Install Rust
@@ -19,14 +18,15 @@ RUN rustup default $(cat "rust-toolchain")
 # Install dependencies at first
 COPY Cargo.toml Cargo.lock ./
 
-# Remove fuzz and test workspace
+# Remove fuzz and test workspace, remove profiler feature
 RUN sed -i '/fuzz/d' Cargo.toml && \\
-    sed -i '/test\_/d' Cargo.toml 
+    sed -i '/test\_/d' Cargo.toml && \\
+    sed -i '/profiler/d' Cargo.toml
 
 EOT
 
-# Get components
-components=$(ls -d ${dir}/components/*  | xargs -n 1 basename | grep -v "test")
+# Get components, remove test and profiler components
+components=$(ls -d ${dir}/components/*  | xargs -n 1 basename | grep -v "test" | grep -v "profiler")
 
 # List components and add their Cargo files
 echo "# Add components Cargo files
