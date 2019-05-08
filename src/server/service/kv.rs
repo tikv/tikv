@@ -1128,10 +1128,10 @@ fn handle_batch_commands_request<E: Engine>(
         Some(BatchCommandsRequest_Request_oneof_cmd::Test(_req)) => {
             #[cfg(feature = "batch-test")]
             {
-                let timer = GRPC_MSG_HISTOGRAM_VEC.coprocessor.start_coarse_timer();
+                let timer = GRPC_MSG_HISTOGRAM_VEC.invalid.start_coarse_timer();
                 let resp = future_test(_req)
                     .map(oneof!(BatchCommandsResponse_Response_oneof_cmd::Test))
-                    .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
+                    .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
                 response_batch_commands_request(id, resp, tx, timer);
             };
         }
