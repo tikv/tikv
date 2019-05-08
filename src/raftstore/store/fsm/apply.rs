@@ -409,12 +409,11 @@ impl ApplyContext {
             if prev_snapshot_seq >= snapshot_seq {
                 break;
             }
-            if let Ok(_) = self.engine_snapshot.compare_exchange(
-                prev_snapshot,
-                snapshot,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
+            if self
+                .engine_snapshot
+                .compare_exchange(prev_snapshot, snapshot, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 break;
             }
         }
@@ -3011,6 +3010,9 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
+        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            Snapshot::new(engines.kv.clone()).into_sync(),
+        ))));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3020,6 +3022,7 @@ mod tests {
             sender,
             engines: engines.clone(),
             router: router.clone(),
+            engine_snapshot,
         };
         system.spawn("test-basic".to_owned(), builder);
 
@@ -3349,11 +3352,15 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
+        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            Snapshot::new(engines.kv.clone()).into_sync(),
+        ))));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
             sender,
             region_scheduler,
+            engine_snapshot,
             coprocessor_host: Arc::new(host),
             importer: importer.clone(),
             engines: engines.clone(),
@@ -3690,12 +3697,16 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
+        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            Snapshot::new(engines.kv.clone()).into_sync(),
+        ))));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
             sender,
             importer,
             region_scheduler,
+            engine_snapshot,
             coprocessor_host: host,
             engines: engines.clone(),
             router: router.clone(),

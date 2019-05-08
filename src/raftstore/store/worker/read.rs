@@ -571,11 +571,16 @@ mod tests {
         let db =
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
+        let kv_engine = Arc::new(db);
+        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            rocks::Snapshot::new(kv_engine.clone()).into_sync(),
+        ))));
         let reader = LocalReader {
             store_meta,
+            kv_engine,
+            engine_snapshot,
             store_id: Some(store_id),
             router: ch,
-            kv_engine: Arc::new(db),
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),
             tag: "foo".to_owned(),

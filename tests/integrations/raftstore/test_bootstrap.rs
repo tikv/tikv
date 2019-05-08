@@ -11,6 +11,7 @@ use kvproto::raft_serverpb::RegionLocalState;
 use engine::rocks;
 use engine::Engines;
 use engine::*;
+use std::sync::atomic::AtomicPtr;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -80,10 +81,14 @@ fn test_node_bootstrap_with_prepared_data() {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
+    let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+        Snapshot::new(engines.kv.clone()).into_sync(),
+    ))));
 
     // try to restart this node, will clear the prepare data
     node.start(
         engines,
+        engine_snapshot,
         simulate_trans,
         snap_mgr,
         pd_worker,

@@ -10,7 +10,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
 
-use engine::Engines;
+use engine::{Engines, Snapshot};
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -34,6 +34,7 @@ use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
+use std::sync::atomic::AtomicPtr;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
@@ -120,7 +121,15 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
+            Snapshot::new(engines.kv.clone()).into_sync(),
+        ))));
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            engine_snapshot.clone(),
+            store_meta.clone(),
+            router.clone(),
+        );
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router);
 
@@ -210,6 +219,7 @@ impl Simulator for ServerCluster {
 
         node.start(
             engines.clone(),
+            engine_snapshot,
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
