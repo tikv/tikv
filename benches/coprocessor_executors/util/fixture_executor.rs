@@ -24,21 +24,9 @@ pub struct EncodedFixtureBatchExecutor {
 impl EncodedFixtureBatchExecutor {
     pub fn new(rows: usize) -> Self {
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::VarChar.into(),
         ];
         let mut columns_datum = [Vec::new(), Vec::new(), Vec::new()];
         for i in 0..rows {

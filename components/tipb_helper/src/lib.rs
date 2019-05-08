@@ -2,4 +2,4 @@
 
 mod expr_def_builder;
 
-pub use self::expr_def_builder::ExprDefinitionBuilder;
+pub use self::expr_def_builder::ExprDefBuilder;

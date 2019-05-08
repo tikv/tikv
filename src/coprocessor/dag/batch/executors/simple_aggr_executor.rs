@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_it_works_integration() {
         use tipb::expression::ExprType;
-        use tipb_helper::ExprDefinitionBuilder;
+        use tipb_helper::ExprDefBuilder;
 
         // This test creates a simple aggregation executor with the following aggregate functions:
         // - COUNT(1)
@@ -746,30 +746,26 @@ mod tests {
 
         let src_exec = make_src_executor_using_fixture();
         let aggr_definitions = vec![
-            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_int(1))
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefBuilder::constant_int(1))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_real(4.5))
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefBuilder::constant_real(4.5))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::constant_null(
-                    FieldTypeTp::NewDecimal,
-                ))
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefBuilder::constant_null(FieldTypeTp::NewDecimal))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
-                .push(ExprDefinitionBuilder::column_ref(1, FieldTypeTp::Double))
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
-                .push(ExprDefinitionBuilder::constant_real(42.5))
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push(ExprDefBuilder::constant_real(42.5))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::NewDecimal)
-                .push(ExprDefinitionBuilder::constant_null(
-                    FieldTypeTp::NewDecimal,
-                ))
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::NewDecimal)
+                .push(ExprDefBuilder::constant_null(FieldTypeTp::NewDecimal))
                 .build(),
-            ExprDefinitionBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
-                .push(ExprDefinitionBuilder::column_ref(0, FieldTypeTp::Double))
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
                 .build(),
         ];
         let mut exec = BatchSimpleAggregationExecutor::new_for_test(

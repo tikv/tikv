@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod aggr;
 pub mod bencher;
 pub mod executor_descriptor;
 pub mod fixture_executor;

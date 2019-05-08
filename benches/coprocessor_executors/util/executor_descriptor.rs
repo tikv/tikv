@@ -15,6 +15,14 @@ pub fn table_scan(columns_info: &[ColumnInfo]) -> PbExecutor {
     exec
 }
 
+/// Builds a selection executor descriptor.
+pub fn selection(exprs: &[Expr]) -> PbExecutor {
+    let mut exec = PbExecutor::new();
+    exec.set_tp(ExecType::TypeSelection);
+    exec.mut_selection().set_conditions(exprs.to_vec().into());
+    exec
+}
+
 /// Builds a simple aggregate executor descriptor.
 pub fn simple_aggregate(aggr_expr: &Expr) -> PbExecutor {
     let mut exec = PbExecutor::new();
