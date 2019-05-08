@@ -56,18 +56,20 @@ impl std::fmt::Debug for Input {
 pub fn bench(c: &mut criterion::Criterion) {
     let mut inputs = vec![];
 
-    let src_rows_options = if crate::util::use_full_payload() {
-        vec![1, 10, 5000]
-    } else {
-        vec![5000]
-    };
+    let mut rows_options = vec![5000];
+    if crate::util::bench_level() >= 1 {
+        rows_options.push(5);
+    }
+    if crate::util::bench_level() >= 2 {
+        rows_options.push(1);
+    }
     let bencher_options: Vec<Box<dyn util::SimpleAggrBencher>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
     for bencher in &bencher_options {
-        for src_rows in &src_rows_options {
+        for rows in &rows_options {
             inputs.push(Input {
-                src_rows: *src_rows,
+                src_rows: *rows,
                 bencher: bencher.box_clone(),
             });
         }
@@ -83,7 +85,7 @@ pub fn bench(c: &mut criterion::Criterion) {
         bench_simple_aggr_count_int_column,
         inputs.clone(),
     );
-    if crate::util::use_full_payload() {
+    if crate::util::bench_level() >= 2 {
         c.bench_function_over_inputs(
             "simple_aggr_count_real_column",
             bench_simple_aggr_count_real_column,

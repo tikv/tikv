@@ -60,8 +60,11 @@ fn bench_select_where_column_from_table(b: &mut criterion::Bencher, input: &Inpu
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-/// SELECT column FROM Table WHERE column > 42
-fn bench_select_where_func_from_table(b: &mut criterion::Bencher, input: &Input) {
+fn bench_select_where_func_from_table_impl(
+    selectivity: f64,
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
     let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
 
     let executors = &[
@@ -69,7 +72,9 @@ fn bench_select_where_func_from_table(b: &mut criterion::Bencher, input: &Input)
         selection(&[
             ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                .push_child(ExprDefBuilder::constant_int(42))
+                .push_child(ExprDefBuilder::constant_int(
+                    (input.rows as f64 * selectivity) as i64,
+                ))
                 .build(),
         ]),
     ];
@@ -79,8 +84,26 @@ fn bench_select_where_func_from_table(b: &mut criterion::Bencher, input: &Input)
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-/// SELECT COUNT(1) FROM Table WHERE column > 42
-fn bench_select_count_where_func_from_table(b: &mut criterion::Bencher, input: &Input) {
+/// SELECT column FROM Table WHERE column > X (selectivity = 5%)
+fn bench_select_where_func_from_table_selectivity_l(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_where_func_from_table_impl(0.05, b, input);
+}
+
+/// SELECT column FROM Table WHERE column > X (selectivity = 50%)
+fn bench_select_where_func_from_table_selectivity_m(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_where_func_from_table_impl(0.5, b, input);
+}
+
+/// SELECT column FROM Table WHERE column > X (selectivity = 95%)
+fn bench_select_where_func_from_table_selectivity_h(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_where_func_from_table_impl(0.95, b, input);
+}
+
+fn bench_select_count_1_where_func_from_table_impl(
+    selectivity: f64,
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
     let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
 
     let executors = &[
@@ -88,7 +111,9 @@ fn bench_select_count_where_func_from_table(b: &mut criterion::Bencher, input: &
         selection(&[
             ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-                .push_child(ExprDefBuilder::constant_int(42))
+                .push_child(ExprDefBuilder::constant_int(
+                    (input.rows as f64 * selectivity) as i64,
+                ))
                 .build(),
         ]),
         simple_aggregate(
@@ -101,6 +126,30 @@ fn bench_select_count_where_func_from_table(b: &mut criterion::Bencher, input: &
     input
         .bencher
         .bench(b, executors, &[table.get_record_range_all()], &store);
+}
+
+/// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 5%)
+fn bench_select_count_1_where_func_from_table_selectivity_l(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    bench_select_count_1_where_func_from_table_impl(0.05, b, input);
+}
+
+/// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 50%)
+fn bench_select_count_1_where_func_from_table_selectivity_m(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    bench_select_count_1_where_func_from_table_impl(0.5, b, input);
+}
+
+/// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 95%)
+fn bench_select_count_1_where_func_from_table_selectivity_h(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    bench_select_count_1_where_func_from_table_impl(0.95, b, input);
 }
 
 #[derive(Clone)]
@@ -118,16 +167,18 @@ impl std::fmt::Debug for Input {
 pub fn bench(c: &mut criterion::Criterion) {
     let mut inputs = vec![];
 
-    let rows_options = if crate::util::use_full_payload() {
-        vec![1, 10, 5000]
-    } else {
-        vec![5000]
-    };
+    let mut rows_options = vec![5000];
+    if crate::util::bench_level() >= 1 {
+        rows_options.push(5);
+    }
+    if crate::util::bench_level() >= 2 {
+        rows_options.push(1);
+    }
     let mut bencher_options: Vec<Box<dyn util::IntegratedBencher>> = vec![
         Box::new(util::DAGBencher::<RocksStore>::new(false)),
         Box::new(util::DAGBencher::<RocksStore>::new(true)),
     ];
-    if crate::util::use_full_payload() {
+    if crate::util::bench_level() >= 2 {
         let mut additional_inputs: Vec<Box<dyn util::IntegratedBencher>> = vec![
             Box::new(util::NormalBencher::<MemStore>::new()),
             Box::new(util::BatchBencher::<MemStore>::new()),
@@ -154,16 +205,16 @@ pub fn bench(c: &mut criterion::Criterion) {
         inputs.clone(),
     );
     c.bench_function_over_inputs(
-        "select_where_func_from_table",
-        bench_select_where_func_from_table,
+        "select_where_func_from_table_selectivity_m",
+        bench_select_where_func_from_table_selectivity_m,
         inputs.clone(),
     );
     c.bench_function_over_inputs(
-        "select_count_where_func_from_table",
-        bench_select_count_where_func_from_table,
+        "select_count_1_where_func_from_table_selectivity_m",
+        bench_select_count_1_where_func_from_table_selectivity_m,
         inputs.clone(),
     );
-    if crate::util::use_full_payload() {
+    if crate::util::bench_level() >= 1 {
         c.bench_function_over_inputs(
             "select_count_column_from_table",
             bench_select_count_column_from_table,
@@ -172,6 +223,26 @@ pub fn bench(c: &mut criterion::Criterion) {
         c.bench_function_over_inputs(
             "select_where_column_from_table",
             bench_select_where_column_from_table,
+            inputs.clone(),
+        );
+        c.bench_function_over_inputs(
+            "select_where_func_from_table_selectivity_l",
+            bench_select_where_func_from_table_selectivity_l,
+            inputs.clone(),
+        );
+        c.bench_function_over_inputs(
+            "select_where_func_from_table_selectivity_h",
+            bench_select_where_func_from_table_selectivity_h,
+            inputs.clone(),
+        );
+        c.bench_function_over_inputs(
+            "select_count_1_where_func_from_table_selectivity_l",
+            bench_select_count_1_where_func_from_table_selectivity_l,
+            inputs.clone(),
+        );
+        c.bench_function_over_inputs(
+            "select_count_1_where_func_from_table_selectivity_h",
+            bench_select_count_1_where_func_from_table_selectivity_h,
             inputs.clone(),
         );
     }

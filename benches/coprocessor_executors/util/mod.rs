@@ -16,13 +16,13 @@ use test_coprocessor::*;
 use tikv::coprocessor::RequestHandler;
 use tikv::storage::{RocksEngine, Store as TxnStore};
 
-/// Whether or not env variable TIKV_BENCH_FULL_PAYLOAD = 1, indicating using full payload to
-/// run benchmarks.
-pub fn use_full_payload() -> bool {
-    if let Ok(s) = std::env::var("TIKV_BENCH_FULL_PAYLOAD") {
-        s == "1"
+/// Gets the value of `TIKV_BENCH_LEVEL`. The larger value it is, the more comprehensive benchmarks
+/// will be.
+pub fn bench_level() -> usize {
+    if let Ok(s) = std::env::var("TIKV_BENCH_LEVEL") {
+        s.parse::<usize>().unwrap()
     } else {
-        false
+        0
     }
 }
 

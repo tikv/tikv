@@ -178,7 +178,7 @@ pub fn bench(c: &mut criterion::Criterion) {
         Input::new(util::TableScanDAGBencher::<RocksStore>::new(false, ROWS)),
         Input::new(util::TableScanDAGBencher::<RocksStore>::new(true, ROWS)),
     ];
-    if crate::util::use_full_payload() {
+    if crate::util::bench_level() >= 2 {
         let mut additional_inputs = vec![
             Input::new(util::NormalTableScanNext1024Bencher::<RocksStore>::new()),
             Input::new(util::BatchTableScanNext1024Bencher::<RocksStore>::new()),
@@ -200,12 +200,29 @@ pub fn bench(c: &mut criterion::Criterion) {
         bench_table_scan_long_datum_all,
         inputs.clone(),
     );
-    if crate::util::use_full_payload() {
+    c.bench_function_over_inputs(
+        "table_scan_datum_absent_large_row",
+        bench_table_scan_datum_absent_large_row,
+        inputs.clone(),
+    );
+    if crate::util::bench_level() >= 1 {
         c.bench_function_over_inputs(
             "table_scan_datum_front",
             bench_table_scan_datum_front,
             inputs.clone(),
         );
+        c.bench_function_over_inputs(
+            "table_scan_datum_all",
+            bench_table_scan_datum_all,
+            inputs.clone(),
+        );
+        c.bench_function_over_inputs(
+            "table_scan_point_range",
+            bench_table_scan_point_range,
+            inputs.clone(),
+        );
+    }
+    if crate::util::bench_level() >= 2 {
         c.bench_function_over_inputs(
             "table_scan_datum_multi_front",
             bench_table_scan_datum_multi_front,
@@ -214,11 +231,6 @@ pub fn bench(c: &mut criterion::Criterion) {
         c.bench_function_over_inputs(
             "table_scan_datum_end",
             bench_table_scan_datum_end,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_datum_all",
-            bench_table_scan_datum_all,
             inputs.clone(),
         );
         c.bench_function_over_inputs(
@@ -239,16 +251,6 @@ pub fn bench(c: &mut criterion::Criterion) {
         c.bench_function_over_inputs(
             "table_scan_datum_absent",
             bench_table_scan_datum_absent,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_datum_absent_large_row",
-            bench_table_scan_datum_absent_large_row,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_point_range",
-            bench_table_scan_point_range,
             inputs.clone(),
         );
     }
