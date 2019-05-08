@@ -32,7 +32,7 @@ use crate::raftstore::store::fsm::peer::{
 };
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    ApplyTaskRes, BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -609,10 +609,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 // TODO: we may need a way to optimize the message copy.
                 Ok(msg) => {
                     fail_point!(
-                        "pause_on_apply_res_1",
+                        "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
                             && match msg {
-                                PeerMsg::ApplyRes { .. } => true,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                } => true,
                                 _ => false,
                             },
                         |_| unreachable!()
