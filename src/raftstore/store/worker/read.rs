@@ -149,7 +149,6 @@ impl Progress {
     }
 }
 
-#[derive(Clone)]
 pub struct LocalReader<C: ProposalRouter> {
     store_id: Option<u64>,
     store_meta: Arc<Mutex<StoreMeta>>,
@@ -362,6 +361,20 @@ impl<C: ProposalRouter> LocalReader<C> {
                 }
             }
             true
+        }
+    }
+}
+
+impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
+    fn clone(&self) -> Self {
+        LocalReader {
+            store_meta: self.store_meta.clone(),
+            kv_engine: self.kv_engine.clone(),
+            router: self.router.clone(),
+            store_id: self.store_id,
+            metrics: Default::default(),
+            delegates: RefCell::new(HashMap::default()),
+            tag: self.tag.clone(),
         }
     }
 }
