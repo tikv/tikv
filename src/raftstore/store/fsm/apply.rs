@@ -2894,7 +2894,7 @@ mod tests {
                 .unwrap(),
         );
         let shared_block_cache = false;
-        (path, Engines::new(db, raft_db), shared_block_cache)
+        (path, Engines::new(db, raft_db, shared_block_cache))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {

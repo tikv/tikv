@@ -60,7 +60,7 @@ impl Engines {
         Engines {
             kv: kv_engine,
             raft: raft_engine,
-            shared_block_cache: shared_block_cache,
+            shared_block_cache,
         }
     }
 
