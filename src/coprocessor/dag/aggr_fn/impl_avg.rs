@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cop_codegen::AggrFunction;
+use cop_datatype::builder::FieldTypeBuilder;
 use cop_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -35,13 +36,12 @@ impl super::parser::Parser for AggrFnDefinitionParserAvg {
         assert_eq!(aggr_def.get_tp(), ExprType::Avg);
 
         // AVG outputs two columns.
-        out_schema.push({
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong)
-                .set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        });
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
         out_schema.push(aggr_def.take_field_type());
 
         // The process below is very much like `AggrFnDefinitionParserAvg::parse()`.

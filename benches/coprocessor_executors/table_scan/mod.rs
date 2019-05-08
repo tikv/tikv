@@ -175,6 +175,8 @@ pub fn bench(c: &mut criterion::Criterion) {
     let mut inputs = vec![
         Input::new(util::NormalTableScanNext1024Bencher::<MemStore>::new()),
         Input::new(util::BatchTableScanNext1024Bencher::<MemStore>::new()),
+        Input::new(util::TableScanDAGBencher::<RocksStore>::new(false, ROWS)),
+        Input::new(util::TableScanDAGBencher::<RocksStore>::new(true, ROWS)),
     ];
     if crate::util::use_full_payload() {
         let mut additional_inputs = vec![
@@ -183,9 +185,7 @@ pub fn bench(c: &mut criterion::Criterion) {
             Input::new(util::NormalTableScanNext1Bencher::<MemStore>::new()),
             Input::new(util::NormalTableScanNext1Bencher::<RocksStore>::new()),
             Input::new(util::TableScanDAGBencher::<MemStore>::new(false, ROWS)),
-            Input::new(util::TableScanDAGBencher::<RocksStore>::new(false, ROWS)),
             Input::new(util::TableScanDAGBencher::<MemStore>::new(true, ROWS)),
-            Input::new(util::TableScanDAGBencher::<RocksStore>::new(true, ROWS)),
         ];
         inputs.append(&mut additional_inputs);
     }

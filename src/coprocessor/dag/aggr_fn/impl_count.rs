@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cop_codegen::AggrFunction;
+use cop_datatype::builder::FieldTypeBuilder;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -29,19 +30,16 @@ impl super::parser::Parser for AggrFnDefinitionParserCount {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
-        use cop_datatype::FieldTypeAccessor;
-
         assert_eq!(aggr_def.get_tp(), ExprType::Count);
         let child = aggr_def.take_children().into_iter().next().unwrap();
 
         // COUNT outputs one column.
-        out_schema.push({
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong)
-                .set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        });
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
 
         // COUNT doesn't need to cast, so using the expression directly.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
