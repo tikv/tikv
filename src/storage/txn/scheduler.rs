@@ -130,11 +130,8 @@ impl TaskContext {
 }
 
 struct SchedulerInner<E: Engine> {
-    // cid -> Task
-    pending_tasks: Vec<Mutex<HashMap<u64, Task>>>,
-
-    // cid -> TaskContext
-    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
+    // slot_id -> `TaskContext`s in the slot
+    task_contexts: Vec<Mutex<HashMap<u64, (Option<Task>, TaskContext)>>>,
 
     // cmd id generator
     id_alloc: AtomicU64,
@@ -142,9 +139,7 @@ struct SchedulerInner<E: Engine> {
     // write concurrency control
     latches: Latches,
 
-    // TODO: Dynamically calculate this value according to processing
-    // speed of recent write requests.
-    sched_pending_write_threshold: AtomicUsize,
+    sched_pending_write_threshold: usize,
 
     // worker pool
     worker_scheduler: threadpool::Scheduler<SchedContext<E>>,
@@ -163,17 +158,15 @@ fn id_index(cid: u64) -> usize {
 
 impl<E: Engine> SchedulerInner<E> {
     /// Generates the next command ID.
+    #[inline]
     fn gen_id(&self) -> u64 {
-        let id = self.id_alloc.fetch_add(1, Ordering::AcqRel);
+        let id = self.id_alloc.fetch_add(1, Ordering::Relaxed);
         id + 1
     }
 
     fn dequeue_task(&self, cid: u64) -> Task {
-        let task = self.pending_tasks[id_index(cid)]
-            .lock()
-            .unwrap()
-            .remove(&cid)
-            .unwrap();
+        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        let task = tasks.get_mut(&cid).unwrap().0.take().unwrap();
         assert_eq!(task.cid, cid);
         task
     }
@@ -191,28 +184,16 @@ impl<E: Engine> SchedulerInner<E> {
             .running_write_bytes
             .fetch_add(tctx.write_bytes, Ordering::AcqRel) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
+        SCHED_CONTEX_GAUGE.inc();
 
-        if self.pending_tasks[id_index(cid)]
-            .lock()
-            .unwrap()
-            .insert(cid, task)
-            .is_some()
-        {
-            panic!("command cid={} shouldn't exist", cid);
-        }
-        SCHED_CONTEX_GAUGE.set(self.pending_tasks.len() as i64);
-        if self.task_contexts[id_index(cid)]
-            .lock()
-            .unwrap()
-            .insert(cid, tctx)
-            .is_some()
-        {
+        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        if tasks.insert(cid, (Some(task), tctx)).is_some() {
             panic!("TaskContext cid={} shouldn't exist", cid);
         }
     }
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
-        let tctx = self.task_contexts[id_index(cid)]
+        let (_, tctx) = self.task_contexts[id_index(cid)]
             .lock()
             .unwrap()
             .remove(&cid)
@@ -222,15 +203,14 @@ impl<E: Engine> SchedulerInner<E> {
             .running_write_bytes
             .fetch_sub(tctx.write_bytes, Ordering::AcqRel) as i64;
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes - tctx.write_bytes as i64);
-        SCHED_CONTEX_GAUGE.set(self.pending_tasks.len() as i64);
+        SCHED_CONTEX_GAUGE.dec();
 
         tctx
     }
 
     fn too_busy(&self) -> bool {
         fail_point!("txn_scheduler_busy", |_| true);
-        self.running_write_bytes.load(Ordering::Acquire)
-            >= self.sched_pending_write_threshold.load(Ordering::Acquire)
+        self.running_write_bytes.load(Ordering::Acquire) >= self.sched_pending_write_threshold
     }
 
     /// Generates the lock for a command.
@@ -246,7 +226,7 @@ impl<E: Engine> SchedulerInner<E> {
     /// Returns `Some(TaskContext)` if successful; returns `None` otherwise.
     fn acquire_lock(&self, cid: u64) -> bool {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
-        let tctx = task_contexts.get_mut(&cid).unwrap();
+        let (_, tctx) = task_contexts.get_mut(&cid).unwrap();
         let acquired = self.latches.acquire(&mut tctx.lock, cid);
         tctx.on_schedule();
         acquired
@@ -279,10 +259,8 @@ impl<E: Engine> Scheduler<E> {
         sched_pending_write_threshold: usize,
     ) -> Self {
         let factory = SchedContextFactory::new(engine.clone());
-        let mut pending_tasks = Vec::with_capacity(TASKS_SLOTS_NUM);
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
-            pending_tasks.push(Mutex::new(Default::default()));
             task_contexts.push(Mutex::new(Default::default()));
         }
         let worker_pool = ThreadPoolBuilder::new(thd_name!("sched-worker-pool"), factory.clone())
@@ -292,12 +270,11 @@ impl<E: Engine> Scheduler<E> {
             ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory).build();
 
         let inner = Arc::new(SchedulerInner {
-            pending_tasks,
             task_contexts,
             id_alloc: AtomicU64::new(0),
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
-            sched_pending_write_threshold: AtomicUsize::new(sched_pending_write_threshold),
+            sched_pending_write_threshold: sched_pending_write_threshold,
             worker_scheduler: worker_pool.scheduler(),
             high_priority_scheduler: high_priority_pool.scheduler(),
         });
