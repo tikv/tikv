@@ -2241,6 +2241,7 @@ dependencies = [
  "fs2 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures-locks 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "grpcio 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hashbrown 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2308,12 +2309,9 @@ dependencies = [
 name = "tikv_alloc"
 version = "0.1.0"
 dependencies = [
- "futures 0.1.23 (registry+https://github.com/rust-lang/crates.io-index)",
- "futures-locks 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemalloc-ctl 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemalloc-sys 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "lazy_static 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "tcmalloc 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
