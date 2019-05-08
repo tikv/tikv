@@ -29,8 +29,6 @@
 [rocksdb.lockcf]
 
 [raftdb]
-max-background-jobs = 4
-max-sub-compactions = 2
 
 [raftdb.defaultcf]
 
