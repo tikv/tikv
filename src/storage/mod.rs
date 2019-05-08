@@ -515,7 +515,7 @@ impl<E: Engine> Clone for Storage<E> {
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage referenced"; "original_ref" => refs
         );
 
@@ -536,7 +536,7 @@ impl<E: Engine> Drop for Storage<E> {
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage de-referenced"; "original_ref" => refs
         );
 
