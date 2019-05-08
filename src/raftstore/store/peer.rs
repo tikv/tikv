@@ -254,6 +254,8 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
 
+    /// If it fails to send messages to leader.
+    pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
@@ -358,6 +360,7 @@ impl Peer {
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
+            leader_unreachable: false,
             pending_remove: false,
             pending_merge_state: None,
             last_committed_prepare_merge_idx: 0,
@@ -2088,7 +2091,9 @@ impl Peer {
                 "target_store_id" => to_store_id,
                 "err" => ?e,
             );
-
+            if to_peer_id == self.leader_id() {
+                self.leader_unreachable = true;
+            }
             // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
             if msg_type == eraftpb::MessageType::MsgSnapshot {
@@ -2221,6 +2226,26 @@ impl ReadExecutor {
             engine,
             snapshot: None,
             snapshot_time: None,
+            need_snapshot_time,
+        }
+    }
+
+    pub fn from_snapshot(
+        snapshot: SyncSnapshot,
+        engine: Arc<DB>,
+        check_epoch: bool,
+        need_snapshot_time: bool,
+    ) -> Self {
+        let snapshot_time = if need_snapshot_time {
+            Some(monotonic_raw_now())
+        } else {
+            None
+        };
+        ReadExecutor {
+            check_epoch,
+            engine,
+            snapshot: Some(snapshot),
+            snapshot_time,
             need_snapshot_time,
         }
     }

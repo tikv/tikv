@@ -60,6 +60,14 @@ impl Snapshot {
         }
         Ok(DBIterator::new_cf(Arc::clone(&self.db), handle, opt))
     }
+
+    pub fn get_sequence_number(&self) -> u64 {
+        unsafe {
+            engine_rocksdb::crocksdb_ffi::crocksdb_get_snapshot_sequence_number(
+                self.snap.get_inner(),
+            )
+        }
+    }
 }
 
 impl Debug for Snapshot {

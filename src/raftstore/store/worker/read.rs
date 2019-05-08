@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ use crate::raftstore::store::{
     RequestPolicy,
 };
 use crate::raftstore::Result;
+use engine::rocks::SyncSnapshot;
 use engine::DB;
 use tikv_util::collections::HashMap;
 use tikv_util::time::Instant;
@@ -153,6 +155,7 @@ pub struct LocalReader<C: ProposalRouter> {
     store_id: Option<u64>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: Arc<DB>,
+    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
     metrics: RefCell<ReadMetrics>,
     // region id -> ReadDelegate
     delegates: RefCell<HashMap<u64, Option<ReadDelegate>>>,
@@ -162,10 +165,16 @@ pub struct LocalReader<C: ProposalRouter> {
 }
 
 impl LocalReader<RaftRouter> {
-    pub fn new(kv_engine: Arc<DB>, store_meta: Arc<Mutex<StoreMeta>>, router: RaftRouter) -> Self {
+    pub fn new(
+        kv_engine: Arc<DB>,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        store_meta: Arc<Mutex<StoreMeta>>,
+        router: RaftRouter,
+    ) -> Self {
         LocalReader {
             store_meta,
             kv_engine,
+            engine_snapshot,
             router,
             store_id: None,
             metrics: Default::default(),
@@ -275,7 +284,9 @@ impl<C: ProposalRouter> LocalReader<C> {
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
-        let mut executor = ReadExecutor::new(
+        let snapshot = unsafe { (*self.engine_snapshot.load(Ordering::Acquire)).clone() };
+        let mut executor = ReadExecutor::from_snapshot(
+            snapshot,
             self.kv_engine.clone(),
             false, /* dont check region epoch */
             true,  /* we need snapshot time */
@@ -370,8 +381,9 @@ impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
         LocalReader {
             store_meta: self.store_meta.clone(),
             kv_engine: self.kv_engine.clone(),
+            engine_snapshot: self.engine_snapshot.clone(),
             router: self.router.clone(),
-            store_id: self.store_id.clone(),
+            store_id: self.store_id,
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: self.tag.clone(),

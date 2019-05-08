@@ -18,12 +18,12 @@ use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
 use crate::storage::{Config as StorageConfig, RaftKv, Storage};
-use engine::rocks::DB;
-use engine::Engines;
-use engine::Peekable;
+use engine::rocks::{SyncSnapshot, DB};
+use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use protobuf::RepeatedField;
+use std::sync::atomic::AtomicPtr;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -103,6 +103,7 @@ where
     pub fn start<T>(
         &mut self,
         engines: Engines,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
@@ -140,6 +141,7 @@ where
         self.start_store(
             store_id,
             engines,
+            engine_snapshot,
             trans,
             snap_mgr,
             pd_worker,
@@ -306,6 +308,7 @@ where
         &mut self,
         store_id: u64,
         engines: Engines,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
@@ -329,6 +332,7 @@ where
             store,
             cfg,
             engines,
+            engine_snapshot,
             trans,
             pd_client,
             snap_mgr,
