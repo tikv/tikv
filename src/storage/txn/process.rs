@@ -131,18 +131,12 @@ impl<E: Engine> Executor<E> {
         self.scheduler.take().unwrap()
     }
 
-    pub fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
+    fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
         self.pool.take().unwrap()
     }
 
     /// Start the execution of the task.
-    pub fn execute(
-        mut self,
-        cb_ctx: CbContext,
-        sched_ctx: &mut SchedContext<E>,
-        snapshot: EngineResult<E::Snap>,
-        task: Task,
-    ) {
+    pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
         debug!(
             "receive snapshot finish msg";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -154,7 +148,7 @@ impl<E: Engine> Executor<E> {
                     .with_label_values(&[task.tag, "snapshot_ok"])
                     .inc();
 
-                self.process(cb_ctx, sched_ctx, snapshot, task);
+                self.process_by_worker(cb_ctx, snapshot, task);
             }
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC
@@ -175,13 +169,7 @@ impl<E: Engine> Executor<E> {
     }
 
     /// Delivers a command to a worker thread for processing.
-    fn process(
-        self,
-        cb_ctx: CbContext,
-        sched_ctx: &mut SchedContext<E>,
-        snapshot: E::Snap,
-        mut task: Task,
-    ) {
+    fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[task.tag, "process"])
             .inc();
@@ -193,31 +181,34 @@ impl<E: Engine> Executor<E> {
         if let Some(term) = cb_ctx.term {
             task.cmd.mut_context().set_term(term);
         }
+        let pool = self.take_pool();
         let readonly = task.cmd.readonly();
-        fail_point!("scheduler_async_snapshot_finish");
+        pool.schedule(move |ctx: &mut SchedContext<E>| {
+            fail_point!("scheduler_async_snapshot_finish");
 
-        let _processing_read_timer = sched_ctx
-            .processing_read_duration
-            .with_label_values(&[tag])
-            .start_coarse_timer();
+            let _processing_read_timer = ctx
+                .processing_read_duration
+                .with_label_values(&[tag])
+                .start_coarse_timer();
 
-        let region_id = task.region_id;
-        let ts = task.ts;
-        let timer = SlowTimer::new();
+            let region_id = task.region_id;
+            let ts = task.ts;
+            let timer = SlowTimer::new();
 
-        let statistics = if readonly {
-            self.process_read(sched_ctx, snapshot, task)
-        } else {
-            self.process_write(sched_ctx, snapshot, task)
-        };
-        sched_ctx.add_statistics(tag, &statistics);
-        slow_log!(
-            timer,
-            "[region {}] scheduler handle command: {}, ts: {}",
-            region_id,
-            tag,
-            ts
-        );
+            let statistics = if readonly {
+                self.process_read(ctx, snapshot, task)
+            } else {
+                self.process_write(ctx, snapshot, task)
+            };
+            ctx.add_statistics(tag, &statistics);
+            slow_log!(
+                timer,
+                "[region {}] scheduler handle command: {}, ts: {}",
+                region_id,
+                tag,
+                ts
+            );
+        });
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
@@ -642,7 +633,7 @@ pub struct SchedContext<E: Engine> {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    pub engine: E,
+    engine: E,
 }
 
 impl<E: Engine> SchedContext<E> {

@@ -23,11 +23,9 @@
 use std::fmt::{self, Debug, Display, Formatter};
 use std::u64;
 
-use futures::{future, Future};
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 
-use crate::storage::kv::Error as KVError;
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
@@ -132,7 +130,8 @@ impl TaskContext {
 
 /// Scheduler which schedules the execution of `storage::Command`s.
 pub struct Scheduler<E: Engine> {
-    // engine: E,
+    engine: E,
+
     /// cid -> Task
     pending_tasks: HashMap<u64, Task>,
 
@@ -173,7 +172,7 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         let factory = SchedContextFactory::new(engine.clone());
         Scheduler {
-            // engine,
+            engine,
             // TODO: GC these two maps.
             pending_tasks: Default::default(),
             task_contexts: Default::default(),
@@ -314,42 +313,23 @@ impl<E: Engine> Scheduler<E> {
         let task = self.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-        let mut executor = self.fetch_executor(task.priority());
-        let pool = executor.take_pool();
-        let scheduler_clone = self.scheduler.clone();
+        let executor = self.fetch_executor(task.priority());
 
-        pool.schedule(move |sched_ctx| {
-            let (callback, future) = tikv_util::future::paired_future_callback();
-            let val = sched_ctx.engine.async_snapshot(&ctx, callback);
+        let cb = Box::new(move |(cb_ctx, snapshot)| {
+            executor.execute(cb_ctx, snapshot, task);
+        });
+        if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[tag, "async_snapshot_err"])
+                .inc();
 
-            if let Err(e) = future::result(val)
-                .and_then(|_| future.map_err(|canceled| KVError::Other(box_err!(canceled))))
-                .and_then(|res| future::ok(res))
-                .then(|result| {
-                    let (cb_ctx, snapshot) = result.unwrap();
-                    executor.execute(cb_ctx, sched_ctx, snapshot, task);
-                    SCHED_STAGE_COUNTER_VEC
-                        .with_label_values(&[tag, "snapshot"])
-                        .inc();
-                    future::ok::<(), KVError>(())
-                })
-                .wait()
-            {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "async_snapshot_err"])
-                    .inc();
-
-                error!("engine async_snapshot failed"; "err" => ?e);
-                let task = Msg::FinishedWithErr {
-                    cid,
-                    err: e.into(),
-                    tag: "scheduler",
-                };
-                if let Err(e) = scheduler_clone.schedule(task) {
-                    panic!("schedule error msg failed, err:{:?}", e);
-                };
-            }
-        })
+            error!("engine async_snapshot failed"; "err" => ?e);
+            self.finish_with_err(cid, e.into());
+        } else {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[tag, "snapshot"])
+                .inc();
+        }
     }
 
     /// Calls the callback with an error.
