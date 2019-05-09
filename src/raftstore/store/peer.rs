@@ -2146,7 +2146,7 @@ pub trait RequestInspector {
                 CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
                     has_write = true
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe corrupted",
                         r.get_cmd_type()
@@ -2336,6 +2336,7 @@ impl ReadExecutor {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::IngestSST
+                | CmdType::ReadIndex
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);
