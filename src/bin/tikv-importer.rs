@@ -16,18 +16,15 @@ extern crate slog;
 #[macro_use]
 extern crate slog_global;
 
-#[cfg(unix)]
-#[macro_use]
-mod util;
 use crate::util::setup::*;
 use crate::util::signal_handler;
 
-use std::process;
-use std::sync::atomic::Ordering;
-
 use clap::{crate_authors, crate_version, App, Arg, ArgMatches};
 
+#[cfg(unix)]
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
+use tikv::fatal;
 use tikv::import::ImportKVServer;
 use tikv_util::{self as tikv_util, check_environment_variables};
 
