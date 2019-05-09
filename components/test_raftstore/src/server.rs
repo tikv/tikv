@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
+use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
@@ -10,7 +11,7 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
 
-use engine::{Engines, Snapshot};
+use engine::Engines;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
@@ -122,9 +123,7 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            Snapshot::new(engines.kv.clone()).into_sync(),
-        ))));
+        let engine_snapshot = Arc::new(AtomicPtr::new(ptr::null_mut()));
         let local_reader = LocalReader::new(
             engines.kv.clone(),
             engine_snapshot.clone(),

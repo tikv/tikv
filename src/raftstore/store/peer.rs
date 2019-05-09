@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{atomic, Arc};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
@@ -1962,6 +1962,7 @@ impl Peer {
     ) -> ReadResponse {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
+            ctx.engine_snapshot.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
@@ -2214,38 +2215,25 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor {
     check_epoch: bool,
     engine: Arc<DB>,
+    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
     snapshot: Option<SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
 }
 
 impl ReadExecutor {
-    pub fn new(engine: Arc<DB>, check_epoch: bool, need_snapshot_time: bool) -> Self {
-        ReadExecutor {
-            check_epoch,
-            engine,
-            snapshot: None,
-            snapshot_time: None,
-            need_snapshot_time,
-        }
-    }
-
-    pub fn from_snapshot(
-        snapshot: SyncSnapshot,
+    pub fn new(
         engine: Arc<DB>,
+        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
         check_epoch: bool,
         need_snapshot_time: bool,
     ) -> Self {
-        let snapshot_time = if need_snapshot_time {
-            Some(monotonic_raw_now())
-        } else {
-            None
-        };
         ReadExecutor {
             check_epoch,
             engine,
-            snapshot: Some(snapshot),
-            snapshot_time,
+            engine_snapshot,
+            snapshot: None,
+            snapshot_time: None,
             need_snapshot_time,
         }
     }
@@ -2261,8 +2249,22 @@ impl ReadExecutor {
         if self.snapshot.is_some() {
             return;
         }
-        let engine = self.engine.clone();
-        self.snapshot = Some(Snapshot::new(engine).into_sync());
+        loop {
+            let prev_snapshot = self.engine_snapshot.load(Ordering::Acquire);
+            if !prev_snapshot.is_null() {
+                self.snapshot = Some(unsafe { (*prev_snapshot).clone() });
+                break;
+            }
+            let snapshot = Box::into_raw(Box::new(Snapshot::new(self.engine.clone()).into_sync()));
+            if self
+                .engine_snapshot
+                .compare_exchange(prev_snapshot, snapshot, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.snapshot = Some(unsafe { (*snapshot).clone() });
+                break;
+            }
+        }
         // Reading current timespec after snapshot, in case we do not
         // expire lease in time.
         atomic::fence(atomic::Ordering::Release);

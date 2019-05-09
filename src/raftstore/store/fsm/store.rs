@@ -13,6 +13,7 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
+use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -217,6 +218,7 @@ pub struct PollContext<T, C: 'static> {
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
+    pub engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -896,6 +898,7 @@ where
             ready_res: Vec::new(),
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
+            engine_snapshot: self.engine_snapshot.clone(),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),
@@ -1462,6 +1465,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
+        self.ctx
+            .engine_snapshot
+            .store(ptr::null_mut(), Ordering::Release);
         if self.ctx.compact_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, check space redundancy next time";

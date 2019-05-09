@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
+use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
@@ -399,24 +400,9 @@ impl ApplyContext {
             self.wb_last_bytes = 0;
             self.wb_last_keys = 0;
         }
-        // Update snapshot cache.
-        loop {
-            let snapshot =
-                Box::into_raw(Box::new(Snapshot::new(self.engines.kv.clone()).into_sync()));
-            let snapshot_seq = unsafe { (*snapshot).get_sequence_number() };
-            let prev_snapshot = self.engine_snapshot.load(Ordering::Acquire);
-            let prev_snapshot_seq = unsafe { (*prev_snapshot).get_sequence_number() };
-            if prev_snapshot_seq >= snapshot_seq {
-                break;
-            }
-            if self
-                .engine_snapshot
-                .compare_exchange(prev_snapshot, snapshot, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                break;
-            }
-        }
+        // Clean snapshot cache.
+        self.engine_snapshot
+            .store(ptr::null_mut(), Ordering::Release);
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);

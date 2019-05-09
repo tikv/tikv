@@ -28,6 +28,7 @@ use crate::util::signal_handler;
 use std::fs::File;
 use std::path::Path;
 use std::process;
+use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -36,9 +37,9 @@ use std::time::Duration;
 use clap::{crate_authors, crate_version, App, Arg};
 use fs2::FileExt;
 
+use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
-use engine::rocks::{self, Snapshot};
 use engine::Engines;
 use tikv::config::{check_and_persist_critical_config, TiKvConfig};
 use tikv::coprocessor;
@@ -192,9 +193,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-    let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-        Snapshot::new(engines.kv.clone()).into_sync(),
-    ))));
+    let engine_snapshot = Arc::new(AtomicPtr::new(ptr::null_mut()));
     let local_reader = LocalReader::new(
         engines.kv.clone(),
         engine_snapshot.clone(),

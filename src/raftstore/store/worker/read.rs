@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::AtomicPtr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -284,10 +284,9 @@ impl<C: ProposalRouter> LocalReader<C> {
     // It can only handle read command.
     pub fn propose_raft_command(&self, cmd: RaftCommand) {
         let region_id = cmd.request.get_header().get_region_id();
-        let snapshot = unsafe { (*self.engine_snapshot.load(Ordering::Acquire)).clone() };
-        let mut executor = ReadExecutor::from_snapshot(
-            snapshot,
+        let mut executor = ReadExecutor::new(
             self.kv_engine.clone(),
+            self.engine_snapshot.clone(),
             false, /* dont check region epoch */
             true,  /* we need snapshot time */
         );
