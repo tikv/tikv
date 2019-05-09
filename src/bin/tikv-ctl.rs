@@ -51,7 +51,7 @@ use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
 use tikv_util::security::{SecurityConfig, SecurityManager};
@@ -892,7 +892,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();
