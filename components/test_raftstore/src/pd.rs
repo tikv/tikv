@@ -18,7 +18,7 @@ use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
-use tikv::raftstore::store::{INIT_EPOCH_VER, INIT_EPOCH_CONF_VER};
+use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
 use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tikv_util::{escape, Either, HandyRwLock};
