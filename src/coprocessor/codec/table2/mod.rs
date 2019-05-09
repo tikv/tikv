@@ -69,6 +69,21 @@ impl RowValueCodec {
     }
 }
 
+/// Do not inline this function in any cases to reduce hot instruction size.
+#[inline(never)]
+fn skip_uncommon_datum(flag: u8, buf: &[u8]) -> Result<usize> {
+    Ok(match flag {
+        datum::DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
+        datum::JSON_FLAG => {
+            let mut v = &buf[1..];
+            let l = v.len();
+            Json::decode(&mut v)?;
+            l - v.len()
+        }
+        _ => return Err(box_err!("Unsupported datum flag {}", flag)),
+    })
+}
+
 pub trait DatumDecoder: NumberDecoder {
     fn peek_datum_slice(&mut self) -> Result<&[u8]> {
         let buf = self.bytes();
@@ -87,16 +102,9 @@ pub trait DatumDecoder: NumberDecoder {
             datum::BYTES_FLAG => MemComparableByteCodec::get_first_encoded_len(&buf[1..]),
             datum::COMPACT_BYTES_FLAG => CompactByteCodec::get_first_encoded_len(&buf[1..]),
             datum::DURATION_FLAG => codec::number::I64_SIZE,
-            datum::DECIMAL_FLAG => mysql::dec_encoded_len(&buf[1..])?,
-            datum::JSON_FLAG => {
-                let mut v = &buf[1..];
-                let l = v.len();
-                Json::decode(&mut v)?;
-                l - v.len()
-            }
-            _ => return Err(box_err!("Unsupported datum flag {}", flag)),
+            _ => skip_uncommon_datum(flag, buf)?,
         };
-        if len + 1 > buf.len() {
+        if unsafe { unlikely(len + 1 > buf.len()) } {
             return Err(box_err!("Unexpected EOF"));
         }
         Ok(&buf[..=len])
