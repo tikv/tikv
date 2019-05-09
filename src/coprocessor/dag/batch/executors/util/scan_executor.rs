@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
@@ -35,7 +24,7 @@ pub trait ScanExecutorImpl: Send {
     fn build_scanner<S: Store>(&self, store: &S, desc: bool, range: KeyRange)
         -> Result<Scanner<S>>;
 
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec;
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec;
 
     /// Accepts a key value pair and fills the column vector.
     ///
@@ -142,10 +131,10 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     /// The columns are ensured to be regular even if there are errors during the process.
     fn fill_column_vec(
         &mut self,
-        expect_rows: usize,
+        scan_rows: usize,
         columns: &mut LazyBatchColumnVec,
     ) -> Result<bool> {
-        assert!(expect_rows > 0);
+        assert!(scan_rows > 0);
 
         loop {
             let range = self.ranges.next();
@@ -181,7 +170,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
                     return Err(e);
                 }
 
-                if columns.rows_len() >= expect_rows {
+                if columns.rows_len() >= scan_rows {
                     return Ok(false); // not drained
                 }
             } else {
@@ -205,6 +194,18 @@ pub fn field_type_from_column_info(ci: &ColumnInfo) -> FieldType {
     field_type
 }
 
+/// Checks whether the given columns info are supported.
+pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
+    use cop_datatype::EvalType;
+    use cop_datatype::FieldTypeAccessor;
+    use std::convert::TryFrom;
+
+    for column in columns_info {
+        box_try!(EvalType::try_from(column.tp()));
+    }
+    Ok(())
+}
+
 impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
     for ScanExecutor<C, S, I, P>
 {
@@ -214,15 +215,14 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
-        assert!(expect_rows > 0);
+        assert!(scan_rows > 0);
 
-        let timer = self.summary_collector.start_record_duration();
-        self.summary_collector.inc_iterations();
+        let timer = self.summary_collector.on_start_iterate();
 
-        let mut data = self.imp.build_column_vec(expect_rows);
-        let is_drained = self.fill_column_vec(expect_rows, &mut data);
+        let mut data = self.imp.build_column_vec(scan_rows);
+        let is_drained = self.fill_column_vec(scan_rows, &mut data);
 
         data.assert_columns_equal_length();
 
@@ -237,8 +237,8 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
             Ok(false) => {}
         };
 
-        self.summary_collector.inc_produced_rows(data.rows_len());
-        self.summary_collector.inc_elapsed_duration(timer);
+        self.summary_collector
+            .on_finish_iterate(timer, data.rows_len());
 
         BatchExecuteResult {
             data,

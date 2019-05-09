@@ -5,8 +5,9 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tikv = { path = "../../" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tikv_util = { path = "../tikv_util" }
+tikv = { path = "../../", default-features = false }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 protobuf = "~2.0"
 tempdir = "0.3"
 raft = "0.4"
@@ -18,3 +19,4 @@ rand = "0.3"
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 # better to not use slog-global, but pass in the logger
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
+engine = { path = "../engine" }

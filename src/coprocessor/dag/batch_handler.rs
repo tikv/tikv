@@ -1,21 +1,11 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
 use protobuf::{Message, RepeatedField};
 
 use kvproto::coprocessor::Response;
+use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse};
 
 use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
@@ -60,6 +50,9 @@ pub struct BatchDAGHandler {
     /// Traditional metric interface.
     // TODO: Deprecate it in Coprocessor DAG v2.
     metrics: ExecutorMetrics,
+
+    /// Whether or not execution summary need to be collected.
+    collect_exec_summary: bool,
 }
 
 impl BatchDAGHandler {
@@ -68,16 +61,17 @@ impl BatchDAGHandler {
         out_most_executor: Box<dyn BatchExecutor>,
         output_offsets: Vec<u32>,
         config: Arc<EvalConfig>,
-        ranges_len: usize,
-        executors_len: usize,
+        statistics: BatchExecuteStatistics,
+        collect_exec_summary: bool,
     ) -> Self {
         Self {
             deadline,
             out_most_executor,
             output_offsets,
             config,
-            statistics: BatchExecuteStatistics::new(executors_len, ranges_len),
+            statistics,
             metrics: ExecutorMetrics::default(),
+            collect_exec_summary,
         }
     }
 }
@@ -116,6 +110,10 @@ impl RequestHandler for BatchDAGHandler {
 
             // Notice that rows_len == 0 doesn't mean that it is drained.
             if result.data.rows_len() > 0 {
+                assert_eq!(
+                    result.data.columns_len(),
+                    self.out_most_executor.schema().len()
+                );
                 let mut chunk = Chunk::new();
                 {
                     let data = chunk.mut_rows_data();
@@ -138,7 +136,7 @@ impl RequestHandler for BatchDAGHandler {
 
                 let mut resp = Response::new();
                 let mut sel_resp = SelectResponse::new();
-                sel_resp.set_chunks(RepeatedField::from_vec(chunks));
+                sel_resp.set_chunks(chunks.into());
                 // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
                 sel_resp.set_output_counts(
                     self.statistics
@@ -148,7 +146,23 @@ impl RequestHandler for BatchDAGHandler {
                         .collect(),
                 );
 
-                sel_resp.set_warnings(RepeatedField::from_vec(warnings.warnings));
+                if self.collect_exec_summary {
+                    let summaries = self
+                        .statistics
+                        .summary_per_executor
+                        .iter()
+                        .map(|summary| {
+                            let mut ret = ExecutorExecutionSummary::new();
+                            ret.set_num_iterations(summary.num_iterations as u64);
+                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                            ret
+                        })
+                        .collect();
+                    sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                }
+
+                sel_resp.set_warnings(warnings.warnings.into());
                 sel_resp.set_warning_count(warnings.warning_cnt as i64);
 
                 let data = box_try!(sel_resp.write_to_bytes());

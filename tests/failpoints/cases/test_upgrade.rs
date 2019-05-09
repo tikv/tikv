@@ -1,15 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -25,9 +14,10 @@ use tikv::pd::PdClient;
 use tikv::raftstore::store::{
     keys, Engines, Mutable, Peekable, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
 };
+use tikv::storage::kv::{DBOptions, Writable, DB};
 use tikv::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use tikv::storage::engine::{DBOptions, Writable, DB};
-use tikv::util::rocksdb_util;
+use tikv_util::rocksdb_util;
+use tikv_util::config::MB;
 
 const CLUSTER_ID: u64 = 1_000_000_000;
 const STOER_ID: u64 = 1;
@@ -137,6 +127,8 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     let tmp_path_raft = tmp_dir.path().join(Path::new("raft"));
     let raft_engine =
         rocksdb_util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap();
+    let mut cache_opts = LRUCacheOptions::new();
+    cache_opts.set_capacity(8 * MB);
 
     // No need to upgrade an empty node.
     tikv::raftstore::store::maybe_upgrade_from_2_to_3(
@@ -144,6 +136,7 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
         tmp_path_kv.to_str().unwrap(),
         DBOptions::new(),
         &DbConfig::default(),
+        Some(Cache::new_lru_cache(cache_opts)),
     )
     .unwrap();
     // Check whether there is a kv engine.

@@ -1,33 +1,22 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error;
 use std::io::Error as IoError;
 use std::net::AddrParseError;
 use std::result;
 
-use crate::grpc::Error as GrpcError;
 use futures::Canceled;
+use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use protobuf::ProtobufError;
 
 use super::snap::Task as SnapTask;
 use crate::pd::Error as PdError;
 use crate::raftstore::Error as RaftServerError;
-use crate::storage::engine::Error as EngineError;
+use crate::storage::kv::Error as EngineError;
 use crate::storage::Error as StorageError;
-use crate::util::codec::Error as CodecError;
-use crate::util::worker::ScheduleError;
+use tikv_util::codec::Error as CodecError;
+use tikv_util::worker::ScheduleError;
 
 quick_error! {
     #[derive(Debug)]
@@ -81,6 +70,12 @@ quick_error! {
             description(err.description())
         }
         Storage(err: StorageError) {
+            from()
+            cause(err)
+            display("{:?}", err)
+            description(err.description())
+        }
+        RealEngine(err: engine::Error) {
             from()
             cause(err)
             display("{:?}", err)

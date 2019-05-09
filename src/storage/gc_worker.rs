@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
@@ -19,27 +8,27 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::storage::engine::DB;
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::DB;
+use engine::util::delete_all_in_range_cf;
+use engine::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use futures::Future;
 use kvproto::kvrpcpb::Context;
 use kvproto::metapb;
+use log_wrappers::DisplayValue;
 use raft::StateRole;
 
-use super::engine::{
-    Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary,
-};
+use super::kv::{Engine, Error as EngineError, RegionInfoProvider, ScanMode, StatisticsSummary};
 use super::metrics::*;
 use super::mvcc::{MvccReader, MvccTxn};
-use super::{Callback, Error, Key, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use super::{Callback, Error, Key, Result};
 use crate::pd::PdClient;
 use crate::raftstore::store::keys;
 use crate::raftstore::store::msg::StoreMsg;
-use crate::raftstore::store::util::{delete_all_in_range_cf, find_peer};
+use crate::raftstore::store::util::find_peer;
 use crate::server::transport::ServerRaftStoreRouter;
-use crate::util::rocksdb_util::get_cf_handle;
-use crate::util::time::{duration_to_sec, SlowTimer};
-use crate::util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
-use log_wrappers::DisplayValue;
+use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::worker::{self, Builder as WorkerBuilder, Runnable, ScheduleError, Worker};
 
 // TODO: make it configurable.
 pub const GC_BATCH_SIZE: usize = 512;
@@ -760,7 +749,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.wait_for_next_safe_point()?;
-        debug!("gc-manager started"; "safe_point" => self.safe_point);
+        info!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
 
@@ -1147,7 +1136,7 @@ mod tests {
     use super::*;
     use crate::raftstore::coprocessor::{RegionInfo, SeekRegionCallback};
     use crate::raftstore::store::util::new_peer;
-    use crate::storage::engine::Result as EngineResult;
+    use crate::storage::kv::Result as EngineResult;
     use crate::storage::{Mutation, Options, Storage, TestEngineBuilder, TestStorageBuilder};
     use futures::Future;
     use kvproto::metapb;
@@ -1341,6 +1330,19 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 234);
 
         test_util.stop();
+    }
+
+    #[test]
+    fn test_gc_manager_initialize() {
+        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut gc_manager = test_util.gc_manager.take().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        test_util.add_next_safe_point(0);
+        test_util.add_next_safe_point(5);
+        gc_manager.initialize().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        assert!(gc_manager.try_update_safe_point());
+        assert_eq!(gc_manager.safe_point, 5);
     }
 
     #[test]

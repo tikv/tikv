@@ -1,26 +1,14 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod config;
-pub mod engine;
 pub mod gc_worker;
+pub mod kv;
 mod metrics;
 pub mod mvcc;
-mod readpool_context;
+pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::boxed::FnBox;
 use std::cmp;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -28,51 +16,42 @@ use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
 use std::u64;
 
+use engine::rocks::DB;
+use engine::{IterOption, DATA_KEY_PREFIX_LEN};
 use futures::{future, Future};
 use kvproto::errorpb;
 use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 
-use crate::raftstore::store::engine::IterOption;
-use crate::server::readpool::{self, ReadPool};
+use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
-use crate::storage::engine::DB;
-use crate::util;
-use crate::util::collections::HashMap;
-use crate::util::worker::{self, Builder, ScheduleError, Worker};
+use tikv_util::collections::HashMap;
+use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
 use self::txn::CMD_BATCH_SIZE;
 
-pub use self::config::{Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
-pub use self::engine::raftkv::RaftKv;
-pub use self::engine::{
+pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
+pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
+pub use self::kv::raftkv::RaftKv;
+pub use self::kv::{
     CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
     Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
-pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::mvcc::Scanner as StoreScanner;
-pub use self::readpool_context::Context as ReadPoolContext;
+pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
-
-pub type CfName = &'static str;
-pub const CF_DEFAULT: CfName = "default";
-pub const CF_LOCK: CfName = "lock";
-pub const CF_WRITE: CfName = "write";
-pub const CF_RAFT: CfName = "raft";
-// Cfs that should be very large generally.
-pub const LARGE_CFS: &[CfName] = &[CF_DEFAULT, CF_WRITE];
-pub const ALL_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE, CF_RAFT];
-pub const DATA_CFS: &[CfName] = &[CF_DEFAULT, CF_LOCK, CF_WRITE];
+pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+
+use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN
@@ -477,14 +456,7 @@ impl<E: Engine> TestStorageBuilder<E> {
 
     /// Build a `Storage<E>`.
     pub fn build(self) -> Result<Storage<E>> {
-        use crate::util::worker::FutureWorker;
-
-        let read_pool = {
-            let pd_worker = FutureWorker::new("test-future–worker");
-            ReadPool::new("readpool", &readpool::Config::default_for_test(), || {
-                ReadPoolContext::new(pd_worker.scheduler())
-            })
-        };
+        let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test()).build();
         Storage::from_engine(
             self.engine,
             &self.config,
@@ -524,7 +496,7 @@ pub struct Storage<E: Engine> {
     worker_scheduler: worker::Scheduler<Msg>,
 
     /// The thread pool used to run most read operations.
-    read_pool: ReadPool<ReadPoolContext>,
+    read_pool: ReadPool,
 
     /// Used to handle requests related to GC.
     gc_worker: GCWorker<E>,
@@ -597,7 +569,7 @@ impl<E: Engine> Storage<E> {
     pub fn from_engine(
         engine: E,
         config: &Config,
-        read_pool: ReadPool<ReadPoolContext>,
+        read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
@@ -665,13 +637,13 @@ impl<E: Engine> Storage<E> {
 
     /// Get a snapshot of `engine`.
     fn async_snapshot(engine: E, ctx: &Context) -> impl Future<Item = E::Snap, Error = Error> {
-        let (callback, future) = util::future::paired_future_callback();
+        let (callback, future) = tikv_util::future::paired_future_callback();
         let val = engine.async_snapshot(ctx, callback);
 
         future::result(val)
             .and_then(|_| future.map_err(|cancel| EngineError::Other(box_err!(cancel))))
             .and_then(|(_ctx, result)| result)
-            // map storage::engine::Error -> storage::txn::Error -> storage::Error
+            // map storage::kv::Error -> storage::txn::Error -> storage::Error
             .map_err(txn::Error::from)
             .map_err(Error::from)
     }
@@ -688,41 +660,37 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    tls_processing_read_observe_duration(CMD, || {
+                        let mut statistics = Statistics::default();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                        );
+                        let result = snap_store
+                            .get(&key, &mut statistics)
+                            // map storage::txn::Error -> storage::Error
+                            .map_err(Error::from)
+                            .map(|r| {
+                                tls_collect_key_reads(CMD, 1);
+                                r
+                            });
 
-                    let mut statistics = Statistics::default();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                    );
-                    let result = snap_store
-                        .get(&key, &mut statistics)
-                        // map storage::txn::Error -> storage::Error
-                        .map_err(Error::from)
-                        .map(|r| {
-                            thread_ctx.collect_key_reads(CMD, 1);
-                            r
-                        });
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                    thread_ctx.collect_scan_count(CMD, &statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-
-                    result
+                        result
+                    })
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -744,45 +712,43 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    tls_processing_read_observe_duration(CMD, || {
+                        let mut statistics = Statistics::default();
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                        );
+                        let kv_pairs: Vec<_> = snap_store
+                            .batch_get(&keys, &mut statistics)
+                            .into_iter()
+                            .zip(keys)
+                            .filter(|&(ref v, ref _k)| {
+                                !(v.is_ok() && v.as_ref().unwrap().is_none())
+                            })
+                            .map(|(v, k)| match v {
+                                Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
+                                Err(e) => Err(Error::from(e)),
+                                _ => unreachable!(),
+                            })
+                            .collect();
 
-                    let mut statistics = Statistics::default();
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                    );
-                    let kv_pairs: Vec<_> = snap_store
-                        .batch_get(&keys, &mut statistics)
-                        .into_iter()
-                        .zip(keys)
-                        .filter(|&(ref v, ref _k)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                        .map(|(v, k)| match v {
-                            Ok(Some(x)) => Ok((k.into_raw().unwrap(), x)),
-                            Err(e) => Err(Error::from(e)),
-                            _ => unreachable!(),
-                        })
-                        .collect();
+                        tls_collect_key_reads(CMD, kv_pairs.len());
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                    thread_ctx.collect_key_reads(CMD, kv_pairs.len() as u64);
-                    thread_ctx.collect_scan_count(CMD, &statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-
-                    Ok(kv_pairs)
+                        Ok(kv_pairs)
+                    })
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -808,53 +774,53 @@ impl<E: Engine> Storage<E> {
         let engine = self.get_engine();
         let priority = readpool::Priority::from(ctx.get_priority());
 
-        let res = self.read_pool.future_execute(priority, move |ctxd| {
-            let timer = {
-                let ctxd = ctxd.clone();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                thread_ctx.start_command_duration_timer(CMD, priority)
-            };
+        let res = self.read_pool.spawn_handle(priority, move || {
+            tls_collect_command_count(CMD, priority);
+            let command_duration = tikv_util::time::Instant::now_coarse();
 
             Self::async_snapshot(engine, &ctx)
                 .and_then(move |snapshot: E::Snap| {
-                    let mut thread_ctx = ctxd.current_thread_context_mut();
-                    let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+                    tls_processing_read_observe_duration(CMD, || {
+                        let snap_store = SnapshotStore::new(
+                            snapshot,
+                            start_ts,
+                            ctx.get_isolation_level(),
+                            !ctx.get_not_fill_cache(),
+                        );
 
-                    let snap_store = SnapshotStore::new(
-                        snapshot,
-                        start_ts,
-                        ctx.get_isolation_level(),
-                        !ctx.get_not_fill_cache(),
-                    );
+                        let mut scanner;
+                        if !options.reverse_scan {
+                            scanner = snap_store.scanner(
+                                false,
+                                options.key_only,
+                                Some(start_key),
+                                end_key,
+                            )?;
+                        } else {
+                            scanner = snap_store.scanner(
+                                true,
+                                options.key_only,
+                                end_key,
+                                Some(start_key),
+                            )?;
+                        };
+                        let res = scanner.scan(limit);
 
-                    let mut scanner;
-                    if !options.reverse_scan {
-                        scanner = snap_store.scanner(
-                            false,
-                            options.key_only,
-                            Some(start_key),
-                            end_key,
-                        )?;
-                    } else {
-                        scanner =
-                            snap_store.scanner(true, options.key_only, end_key, Some(start_key))?;
-                    };
-                    let res = scanner.scan(limit);
+                        let statistics = scanner.take_statistics();
+                        tls_collect_scan_count(CMD, &statistics);
+                        tls_collect_read_flow(ctx.get_region_id(), &statistics);
 
-                    let statistics = scanner.take_statistics();
-                    thread_ctx.collect_scan_count(CMD, &statistics);
-                    thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-
-                    res.map_err(Error::from).map(|results| {
-                        thread_ctx.collect_key_reads(CMD, results.len() as u64);
-                        results
-                            .into_iter()
-                            .map(|x| x.map_err(Error::from))
-                            .collect()
+                        res.map_err(Error::from).map(|results| {
+                            tls_collect_key_reads(CMD, results.len());
+                            results
+                                .into_iter()
+                                .map(|x| x.map_err(Error::from))
+                                .collect()
+                        })
                     })
                 })
                 .then(move |r| {
-                    timer.observe_duration();
+                    tls_collect_command_duration(CMD, command_duration.elapsed());
                     r
                 })
         });
@@ -945,23 +911,13 @@ impl<E: Engine> Storage<E> {
     ) -> Result<()> {
         let mut modifies = Vec::with_capacity(DATA_CFS.len());
         for cf in DATA_CFS {
-            // We enable memtable prefix bloom for CF_WRITE column family, for delete_range
-            // operation, RocksDB will add start key to the prefix bloom, and the start key
-            // will go through function prefix_extractor. In our case the prefix_extractor
-            // is FixedSuffixSliceTransform, which will trim the timestamp at the tail. If the
-            // length of start key is less than 8, we will encounter index out of range error.
-            let s = if *cf == CF_WRITE {
-                start_key.clone().append_ts(u64::MAX)
-            } else {
-                start_key.clone()
-            };
-            modifies.push(Modify::DeleteRange(cf, s, end_key.clone()));
+            modifies.push(Modify::DeleteRange(cf, start_key.clone(), end_key.clone()));
         }
 
         self.engine.async_write(
             &ctx,
             modifies,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -1102,33 +1058,33 @@ impl<E: Engine> Storage<E> {
         let readpool = self.read_pool.clone();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.future_execute(priority, move |ctxd| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                let cf = match Self::rawkv_cf(&cf) {
-                    Ok(x) => x,
-                    Err(e) => return future::err(e),
-                };
-                // no scan_count for this kind of op.
+            let res = readpool.spawn_handle(priority, move || {
+                tls_processing_read_observe_duration(CMD, || {
+                    let cf = match Self::rawkv_cf(&cf) {
+                        Ok(x) => x,
+                        Err(e) => return future::err(e),
+                    };
+                    // no scan_count for this kind of op.
 
-                let key_len = key.len();
-                let result = snapshot
-                    .get_cf(cf, &Key::from_encoded(key))
-                    // map storage::engine::Error -> storage::Error
-                    .map_err(Error::from)
-                    .map(|r| {
-                        if let Some(ref value) = r {
-                            let mut stats = Statistics::default();
-                            stats.data.flow_stats.read_keys = 1;
-                            stats.data.flow_stats.read_bytes = key_len + value.len();
-                            thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
-                            thread_ctx.collect_key_reads(CMD, 1);
-                        }
-                        r
-                    });
+                    let key_len = key.len();
+                    let result = snapshot
+                        .get_cf(cf, &Key::from_encoded(key))
+                        // map storage::engine::Error -> storage::Error
+                        .map_err(Error::from)
+                        .map(|r| {
+                            if let Some(ref value) = r {
+                                let mut stats = Statistics::default();
+                                stats.data.flow_stats.read_keys = 1;
+                                stats.data.flow_stats.read_bytes = key_len + value.len();
+                                tls_collect_read_flow(ctx.get_region_id(), &stats);
+                                tls_collect_key_reads(CMD, 1);
+                            }
+                            r
+                        });
 
-                timer.observe_duration();
-                future::result(result)
+                    timer.observe_duration();
+                    future::result(result)
+                })
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
@@ -1154,38 +1110,39 @@ impl<E: Engine> Storage<E> {
         let readpool = self.read_pool.clone();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.future_execute(priority, move |ctxd| {
-                let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-                let cf = match Self::rawkv_cf(&cf) {
-                    Ok(x) => x,
-                    Err(e) => return future::err(e),
-                };
-                // no scan_count for this kind of op.
-                let mut stats = Statistics::default();
-                let result: Vec<Result<KvPair>> = keys
-                    .into_iter()
-                    .map(|k| {
-                        let v = snapshot.get_cf(cf, &k);
-                        (k, v)
-                    })
-                    .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
-                    .map(|(k, v)| match v {
-                        Ok(Some(v)) => {
-                            stats.data.flow_stats.read_keys += 1;
-                            stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
-                            Ok((k.into_encoded(), v))
-                        }
-                        Err(e) => Err(Error::from(e)),
-                        _ => unreachable!(),
-                    })
-                    .collect();
-                thread_ctx.collect_key_reads(CMD, stats.data.flow_stats.read_keys as u64);
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &stats);
+            let res = readpool.spawn_handle(priority, move || {
+                tls_processing_read_observe_duration(CMD, || {
+                    let keys: Vec<Key> = keys.into_iter().map(Key::from_encoded).collect();
+                    let cf = match Self::rawkv_cf(&cf) {
+                        Ok(x) => x,
+                        Err(e) => return future::err(e),
+                    };
+                    // no scan_count for this kind of op.
+                    let mut stats = Statistics::default();
+                    let result: Vec<Result<KvPair>> = keys
+                        .into_iter()
+                        .map(|k| {
+                            let v = snapshot.get_cf(cf, &k);
+                            (k, v)
+                        })
+                        .filter(|&(_, ref v)| !(v.is_ok() && v.as_ref().unwrap().is_none()))
+                        .map(|(k, v)| match v {
+                            Ok(Some(v)) => {
+                                stats.data.flow_stats.read_keys += 1;
+                                stats.data.flow_stats.read_bytes += k.as_encoded().len() + v.len();
+                                Ok((k.into_encoded(), v))
+                            }
+                            Err(e) => Err(Error::from(e)),
+                            _ => unreachable!(),
+                        })
+                        .collect();
 
-                timer.observe_duration();
-                future::ok(result)
+                    tls_collect_key_reads(CMD, stats.data.flow_stats.read_keys as usize);
+                    tls_collect_read_flow(ctx.get_region_id(), &stats);
+
+                    timer.observe_duration();
+                    future::ok(result)
+                })
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
@@ -1213,7 +1170,7 @@ impl<E: Engine> Storage<E> {
                 Key::from_encoded(key),
                 value,
             )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -1241,7 +1198,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -1262,7 +1219,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             vec![Modify::Delete(Self::rawkv_cf(&cf)?, Key::from_encoded(key))],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -1285,14 +1242,14 @@ impl<E: Engine> Storage<E> {
             return Ok(());
         }
 
+        let cf = Self::rawkv_cf(&cf)?;
+        let start_key = Key::from_encoded(start_key);
+        let end_key = Key::from_encoded(end_key);
+
         self.engine.async_write(
             &ctx,
-            vec![Modify::DeleteRange(
-                Self::rawkv_cf(&cf)?,
-                Key::from_encoded(start_key),
-                Key::from_encoded(end_key),
-            )],
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            vec![Modify::DeleteRange(cf, start_key, end_key)],
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -1320,7 +1277,7 @@ impl<E: Engine> Storage<E> {
         self.engine.async_write(
             &ctx,
             requests,
-            Box::new(|(_, res): (_, engine::Result<_>)| callback(res.map_err(Error::from))),
+            Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
@@ -1342,7 +1299,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_upper_bound(end.into_encoded());
+            option.set_upper_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Forward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1350,7 +1307,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1380,7 +1337,7 @@ impl<E: Engine> Storage<E> {
     ) -> Result<Vec<Result<KvPair>>> {
         let mut option = IterOption::default();
         if let Some(end) = end_key {
-            option.set_lower_bound(end.into_encoded());
+            option.set_lower_bound(end.as_encoded(), DATA_KEY_PREFIX_LEN);
         }
         let mut cursor = snapshot.iter_cf(Self::rawkv_cf(cf)?, option, ScanMode::Backward)?;
         let statistics = statistics.mut_cf_statistics(cf);
@@ -1388,7 +1345,7 @@ impl<E: Engine> Storage<E> {
             return Ok(vec![]);
         }
         let mut pairs = vec![];
-        while cursor.valid() && pairs.len() < limit {
+        while cursor.valid()? && pairs.len() < limit {
             pairs.push(Ok((
                 cursor.key(statistics).to_owned(),
                 if key_only {
@@ -1431,43 +1388,42 @@ impl<E: Engine> Storage<E> {
         let readpool = self.read_pool.clone();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.future_execute(priority, move |ctxd| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
+            let res = readpool.spawn_handle(priority, move || {
+                tls_processing_read_observe_duration(CMD, || {
+                    let end_key = end_key.map(Key::from_encoded);
 
-                let end_key = end_key.map(Key::from_encoded);
+                    let mut statistics = Statistics::default();
+                    let result = if reverse {
+                        Self::reverse_raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            end_key,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
+                        .map_err(Error::from)
+                    } else {
+                        Self::raw_scan(
+                            &snapshot,
+                            &cf,
+                            &Key::from_encoded(key),
+                            end_key,
+                            limit,
+                            &mut statistics,
+                            key_only,
+                        )
+                        .map_err(Error::from)
+                    };
 
-                let mut statistics = Statistics::default();
-                let result = if reverse {
-                    Self::reverse_raw_scan(
-                        &snapshot,
-                        &cf,
-                        &Key::from_encoded(key),
-                        end_key,
-                        limit,
-                        &mut statistics,
-                        key_only,
-                    )
-                    .map_err(Error::from)
-                } else {
-                    Self::raw_scan(
-                        &snapshot,
-                        &cf,
-                        &Key::from_encoded(key),
-                        end_key,
-                        limit,
-                        &mut statistics,
-                        key_only,
-                    )
-                    .map_err(Error::from)
-                };
+                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
+                    tls_collect_scan_count(CMD, &statistics);
 
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
-                thread_ctx.collect_scan_count(CMD, &statistics);
-
-                timer.observe_duration();
-                future::result(result)
+                    timer.observe_duration();
+                    future::result(result)
+                })
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
@@ -1532,64 +1488,64 @@ impl<E: Engine> Storage<E> {
         let readpool = self.read_pool.clone();
 
         Self::async_snapshot(engine, &ctx).and_then(move |snapshot: E::Snap| {
-            let res = readpool.future_execute(priority, move |ctxd| {
-                let mut thread_ctx = ctxd.current_thread_context_mut();
-                let _t_process = thread_ctx.start_processing_read_duration_timer(CMD);
-
-                let mut statistics = Statistics::default();
-                if !Self::check_key_ranges(&ranges, reverse) {
-                    return future::result(Err(box_err!("Invalid KeyRanges")));
-                };
-                let mut result = Vec::new();
-                let ranges_len = ranges.len();
-                for i in 0..ranges_len {
-                    let start_key = Key::from_encoded(ranges[i].take_start_key());
-                    let end_key = ranges[i].take_end_key();
-                    let end_key = if end_key.is_empty() {
-                        if i + 1 == ranges_len {
-                            None
+            let res = readpool.spawn_handle(priority, move || {
+                tls_processing_read_observe_duration(CMD, || {
+                    let mut statistics = Statistics::default();
+                    if !Self::check_key_ranges(&ranges, reverse) {
+                        return future::result(Err(box_err!("Invalid KeyRanges")));
+                    };
+                    let mut result = Vec::new();
+                    let ranges_len = ranges.len();
+                    for i in 0..ranges_len {
+                        let start_key = Key::from_encoded(ranges[i].take_start_key());
+                        let end_key = ranges[i].take_end_key();
+                        let end_key = if end_key.is_empty() {
+                            if i + 1 == ranges_len {
+                                None
+                            } else {
+                                Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
+                            }
                         } else {
-                            Some(Key::from_encoded_slice(ranges[i + 1].get_start_key()))
-                        }
-                    } else {
-                        Some(Key::from_encoded(end_key))
-                    };
-                    let pairs = if reverse {
-                        match Self::reverse_raw_scan(
-                            &snapshot,
-                            &cf,
-                            &start_key,
-                            end_key,
-                            each_limit,
-                            &mut statistics,
-                            key_only,
-                        ) {
-                            Ok(x) => x,
-                            Err(e) => return future::err(e),
-                        }
-                    } else {
-                        match Self::raw_scan(
-                            &snapshot,
-                            &cf,
-                            &start_key,
-                            end_key,
-                            each_limit,
-                            &mut statistics,
-                            key_only,
-                        ) {
-                            Ok(x) => x,
-                            Err(e) => return future::err(e),
-                        }
-                    };
-                    result.extend(pairs.into_iter());
-                }
+                            Some(Key::from_encoded(end_key))
+                        };
+                        let pairs = if reverse {
+                            match Self::reverse_raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            ) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            }
+                        } else {
+                            match Self::raw_scan(
+                                &snapshot,
+                                &cf,
+                                &start_key,
+                                end_key,
+                                each_limit,
+                                &mut statistics,
+                                key_only,
+                            ) {
+                                Ok(x) => x,
+                                Err(e) => return future::err(e),
+                            }
+                        };
+                        result.extend(pairs.into_iter());
+                    }
 
-                thread_ctx.collect_read_flow(ctx.get_region_id(), &statistics);
-                thread_ctx.collect_key_reads(CMD, statistics.write.flow_stats.read_keys as u64);
-                thread_ctx.collect_scan_count(CMD, &statistics);
+                    tls_collect_read_flow(ctx.get_region_id(), &statistics);
+                    tls_collect_key_reads(CMD, statistics.write.flow_stats.read_keys as usize);
 
-                timer.observe_duration();
-                future::ok(result)
+                    tls_collect_scan_count(CMD, &statistics);
+
+                    timer.observe_duration();
+                    future::ok(result)
+                })
             });
             future::result(res)
                 .map_err(|_| Error::SchedTooBusy)
@@ -1741,9 +1697,9 @@ pub fn get_tag_from_header(header: &errorpb::Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::config::ReadableSize;
     use kvproto::kvrpcpb::{Context, LockInfo};
     use std::sync::mpsc::{channel, Sender};
+    use tikv_util::config::ReadableSize;
 
     fn expect_none(x: Result<Option<Value>>) {
         assert_eq!(x.unwrap(), None);

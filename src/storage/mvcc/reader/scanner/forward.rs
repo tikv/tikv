@@ -1,24 +1,14 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 
+use engine::CF_DEFAULT;
 use kvproto::kvrpcpb::IsolationLevel;
 
-use crate::storage::engine::SEEK_BOUND;
+use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::Result;
-use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value, CF_DEFAULT};
+use crate::storage::{Cursor, Key, Lock, Snapshot, Statistics, Value};
 
 use super::util::CheckLockResult;
 use super::ScannerConfig;
@@ -98,12 +88,12 @@ impl<S: Snapshot> ForwardScanner<S> {
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
             let (current_user_key, has_write, has_lock) = {
-                let w_key = if self.write_cursor.valid() {
+                let w_key = if self.write_cursor.valid()? {
                     Some(self.write_cursor.key(&mut self.statistics.write))
                 } else {
                     None
                 };
-                let l_key = if self.lock_cursor.valid() {
+                let l_key = if self.lock_cursor.valid()? {
                     Some(self.lock_cursor.key(&mut self.statistics.lock))
                 } else {
                     None
@@ -217,7 +207,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         ts: u64,
         met_next_user_key: &mut bool,
     ) -> Result<Option<Value>> {
-        assert!(self.write_cursor.valid());
+        assert!(self.write_cursor.valid()?);
 
         // The logic starting from here is similar to `PointGetter`.
 
@@ -230,7 +220,7 @@ impl<S: Snapshot> ForwardScanner<S> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
                 self.write_cursor.next(&mut self.statistics.write);
-                if !self.write_cursor.valid() {
+                if !self.write_cursor.valid()? {
                     // Key space ended.
                     return Ok(None);
                 }
@@ -255,7 +245,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             // reallocation happens in `append_ts`.
             self.write_cursor
                 .seek(&user_key.clone().append_ts(ts), &mut self.statistics.write)?;
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
             }
@@ -283,7 +273,7 @@ impl<S: Snapshot> ForwardScanner<S> {
 
             self.write_cursor.next(&mut self.statistics.write);
 
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended.
                 return Ok(None);
             }
@@ -337,7 +327,7 @@ impl<S: Snapshot> ForwardScanner<S> {
             if i > 0 {
                 self.write_cursor.next(&mut self.statistics.write);
             }
-            if !self.write_cursor.valid() {
+            if !self.write_cursor.valid()? {
                 // Key space ended. We are done here.
                 return Ok(());
             }
