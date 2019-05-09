@@ -1101,7 +1101,7 @@ impl ApplyDelegate {
                     );
                     continue;
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
             }?;
