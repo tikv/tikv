@@ -25,10 +25,10 @@ struct CaseTraceLogger {
 
 impl CaseTraceLogger {
     fn write_log(
-        w: &mut dyn ::std::io::Write,
+        w: &mut dyn std::io::Write,
         record: &Record<'_>,
         values: &OwnedKVList,
-    ) -> Result<(), ::std::io::Error> {
+    ) -> Result<(), std::io::Error> {
         use slog::KV;
 
         let tag = tikv_util::get_tag_from_thread_name().map_or_else(|| "".to_owned(), |s| s + " ");
