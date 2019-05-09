@@ -1,8 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
-#[cfg(test)]
-use std::boxed::FnBox;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -1124,7 +1122,7 @@ impl ApplyDelegate {
                     );
                     continue;
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     Err(box_err!("invalid cmd type, message maybe currupted"))
                 }
             }?;
@@ -2278,7 +2276,7 @@ pub enum Msg {
     Destroy(Destroy),
     Snapshot(GenSnapTask),
     #[cfg(test)]
-    Validate(u64, Box<dyn FnBox(&ApplyDelegate) + Send>),
+    Validate(u64, Box<dyn FnOnce(&ApplyDelegate) + Send>),
 }
 
 impl Msg {
@@ -2635,7 +2633,7 @@ impl ApplyFsm {
                 Some(Msg::LogsUpToDate(_)) => {}
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 #[cfg(test)]
-                Some(Msg::Validate(_, f)) => f.call_box((&self.delegate,)),
+                Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }

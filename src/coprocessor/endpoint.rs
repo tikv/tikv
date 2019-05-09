@@ -233,7 +233,7 @@ impl<E: Engine> Endpoint<E> {
                     .map(|_| (tracker, snapshot))
             })
             .and_then(move |(tracker, snapshot)| {
-                future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                future::result(handler_builder(snapshot, &tracker.req_ctx))
                     .map(|handler| (tracker, handler))
             })
             .and_then(|(mut tracker, mut handler)| {
@@ -331,7 +331,7 @@ impl<E: Engine> Endpoint<E> {
                         .map(|_| (tracker, snapshot))
                 })
                 .and_then(move |(tracker, snapshot)| {
-                    future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
+                    future::result(handler_builder(snapshot, &tracker.req_ctx))
                         .map(|handler| (tracker, handler))
                 });
 
