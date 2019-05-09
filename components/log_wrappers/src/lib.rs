@@ -101,7 +101,7 @@ fn test_log_key() {
 
 pub mod kvproto {
     pub mod kvrpcpb {
-        use ::kvproto as lib_kvproto;
+        use kvproto as lib_kvproto;
 
         pub struct KeyRange<'a>(pub &'a lib_kvproto::kvrpcpb::KeyRange);
 
