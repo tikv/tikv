@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::time::Duration;
@@ -44,7 +43,7 @@ const STAT_SEEK: &str = "seek";
 const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
-pub type Callback<T> = Box<dyn FnBox((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
 
 #[derive(Debug)]
 pub struct CbContext {

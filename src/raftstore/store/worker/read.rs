@@ -354,6 +354,9 @@ impl<C: ProposalRouter> LocalReader<C> {
         self.metrics.borrow_mut().maybe_flush();
     }
 
+    /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
+    /// Returns `true`, it can be saftly sent to localreader,
+    /// Returns `false`, it must not be sent to localreader.
     #[inline]
     pub fn acceptable(request: &RaftCmdRequest) -> bool {
         if request.has_admin_request() || request.has_status_request() {
@@ -367,6 +370,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                     | CmdType::DeleteRange
                     | CmdType::Prewrite
                     | CmdType::IngestSST
+                    | CmdType::ReadIndex
                     | CmdType::Invalid => return false,
                 }
             }
