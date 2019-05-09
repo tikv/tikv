@@ -748,8 +748,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     fn initialize(&mut self) -> GCManagerResult<()> {
         debug!("gc-manager is initializing");
         self.safe_point = 0;
-        self.wait_for_next_safe_point()?;
-        info!("gc-manager started"; "safe_point" => self.safe_point);
+        self.try_update_safe_point();;
+        debug!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
 
