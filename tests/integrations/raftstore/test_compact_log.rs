@@ -9,7 +9,11 @@ use tikv_util::collections::HashMap;
 use tikv_util::config::*;
 
 fn get_raft_msg_or_default<M: protobuf::Message + Default>(engines: &Engines, key: &[u8]) -> M {
-    engines.kv.get_msg_cf(CF_RAFT, key).unwrap().unwrap_or_default()
+    engines
+        .kv
+        .get_msg_cf(CF_RAFT, key)
+        .unwrap()
+        .unwrap_or_default()
 }
 
 fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
