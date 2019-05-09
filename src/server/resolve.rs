@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,7 +15,7 @@ use super::Result;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
 
-pub type Callback = Box<dyn FnBox(Result<String>) + Send>;
+pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
 /// A trait for resolving store addresses.
 pub trait StoreAddrResolver: Send + Clone {
@@ -92,7 +91,7 @@ impl<T: PdClient> Runnable<Task> for Runner<T> {
     fn run(&mut self, task: Task) {
         let store_id = task.store_id;
         let resp = self.resolve(store_id);
-        task.cb.call_box((resp,))
+        (task.cb)(resp)
     }
 }
 
