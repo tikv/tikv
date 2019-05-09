@@ -2016,14 +2016,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
-        if exec_results.is_empty() {
-            return None;
-        }
-
-        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
-        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
-        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -2062,6 +2054,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
+
+        // Update metrics only when all exec_results are finished in case the metrics is counted multiple times
+        // when waiting for commit merge
+        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+
         None
     }
 
