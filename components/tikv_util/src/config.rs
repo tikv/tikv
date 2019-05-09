@@ -149,18 +149,8 @@ impl FromStr for ReadableSize {
             .take_while(|c| char::is_ascii_digit(c) || *c == '.')
             .collect::<String>();
 
-        // unit: alphabetic characters, i.e., no more digits etc expected
+        // unit: alphabetic characters
         let (_, unit) = size_str.split_at(size.len());
-
-        let is_unit_invalid = unit
-            .to_string()
-            .trim()
-            .chars()
-            .find(|c| !char::is_ascii_alphabetic(c));
-
-        if is_unit_invalid.is_some() {
-            return Err(format!("invalid unit string: {:?}.", s));
-        }
 
         let unit = match unit.trim() {
             "K" | "KB" | "KiB" => KB,
