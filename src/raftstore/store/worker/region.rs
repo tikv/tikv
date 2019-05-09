@@ -766,31 +766,39 @@ mod tests {
         let mut cf_opts = ColumnFamilyOptions::new();
         cf_opts.set_level_zero_slowdown_writes_trigger(5);
         cf_opts.set_disable_auto_compactions(true);
-        let cfs_opts = vec![
+        let kv_cfs_opts = vec![
             rocks::util::CFOptions::new("default", cf_opts.clone()),
             rocks::util::CFOptions::new("write", cf_opts.clone()),
             rocks::util::CFOptions::new("lock", cf_opts.clone()),
             rocks::util::CFOptions::new("raft", cf_opts.clone()),
         ];
-        let db =
-            get_test_db_for_regions(&temp_dir, None, Some(cfs_opts), &[1, 2, 3, 4, 5, 6]).unwrap();
+        let raft_cfs_opt = rocks::util::CFOptions::new(CF_DEFAULT, cf_opts.clone());
+        let engine = get_test_db_for_regions(
+            &temp_dir,
+            None,
+            Some(raft_cfs_opt),
+            None,
+            Some(kv_cfs_opts),
+            &[1, 2, 3, 4, 5, 6],
+        )
+        .unwrap();
 
-        for cf_name in db.cf_names() {
-            let cf = db.cf_handle(cf_name).unwrap();
+        for cf_name in engine.kv.cf_names() {
+            let cf = engine.kv.cf_handle(cf_name).unwrap();
             for i in 0..6 {
-                db.put_cf(cf, &[i], &[i]).unwrap();
-                db.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
-                db.flush_cf(cf, true).unwrap();
+                engine.kv.put_cf(cf, &[i], &[i]).unwrap();
+                engine.kv.put_cf(cf, &[i + 1], &[i + 1]).unwrap();
+                engine.kv.flush_cf(cf, true).unwrap();
                 // check level 0 files
                 assert_eq!(
-                    rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+                    rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
                     u64::from(i) + 1
                 );
             }
         }
 
         let shared_block_cache = false;
-        let engines = Engines::new(Arc::clone(&db), Arc::clone(&db), shared_block_cache);
+        let engines = Engines::new(Arc::clone(&engine.kv), Arc::clone(&engine.kv), shared_block_cache);
         let snap_dir = TempDir::new("snap_dir").unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap(), None);
         let mut worker = Worker::new("snap-manager");
@@ -822,15 +830,16 @@ mod tests {
 
             // set applying state
             let wb = WriteBatch::new();
-            let handle = db.cf_handle(CF_RAFT).unwrap();
+            let handle = engine.kv.cf_handle(CF_RAFT).unwrap();
             let region_key = keys::region_state_key(id);
-            let mut region_state = db
+            let mut region_state = engine
+                .kv
                 .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                 .unwrap()
                 .unwrap();
             region_state.set_state(PeerState::Applying);
             wb.put_msg_cf(handle, &region_key, &region_state).unwrap();
-            db.write(&wb).unwrap();
+            engine.kv.write(&wb).unwrap();
 
             // apply snapshot
             let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
@@ -845,7 +854,8 @@ mod tests {
             let region_key = keys::region_state_key(id);
             loop {
                 thread::sleep(Duration::from_millis(100));
-                if db
+                if engine
+                    .kv
                     .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
                     .unwrap()
                     .unwrap()
@@ -856,19 +866,19 @@ mod tests {
                 }
             }
         };
-        let cf = db.cf_handle(CF_DEFAULT).unwrap();
+        let cf = engine.kv.cf_handle(CF_DEFAULT).unwrap();
 
         // snapshot will not ingest cause already write stall
         gen_and_apply_snap(1);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             6
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
 
@@ -878,7 +888,7 @@ mod tests {
         // note that when ingest sst, it may flush memtable if overlap,
         // so here will two level 0 files.
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
 
@@ -886,31 +896,31 @@ mod tests {
         gen_and_apply_snap(2);
         wait_apply_finish(2);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
         // snapshot will not ingest cause it may cause write stall
         gen_and_apply_snap(3);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(4);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
         gen_and_apply_snap(5);
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
         // compact all files to the bottomest level
-        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
 
@@ -920,21 +930,21 @@ mod tests {
         // before two pending apply tasks should be finished and snapshots are ingested
         // and one still in pending.
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             4
         );
 
         // make sure have checked pending applies
-        rocks::util::compact_files_in_range(&db, None, None, None).unwrap();
+        rocks::util::compact_files_in_range(&engine.kv, None, None, None).unwrap();
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             0
         );
         wait_apply_finish(5);
 
         // the last one pending task finished
         assert_eq!(
-            rocks::util::get_cf_num_files_at_level(&db, cf, 0).unwrap(),
+            rocks::util::get_cf_num_files_at_level(&engine.kv, cf, 0).unwrap(),
             2
         );
     }
