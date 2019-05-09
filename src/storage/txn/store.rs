@@ -919,7 +919,8 @@ mod tests {
 mod benches {
     use crate::test;
 
-    use rand::{self, Rng};
+    use rand;
+    use rand_core::RngCore;
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};

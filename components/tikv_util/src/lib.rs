@@ -42,7 +42,8 @@ use std::time::Duration;
 use std::{env, slice, thread, u64};
 
 use protobuf::Message;
-use rand::{self, ThreadRng};
+use rand;
+use rand::rngs::ThreadRng;
 
 pub mod codec;
 pub mod collections;

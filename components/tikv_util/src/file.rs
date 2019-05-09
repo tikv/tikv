@@ -69,12 +69,13 @@ pub fn calc_crc32<P: AsRef<Path>>(path: P) -> io::Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{thread_rng, Rng};
+    use rand::thread_rng;
     use std::fs::OpenOptions;
     use std::io::Write;
     use tempdir::TempDir;
 
     use super::*;
+    use rand_core::RngCore;
 
     #[test]
     fn test_get_file_size() {
@@ -153,8 +154,17 @@ mod tests {
         delete_file_if_exist(&non_existent_file).unwrap();
     }
 
+    fn gen_ascii_chars(size: usize) -> String {
+        let mut s = String::new();
+        let mut rng = thread_rng();
+        for _ in 0..size {
+            s.push((rng.next_u32() % 256) as u8 as char);
+        }
+        s
+    }
+
     fn gen_rand_file<P: AsRef<Path>>(path: P, size: usize) -> u32 {
-        let s: String = thread_rng().gen_ascii_chars().take(size).collect();
+        let s: String = gen_ascii_chars(size);
         fs::write(path, s.as_bytes()).unwrap();
         let mut digest = Digest::new(crc32::IEEE);
         digest.write(s.as_bytes());

@@ -5,7 +5,8 @@ use std::{f64, i64};
 
 use crc::{crc32, Hasher32};
 use num::traits::Pow;
-use rand::{Rng, SeedableRng, XorShiftRng};
+use rand::{Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
 use time;
 
 use super::{Error, EvalContext, Result, ScalarFunc};
@@ -547,15 +548,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
             sec + nsec
         }
     };
-
-    let seeds: [u32; 4] = [
-        (seed & 0x0000_0000_0000_FFFF) as u32,
-        ((seed & 0x0000_0000_FFFF_0000) >> 16) as u32,
-        ((seed & 0x0000_FFFF_0000_0000) >> 32) as u32,
-        ((seed & 0xFFFF_0000_0000_0000) >> 48) as u32,
-    ];
-
-    let rng: XorShiftRng = SeedableRng::from_seed(seeds);
+    let rng = SeedableRng::seed_from_u64(seed);
     rng
 }
 
