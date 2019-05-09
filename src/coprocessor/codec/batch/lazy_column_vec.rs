@@ -267,11 +267,10 @@ mod tests {
         use cop_datatype::FieldTypeTp;
 
         for comparable in &[true, false] {
-            let schema = [
-                FieldTypeTp::Long.into(),
-                FieldTypeTp::Double.into(),
-                FieldTypeTp::VarChar.into(),
-            ];
+            let schema = vec![FieldTypeTp::Long, FieldTypeTp::Double, FieldTypeTp::VarChar]
+                .into_iter()
+                .map(FieldType::from)
+                .collect::<Vec<_>>();
             let values = vec![
                 vec![Datum::U64(1), Datum::F64(1.0), Datum::Null],
                 vec![Datum::Null, Datum::Null, Datum::Bytes(vec![0u8, 2u8])],
@@ -339,7 +338,10 @@ mod tests {
     fn test_retain_rows_by_index() {
         use cop_datatype::FieldTypeTp;
 
-        let schema = [FieldTypeTp::Long.into(), FieldTypeTp::Double.into()];
+        let schema = vec![FieldTypeTp::Long, FieldTypeTp::Double]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
         let mut columns = LazyBatchColumnVec::with_raw_columns(2);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);

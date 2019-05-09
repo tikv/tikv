@@ -303,7 +303,8 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.decode(&Tz::utc(), &FieldTypeTp::Long.into()).unwrap();
+            col.decode(&Tz::utc(), &FieldType::from(FieldTypeTp::Long))
+                .unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
@@ -343,7 +344,8 @@ mod tests {
             assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         }
         // Non-empty raw to non-empty decoded.
-        col.decode(&Tz::utc(), &FieldTypeTp::Long.into()).unwrap();
+        col.decode(&Tz::utc(), &FieldType::from(FieldTypeTp::Long))
+            .unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
@@ -469,7 +471,7 @@ mod benches {
         }
 
         column
-            .decode(&Tz::utc(), &FieldTypeTp::LongLong.into())
+            .decode(&Tz::utc(), &FieldType::from(FieldTypeTp::LongLong))
             .unwrap();
 
         b.iter(|| {
@@ -494,7 +496,7 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let ft = FieldTypeTp::LongLong.into();
+        let ft = FieldType::from(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         b.iter(|| {
@@ -522,7 +524,7 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let ft = FieldTypeTp::LongLong.into();
+        let ft = FieldType::from(FieldTypeTp::LongLong);
         let tz = Tz::utc();
 
         column.decode(&tz, &ft).unwrap();

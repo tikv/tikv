@@ -292,10 +292,13 @@ mod tests {
 
         // The schema of these columns. Used to check executor output.
         let schema = vec![
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::Double.into(),
-            FieldTypeTp::LongLong.into(),
-        ];
+            FieldTypeTp::LongLong,
+            FieldTypeTp::Double,
+            FieldTypeTp::LongLong,
+        ]
+        .into_iter()
+        .map(FieldType::from)
+        .collect::<Vec<_>>();
 
         // Case 1. Normal index.
 

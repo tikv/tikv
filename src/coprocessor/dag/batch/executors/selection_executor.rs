@@ -216,7 +216,10 @@ mod tests {
     /// (drained)
     fn make_src_executor_using_fixture_1() -> MockExecutor {
         MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()],
+            vec![FieldTypeTp::LongLong, FieldTypeTp::Double]
+                .into_iter()
+                .map(FieldType::from)
+                .collect(),
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
@@ -351,10 +354,13 @@ mod tests {
     fn make_src_executor_using_fixture_2() -> MockExecutor {
         MockExecutor::new(
             vec![
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-            ],
+                FieldTypeTp::LongLong,
+                FieldTypeTp::LongLong,
+                FieldTypeTp::LongLong,
+            ]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>(),
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
@@ -557,7 +563,10 @@ mod tests {
         // == Call #2 ==
         // (drained)
         let src_exec = MockExecutor::new(
-            vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()],
+            vec![FieldTypeTp::LongLong, FieldTypeTp::LongLong]
+                .into_iter()
+                .map(FieldType::from)
+                .collect::<Vec<_>>(),
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![

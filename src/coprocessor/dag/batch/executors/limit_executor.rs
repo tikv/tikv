@@ -88,10 +88,13 @@ mod tests {
                 (6, None, Some(4.5)),
             ];
             let field_types = vec![
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::Double.into(),
-            ];
+                FieldTypeTp::LongLong,
+                FieldTypeTp::LongLong,
+                FieldTypeTp::Double,
+            ]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
             MockExecutor {
                 data: expect_rows,

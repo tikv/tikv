@@ -423,10 +423,13 @@ mod tests {
             ];
 
             let field_types = vec![
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::LongLong.into(),
-                FieldTypeTp::Double.into(),
-            ];
+                FieldTypeTp::LongLong,
+                FieldTypeTp::LongLong,
+                FieldTypeTp::Double,
+            ]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
             let store = {
                 let kv = data
@@ -720,10 +723,13 @@ mod tests {
             },
         ];
         let schema = vec![
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::LongLong.into(),
-            FieldTypeTp::LongLong.into(),
-        ];
+            FieldTypeTp::LongLong,
+            FieldTypeTp::LongLong,
+            FieldTypeTp::LongLong,
+        ]
+        .into_iter()
+        .map(FieldType::from)
+        .collect::<Vec<_>>();
 
         let mut kv = vec![];
         {
@@ -824,7 +830,10 @@ mod tests {
                 ci
             },
         ];
-        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![FieldTypeTp::LongLong, FieldTypeTp::LongLong]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
         let mut kv = vec![];
         {

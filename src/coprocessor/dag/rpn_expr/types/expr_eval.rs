@@ -260,7 +260,7 @@ mod tests {
     }
 
     /// Creates fixture to be used in `test_eval_single_column_node_xxx`.
-    fn new_single_column_node_fixture() -> (LazyBatchColumnVec, [FieldType; 2]) {
+    fn new_single_column_node_fixture() -> (LazyBatchColumnVec, Vec<FieldType>) {
         let columns = LazyBatchColumnVec::from(vec![
             {
                 // this column is not referenced
@@ -282,7 +282,10 @@ mod tests {
                 col
             },
         ]);
-        let schema = [FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![FieldTypeTp::Double, FieldTypeTp::LongLong]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
         (columns, schema)
     }
 
@@ -427,7 +430,7 @@ mod tests {
             col.mut_decoded().push_int(None);
             col
         }]);
-        let schema = &[FieldTypeTp::LongLong.into()];
+        let schema = &[FieldType::from(FieldTypeTp::LongLong)];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -479,7 +482,7 @@ mod tests {
 
             col
         }]);
-        let schema = &[FieldTypeTp::LongLong.into()];
+        let schema = &[FieldType::from(FieldTypeTp::LongLong)];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -558,7 +561,7 @@ mod tests {
             col.mut_decoded().push_real(Some(-4.3));
             col
         }]);
-        let schema = &[FieldTypeTp::Double.into()];
+        let schema = &[FieldType::from(FieldTypeTp::Double)];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -602,7 +605,7 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-        let schema = &[FieldTypeTp::LongLong.into()];
+        let schema = &[FieldType::from(FieldTypeTp::LongLong)];
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
@@ -657,7 +660,10 @@ mod tests {
                 col
             },
         ]);
-        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
+        let schema = vec![FieldTypeTp::LongLong, FieldTypeTp::Double]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
         // FnFoo(col1, col0)
         let exp = RpnExpressionBuilder::new()
@@ -666,7 +672,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, 3, &schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -713,7 +719,10 @@ mod tests {
 
             col
         }]);
-        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![FieldTypeTp::LongLong, FieldTypeTp::LongLong]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -721,7 +730,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, 3, &schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -758,7 +767,7 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-        let schema = &[FieldTypeTp::LongLong.into()];
+        let schema = &[FieldType::from(FieldTypeTp::LongLong)];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -866,7 +875,10 @@ mod tests {
                 col
             },
         ]);
-        let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
+        let schema = vec![FieldTypeTp::Double, FieldTypeTp::LongLong]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
         // Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
         let exp = RpnExpressionBuilder::new()
@@ -891,7 +903,7 @@ mod tests {
         //      => [25.0, 3.8, 146.0]
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, 3, &schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -1181,10 +1193,13 @@ mod tests {
                 col
             },
         ]);
-        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
+        let schema = vec![FieldTypeTp::LongLong, FieldTypeTp::Double]
+            .into_iter()
+            .map(FieldType::from)
+            .collect::<Vec<_>>();
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.eval(&mut ctx, 3, &schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
