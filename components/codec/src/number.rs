@@ -1,14 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::{likely, unlikely};
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use super::{BufferReader, BufferWriter};
-use super::{Error, Result};
+use crate::buffer::{BufferReader, BufferWriter};
+use crate::{Error, Result};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
-pub const U64_SIZE: usize = 8;
-pub const I64_SIZE: usize = 8;
-pub const F64_SIZE: usize = 8;
+pub const U64_SIZE: usize = std::mem::size_of::<u64>();
+pub const I64_SIZE: usize = std::mem::size_of::<i64>();
+pub const F64_SIZE: usize = std::mem::size_of::<f64>();
 
 /// Byte encoding and decoding utility for primitive number types.
 pub struct NumberCodec;
@@ -417,7 +419,7 @@ impl NumberCodec {
             let mut ptr = buf.as_ptr();
             let len = buf.len();
             let mut val = 0u64;
-            if std::intrinsics::likely(len >= MAX_VARINT64_LENGTH) {
+            if likely(len >= MAX_VARINT64_LENGTH) {
                 // Fast path
                 let mut b: u64;
                 let mut shift = 0;
@@ -443,7 +445,7 @@ impl NumberCodec {
                     shift += 7;
                     ptr = ptr.add(1);
                 }
-                if std::intrinsics::unlikely(ptr == ptr_end) {
+                if unlikely(ptr == ptr_end) {
                     return Err(Error::BufferTooSmall);
                 }
                 val |= (*ptr as u64) << shift;
@@ -463,7 +465,7 @@ impl NumberCodec {
     #[inline]
     pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
         let mut uv = (v as u64) << 1;
-        if v < 0 {
+        if unsafe { unlikely(v < 0) } {
             uv = !uv;
         }
         Self::encode_var_u64(buf, uv)
@@ -481,10 +483,48 @@ impl NumberCodec {
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
         let v = uv >> 1;
-        if uv & 1 == 0 {
+        if unsafe { likely(uv & 1 == 0) } {
             Ok((v as i64, decoded_bytes))
         } else {
             Ok((!v as i64, decoded_bytes))
+        }
+    }
+
+    /// Gets the length of the first encoded VarInt in the given buffer. If the buffer is not
+    /// complete, the length of buffer will be returned.
+    ///
+    /// This function is more efficient when `buf.len() >= 10`.
+    #[inline]
+    pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
+        unsafe {
+            let mut ptr = buf.as_ptr();
+            let len = buf.len();
+            if likely(len >= MAX_VARINT64_LENGTH) {
+                // Fast path
+                // Compiler will do loop unrolling for us.
+                for i in 1..=9 {
+                    if *ptr < 0x80 {
+                        return i;
+                    }
+                    ptr = ptr.add(1);
+                }
+                10
+            } else {
+                let ptr_end = buf.as_ptr().add(len);
+                // Slow path
+                while ptr != ptr_end && *ptr >= 0x80 {
+                    ptr = ptr.add(1);
+                }
+                // We we got here, we are either `ptr == ptr_end`, or `*ptr < 0x80`.
+                // For `ptr == ptr_end` case, it means we are expecting a value < 0x80
+                //      but meet EOF, so only `len` is returned.
+                // For `*ptr < 0x80` case, it means currently it is pointing to the last byte
+                //      of the VarInt, so we return `delta + 1` as length.
+                if unlikely(ptr == ptr_end) {
+                    return len;
+                }
+                ptr.offset_from(buf.as_ptr()) as usize + 1
+            }
         }
     }
 }
@@ -493,7 +533,7 @@ macro_rules! read {
     ($s:expr, $size:expr, $f:ident) => {{
         let ret = {
             let buf = $s.bytes();
-            if buf.len() < $size {
+            if unsafe { unlikely(buf.len() < $size) } {
                 return Err(Error::BufferTooSmall);
             }
             NumberCodec::$f(buf)
@@ -724,7 +764,7 @@ macro_rules! write {
     ($s:expr, $v:expr, $size:expr, $f:ident) => {{
         {
             let buf = unsafe { $s.bytes_mut($size) };
-            if buf.len() < $size {
+            if unsafe { unlikely(buf.len() < $size) } {
                 return Err(Error::BufferTooSmall);
             }
             NumberCodec::$f(buf, $v);
@@ -926,7 +966,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_u64(&mut self, v: u64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if buf.len() < MAX_VARINT64_LENGTH {
+            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
                 return Err(Error::BufferTooSmall);
             }
             NumberCodec::encode_var_u64(buf, v)
@@ -950,7 +990,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_var_i64(&mut self, v: i64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if buf.len() < MAX_VARINT64_LENGTH {
+            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
                 return Err(Error::BufferTooSmall);
             }
             NumberCodec::encode_var_i64(buf, v)
@@ -967,7 +1007,7 @@ pub trait NumberEncoder: BufferWriter {
     #[inline]
     fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
         let buf = unsafe { self.bytes_mut(values.len()) };
-        if buf.len() < values.len() {
+        if unsafe { unlikely(buf.len() < values.len()) } {
             return Err(Error::BufferTooSmall);
         }
         buf[..values.len()].copy_from_slice(values);
@@ -985,6 +1025,7 @@ impl<T: BufferWriter> NumberEncoder for T {}
 mod tests {
     use protobuf::CodedOutputStream;
     use rand;
+
     fn get_u8_samples() -> Vec<u8> {
         vec![
             (::std::i8::MIN as u8),
@@ -1564,15 +1605,26 @@ mod tests {
                 assert_eq!(result.0, sample);
                 assert_eq!(result.1, len);
 
+                // NumberCodec fast path decode length
+                let result = super::NumberCodec::get_first_encoded_var_int_len(base_buf.as_slice());
+                assert_eq!(result, len);
+
                 // NumberCodec slow path decode
                 let result = super::NumberCodec::$dec(&base_buf[0..len]).unwrap();
                 assert_eq!(result.0, sample);
                 assert_eq!(result.1, len);
 
-                // Incomplete buffer, we should got errors
+                // NumberCodec slow path decode length
+                let result = super::NumberCodec::get_first_encoded_var_int_len(&base_buf[0..len]);
+                assert_eq!(result, len);
+
+                // Incomplete buffer, we should got errors in decoding, but get `len` as length
                 for l in 0..len {
                     let result = super::NumberCodec::$dec(&base_buf[0..l]);
                     assert!(result.is_err());
+
+                    let result = super::NumberCodec::get_first_encoded_var_int_len(&base_buf[0..l]);
+                    assert_eq!(result, l);
                 }
 
                 // Buffer encode with insufficient space
@@ -1989,6 +2041,15 @@ mod benches {
         });
     }
 
+    #[bench]
+    fn bench_varint_len_small_number_large_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = vec![60, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
+            test::black_box(bytes);
+        });
+    }
+
     /// Decode u64 < 128 in VarInt using `NumberCodec`.
     /// The buffer size < 10.
     #[bench]
@@ -1997,6 +2058,15 @@ mod benches {
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
+            test::black_box(bytes);
+        });
+    }
+
+    #[bench]
+    fn bench_varint_len_small_number_small_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = vec![60, 0, 0];
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
             test::black_box(bytes);
         });
     }
@@ -2070,6 +2140,16 @@ mod benches {
         });
     }
 
+    #[bench]
+    fn bench_varint_len_normal_number_large_buffer(b: &mut test::Bencher) {
+        let mut buf: Vec<u8> = vec![0; 10];
+        buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
+            test::black_box(bytes);
+        });
+    }
+
     /// Decode normal u64 in VarInt using `NumberCodec`.
     /// The buffer size < 10.
     #[bench]
@@ -2078,6 +2158,15 @@ mod benches {
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
+            test::black_box(bytes);
+        });
+    }
+
+    #[bench]
+    fn bench_varint_len_normal_number_small_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = VARINT_ENCODED.to_vec();
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
             test::black_box(bytes);
         });
     }
