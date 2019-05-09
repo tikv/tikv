@@ -26,7 +26,9 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalNext1Bencher<E, F> {
         b.iter_batched_ref(
             &mut self.executor_builder,
             |executor| {
+                profiler::start("NormalNext1Bencher");
                 black_box(executor.next().unwrap());
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -49,10 +51,12 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalNext1024Bencher<E, F> {
         b.iter_batched_ref(
             &mut self.executor_builder,
             |executor| {
+                profiler::start("NormalNext1024Bencher");
                 let iter_times = black_box(1024);
                 for _ in 0..iter_times {
                     black_box(executor.next().unwrap());
                 }
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -74,12 +78,16 @@ impl<E: Executor, F: FnMut() -> E> Bencher for NormalNextAllBencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
         b.iter_batched_ref(
             &mut self.executor_builder,
-            |executor| loop {
-                let r = executor.next().unwrap();
-                black_box(&r);
-                if r.is_none() {
-                    break;
+            |executor| {
+                profiler::start("NormalNextAllBencher");
+                loop {
+                    let r = executor.next().unwrap();
+                    black_box(&r);
+                    if r.is_none() {
+                        break;
+                    }
                 }
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -102,9 +110,11 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNext1024Bencher<E, F> {
         b.iter_batched_ref(
             &mut self.executor_builder,
             |executor| {
+                profiler::start("BatchNext1024Bencher");
                 let iter_times = black_box(1024);
                 let r = black_box(executor.next_batch(iter_times));
                 r.is_drained.unwrap();
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -126,12 +136,16 @@ impl<E: BatchExecutor, F: FnMut() -> E> Bencher for BatchNextAllBencher<E, F> {
     fn bench(&mut self, b: &mut criterion::Bencher) {
         b.iter_batched_ref(
             &mut self.executor_builder,
-            |executor| loop {
-                let r = executor.next_batch(1024);
-                black_box(&r);
-                if r.is_drained.unwrap() {
-                    break;
+            |executor| {
+                profiler::start("BatchNextAllBencher");
+                loop {
+                    let r = executor.next_batch(1024);
+                    black_box(&r);
+                    if r.is_drained.unwrap() {
+                        break;
+                    }
                 }
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -154,7 +168,9 @@ impl<F: FnMut() -> Box<dyn RequestHandler>> Bencher for DAGHandleBencher<F> {
         b.iter_batched_ref(
             &mut self.handler_builder,
             |handler| {
+                profiler::start("DAGHandleBencher");
                 black_box(handler.handle_request().unwrap());
+                profiler::stop();
             },
             criterion::BatchSize::SmallInput,
         );
