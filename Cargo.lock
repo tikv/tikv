@@ -2215,6 +2215,7 @@ dependencies = [
  "chrono 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono-tz 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "codec 0.0.1",
  "cop_codegen 0.0.1",
  "cop_datatype 0.0.1",
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",

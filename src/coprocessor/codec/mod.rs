@@ -22,6 +22,7 @@ pub mod error;
 pub mod mysql;
 mod overflow;
 pub mod table;
+pub mod table2;
 
 pub use self::datum::Datum;
 pub use self::error::{Error, Result};

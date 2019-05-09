@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::{likely, unlikely};
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
@@ -215,14 +216,15 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
-        use crate::coprocessor::codec::{datum, table};
-        use tikv_util::codec::number;
+        use crate::coprocessor::codec::datum;
+        use crate::coprocessor::codec::table2::{RowKeyCodec, RowValueDecoder};
+        use codec::buffer::BufferReader;
 
         let columns_len = self.schema.len();
         let mut decoded_columns = 0;
 
         if let Some(handle_index) = self.handle_index {
-            let handle_id = table::decode_handle(key)?;
+            let handle_id = RowKeyCodec::decode_only_handle(key)?;
             // TODO: We should avoid calling `push_int` repeatedly. Instead we should specialize
             // a `&mut Vec` first. However it is hard to program due to lifetime restriction.
             columns[handle_index]
@@ -232,7 +234,9 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             self.is_column_filled[handle_index] = true;
         }
 
-        if value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG) {
+        if unsafe {
+            unlikely(value.is_empty() || (value.len() == 1 && value[0] == datum::NIL_FLAG))
+        } {
             // Do nothing
         } else {
             // The layout of value is: [col_id_1, value_1, col_id_2, value_2, ...]
@@ -240,41 +244,40 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
             // The column id datum must be in var i64 type.
             let mut remaining = value;
             while !remaining.is_empty() && decoded_columns < columns_len {
-                if remaining[0] != datum::VAR_INT_FLAG {
-                    return Err(box_err!("Unable to decode row: column id must be VAR_INT"));
-                }
-                remaining = &remaining[1..];
-                let column_id = box_try!(number::decode_var_i64(&mut remaining));
-                let (val, new_remaining) = datum::split_datum(remaining, false)?;
-                // Note: The produced columns may be not in the same length if there is error due
-                // to corrupted data. It will be handled in `ScanExecutor`.
-                let some_index = self.column_id_index.get(&column_id);
-                if let Some(index) = some_index {
-                    let index = *index;
-                    if !self.is_column_filled[index] {
-                        columns[index].push_raw(val);
-                        decoded_columns += 1;
-                        self.is_column_filled[index] = true;
-                    } else {
-                        // This indicates that there are duplicated elements in the row, which is
-                        // unexpected. We won't abort the request or overwrite the previous element,
-                        // but will output a log anyway.
-                        warn!(
-                            "Ignored duplicated row datum in table scan";
-                            "key" => log_wrappers::Key(&key),
-                            "value" => log_wrappers::Key(&value),
-                            "dup_column_id" => column_id,
-                        );
+                let column_id = remaining.read_v1_column_id()?;
+                let val_len = {
+                    let val = remaining.peek_v1_column_data()?;
+                    // Note: The produced columns may be not in the same length if there is error due
+                    // to corrupted data. It will be handled in `ScanExecutor`.
+                    let some_index = self.column_id_index.get(&column_id);
+                    if let Some(index) = some_index {
+                        let index = *index;
+                        if unsafe { likely(!self.is_column_filled[index]) } {
+                            columns[index].push_raw(val);
+                            decoded_columns += 1;
+                            self.is_column_filled[index] = true;
+                        } else {
+                            // This indicates that there are duplicated elements in the row, which is
+                            // unexpected. We won't abort the request or overwrite the previous element,
+                            // but will output a log anyway.
+                            warn!(
+                                "Ignored duplicated row datum in table scan";
+                                "key" => log_wrappers::Key(&key),
+                                "value" => log_wrappers::Key(&value),
+                                "dup_column_id" => column_id,
+                            );
+                        }
                     }
-                }
-                remaining = new_remaining;
+                    val.len()
+                };
+                remaining.advance(val_len);
             }
         }
 
         // Some fields may be missing in the row, we push corresponding default value to make all
         // columns in same length.
         for i in 0..columns_len {
-            if !self.is_column_filled[i] {
+            if unsafe { unlikely(!self.is_column_filled[i]) } {
                 // Missing fields must not be a primary key, so it must be
                 // `LazyBatchColumn::raw`.
 

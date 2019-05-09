@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::unlikely;
+
 use kvproto::coprocessor::KeyRange;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
@@ -170,7 +172,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
                     return Err(e);
                 }
 
-                if columns.rows_len() >= scan_rows {
+                if unsafe { unlikely(columns.rows_len() >= scan_rows) } {
                     return Ok(false); // not drained
                 }
             } else {
