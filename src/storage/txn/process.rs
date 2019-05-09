@@ -132,6 +132,11 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.pool.take().unwrap()
     }
 
+    #[inline]
+    pub fn clone_pool(&self) -> threadpool::Scheduler<SchedContext<E>> {
+        self.pool.clone().unwrap()
+    }
+
     /// Start the execution of the task.
     pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
         debug!(
@@ -589,7 +594,7 @@ fn process_write_impl<S: Snapshot>(
     Ok((ctx, pr, modifies, rows))
 }
 
-fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) -> bool {
+pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) -> bool {
     match scheduler.on_msg(msg) {
         Ok(_) => true,
         e @ Err(ScheduleError::Stopped(_)) => {
@@ -630,7 +635,7 @@ pub struct SchedContext<E: Engine> {
     processing_read_duration: LocalHistogramVec,
     processing_write_duration: LocalHistogramVec,
     command_keyread_duration: LocalHistogramVec,
-    engine: E,
+    pub engine: E,
 }
 
 impl<E: Engine> SchedContext<E> {

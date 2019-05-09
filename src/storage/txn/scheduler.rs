@@ -34,8 +34,8 @@ use tikv_util::worker::ScheduleError;
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{
-    execute_callback, Executor, MsgScheduler, ProcessResult, SchedContext, SchedContextFactory,
-    Task,
+    execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, SchedContext,
+    SchedContextFactory, Task,
 };
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -361,23 +361,35 @@ impl<E: Engine> InnerWrapper<E> {
         let task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-        let executor = self.fetch_executor(task.priority());
 
+        let executor = self.fetch_executor(task.priority());
+        let pool = executor.clone_pool();
+        let inner = self.clone();
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
         });
-        if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "async_snapshot_err"])
-                .inc();
 
-            error!("engine async_snapshot failed, err: {:?}", e);
-            self.finish_with_err(cid, e.into());
-        } else {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "snapshot"])
-                .inc();
-        }
+        pool.schedule(move |sched_ctx: &mut SchedContext<E>| {
+            if let Err(e) = sched_ctx.engine.async_snapshot(&ctx, cb) {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[tag, "async_snapshot_err"])
+                    .inc();
+
+                error!("engine async_snapshot failed, err: {:?}", e);
+                notify_scheduler(
+                    inner,
+                    Msg::FinishedWithErr {
+                        cid,
+                        err: e.into(),
+                        tag: tag,
+                    },
+                );
+            } else {
+                SCHED_STAGE_COUNTER_VEC
+                    .with_label_values(&[tag, "snapshot"])
+                    .inc();
+            }
+        });
     }
 
     /// Calls the callback with an error.
