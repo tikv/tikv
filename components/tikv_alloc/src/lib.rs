@@ -79,9 +79,6 @@
 //! `tikv`.
 mod default;
 
-#[cfg(any(windows, fuzzing))]
-use compile_warning::compile_warning;
-
 #[cfg(feature = "mem-profiling")]
 #[macro_use]
 extern crate log;
@@ -102,8 +99,6 @@ mod imp;
 mod imp;
 
 #[cfg(any(windows, fuzzing))]
-compile_warning!("Memory allocation uses System alloc on Windows or Fuzzing");
-#[cfg(any(windows, fuzzing, features))]
 #[path = "system.rs"]
 mod imp;
 
