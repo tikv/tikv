@@ -1705,7 +1705,7 @@ impl Peer {
                 let cmd_type = cmd.get_admin_request().get_cmd_type();
                 match cmd_type {
                     AdminCmdType::TransferLeader
-                    | AdminResponse::VerifyHash
+                    | AdminCmdType::VerifyHash
                     | AdminCmdType::InvalidAdmin => {}
                     _ => {
                         // Any command that can change epoch or log gap should be rejected.

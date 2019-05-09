@@ -367,14 +367,16 @@ impl<'a> ApplyContextCore<'a> {
     /// the context is ready to switch to apply other `ApplyDelegate`.
     pub fn stash(&mut self, delegate: &mut ApplyDelegate) -> Stash {
         self.commit_opt(delegate, false);
-        Stash {
+        let stash = Stash {
             // last cbs should not be popped, because if the ApplyContext
             // is flushed, the callbacks can be flushed too.
             region: self.cbs.last().map(|cbs| cbs.region.clone()),
             exec_ctx: self.exec_ctx.take(),
             last_applied_index: self.last_applied_index,
             for_merge_source: self.for_merge_source,
-        }
+        };
+        self.for_merge_source = true;
+        stash
     }
 
     /// Restore the dirty state, so context can resume applying from
@@ -1368,7 +1370,6 @@ impl ApplyDelegate {
             return;
         }
         let stash = ctx.stash(self);
-        self.for_merge_source = true;
         let mut delegate = match ctx.delegates.get_mut(&region_id) {
             None => panic!("{} source region {} not exist", self.tag, region_id),
             Some(e) => e.take().unwrap_or_else(|| {
@@ -2113,7 +2114,6 @@ impl Runner {
                     |_| {
                         ctx.delegates.remove(&region_id);
                         ctx.cbs.drain(..);
-                        ()
                     }
                 );
             }
@@ -2333,6 +2333,7 @@ mod tests {
             wb.put(key.as_bytes(), b"value").unwrap();
         }
         assert_eq!(should_write_to_engine(&req, wb.count(), false), true);
+        assert_eq!(should_write_to_engine(&req, wb.count(), true), false);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
