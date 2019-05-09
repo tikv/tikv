@@ -12,9 +12,9 @@ pub fn fetch_stats() -> io::Result<Option<AllocStats>> {
 }
 
 pub fn activate_prof() -> ProfResult<()> {
-    Err(ProfError::JemallocNotEnabled)
+    Err(ProfError::MemProfilingNotEnabled)
 }
 
 pub fn deactivate_prof() -> ProfResult<()> {
-    Err(ProfError::JemallocNotEnabled)
+    Err(ProfError::MemProfilingNotEnabled)
 }
