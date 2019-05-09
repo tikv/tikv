@@ -752,6 +752,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     res.merged,
                     &res.metrics,
                 );
+                // After applying, several metrics are updated, report it to pd to
+                // get fair schedule.
                 self.register_pd_heartbeat_tick();
             }
             ApplyTaskRes::Destroy { peer_id, .. } => {
@@ -2598,6 +2600,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             return;
         }
 
+        // Schedule a pd heartbeat to discover down and pending peer when
+        // hibernate_regions is enabled.
         if self.fsm.peer.is_leader() {
             self.register_pd_heartbeat_tick();
         }
