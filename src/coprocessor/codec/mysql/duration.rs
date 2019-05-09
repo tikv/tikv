@@ -7,15 +7,25 @@ use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
-use time::{self, Tm};
 
-use super::super::Result;
-use super::{check_fsp, parse_frac, Decimal};
+use nom::character::complete::{digit1, multispace0, multispace1};
+use nom::{
+    alt_complete, call, char, complete, cond_with_error, do_parse, eof, map, map_res, named,
+    named_args, opt, peek, preceded, tag,
+};
+
+use super::super::{Result, TEN_POW};
+use super::{check_fsp, Decimal};
 
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
 pub const NANO_WIDTH: u32 = 9;
+
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_MINUTE: u64 = 60;
+
+const MAX_HOURS: u32 = 838;
+const MAX_MINUTES: u32 = 59;
+const MAX_SECONDS: u32 = 59;
 
 /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
 const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
@@ -32,9 +42,151 @@ fn check_dur(dur: &StdDuration) -> Result<()> {
     Ok(())
 }
 
-fn tm_to_secs(t: Tm) -> u64 {
-    t.tm_hour as u64 * SECS_PER_HOUR + t.tm_min as u64 * SECS_PER_MINUTE + t.tm_sec as u64
+#[inline]
+fn check_hour(hour: u32) -> Result<u32> {
+    if hour > MAX_HOURS {
+        Err(invalid_type!(
+            "invalid hour value: {} larger than {}",
+            hour,
+            MAX_HOURS
+        ))
+    } else {
+        Ok(hour)
+    }
 }
+
+#[inline]
+fn check_minute(minute: u32) -> Result<u32> {
+    if minute > MAX_MINUTES {
+        Err(invalid_type!(
+            "invalid minute value: {} larger than {}",
+            minute,
+            MAX_MINUTES
+        ))
+    } else {
+        Ok(minute)
+    }
+}
+
+#[inline]
+fn check_second(second: u32) -> Result<u32> {
+    if second > MAX_SECONDS {
+        Err(invalid_type!(
+            "invalid second value: {} larger than {}",
+            second,
+            MAX_SECONDS
+        ))
+    } else {
+        Ok(second)
+    }
+}
+
+fn buf_to_int(buf: &[u8]) -> u32 {
+    buf.iter().fold(0, |acc, c| acc * 10 + (c - b'0') as u32)
+}
+
+// Functionality:
+// Extract a `u32` from a buffer which matches pattern: `\d+.*`
+//
+// The range of MySQL's TIME is `-838:59:59 ~ 838:59:59`, so we can at most read 7 digits
+// (pattern like `HHHMMSS`)
+named!(
+    read_int<u32>,
+    map_res!(digit1, |buf: &[u8]| if buf.len() > 7 {
+        Err(invalid_type!("invalid time value, more than {} digits", 7))
+    } else {
+        Ok(buf_to_int(buf))
+    })
+);
+
+// Functionality:
+// Extract a `u32` with `fsp` from a buffer which matches pattern: `\d+.*`
+//
+// 1. The behavior of this function is similar to `read_int` except that it's designed to read the
+// fractional part of a `TIME`, it will never round with `fsp` and the round will be delayed to
+// the construction of `TIME`.
+// 2. The fractional part will be align to a 9-digit number which it's easy to round with `fsp`
+named_args!(read_int_with_fsp(fsp: u8)<u32>, map_res!(
+        digit1,
+        |buf: &[u8]| -> Result<u32> {
+            let fsp = fsp as usize;
+            let (fraction, len) = if fsp >= buf.len() {
+                (buf_to_int(buf), buf.len())
+            } else {
+                (buf_to_int(&buf[..=fsp]), fsp + 1)
+            };
+            Ok(fraction * TEN_POW[9 - len])
+        }
+));
+
+// Parse the sign of `Duration`, return true if it's negative otherwise false
+named!(
+    neg<bool>,
+    map!(opt!(complete!(char!('-'))), |neg| neg.is_some())
+);
+
+// Functionality:
+// Parse the day/block(format like `HHMMSS`) value of the `Duration`
+//
+// 1. Assuming that there is no integers before marker {integer}.
+// 2. We can't determine the value we extract is a `day` or a `block`(`HHMMSS`) before we iterate
+//    the whole string.
+// 3. If a integer exists in a string like `{integer} {some digit}`, then it should parse as a
+//    `day` value.
+// 4. If a integer exists in a string like `{integer}.`, then it should parse as a `block`
+// 5. If a integer exists in a string like `{integer}\s*$`, then it should parse as a `block` too.
+
+named!(
+    day<Option<u32>>,
+    opt!(do_parse!(
+        day: read_int
+            >> alt_complete!(
+                preceded!(multispace1, peek!(digit1))
+                    | preceded!(multispace0, peek!(tag!(".")))
+                    | preceded!(multispace0, eof!())
+            )
+            >> (day)
+    ))
+);
+
+// Parse format like: `hh:mm` `(day) hh` `hh:mm:ss`
+named!(
+    hhmmss<(Option<u32>, Option<u32>, Option<u32>)>,
+    do_parse!(
+        hour: opt!(map_res!(read_int, check_hour))
+            >> has_mintue: map!(opt!(complete!(char!(':'))), |flag| flag.is_some())
+            >> minute: cond_with_error!(has_mintue, map_res!(read_int, check_minute))
+            >> has_second: map!(opt!(complete!(char!(':'))), |flag| flag.is_some())
+            >> second: cond_with_error!(has_second, map_res!(read_int, check_second))
+            >> (hour, minute, second)
+    )
+);
+
+// Parse fractional part.
+named_args!(
+    fraction(fsp: u8)<Option<u32>>,
+    preceded!(opt!(complete!(char!('.'))), opt!(call!(read_int_with_fsp, fsp)))
+);
+
+named_args!(parse(fsp: u8)<
+            (bool,          // neg
+             Option<u32>,   // day
+             Option<u32>,   // hour
+             Option<u32>,   // minute
+             Option<u32>,   // second
+             Option<u32>)>, // fraction
+
+            do_parse!(
+                multispace0
+                >> neg: neg
+                >> multispace0
+                >> day: day
+                >> hhmmss: hhmmss
+                >> multispace0
+                >> fraction: call!(fraction, fsp)
+                >> multispace0
+                >> eof!()
+                >> (neg, day, hhmmss.0, hhmmss.1, hhmmss.2, fraction)));
 
 /// `Duration` is the type for MySQL `time` type.
 ///
@@ -131,68 +283,40 @@ impl Duration {
     /// Parses the time form a formatted string with a fractional seconds part,
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
-    pub fn parse(mut s: &[u8], fsp: i8) -> Result<Duration> {
+    pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
         let fsp = check_fsp(fsp)?;
 
-        let (mut neg, mut day, mut frac) = (false, None, 0);
-
-        if s.is_empty() {
+        if input.is_empty() {
             return Ok(Duration::zero());
-        } else if s[0] == b'-' {
-            s = &s[1..];
-            neg = true;
         }
 
-        let mut parts = s.splitn(2, |c| *c == b' ');
-        s = parts.next().unwrap();
-        if let Some(remain) = parts.next() {
-            let day_str = str::from_utf8(s)?;
-            day = Some(box_try!(u64::from_str_radix(day_str, 10)));
-            s = remain;
+        let (_, (mut neg, mut day, mut hour, mut minute, mut second, fraction)) =
+            parse(input, fsp).map_err(|_| invalid_type!("invalid time format"))?;
+
+        if day.is_some() && hour.is_none() {
+            let block = day.take().unwrap();
+            hour = Some(block / 10_000);
+            minute = Some(block / 100 % 100);
+            second = Some(block % 100);
         }
 
-        let mut parts = s.splitn(2, |c| *c == b'.');
-        s = parts.next().unwrap();
-        if let Some(frac_part) = parts.next() {
-            frac = parse_frac(frac_part, fsp)?;
-            frac *= 10u32.pow(NANO_WIDTH - u32::from(fsp));
+        let (hour, minute, second, fraction) = (
+            hour.unwrap_or(0) + day.unwrap_or(0) * 24,
+            minute.unwrap_or(0),
+            second.unwrap_or(0),
+            fraction.unwrap_or(0),
+        );
+
+        let secs = hour as u64 * SECS_PER_HOUR + minute as u64 * SECS_PER_MINUTE + second as u64;
+
+        let mask = TEN_POW[NANO_WIDTH as usize - fsp as usize - 1];
+        let fraction = (fraction / mask + 5) / 10 * 10 * mask;
+
+        if secs == 0 && fraction == 0 {
+            neg = false;
         }
 
-        let mut parts = s.splitn(2, |c| *c == b':');
-        s = parts.next().unwrap();
-        let s_str = str::from_utf8(s)?;
-        let mut secs;
-        match parts.next() {
-            Some(remain) => {
-                let remain_str = str::from_utf8(remain)?;
-                let t = box_try!(match remain.len() {
-                    5 => time::strptime(remain_str, "%M:%S"),
-                    2 => time::strptime(remain_str, "%M"),
-                    _ => return Err(invalid_type!("{} is invalid time.", remain_str)),
-                });
-                secs = tm_to_secs(t);
-                secs += box_try!(u64::from_str_radix(s_str, 10)) * SECS_PER_HOUR;
-            }
-            None if day.is_some() => {
-                secs = box_try!(u64::from_str_radix(s_str, 10)) * SECS_PER_HOUR;
-            }
-            None => {
-                let t = box_try!(match s.len() {
-                    6 => time::strptime(s_str, "%H%M%S"),
-                    4 => time::strptime(s_str, "%M%S"),
-                    2 => time::strptime(s_str, "%S"),
-                    _ => return Err(invalid_type!("{} is invalid time", s_str)),
-                });
-                secs = tm_to_secs(t);
-            }
-        }
-
-        if let Some(day) = day {
-            secs += day * SECS_PER_HOUR * 24;
-        }
-
-        let dur = StdDuration::new(secs, frac);
-        Duration::new(dur, neg, fsp as i8)
+        Duration::new(StdDuration::new(secs, fraction), neg, fsp as i8)
     }
 
     pub fn to_decimal(&self) -> Result<Decimal> {
@@ -457,6 +581,18 @@ mod tests {
             (b"00:00:00.777777", 2, Some("00:00:00.78")),
             (b"00:00:00.777777", 6, Some("00:00:00.777777")),
             (b"00:00:00.001", 3, Some("00:00:00.001")),
+            // NOTE:
+            (b"1:2:3", 0, Some("01:02:03")),
+            (b"1 1:2:3", 0, Some("25:02:03")),
+            (b"-.123", 3, Some("-00:00:00.123")),
+            (b"-", 0, Some("00:00:00")),
+            (b"", 0, Some("00:00:00")),
+            (b" - 1:2:3 .123 ", 3, Some("-01:02:03.123")),
+            (b" - 1 .123 ", 3, Some("-00:00:01.123")),
+            (b"12345", 0, Some("01:23:45")),
+            (b"1::2:3", 0, None),
+            (b"18446744073709551615:59:59", 0, None),
+            (b"1.23 3", 0, None),
         ];
 
         for (input, fsp, expect) in cases {

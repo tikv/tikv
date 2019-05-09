@@ -119,6 +119,7 @@ hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
+nom = "5.0.0-alpha2"
 profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
