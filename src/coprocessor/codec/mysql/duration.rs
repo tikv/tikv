@@ -82,7 +82,7 @@ fn check_second(second: u32) -> Result<u32> {
 }
 
 fn buf_to_int(buf: &[u8]) -> u32 {
-    buf.iter().fold(0, |acc, c| acc * 10 + (c - b'0') as u32)
+    buf.iter().fold(0, |acc, c| acc * 10 + u32::from(c - b'0'))
 }
 
 // Functionality:
@@ -307,7 +307,9 @@ impl Duration {
             fraction.unwrap_or(0),
         );
 
-        let secs = hour as u64 * SECS_PER_HOUR + minute as u64 * SECS_PER_MINUTE + second as u64;
+        let secs = u64::from(hour) * SECS_PER_HOUR
+            + u64::from(minute) * SECS_PER_MINUTE
+            + u64::from(second);
 
         let mask = TEN_POW[NANO_WIDTH as usize - fsp as usize - 1];
         let fraction = (fraction / mask + 5) / 10 * 10 * mask;
