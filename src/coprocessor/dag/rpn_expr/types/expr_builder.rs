@@ -19,12 +19,12 @@ pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
-        EvalType::try_from(c.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {
             ExprType::ScalarFunc => {
                 let sig = c.get_sig();
-                super::super::map_pb_sig_to_rpn_func(sig)?;
+                super::super::map_pb_sig_to_rpn_func(sig, c.get_children())?;
                 for n in c.get_children() {
                     RpnExpressionBuilder::check_expr_tree_supported(n)?;
                 }
@@ -70,7 +70,7 @@ impl RpnExpressionBuilder {
         max_columns: usize,
     ) -> Result<RpnExpression>
     where
-        F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+        F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
     {
         let mut expr_nodes = Vec::new();
         append_rpn_nodes_recursively(
@@ -150,6 +150,12 @@ impl RpnExpressionBuilder {
     }
 }
 
+impl AsRef<[RpnExpressionNode]> for RpnExpressionBuilder {
+    fn as_ref(&self) -> &[RpnExpressionNode] {
+        self.0.as_ref()
+    }
+}
+
 /// Transforms eval tree nodes into RPN nodes.
 ///
 /// Suppose that we have a function call:
@@ -197,7 +203,7 @@ fn append_rpn_nodes_recursively<F>(
     // the full schema instead.
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // TODO: We should check whether node types match the function signature. Otherwise there
     // will be panics when the expression is evaluated.
@@ -209,12 +215,6 @@ where
         ExprType::ColumnRef => handle_node_column_ref(tree_node, rpn_nodes, max_columns),
         _ => handle_node_constant(tree_node, rpn_nodes, time_zone),
     }
-}
-
-/// TODO: Remove this helper function when we use Failure which can simplify the code.
-#[inline]
-fn get_eval_type(tree_node: &Expr) -> Result<EvalType> {
-    EvalType::try_from(tree_node.get_field_type().tp()).map_err(|e| Error::Other(box_err!(e)))
 }
 
 #[inline]
@@ -248,10 +248,10 @@ fn handle_node_fn_call<F>(
     max_columns: usize,
 ) -> Result<()>
 where
-    F: Fn(tipb::expression::ScalarFuncSig) -> Result<Box<dyn RpnFunction>> + Copy,
+    F: Fn(tipb::expression::ScalarFuncSig, &[Expr]) -> Result<Box<dyn RpnFunction>> + Copy,
 {
     // Map pb func to `RpnFunction`.
-    let func = fn_mapper(tree_node.get_sig())?;
+    let func = fn_mapper(tree_node.get_sig(), tree_node.get_children())?;
     let args = tree_node.take_children().into_vec();
     if func.args_len() != args.len() {
         return Err(box_err!(
@@ -277,7 +277,7 @@ fn handle_node_constant(
     rpn_nodes: &mut Vec<RpnExpressionNode>,
     time_zone: &Tz,
 ) -> Result<()> {
-    let eval_type = get_eval_type(&tree_node)?;
+    let eval_type = box_try!(EvalType::try_from(tree_node.get_field_type().tp()));
 
     let scalar_value = match tree_node.get_tp() {
         ExprType::Null => get_scalar_value_null(eval_type),
@@ -404,6 +404,7 @@ mod tests {
 
     use super::super::RpnFnCallPayload;
 
+    use cop_codegen::RpnFunction;
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
@@ -412,10 +413,9 @@ mod tests {
     use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 1)]
     struct FnA;
-
-    impl_template_fn! { 1 arg @ FnA }
 
     impl FnA {
         fn call(
@@ -428,10 +428,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 2 float arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 2)]
     struct FnB;
-
-    impl_template_fn! { 2 arg @ FnB }
 
     impl FnB {
         fn call(
@@ -445,10 +444,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 int arguments, returns int.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnC;
-
-    impl_template_fn! { 3 arg @ FnC }
 
     impl FnC {
         fn call(
@@ -463,10 +461,9 @@ mod tests {
     }
 
     /// An RPN function for test. It accepts 3 float arguments, returns float.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, RpnFunction)]
+    #[rpn_function(args = 3)]
     struct FnD;
-
-    impl_template_fn! { 3 arg @ FnD }
 
     impl FnD {
         fn call(
@@ -483,7 +480,7 @@ mod tests {
     /// For testing `append_rpn_nodes_recursively`. It accepts protobuf function sig enum, which
     /// cannot be modified by us in tests to support FnA ~ FnD. So let's just hard code some
     /// substitute.
-    fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+    fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
         // FnA: CastIntAsInt
         // FnB: CastIntAsReal
         // FnC: CastIntAsString
