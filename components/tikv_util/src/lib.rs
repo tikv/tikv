@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(fnbox)]
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
