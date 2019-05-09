@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::unlikely;
+
 /// A trait to provide sequential read over a memory buffer.
 ///
 /// The memory buffer can be `&[u8]` or `std::io::Cursor<AsRef<[u8]>>`.
@@ -22,7 +24,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
-        if pos >= slice.len() {
+        if unsafe { unlikely(pos >= slice.len()) } {
             return &[];
         }
         &slice[pos..]
@@ -103,7 +105,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
         let slice = self.get_mut().as_mut();
-        if pos >= slice.len() {
+        if unlikely(pos >= slice.len()) {
             return &mut [];
         }
         &mut slice[pos..]
