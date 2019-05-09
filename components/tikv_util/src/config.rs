@@ -143,14 +143,14 @@ impl FromStr for ReadableSize {
         }
 
         // size: digits and '.' as decimal separator
-        let size = size_str
+        let size_len = size_str
             .to_string()
             .chars()
             .take_while(|c| char::is_ascii_digit(c) || *c == '.')
-            .collect::<String>();
+            .count();
 
         // unit: alphabetic characters
-        let (_, unit) = size_str.split_at(size.len());
+        let (size, unit) = size_str.split_at(size_len);
 
         let unit = match unit.trim() {
             "K" | "KB" | "KiB" => KB,
