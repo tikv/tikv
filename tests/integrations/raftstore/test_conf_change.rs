@@ -650,6 +650,9 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
     // To avoid using stale leader.
     cluster.reset_leader_of_region(r1);
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k4", b"v4");
 
     let mut add_peer = |peer: metapb::Peer| {
         let conf_type = if peer.get_is_learner() {
@@ -715,6 +718,9 @@ fn test_conf_change_remove_leader() {
 
     // Transfer leader to the first peer.
     cluster.must_transfer_leader(r1, new_peer(1, 1));
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k1", b"v1");
 
     // Try to remove leader, which should be ignored.
     let res =
