@@ -157,7 +157,7 @@ macro_rules! cf_config {
 }
 
 macro_rules! write_into_metrics {
-    ($cf:expr, $tag:expr,$metrics:expr) => {{
+    ($cf:expr, $tag:expr, $metrics:expr) => {{
         $metrics
             .with_label_values(&[$tag, "block_size"])
             .set($cf.block_size.0 as f64);
@@ -865,7 +865,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 2,
+            max_background_jobs: 4,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -876,7 +876,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 1,
+            max_sub_compactions: 2,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,

@@ -59,7 +59,6 @@ pub fn delete_all_in_range_cf(
 ) -> Result<()> {
     let handle = rocks::util::get_cf_handle(db, cf)?;
     let wb = WriteBatch::new();
-    // Since CF_LOCK is usually small, so using traditional way to cleanup.
     if use_delete_range && cf != CF_LOCK {
         wb.delete_range_cf(handle, start_key, end_key)?;
     } else {

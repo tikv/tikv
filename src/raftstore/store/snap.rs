@@ -174,7 +174,7 @@ pub struct ApplyOptions {
 pub trait Snapshot: Read + Write + Send {
     fn build(
         &mut self,
-        snap: &DbSnapshot,
+        kv_snap: &DbSnapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
@@ -1490,21 +1490,20 @@ pub mod tests {
     use std::cmp;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::Engines;
-    use engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{Engines, Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
         RaftApplyState, RaftSnapshotData, RegionLocalState, SnapshotMeta,
     };
     use protobuf::Message;
-    use std::path::{Path, PathBuf};
     use tempdir::TempDir;
 
     use super::{
@@ -1512,8 +1511,8 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use crate::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::raftstore::Result;
 
     const TEST_STORE_ID: u64 = 1;
@@ -1576,6 +1575,7 @@ pub mod tests {
         regions: &[u64],
     ) -> Result<Engines> {
         let p = path.path();
+        let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         let raft = open_test_db(
             p.join("raft").as_path(),
             raft_db_opt,
@@ -1594,8 +1594,6 @@ pub mod tests {
             region_state.set_region(region);
             raft.put_msg(&keys::region_state_key(region_id), &region_state)?;
         }
-
-        let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
         Ok(Engines { kv, raft })
     }
 
@@ -1625,8 +1623,8 @@ pub mod tests {
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"z".to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(peer.clone());
         region
     }
@@ -2119,7 +2117,7 @@ pub mod tests {
         assert!(s5.exists());
 
         let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
-        let dst_db = open_test_empty_db(dst_db_dir.path(), None, None).unwrap();
+        let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
             region: region.clone(),
@@ -2433,14 +2431,14 @@ pub mod tests {
     fn test_snapshot_max_total_size() {
         let regions: Vec<u64> = (0..20).collect();
         let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
-        let engines = get_test_db_for_regions(&kv_path, None, None, None, None, &regions).unwrap();
+        let engine = get_test_db_for_regions(&kv_path, None, None, None, None, &regions).unwrap();
 
         let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
         let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = DbSnapshot::new(engines.kv);
+        let snapshot = DbSnapshot::new(engine.kv);
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);

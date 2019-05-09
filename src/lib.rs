@@ -4,7 +4,6 @@
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "200"]
 #![feature(cell_update)]
-#![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
 #![feature(duration_float)]
 #![feature(specialization)]
