@@ -47,8 +47,8 @@ use crate::raftstore::store::worker::{
     SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, Callback, CasualMessage, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter, StoreMsg,
-    StoreTick,
+    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
+    SnapshotDeleter, StoreMsg, StoreTick,
 };
 use crate::raftstore::Result;
 use crate::storage::kv::{CompactedEvent, CompactionListener};
@@ -66,6 +66,7 @@ type Key = Vec<u8>;
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const PENDING_VOTES_CAP: usize = 20;
+const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
     pub engine: Arc<DB>,
@@ -174,6 +175,12 @@ impl RaftRouter {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn report_unreachable(&self, store_id: u64) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
+        });
     }
 }
 
@@ -334,6 +341,7 @@ struct Store {
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
+    last_unreachable_report: HashMap<u64, Instant>,
 }
 
 pub struct StoreFsm {
@@ -351,6 +359,7 @@ impl StoreFsm {
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
+                last_unreachable_report: HashMap::default(),
             },
             receiver: rx,
         });
@@ -410,6 +419,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
                 StoreMsg::SnapshotStats => self.store_heartbeat_pd(),
+                StoreMsg::StoreUnreachable { store_id } => {
+                    self.on_store_unreachable(store_id);
+                }
                 StoreMsg::Start { store } => self.start(store),
             }
         }
@@ -1899,6 +1911,30 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                 PeerMsg::CasualMessage(CasualMessage::ClearRegionSize),
             );
         }
+    }
+
+    fn on_store_unreachable(&mut self, store_id: u64) {
+        let now = Instant::now();
+        if self
+            .fsm
+            .store
+            .last_unreachable_report
+            .get(&store_id)
+            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            < UNREACHABLE_BACKOFF
+        {
+            return;
+        }
+        info!(
+            "broadcasting unreachable";
+            "store_id" => self.fsm.store.id,
+            "unreachable_store_id" => store_id,
+        );
+        self.fsm.store.last_unreachable_report.insert(store_id, now);
+        // It's possible to acquire the lock and only send notification to
+        // invovled regions. However loop over all the regions can take a
+        // lot of time, which may block other operations.
+        self.ctx.router.report_unreachable(store_id);
     }
 }
 
