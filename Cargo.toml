@@ -5,6 +5,9 @@ authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
 keywords = ["KV", "distributed-systems", "raft"]
+homepage = "https://tikv.org"
+repository = "https://github.com/tikv/tikv/"
+readme = "README.md"
 edition = "2018"
 publish = false
 
@@ -122,7 +125,8 @@ cop_codegen = { path = "components/cop_codegen" }
 tipb_helper = { path = "components/tipb_helper" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# TODO: use master branch after the next version is released.
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
