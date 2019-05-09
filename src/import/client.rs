@@ -290,8 +290,7 @@ impl<R: Read> Stream for UploadStream<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand;
-    use rand_core::RngCore;
+    use rand::RngCore;
 
     #[test]
     fn test_upload_stream() {

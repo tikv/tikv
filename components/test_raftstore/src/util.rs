@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
+use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -29,7 +30,6 @@ use tikv_util::escape;
 
 use super::*;
 
-use rand_core::RngCore;
 pub use tikv::raftstore::store::util::{find_peer, new_learner_peer, new_peer};
 
 pub fn must_get(engine: &Arc<DB>, cf: &str, key: &[u8], value: Option<&[u8]>) {

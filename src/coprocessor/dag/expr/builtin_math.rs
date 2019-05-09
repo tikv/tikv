@@ -548,8 +548,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
             sec + nsec
         }
     };
-    let rng = SeedableRng::seed_from_u64(seed);
-    rng
+    SeedableRng::seed_from_u64(seed)
 }
 
 #[cfg(test)]
