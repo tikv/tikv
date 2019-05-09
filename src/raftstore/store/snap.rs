@@ -1598,7 +1598,11 @@ pub mod tests {
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
         let shared_block_cache = false;
-        Ok(Engines { kv, raft, shared_block_cache })
+        Ok(Engines {
+            kv,
+            raft,
+            shared_block_cache,
+        })
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
