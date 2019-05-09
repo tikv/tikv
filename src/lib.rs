@@ -20,12 +20,9 @@
 #![cfg_attr(test, feature(test))]
 #![recursion_limit = "200"]
 #![feature(cell_update)]
-#![feature(fnbox)]
 #![feature(proc_macro_hygiene)]
+#![feature(duration_float)]
 #![feature(specialization)]
-// Currently this raises some false positives, so we allow it:
-// https://github.com/rust-lang-nursery/rust-clippy/issues/2638
-#![allow(clippy::nonminimal_bool)]
 
 #[macro_use]
 extern crate bitflags;
@@ -68,7 +65,6 @@ extern crate vlog;
 extern crate tikv_util;
 #[cfg(test)]
 extern crate test;
-use grpcio as grpc;
 
 pub mod binutil;
 pub mod config;
@@ -78,5 +74,3 @@ pub mod pd;
 pub mod raftstore;
 pub mod server;
 pub mod storage;
-
-pub use crate::storage::Storage;

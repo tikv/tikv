@@ -5,8 +5,8 @@ mod raft_client;
 
 use std::sync::Arc;
 
-use crate::grpc::*;
 use futures::Future;
+use grpcio::*;
 use kvproto::coprocessor::*;
 use kvproto::kvrpcpb::*;
 use kvproto::raft_serverpb::{Done, RaftMessage, SnapshotChunk};
@@ -136,6 +136,7 @@ trait MockKvService {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
@@ -190,6 +191,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 

@@ -27,7 +27,7 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
 
 impl
     BatchIndexScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
@@ -247,12 +247,11 @@ mod tests {
 
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
-    use tipb::expression::FieldType;
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -293,21 +292,9 @@ mod tests {
 
         // The schema of these columns. Used to check executor output.
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         // Case 1. Normal index.

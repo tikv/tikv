@@ -38,7 +38,7 @@ use raft::eraftpb::{ConfChange, Entry, EntryType};
 use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
 use tikv_util::security::{SecurityConfig, SecurityManager};
@@ -63,8 +63,9 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -77,7 +78,7 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -878,7 +879,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();

@@ -34,8 +34,6 @@ pub mod util;
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
 
-use std::boxed::FnBox;
-
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
 use tikv_util::time::{Duration, Instant};
@@ -113,10 +111,8 @@ impl Deadline {
     }
 }
 
-/// Denotes for a function that builds a `RequestHandler`.
-/// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]

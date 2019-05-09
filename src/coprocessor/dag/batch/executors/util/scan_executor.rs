@@ -11,7 +11,7 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::Scanner;
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 /// Common interfaces for table scan and index scan implementations.
 pub trait ScanExecutorImpl: Send {
@@ -201,7 +201,7 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
     use std::convert::TryFrom;
 
     for column in columns_info {
-        EvalType::try_from(column.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        box_try!(EvalType::try_from(column.tp()));
     }
     Ok(())
 }
@@ -219,7 +219,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         assert!(!self.is_ended);
         assert!(scan_rows > 0);
 
-        let timer = self.summary_collector.on_start_batch();
+        let timer = self.summary_collector.on_start_iterate();
 
         let mut data = self.imp.build_column_vec(scan_rows);
         let is_drained = self.fill_column_vec(scan_rows, &mut data);
@@ -238,7 +238,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         };
 
         self.summary_collector
-            .on_finish_batch(timer, data.rows_len());
+            .on_finish_iterate(timer, data.rows_len());
 
         BatchExecuteResult {
             data,

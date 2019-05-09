@@ -920,6 +920,11 @@ impl Decimal {
         self.word_buf[0] = 0;
     }
 
+    /// Creates a new decimal which is zero.
+    pub fn zero() -> Decimal {
+        Decimal::new(1, 0, false)
+    }
+
     /// Given a precision count 'prec', get:
     ///  1. the index of first non-zero word in self.word_buf to hold the leading 'prec' number of
     ///     digits

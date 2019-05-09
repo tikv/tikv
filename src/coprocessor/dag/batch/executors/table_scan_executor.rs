@@ -28,7 +28,7 @@ pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
 
 impl
     BatchTableScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
+        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
         FixtureStore,
     >
 {
@@ -321,16 +321,10 @@ mod tests {
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
-
-    fn field_type(ft: FieldTypeTp) -> FieldType {
-        let mut f = FieldType::new();
-        f.as_mut_accessor().set_tp(ft);
-        f
-    }
 
     /// Test Helper for normal test with fixed schema and data.
     /// Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
@@ -429,9 +423,9 @@ mod tests {
             ];
 
             let field_types = vec![
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::Double),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::Double.into(),
             ];
 
             let store = {
@@ -673,9 +667,9 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        // 0 is none because our output index is 1
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        // 0 remains Default because our output index is 1
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -683,8 +677,8 @@ mod tests {
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -694,8 +688,8 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 2);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(2, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
     }
@@ -725,23 +719,10 @@ mod tests {
                 ci
             },
         ];
-
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         let mut kv = vec![];
@@ -843,19 +824,7 @@ mod tests {
                 ci
             },
         ];
-
-        let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let mut kv = vec![];
         {
