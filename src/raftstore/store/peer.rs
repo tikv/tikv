@@ -1449,8 +1449,11 @@ impl Peer {
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(monotonic_raw_now());
-        let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
-        self.apply_proposals.push(p);
+
+        if !cb.is_none() {
+            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            self.apply_proposals.push(p);
+        }
 
         self.proposals.push(meta);
     }
