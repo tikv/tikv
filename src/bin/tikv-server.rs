@@ -3,8 +3,9 @@
 #![feature(slice_patterns)]
 #![feature(proc_macro_hygiene)]
 
-use clap::{crate_authors, crate_version, App, Arg};
 use std::process;
+
+use clap::{crate_authors, crate_version, App, Arg};
 use tikv::binutil::{self, server, setup};
 use tikv::config::TiKvConfig;
 

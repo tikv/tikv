@@ -111,7 +111,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Initialize raftstore channels.
     let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
 
-    // Create router.
     let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
