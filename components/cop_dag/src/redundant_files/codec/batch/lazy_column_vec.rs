@@ -217,7 +217,7 @@ mod tests {
 
     use cop_datatype::{EvalType, FieldTypeAccessor};
 
-    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
+    use crate::codec::datum::{Datum, DatumEncoder};
 
     /// Pushes a raw row. There must be no empty datum.
     ///

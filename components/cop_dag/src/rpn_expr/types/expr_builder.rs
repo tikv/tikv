@@ -407,8 +407,8 @@ mod tests {
     use cop_datatype::FieldTypeTp;
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::dag::expr::EvalContext;
-    use crate::coprocessor::Result;
+    use crate::expr::EvalContext;
+    use crate::Result;
     use tikv_util::codec::number::NumberEncoder;
 
     /// An RPN function for test. It accepts 1 int argument, returns float.

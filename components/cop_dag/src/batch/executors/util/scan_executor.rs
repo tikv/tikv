@@ -7,8 +7,8 @@ use tipb::schema::ColumnInfo;
 use crate::storage::{Key, Store};
 
 use super::ranges_iter::{PointRangePolicy, RangesIterator};
-use crate::codec::batch::LazyBatchColumnVec;
 use crate::batch::interface::*;
+use crate::codec::batch::LazyBatchColumnVec;
 use crate::expr::EvalContext;
 use crate::Scanner;
 use crate::{Error, Result};

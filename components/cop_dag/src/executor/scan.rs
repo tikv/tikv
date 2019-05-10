@@ -4,8 +4,8 @@ use std::{iter::Peekable, mem, sync::Arc, vec::IntoIter};
 
 use super::{Executor, ExecutorMetrics, Row};
 use crate::codec::table;
-use crate::{Error, Result};
 use crate::storage::{Key, Store};
+use crate::{Error, Result};
 use kvproto::coprocessor::KeyRange;
 use tipb::schema::ColumnInfo;
 

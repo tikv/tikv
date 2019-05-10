@@ -30,11 +30,11 @@ impl ScalarFunc {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::mysql::Decimal;
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::Flag;
-    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::codec::mysql::Decimal;
+    use crate::codec::Datum;
+    use crate::expr::ctx::Flag;
+    use crate::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::expr::{EvalConfig, EvalContext, Expression};
     use std::str::FromStr;
     use std::sync::Arc;
     use tipb::expression::ScalarFuncSig;

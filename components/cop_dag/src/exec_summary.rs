@@ -28,8 +28,8 @@ pub trait ExecSummaryCollector: Send {
 
     /// Creates a new instance with specified output slot index.
     fn new(output_index: usize) -> Self
-        where
-            Self: Sized;
+    where
+        Self: Sized;
 
     /// Returns an instance that will record elapsed duration and increase
     /// the iterations counter. The instance should be later passed back to

@@ -30,7 +30,7 @@ impl RpnFnLogicalAnd {
 mod tests {
     use super::*;
 
-    use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
+    use crate::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
     fn test_logical_and() {

@@ -15,9 +15,7 @@ use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
 
 use cop_datatype::FieldTypeTp;
 
-use crate::codec::mysql::duration::{
-    Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH,
-};
+use crate::codec::mysql::duration::{Duration as MyDuration, NANOS_PER_SEC, NANO_WIDTH};
 use crate::codec::mysql::{self, Decimal};
 use crate::codec::{Error, Result, TEN_POW};
 use tikv_util::codec::number::{self, NumberEncoder};
@@ -352,56 +350,56 @@ impl Time {
         let (parts, frac_str) = Time::split_datetime(s);
         let (mut year, month, day, hour, minute, sec): (i32, u32, u32, u32, u32, u32) = match *parts
             .as_slice()
-            {
-                [s1] => {
-                    need_adjust = s1.len() != 14 && s1.len() != 8;
-                    has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
-                    match s1.len() {
-                        14 | 12 | 11 | 10 | 9 => {
-                            split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
-                        }
-                        8 | 6 | 5 => {
-                            split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
-                        }
-                        _ => {
-                            return Err(box_err!(
+        {
+            [s1] => {
+                need_adjust = s1.len() != 14 && s1.len() != 8;
+                has_hhmmss = s1.len() == 14 || s1.len() == 12 || s1.len() == 11;
+                match s1.len() {
+                    14 | 12 | 11 | 10 | 9 => {
+                        split_ymd_hms_with_frac_as_s(s1.as_bytes(), frac_str.as_bytes())?
+                    }
+                    8 | 6 | 5 => {
+                        split_ymd_with_frac_as_hms(s1.as_bytes(), frac_str.as_bytes(), is_float)?
+                    }
+                    _ => {
+                        return Err(box_err!(
                             "invalid datetime: {}, s1: {}, len: {}",
                             s,
                             s1,
                             s1.len()
                         ));
-                        }
                     }
                 }
-                [year, month, day] => (
-                    box_try!(year.parse()),
-                    box_try!(month.parse()),
-                    box_try!(day.parse()),
-                    0,
-                    0,
-                    0,
-                ),
-                [year, month, day, hour, min] => (
+            }
+            [year, month, day] => (
+                box_try!(year.parse()),
+                box_try!(month.parse()),
+                box_try!(day.parse()),
+                0,
+                0,
+                0,
+            ),
+            [year, month, day, hour, min] => (
+                box_try!(year.parse()),
+                box_try!(month.parse()),
+                box_try!(day.parse()),
+                box_try!(hour.parse()),
+                box_try!(min.parse()),
+                0,
+            ),
+            [year, month, day, hour, min, sec] => {
+                has_hhmmss = true;
+                (
                     box_try!(year.parse()),
                     box_try!(month.parse()),
                     box_try!(day.parse()),
                     box_try!(hour.parse()),
                     box_try!(min.parse()),
-                    0,
-                ),
-                [year, month, day, hour, min, sec] => {
-                    has_hhmmss = true;
-                    (
-                        box_try!(year.parse()),
-                        box_try!(month.parse()),
-                        box_try!(day.parse()),
-                        box_try!(hour.parse()),
-                        box_try!(min.parse()),
-                        box_try!(sec.parse()),
-                    )
-                }
-                _ => return Err(box_err!("invalid datetime: {}", s)),
-            };
+                    box_try!(sec.parse()),
+                )
+            }
+            _ => return Err(box_err!("invalid datetime: {}", s)),
+        };
 
         if need_adjust || parts[0].len() == 2 {
             if year >= 0 && year <= 69 {
@@ -898,10 +896,7 @@ impl Time {
 
 impl crate::codec::data_type::AsMySQLBool for Time {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> crate::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::Result<bool> {
         Ok(!self.is_zero())
     }
 }
@@ -914,7 +909,7 @@ mod tests {
 
     use chrono::{Duration, Local};
 
-    use crate::coprocessor::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
+    use crate::codec::mysql::{Duration as MyDuration, MAX_FSP, UNSPECIFIED_FSP};
 
     fn for_each_tz<F: FnMut(Tz, i64)>(mut f: F) {
         const MIN_OFFSET: i64 = -60 * 24 + 1;
@@ -1019,7 +1014,7 @@ mod tests {
                         utc_t.time_type,
                         utc_t.fsp as i8,
                     )
-                        .unwrap();
+                    .unwrap();
                     assert_eq!(exp_t, t);
                 }
             });

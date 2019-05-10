@@ -88,10 +88,10 @@ mod tests {
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 
-    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::col_expr;
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression, Flag};
+    use crate::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::codec::Datum;
+    use crate::expr::tests::col_expr;
+    use crate::expr::{EvalConfig, EvalContext, Expression, Flag};
 
     #[derive(PartialEq, Debug)]
     struct EvalResults(

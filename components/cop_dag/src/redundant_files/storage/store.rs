@@ -1,11 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crate::storage::types::Key;
-use crate::storage::{Value, KvPair};
+use crate::storage::Statistics;
+use crate::storage::{KvPair, Value};
 
+use std::error;
 use std::io::Error as IoError;
 use tikv_util::escape;
-use std::error;
 
 quick_error! {
     #[derive(Debug)]
@@ -63,6 +64,35 @@ quick_error! {
     }
 }
 
+impl Error {
+    pub fn maybe_clone(&self) -> Option<Error> {
+        match *self {
+            //            Error::Engine(ref e) => e.maybe_clone().map(Error::Engine),
+            Error::Codec(ref e) => e.maybe_clone().map(Error::Codec),
+            //            Error::Mvcc(ref e) => e.maybe_clone().map(Error::Mvcc),
+            Error::InvalidTxnTso {
+                start_ts,
+                commit_ts,
+            } => Some(Error::InvalidTxnTso {
+                start_ts,
+                commit_ts,
+            }),
+            Error::InvalidReqRange {
+                ref start,
+                ref end,
+                ref lower_bound,
+                ref upper_bound,
+            } => Some(Error::InvalidReqRange {
+                start: start.clone(),
+                end: end.clone(),
+                lower_bound: lower_bound.clone(),
+                upper_bound: upper_bound.clone(),
+            }),
+            Error::Other(_) | Error::ProtoBuf(_) | Error::Io(_) => None,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait Store: Send {
@@ -93,9 +123,9 @@ pub trait Scanner: Send {
                 }
                 Ok(None) => break,
                 // TODO: Add error for mvcc
-//                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
-//                    results.push(Err(e));
-//                }
+                //                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                //                    results.push(Err(e));
+                //                }
                 Err(e) => return Err(e),
             }
         }
@@ -104,7 +134,6 @@ pub trait Scanner: Send {
 
     fn take_statistics(&mut self) -> Statistics;
 }
-
 
 /// A Store that reads on fixtures.
 pub struct FixtureStore {

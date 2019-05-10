@@ -175,10 +175,10 @@ mod tests {
 
     use tipb::expression::{ByItem, Expr, ExprType};
 
-    use crate::coprocessor::codec::table::RowColsDict;
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::executor::OriginCols;
-    use crate::coprocessor::dag::expr::EvalContext;
+    use crate::codec::table::RowColsDict;
+    use crate::codec::Datum;
+    use crate::executor::OriginCols;
+    use crate::expr::EvalContext;
     use tikv_util::codec::number::*;
     use tikv_util::collections::HashMap;
 

@@ -950,7 +950,7 @@ mod benches {
 
     #[bench]
     fn bench_push_datum_int(b: &mut test::Bencher) {
-        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
+        use crate::codec::datum::{Datum, DatumEncoder};
 
         let mut column = VectorValue::with_capacity(1000, EvalType::Int);
 
@@ -979,9 +979,9 @@ mod benches {
     /// Bench performance of naively decoding multiple datums (without pushing into a vector).
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
-        use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
-        use crate::coprocessor::codec::table;
-        use crate::coprocessor::dag::expr::EvalContext;
+        use crate::codec::datum::{Datum, DatumEncoder};
+        use crate::codec::table;
+        use crate::expr::EvalContext;
         use cop_datatype::FieldTypeTp;
 
         let mut datum_raw: Vec<u8> = Vec::new();

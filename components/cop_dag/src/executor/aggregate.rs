@@ -289,7 +289,7 @@ impl AggrFunc for Extremum {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::expr::{EvalConfig, EvalContext};
     use std::ops::Add;
     use std::sync::Arc;
     use std::{i64, u64};

@@ -385,14 +385,8 @@ macro_rules! impl_template_fn {
                 rows: usize,
                 context: &mut $crate::expr::EvalContext,
                 payload: $crate::rpn_expr::types::RpnFnCallPayload<'_>,
-            ) -> $crate::Result<$crate::codec::data_type::VectorValue>
-            {
-                $crate::rpn_expr::function::Helper::$eval_fn(
-                    rows,
-                    Self::call,
-                    context,
-                    payload,
-                )
+            ) -> $crate::Result<$crate::codec::data_type::VectorValue> {
+                $crate::rpn_expr::function::Helper::$eval_fn(rows, Self::call, context, payload)
             }
 
             #[inline]

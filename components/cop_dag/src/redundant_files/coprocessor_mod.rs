@@ -1,5 +1,35 @@
-use tikv_util::time::{Instant, Duration};
-use crate::{Result, Error};
+use crate::{Error, Result};
+use tikv_util::time::{Duration, Instant};
+
+pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
+
+use kvproto::coprocessor as coppb;
+type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
+
+/// An interface for all kind of Coprocessor request handlers.
+pub trait RequestHandler: Send {
+    /// Processes current request and produces a response.
+    fn handle_request(&mut self) -> Result<coppb::Response> {
+        panic!("unary request is not supported for this handler");
+    }
+
+    /// Processes current request and produces streaming responses.
+    fn handle_streaming_request(&mut self) -> HandlerStreamStepResult {
+        panic!("streaming request is not supported for this handler");
+    }
+
+    /// Collects metrics generated in this request handler so far.
+    fn collect_metrics_into(&mut self, _metrics: &mut crate::executor::ExecutorMetrics) {
+        // Do nothing by default
+    }
+
+    fn into_boxed(self) -> Box<dyn RequestHandler>
+    where
+        Self: 'static + Sized,
+    {
+        Box::new(self)
+    }
+}
 
 /// Request process dead line.
 ///

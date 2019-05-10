@@ -1034,8 +1034,8 @@ pub fn split_datum(buf: &[u8], desc: bool) -> Result<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::codec::mysql::{Decimal, Duration, Time, MAX_FSP};
+    use crate::expr::{EvalConfig, EvalContext};
     use tikv_util::as_slice;
 
     use std::cmp::Ordering;

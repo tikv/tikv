@@ -414,7 +414,7 @@ mod tests {
 
     use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::datum::{self, Datum};
+    use crate::codec::datum::{self, Datum};
     use tikv_util::collections::{HashMap, HashSet};
 
     use super::*;

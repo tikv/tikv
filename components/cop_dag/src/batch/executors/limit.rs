@@ -62,10 +62,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use crate::coprocessor::codec::data_type::VectorValue;
-    use crate::coprocessor::dag::exec_summary::*;
-    use crate::coprocessor::dag::expr::EvalConfig;
+    use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+    use crate::codec::data_type::VectorValue;
+    use crate::exec_summary::*;
+    use crate::expr::EvalConfig;
     use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
     use tipb::expression::FieldType;
 

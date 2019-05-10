@@ -1059,7 +1059,7 @@ dispatch_call! {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::dag::expr::{Error, ScalarFunc};
+    use crate::expr::{Error, ScalarFunc};
     use std::usize;
     use tipb::expression::ScalarFuncSig;
 

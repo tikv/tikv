@@ -14,15 +14,17 @@ macro_rules! invalid_type {
 }
 
 pub mod batch;
-pub mod error;
-pub mod mysql;
+pub mod convert;
 pub mod data_type;
 pub mod datum;
-pub mod convert;
+pub mod error;
+pub mod mysql;
+mod overflow;
 pub mod table;
 
-pub use self::error::{Error, Result};
 pub use self::datum::Datum;
+pub use self::error::{Error, Result};
+pub use self::overflow::{div_i64, div_i64_with_u64, div_u64_with_i64};
 
 const TEN_POW: &[u32] = &[
     1,

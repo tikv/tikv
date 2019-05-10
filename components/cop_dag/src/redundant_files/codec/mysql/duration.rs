@@ -318,10 +318,7 @@ impl Duration {
 
 impl crate::codec::data_type::AsMySQLBool for Duration {
     #[inline]
-    fn as_mysql_bool(
-        &self,
-        _context: &mut crate::expr::EvalContext,
-    ) -> crate::Result<bool> {
+    fn as_mysql_bool(&self, _context: &mut crate::expr::EvalContext) -> crate::Result<bool> {
         Ok(!self.is_zero())
     }
 }
@@ -329,7 +326,7 @@ impl crate::codec::data_type::AsMySQLBool for Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::codec::mysql::MAX_FSP;
+    use crate::codec::mysql::MAX_FSP;
     use tikv_util::escape;
 
     #[test]

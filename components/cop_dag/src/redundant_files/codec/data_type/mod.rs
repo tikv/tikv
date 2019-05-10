@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// FIXME: Move to cop_datatype. Currently it refers some types in `crate::coprocessor::codec::mysql`
+// FIXME: Move to cop_datatype. Currently it refers some types in `crate::codec::mysql`
 // so that it is not possible to move.
 
 mod scalar;
@@ -47,8 +47,7 @@ impl AsMySQLBool for Real {
 impl AsMySQLBool for Bytes {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        Ok(!self.is_empty()
-            && crate::codec::convert::bytes_to_int(context, self)? != 0)
+        Ok(!self.is_empty() && crate::codec::convert::bytes_to_int(context, self)? != 0)
     }
 }
 

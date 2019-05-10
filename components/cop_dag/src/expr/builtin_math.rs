@@ -567,10 +567,8 @@ mod tests {
     use cop_datatype::{self, FieldTypeAccessor, FieldTypeFlag};
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{
-        check_overflow, eval_func, eval_func_with, str2dec,
-    };
+    use crate::codec::Datum;
+    use crate::expr::tests::{check_overflow, eval_func, eval_func_with, str2dec};
 
     #[test]
     fn test_abs() {

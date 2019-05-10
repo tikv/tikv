@@ -470,11 +470,11 @@ where
 mod tests {
     use super::super::EvalConfig;
     use super::*;
-    use crate::coprocessor::codec::error::ERR_TRUNCATE_WRONG_VALUE;
-    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, str2dec};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression, Flag, SqlMode};
+    use crate::codec::error::ERR_TRUNCATE_WRONG_VALUE;
+    use crate::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::codec::Datum;
+    use crate::expr::tests::{col_expr, datum_expr, str2dec};
+    use crate::expr::{EvalContext, Expression, Flag, SqlMode};
     use protobuf::RepeatedField;
     use std::sync::Arc;
     use std::{i64, u64};

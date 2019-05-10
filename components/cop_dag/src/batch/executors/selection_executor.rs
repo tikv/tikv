@@ -147,12 +147,12 @@ mod tests {
 
     use cop_datatype::FieldTypeTp;
 
-    use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::VectorValue;
-    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
-    use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
-    use crate::coprocessor::dag::rpn_expr::RpnFunction;
+    use crate::batch::executors::util::mock_executor::MockExecutor;
+    use crate::codec::batch::LazyBatchColumnVec;
+    use crate::codec::data_type::VectorValue;
+    use crate::expr::EvalWarnings;
+    use crate::rpn_expr::types::RpnFnCallPayload;
+    use crate::rpn_expr::RpnFunction;
 
     #[test]
     fn test_empty_rows() {
@@ -366,12 +366,7 @@ mod tests {
             payload: RpnFnCallPayload<'_>,
         ) -> Result<VectorValue> {
             // This function should never be called because we filter no rows
-            crate::coprocessor::dag::rpn_expr::function::Helper::eval_1_arg(
-                rows,
-                Self::call,
-                context,
-                payload,
-            )
+            crate::rpn_expr::function::Helper::eval_1_arg(rows, Self::call, context, payload)
         }
 
         fn box_clone(&self) -> Box<dyn RpnFunction> {
@@ -604,12 +599,7 @@ mod tests {
                 payload: RpnFnCallPayload<'_>,
             ) -> Result<VectorValue> {
                 // This function should never be called because we filter no rows
-                crate::coprocessor::dag::rpn_expr::function::Helper::eval_1_arg(
-                    rows,
-                    Self::call,
-                    context,
-                    payload,
-                )
+                crate::rpn_expr::function::Helper::eval_1_arg(rows, Self::call, context, payload)
             }
 
             fn box_clone(&self) -> Box<dyn RpnFunction> {

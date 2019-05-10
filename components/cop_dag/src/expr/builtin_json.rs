@@ -188,10 +188,10 @@ impl<'a> JsonFuncArgsParser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::mysql::Json;
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{datum_expr, make_null_datums, scalar_func_expr};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::codec::mysql::Json;
+    use crate::codec::Datum;
+    use crate::expr::tests::{datum_expr, make_null_datums, scalar_func_expr};
+    use crate::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
     #[test]

@@ -122,6 +122,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
+cop_dag = { path = "components/cop_dag" }
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

@@ -237,11 +237,11 @@ mod tests {
 
     use super::super::RpnFnCallPayload;
 
-    use crate::coprocessor::codec::batch::LazyBatchColumn;
-    use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
-    use crate::coprocessor::dag::expr::EvalContext;
-    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
-    use crate::coprocessor::Result;
+    use crate::codec::batch::LazyBatchColumn;
+    use crate::codec::datum::{Datum, DatumEncoder};
+    use crate::expr::EvalContext;
+    use crate::rpn_expr::RpnExpressionBuilder;
+    use crate::Result;
 
     /// Single constant node
     #[test]

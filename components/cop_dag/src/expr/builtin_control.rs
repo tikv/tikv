@@ -221,10 +221,10 @@ mod tests {
     use protobuf::RepeatedField;
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
-    use crate::coprocessor::codec::mysql::{Duration, Json, Time};
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::codec::mysql::{Duration, Json, Time};
+    use crate::codec::Datum;
+    use crate::expr::tests::{col_expr, datum_expr, scalar_func_expr, str2dec};
+    use crate::expr::{EvalContext, Expression};
 
     #[test]
     fn test_if_null() {

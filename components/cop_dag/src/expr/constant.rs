@@ -115,10 +115,10 @@ impl Constant {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::datum_expr;
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::codec::mysql::{Decimal, Duration, Json, Time};
+    use crate::codec::Datum;
+    use crate::expr::tests::datum_expr;
+    use crate::expr::{EvalContext, Expression};
     use std::u64;
 
     #[derive(PartialEq, Debug)]

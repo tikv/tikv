@@ -33,7 +33,7 @@ impl Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::expr::{EvalConfig, EvalContext};
     use std::f64;
     use std::sync::Arc;
 

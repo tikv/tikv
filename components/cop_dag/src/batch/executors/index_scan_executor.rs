@@ -10,8 +10,8 @@ use tipb::schema::ColumnInfo;
 
 use crate::storage::{FixtureStore, Store};
 
-use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::batch::interface::*;
+use crate::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::expr::{EvalConfig, EvalContext};
 use crate::Scanner;
 use crate::{Error, Result};
@@ -25,12 +25,7 @@ pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
     >,
 );
 
-impl
-BatchIndexScanExecutor<
-    crate::exec_summary::ExecSummaryCollectorDisabled,
-    FixtureStore,
->
-{
+impl BatchIndexScanExecutor<crate::exec_summary::ExecSummaryCollectorDisabled, FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -140,13 +135,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
         desc: bool,
         range: KeyRange,
     ) -> Result<Scanner<S>> {
-        Scanner::new(
-            store,
-            crate::ScanOn::Index,
-            desc,
-            false,
-            range,
-        )
+        Scanner::new(store, crate::ScanOn::Index, desc, false, range)
     }
 
     /// Constructs empty columns, with PK in decoded format and the rest in raw format.
@@ -250,12 +239,12 @@ mod tests {
     use tipb::expression::FieldType;
     use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::mysql::Tz;
-    use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
-    use crate::coprocessor::dag::expr::EvalConfig;
-    use crate::coprocessor::util::convert_to_prefix_next;
+    use crate::codec::mysql::Tz;
+    use crate::codec::{datum, table, Datum};
+    use crate::exec_summary::*;
+    use crate::expr::EvalConfig;
     use crate::storage::{FixtureStore, Key};
+    use crate::util::convert_to_prefix_next;
 
     #[test]
     fn test_basic() {
@@ -352,7 +341,7 @@ mod tests {
                 true,
                 false,
             )
-                .unwrap();
+            .unwrap();
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
@@ -399,7 +388,7 @@ mod tests {
                 false,
                 false,
             )
-                .unwrap();
+            .unwrap();
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
@@ -466,7 +455,7 @@ mod tests {
                 false,
                 false,
             )
-                .unwrap();
+            .unwrap();
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());
@@ -511,7 +500,7 @@ mod tests {
                 false,
                 true,
             )
-                .unwrap();
+            .unwrap();
 
             let mut result = executor.next_batch(10);
             assert!(result.is_drained.as_ref().unwrap());

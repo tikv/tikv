@@ -111,9 +111,9 @@ fn like(target: &[u8], pattern: &[u8], escape: u32, recurse_level: usize) -> Res
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::codec::Datum;
+    use crate::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::expr::{EvalContext, Expression};
     use tipb::expression::ScalarFuncSig;
 
     #[test]

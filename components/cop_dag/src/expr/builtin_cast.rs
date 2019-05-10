@@ -726,14 +726,12 @@ mod tests {
 
     use chrono::Utc;
 
-    use crate::coprocessor::codec::error::*;
-    use crate::coprocessor::codec::mysql::{
-        self, charset, Decimal, Duration, Json, Time, TimeType, Tz,
-    };
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::ctx::Flag;
-    use crate::coprocessor::dag::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, Expression};
+    use crate::codec::error::*;
+    use crate::codec::mysql::{self, charset, Decimal, Duration, Json, Time, TimeType, Tz};
+    use crate::codec::Datum;
+    use crate::expr::ctx::Flag;
+    use crate::expr::tests::{col_expr as base_col_expr, scalar_func_expr};
+    use crate::expr::{EvalConfig, EvalContext, Expression};
 
     pub fn col_expr(col_id: i64, tp: FieldTypeTp) -> Expr {
         let mut expr = base_col_expr(col_id);

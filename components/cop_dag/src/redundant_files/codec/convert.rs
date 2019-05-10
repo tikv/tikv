@@ -338,8 +338,8 @@ mod tests {
     use std::sync::Arc;
     use std::{f64, i64, isize, u64};
 
-    use crate::coprocessor::codec::error::ERR_DATA_OUT_OF_RANGE;
-    use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+    use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+    use crate::expr::{EvalConfig, EvalContext};
 
     use super::*;
 
@@ -493,7 +493,7 @@ mod tests {
             ("-123.45678e5", "-12345678"),
             ("+123.45678e5", "+12345678"),
             ("9e20", "900000000000000000000"), // TODO: check code validity again on function float_str_to_int_string(),
-            // as "900000000000000000000" is already larger than i64::MAX
+                                               // as "900000000000000000000" is already larger than i64::MAX
         ];
 
         for (i, e) in cases {

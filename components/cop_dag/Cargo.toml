@@ -11,6 +11,8 @@ byteorder = "1.2"
 tikv_util = { path = "../tikv_util" }
 cop_datatype = {path = "../cop_datatype"}
 log_wrappers = { path = "../log_wrappers" }
+panic_hook = { path = "../panic_hook" }
+engine = { path = "../engine" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 quick-error = "1.2.2"
@@ -36,7 +38,6 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-async = { version = "2.3", default-features = false }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "91904ade" }
 slog-term = "2.4"
-slog_derive = "0.1"
 protobuf = "~2.0"
 twoway = "0.2.0"
 lazy_static = "0.2.1"

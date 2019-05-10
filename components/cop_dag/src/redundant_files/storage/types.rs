@@ -35,7 +35,6 @@ pub type KvPair = (Vec<u8>, Value);
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(Vec<u8>);
 
-
 /// Core functions for `Key`.
 impl Key {
     /// Creates a key from raw bytes.
@@ -189,5 +188,21 @@ impl Key {
         } else {
             ts_encoded_key[..user_key_len] == user_key[..]
         }
+    }
+}
+
+impl Clone for Key {
+    fn clone(&self) -> Self {
+        // default clone implemention use self.len() to reserve capacity
+        // for the sake of appending ts, we need to reserve more
+        let mut key = Vec::with_capacity(self.0.capacity());
+        key.extend_from_slice(&self.0);
+        Key(key)
+    }
+}
+
+impl Display for Key {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.write_hex_upper(f)
     }
 }

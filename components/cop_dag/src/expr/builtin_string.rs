@@ -1060,16 +1060,16 @@ fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'
 #[cfg(test)]
 mod tests {
     use super::{encoded_size, TrimDirection};
-    use crate::coprocessor::codec::mysql::charset::CHARSET_BIN;
+    use crate::codec::mysql::charset::CHARSET_BIN;
     use cop_datatype::{Collation, FieldTypeFlag, FieldTypeTp, MAX_BLOB_WIDTH};
     use std::{f64, i64};
     use tipb::expression::{Expr, ScalarFuncSig};
 
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{
+    use crate::codec::Datum;
+    use crate::expr::tests::{
         col_expr, datum_expr, eval_func, scalar_func_expr, string_datum_expr_with_tp,
     };
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::expr::{EvalContext, Expression};
 
     #[test]
     fn test_length() {

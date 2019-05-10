@@ -496,11 +496,11 @@ fn month_to_period(month: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::coprocessor::codec::mysql::{Duration, Time};
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{datum_expr, scalar_func_expr};
-    use crate::coprocessor::dag::expr::*;
-    use crate::coprocessor::dag::expr::{EvalContext, Expression};
+    use crate::codec::mysql::{Duration, Time};
+    use crate::codec::Datum;
+    use crate::expr::tests::{datum_expr, scalar_func_expr};
+    use crate::expr::*;
+    use crate::expr::{EvalContext, Expression};
     use std::sync::Arc;
     use tipb::expression::{Expr, ScalarFuncSig};
 

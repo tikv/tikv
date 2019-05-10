@@ -297,13 +297,13 @@ mod tests {
     use cop_datatype::FieldTypeFlag;
     use tipb::expression::ScalarFuncSig;
 
-    use crate::coprocessor::codec::error::ERR_DIVISION_BY_ZERO;
-    use crate::coprocessor::codec::mysql::Decimal;
-    use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::expr::tests::{
+    use crate::codec::error::ERR_DIVISION_BY_ZERO;
+    use crate::codec::mysql::Decimal;
+    use crate::codec::Datum;
+    use crate::expr::tests::{
         check_divide_by_zero, check_overflow, datum_expr, scalar_func_expr, str2dec,
     };
-    use crate::coprocessor::dag::expr::*;
+    use crate::expr::*;
 
     #[test]
     fn test_arithmetic_int() {
