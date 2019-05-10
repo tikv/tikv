@@ -114,7 +114,7 @@ impl PendingCmdQueue {
             {
                 self.normals.shrink_to_fit();
             }
-            if cmd.term > term || cmd.term == term && cmd.index > index {
+            if (cmd.term, cmd.index) > (term, index) {
                 self.normals.push_front(cmd);
                 return None;
             }
@@ -851,7 +851,7 @@ impl ApplyDelegate {
                     return Some(head.cb.take().unwrap());
                 } else {
                     panic!(
-                        "{} unexpected callback at term {}, find index {}, expect {}",
+                        "{} unexpected callback at term {}, found index {}, expected {}",
                         self.tag, term, head.index, index
                     );
                 }
