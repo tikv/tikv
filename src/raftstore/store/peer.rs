@@ -192,15 +192,15 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
-pub struct RecentAddedPeer {
+pub struct RecentConfChangedPeer {
     pub reject_duration_as_secs: u64,
     pub id: u64,
     pub added_time: Instant,
 }
 
-impl RecentAddedPeer {
-    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
-        RecentAddedPeer {
+impl RecentConfChangedPeer {
+    pub fn new(reject_duration_as_secs: u64) -> RecentConfChangedPeer {
+        RecentConfChangedPeer {
             reject_duration_as_secs,
             id: Default::default(),
             added_time: Instant::now(),
@@ -264,7 +264,7 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
-    pub recent_added_peer: RecentAddedPeer,
+    pub recent_conf_change_region: RecentConfChangedPeer,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -352,7 +352,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            recent_added_peer: RecentAddedPeer::new(
+            recent_conf_change_region: RecentConfChangedPeer::new(
                 cfg.raft_reject_transfer_leader_duration.as_secs(),
             ),
             size_diff_hint: 0,
@@ -1601,9 +1601,9 @@ impl Peer {
                 return false;
             }
         }
-        if self.recent_added_peer.contains(peer_id) {
+        if self.recent_conf_change_region.contains(self.region_id) {
             debug!(
-                "reject transfer leader due to the peer was added recently";
+                "reject transfer leader due to the region was config changed recently";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,

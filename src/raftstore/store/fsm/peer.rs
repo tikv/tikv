@@ -1302,12 +1302,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             meta.set_region(
                 &self.ctx.coprocessor_host,
                 &self.ctx.local_reader,
-                cp.region,
+                cp.region.clone(),
                 &mut self.fsm.peer,
             );
         }
 
         let peer_id = cp.peer.get_id();
+        let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
@@ -1316,14 +1317,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
 
                 // Add this peer to cache and heartbeats.
-                let now = Instant::now();
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_added_peer.update(id, now);
-                self.fsm.peer.insert_peer_cache(peer);
+                self.fsm
+                    .peer
+                    .recent_conf_change_region
+                    .update(cp.region.get_id(), now);
             }
             ConfChangeType::RemoveNode => {
                 // Remove this peer from cache.
@@ -1334,7 +1336,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .peers_start_pending_time
                         .retain(|&(p, _)| p != peer_id);
                 }
-                self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm
+                    .peer
+                    .recent_conf_change_region
+                    .update(cp.region.get_id(), now);
             }
         }
 
