@@ -98,8 +98,11 @@ impl StatusServer {
         Box::new(lock.then(move |guard| {
             timer
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
-                .then(move |_| {
-                    let tmp_dir = TempDir::new("").unwrap();
+                .then(|_| match TempDir::new("") {
+                    Ok(tmp_dir) => ok(tmp_dir),
+                    Err(e) => err(e.into()),
+                })
+                .and_then(move |tmp_dir| {
                     let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
                     let path = os_path.into_string().unwrap();
 
