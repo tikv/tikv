@@ -2,7 +2,6 @@
 pub enum ProfError {
     MemProfilingNotEnabled,
     IOError(std::io::Error),
-    JemallocNotEnabled,
     JemallocError(i32),
 }
 
