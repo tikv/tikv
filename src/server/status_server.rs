@@ -129,8 +129,17 @@ impl StatusServer {
     pub fn dump_prof_to_resp(
         req: Request<Body>,
     ) -> Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send> {
-        let url = url::Url::parse(&format!("http://host{}", req.uri().to_string())).unwrap(); // Add scheme and host to parse query
-        let query_pairs: HashMap<_, _> = url.query_pairs().collect();
+        let query = match req.uri().query() {
+            Some(query) => query,
+            None => {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .unwrap();
+                return Box::new(ok(response));
+            }
+        };
+        let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
         let seconds: u64 = match query_pairs.get("seconds") {
             Some(val) => match val.parse() {
                 Ok(val) => val,
