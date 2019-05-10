@@ -446,7 +446,7 @@ impl NumberCodec {
                     ptr = ptr.add(1);
                 }
                 if unlikely(ptr == ptr_end) {
-                    return Err(Error::BufferTooSmall);
+                    return Err(Error::new_eof_error());
                 }
                 val |= (*ptr as u64) << shift;
                 Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
@@ -483,7 +483,8 @@ impl NumberCodec {
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
         let v = uv >> 1;
-        if unsafe { likely(uv & 1 == 0) } {
+        if uv & 1 == 0 {
+            // no need for likely/unlikely here
             Ok((v as i64, decoded_bytes))
         } else {
             Ok((!v as i64, decoded_bytes))
@@ -515,7 +516,7 @@ impl NumberCodec {
                 while ptr != ptr_end && *ptr >= 0x80 {
                     ptr = ptr.add(1);
                 }
-                // We we got here, we are either `ptr == ptr_end`, or `*ptr < 0x80`.
+                // When we got here, we are either `ptr == ptr_end`, or `*ptr < 0x80`.
                 // For `ptr == ptr_end` case, it means we are expecting a value < 0x80
                 //      but meet EOF, so only `len` is returned.
                 // For `*ptr < 0x80` case, it means currently it is pointing to the last byte
@@ -534,7 +535,7 @@ macro_rules! read {
         let ret = {
             let buf = $s.bytes();
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::BufferTooSmall);
+                return Err(Error::new_eof_error());
             }
             NumberCodec::$f(buf)
         };
@@ -765,7 +766,7 @@ macro_rules! write {
         {
             let buf = unsafe { $s.bytes_mut($size) };
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::BufferTooSmall);
+                return Err(Error::new_eof_error());
             }
             NumberCodec::$f(buf, $v);
         }
@@ -967,7 +968,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::BufferTooSmall);
+                return Err(Error::new_eof_error());
             }
             NumberCodec::encode_var_u64(buf, v)
         };
@@ -991,7 +992,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::BufferTooSmall);
+                return Err(Error::new_eof_error());
             }
             NumberCodec::encode_var_i64(buf, v)
         };
@@ -1008,7 +1009,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
         let buf = unsafe { self.bytes_mut(values.len()) };
         if unsafe { unlikely(buf.len() < values.len()) } {
-            return Err(Error::BufferTooSmall);
+            return Err(Error::new_eof_error());
         }
         buf[..values.len()].copy_from_slice(values);
         unsafe {
@@ -1774,7 +1775,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::test;
+    use crate::Error;
 
     use byteorder;
     use protobuf::CodedOutputStream;
@@ -1892,7 +1893,7 @@ mod benches {
             *data = &data[size..];
             return Ok(f(buf));
         }
-        Err(super::Error::BufferTooSmall)
+        Err(Error::new_eof_error())
     }
 
     /// The original implementation in TiKV
@@ -1967,12 +1968,10 @@ mod benches {
     trait OldVarIntEncoder: byteorder::WriteBytesExt {
         fn encode_var_u64(&mut self, mut v: u64) -> super::Result<()> {
             while v >= 0x80 {
-                self.write_u8(v as u8 | 0x80)
-                    .map_err(|_| super::Error::BufferTooSmall)?;
+                self.write_u8(v as u8 | 0x80)?;
                 v >>= 7;
             }
-            self.write_u8(v as u8)
-                .map_err(|_| super::Error::BufferTooSmall)
+            Ok(self.write_u8(v as u8)?)
         }
     }
 
@@ -2098,7 +2097,7 @@ mod benches {
                     *data = unsafe { data.get_unchecked(10..) };
                     return Ok(res);
                 }
-                return Err(super::Error::BufferTooSmall);
+                return Err(Error::new_eof_error());
             }
         }
 
@@ -2112,7 +2111,7 @@ mod benches {
                 return Ok(res);
             }
         }
-        Err(super::Error::BufferTooSmall)
+        Err(Error::new_eof_error())
     }
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.

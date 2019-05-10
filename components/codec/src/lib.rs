@@ -5,7 +5,7 @@
 #![feature(ptr_offset_from)]
 
 #[macro_use]
-extern crate quick_error;
+extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
