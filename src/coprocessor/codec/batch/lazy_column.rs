@@ -73,7 +73,7 @@ impl LazyBatchColumn {
         LazyBatchColumn::Raw(Vec::with_capacity(capacity))
     }
 
-    /// Creates a new `LazyBatchColumnb::Decoded` with specified capacity and eval type.
+    /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and eval type.
     #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
