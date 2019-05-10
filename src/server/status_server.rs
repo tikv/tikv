@@ -92,7 +92,7 @@ impl StatusServer {
             Err(e) => return Box::new(err(e)),
             Ok(lock) => lock,
         };
-        info!("Start profiling {} seconds", seconds);
+        info!("start memory profiling {} seconds", seconds);
 
         let timer = GLOBAL_TIMER_HANDLE.clone();
         Box::new(lock.then(move |guard| {
