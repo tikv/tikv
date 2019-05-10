@@ -457,8 +457,8 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines.raft, region));
-            let apply_state = box_try!(init_apply_state(&self.engines.kv, region));
+            let raft_state = box_try!(init_raft_state(&self.engines, region));
+            let apply_state = box_try!(init_apply_state(&self.engines, region));
             if raft_state.get_last_index() < apply_state.get_applied_index() {
                 return Err(Error::Other("last index < applied index".into()));
             }
