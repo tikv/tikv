@@ -13,7 +13,7 @@ pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
     ///
     /// For decoded columns, they may be in different types. If the column is in
-    /// type `LazyBatchColumn::Encoded`, it means that it is not decoded.
+    /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
     columns: Vec<LazyBatchColumn>,
 }
 
