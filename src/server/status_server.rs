@@ -102,10 +102,14 @@ impl StatusServer {
                     Ok(tmp_dir) => ok(tmp_dir),
                     Err(e) => err(e.into()),
                 })
-                .and_then(move |tmp_dir| {
+                .and_then(|tmp_dir| {
                     let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
-                    let path = os_path.into_string().unwrap();
-
+                    match os_path.into_string() {
+                        Ok(path) => ok((tmp_dir, path)),
+                        Err(path) => err(ProfError::PathError(path)),
+                    }
+                })
+                .and_then(move |(tmp_dir, path)| {
                     tikv_alloc::dump_prof(Some(&path));
                     drop(guard);
                     tokio_fs::file::File::open(path)
