@@ -154,7 +154,7 @@ pub struct Scheduler<E: Engine> {
     // worker pool
     worker_pool: ThreadPool<SchedContext<E>>,
 
-    // high priority commands will be delivered to this pool
+    // high priority commands and system commands will be delivered to this pool
     high_priority_pool: ThreadPool<SchedContext<E>>,
 
     // used to control write flow
@@ -184,6 +184,7 @@ impl<E: Engine> Scheduler<E> {
                 .thread_count(worker_pool_size)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
+                .thread_count(worker_pool_size / 2)
                 .build(),
             running_write_bytes: 0,
         }
@@ -232,10 +233,11 @@ impl<E: Engine> Scheduler<E> {
         tctx
     }
 
-    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E> {
-        let pool = match priority {
-            CommandPri::Low | CommandPri::Normal => &self.worker_pool,
-            CommandPri::High => &self.high_priority_pool,
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E> {
+        let pool = if priority == CommandPri::High || is_sys_cmd {
+            &self.high_priority_pool
+        } else {
+            &self.worker_pool
         };
         let pool_scheduler = pool.scheduler();
         let scheduler = self.scheduler.clone();
@@ -313,7 +315,7 @@ impl<E: Engine> Scheduler<E> {
         let task = self.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-        let executor = self.fetch_executor(task.priority());
+        let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
