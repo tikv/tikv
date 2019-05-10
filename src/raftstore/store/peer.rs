@@ -564,7 +564,7 @@ impl Peer {
 
     pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
         if res.leader {
-            res.up_to_date && self.is_leader()
+            res.up_to_date && self.is_leader() && self.raft_group.raft.pending_read_count() == 0
         } else {
             // If follower keeps receiving data from leader, then it's safe to stop
             // ticking, as leader will make sure it has the latest logs.
