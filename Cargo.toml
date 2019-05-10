@@ -16,7 +16,7 @@ portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
 no-fail = ["fail/no_fail"]
-batch-test = []
+service-test = []
 
 [lib]
 name = "tikv"
@@ -119,7 +119,7 @@ twoway = "0.2.0"
 cop_datatype = { path = "components/cop_datatype" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "tikv-service-test"}
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
@@ -135,9 +135,6 @@ features = ["nightly", "push", "process"]
 [dependencies.prometheus-static-metric]
 version = "0.1.4"
 default-features = false
-
-[patch."https://github.com/pingcap/kvproto.git"]
-kvproto = {git = "https://github.com/benpigchu/kvproto.git", branch = "batch-test"}
 
 [dev-dependencies]
 test_util = { path = "components/test_util" }
