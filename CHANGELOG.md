@@ -2,6 +2,36 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [3.0.0-rc.1]
++ Engine
+    - Fix the issue that may cause incorrect statistics on read traffic [#4436](https://github.com/tikv/tikv/pull/4436)
+    - Fix the issue that may cause prefix extractor panic when deleting a range [#4503](https://github.com/tikv/tikv/pull/4503)
+    - Optimize memory management to reduce memory allocation and copying for `Iterator Key Bound Option` [#4537](https://github.com/tikv/tikv/pull/4537)
+    - Fix the issue that failing to consider learner log gap may in some cases cause panic [#4559](https://github.com/tikv/tikv/pull/4559)
+    - Support `block cache` sharing  among different `column families`[#4612](https://github.com/tikv/tikv/pull/4612)
+
++ Server
+    - Reduce context switch overhead of  `batch commands` [#4473](https://github.com/tikv/tikv/pull/4473)
+    - Check the validity of seek iterator status [#4470](https://github.com/tikv/tikv/pull/4470)
+
++ RaftStore
+    - Support configurable `properties index distance` [#4517](https://github.com/tikv/tikv/pull/4517)
+
++ Coprocessor
+    - Add batch index scan executor [#4419](https://github.com/tikv/tikv/pull/4419)
+    - Add vectorized evaluation framework [#4322](https://github.com/tikv/tikv/pull/4322)
+    - Add execution summary framework for batch executors [#4433](https://github.com/tikv/tikv/pull/4433)
+    - Check the maximum column when constructing the RPN expression to avoid invalid column offset that may cause evaluation panic [#4481](https://github.com/tikv/tikv/pull/4481)
+    - Add `BatchLimitExecutor` [#4469](https://github.com/tikv/tikv/pull/4469)
+    - Replace the original `futures-cpupool` with `tokio-threadpool` in ReadPool to reduce context switch [#4486](https://github.com/tikv/tikv/pull/4486)
+    - Add batch aggregation framework [#4533](https://github.com/tikv/tikv/pull/4533)
+    - Add `BatchSelectionExecutor` [#4562](https://github.com/tikv/tikv/pull/4562)
+    - Add batch aggression function `AVG` [#4570](https://github.com/tikv/tikv/pull/4570)
+    - Add RPN function `LogicalAnd`[#4575](https://github.com/tikv/tikv/pull/4575)
+
++ Misc
+    - Support `tcmalloc` as a memory allocator [#4370](https://github.com/tikv/tikv/pull/4370)
+
 ## [3.0.0-beta.1]
 - Optimize the Coprocessor calculation execution framework and implement the TableScan section, with the Single TableScan performance improved by 5% ~ 30%
     - Implement the definition of the `BatchRows` row and the `BatchColumn` column [#3660](https://github.com/tikv/tikv/pull/3660)
