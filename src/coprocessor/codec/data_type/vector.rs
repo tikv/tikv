@@ -957,8 +957,7 @@ mod benches {
         let mut datum_raw: Vec<u8> = Vec::new();
         DatumEncoder::encode(&mut datum_raw, &[Datum::U64(0xDEADBEEF)], true).unwrap();
 
-        let mut field_type = tipb::expression::FieldType::new();
-        field_type.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+        let field_type = FieldTypeTp::LongLong.into();
         let tz = Tz::utc();
 
         b.iter(move || {

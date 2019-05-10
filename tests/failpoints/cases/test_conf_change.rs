@@ -164,31 +164,25 @@ fn test_tick_after_destroy() {
 
     let tick_fp = "on_raft_log_gc_tick_1";
     fail::cfg(tick_fp, "pause").unwrap();
-    let apply_fp = "apply_on_conf_change_all_1";
-    fail::cfg(apply_fp, "pause").unwrap();
+    let poll_fp = "pause_on_peer_destroy_res";
+    fail::cfg(poll_fp, "pause").unwrap();
 
     cluster.must_transfer_leader(1, new_peer(3, 3));
-    let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(1, 1));
-    let epoch = cluster.pd_client.get_region_epoch(1);
-    let mut admin_req = new_admin_request(1, &epoch, conf_change);
-    admin_req.mut_header().set_peer(new_peer(3, 3));
-    let (cb1, rx1) = make_cb(&admin_req);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(3, admin_req, cb1)
-        .unwrap();
-    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    let poll_fp = "pause_on_apply_res_1";
-    fail::cfg(poll_fp, "pause").unwrap();
-    fail::remove(apply_fp);
+
+    cluster.add_send_filter(IsolationFilterFactory::new(1));
+    pd_client.must_remove_peer(1, new_peer(1, 1));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&engine_3, b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
+
+    pd_client.must_add_peer(1, new_peer(1, 4));
+    cluster.clear_send_filters();
+    cluster.must_put(b"k3", b"v3");
+
     thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
     fail::remove(tick_fp);
-    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
+    thread::sleep(Duration::from_millis(100));
     fail::remove(poll_fp);
-    let resp = rx1.recv_timeout(Duration::from_secs(3)).unwrap();
-    assert!(!resp.get_header().has_error(), "{:?}", resp);
-    thread::sleep(cluster.cfg.raft_store.raft_log_gc_tick_interval.0);
-    cluster.must_put(b"k3", b"v3");
+
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 }
