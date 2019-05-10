@@ -110,6 +110,9 @@ pub struct Config {
 
     pub cleanup_import_sst_interval: ReadableDuration,
 
+    /// Interval to force release cached snapshot
+    pub release_engine_snapshot_interval: ReadableDuration,
+
     /// Maximum size of every local read task batch.
     pub local_read_batch_size: u64,
 
@@ -185,6 +188,7 @@ impl Default for Config {
             merge_check_tick_interval: ReadableDuration::secs(10),
             use_delete_range: false,
             cleanup_import_sst_interval: ReadableDuration::minutes(10),
+            release_engine_snapshot_interval: ReadableDuration::minutes(1),
             local_read_batch_size: 1024,
             apply_max_batch_size: 1024,
             apply_pool_size: 2,

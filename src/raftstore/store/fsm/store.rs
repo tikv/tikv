@@ -392,6 +392,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             StoreTick::CompactCheck => self.on_compact_check_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSST => self.on_cleanup_import_sst_tick(),
+            StoreTick::ReleaseEngineSnapshot => self.on_release_engine_snapshot_tick(),
         }
         RAFT_EVENT_DURATION
             .with_label_values(&[tick.tag()])
@@ -1465,9 +1466,6 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
 
     fn on_compact_check_tick(&mut self) {
         self.register_compact_check_tick();
-        self.ctx
-            .engine_snapshot
-            .store(ptr::null_mut(), Ordering::Release);
         if self.ctx.compact_scheduler.is_busy() {
             debug!(
                 "compact worker is busy, check space redundancy next time";
@@ -1896,6 +1894,20 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
         self.ctx.schedule_store_tick(
             StoreTick::CleanupImportSST,
             self.ctx.cfg.cleanup_import_sst_interval.0,
+        )
+    }
+
+    fn on_release_engine_snapshot_tick(&self) {
+        self.ctx
+            .engine_snapshot
+            .store(ptr::null_mut(), Ordering::Release);
+        self.register_release_engine_snapshot_tick();
+    }
+
+    fn register_release_engine_snapshot_tick(&self) {
+        self.ctx.schedule_store_tick(
+            StoreTick::ReleaseEngineSnapshot,
+            self.ctx.cfg.release_engine_snapshot_interval.0,
         )
     }
 

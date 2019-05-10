@@ -117,6 +117,7 @@ pub enum StoreTick {
     CompactLockCf,
     ConsistencyCheck,
     CleanupImportSST,
+    ReleaseEngineSnapshot,
 }
 
 impl StoreTick {
@@ -129,6 +130,7 @@ impl StoreTick {
             StoreTick::CompactLockCf => "compact_lock_cf",
             StoreTick::ConsistencyCheck => "consistency_check",
             StoreTick::CleanupImportSST => "cleanup_import_sst",
+            StoreTick::ReleaseEngineSnapshot => "release_engine_snapshot",
         }
     }
 }
