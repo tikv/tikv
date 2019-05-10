@@ -8,6 +8,7 @@ publish = false
 libc = "0.2"
 byteorder = "1.2"
 failure = "0.1"
+static_assertions = { version = "0.3", features = ["nightly"] }
 panic_hook = { path = "../panic_hook" }
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 

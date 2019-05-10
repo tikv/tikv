@@ -446,7 +446,7 @@ impl NumberCodec {
                     ptr = ptr.add(1);
                 }
                 if unlikely(ptr == ptr_end) {
-                    return Err(Error::new_eof_error());
+                    return Err(Error::eof());
                 }
                 val |= (*ptr as u64) << shift;
                 Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
@@ -535,7 +535,7 @@ macro_rules! read {
         let ret = {
             let buf = $s.bytes();
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::new_eof_error());
+                return Err(Error::eof());
             }
             NumberCodec::$f(buf)
         };
@@ -766,7 +766,7 @@ macro_rules! write {
         {
             let buf = unsafe { $s.bytes_mut($size) };
             if unsafe { unlikely(buf.len() < $size) } {
-                return Err(Error::new_eof_error());
+                return Err(Error::eof());
             }
             NumberCodec::$f(buf, $v);
         }
@@ -968,7 +968,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::new_eof_error());
+                return Err(Error::eof());
             }
             NumberCodec::encode_var_u64(buf, v)
         };
@@ -992,7 +992,7 @@ pub trait NumberEncoder: BufferWriter {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
             if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
-                return Err(Error::new_eof_error());
+                return Err(Error::eof());
             }
             NumberCodec::encode_var_i64(buf, v)
         };
@@ -1009,7 +1009,7 @@ pub trait NumberEncoder: BufferWriter {
     fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
         let buf = unsafe { self.bytes_mut(values.len()) };
         if unsafe { unlikely(buf.len() < values.len()) } {
-            return Err(Error::new_eof_error());
+            return Err(Error::eof());
         }
         buf[..values.len()].copy_from_slice(values);
         unsafe {
@@ -1893,7 +1893,7 @@ mod benches {
             *data = &data[size..];
             return Ok(f(buf));
         }
-        Err(Error::new_eof_error())
+        Err(Error::eof())
     }
 
     /// The original implementation in TiKV
@@ -2097,7 +2097,7 @@ mod benches {
                     *data = unsafe { data.get_unchecked(10..) };
                     return Ok(res);
                 }
-                return Err(Error::new_eof_error());
+                return Err(Error::eof());
             }
         }
 
@@ -2111,7 +2111,7 @@ mod benches {
                 return Ok(res);
             }
         }
-        Err(Error::new_eof_error())
+        Err(Error::eof())
     }
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.
