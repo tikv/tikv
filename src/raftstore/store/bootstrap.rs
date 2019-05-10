@@ -1,7 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::keys;
-use super::peer_storage::{write_initial_apply_state, write_initial_raft_state};
+use super::peer_storage::{
+    write_initial_apply_state, write_initial_raft_state, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
+};
 use super::util::new_peer;
 use crate::raftstore::Result;
 use engine::rocks;
@@ -11,11 +13,6 @@ use engine::{CF_DEFAULT, CF_RAFT};
 
 use kvproto::metapb;
 use kvproto::raft_serverpb::{RegionLocalState, StoreIdent};
-
-/// The initial region epoch version.
-pub const INIT_EPOCH_VER: u64 = 1;
-/// The initial region epoch conf_version.
-pub const INIT_EPOCH_CONF_VER: u64 = 1;
 
 pub fn initial_region(store_id: u64, region_id: u64, peer_id: u64) -> metapb::Region {
     let mut region = metapb::Region::new();
