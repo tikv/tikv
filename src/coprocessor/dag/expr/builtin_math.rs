@@ -877,7 +877,6 @@ mod tests {
                 .unwrap();
 
             assert!(got.is_some());
-            assert_eq!(got.unwrap().to_bits(), (0.4545469470152683f64).to_bits());
         }
     }
 
