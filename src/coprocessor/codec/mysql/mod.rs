@@ -72,7 +72,7 @@ mod tests {
             (b"1234567", 5, 12346),
             (b"1234567", 6, 123457),
             (b"9999999", 6, 1000000),
-            (b"9999999", 8, 99999990),
+            (b"12", 5, 12000),
         ];
 
         for (s, fsp, exp) in cases {
@@ -82,7 +82,7 @@ mod tests {
 
         assert!(
             super::parse_frac(b"00x", 6).is_err(),
-            "00x should invalid for `parse_frac`"
+            "00x should be invalid for `parse_frac`"
         );
     }
 }
