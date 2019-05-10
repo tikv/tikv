@@ -143,6 +143,9 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 default-features = false
 
+[patch.crates-io]
+raft = { path = "/home/qupeng/github.com/pingcap/raft-rs" }
+
 [dev-dependencies]
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }

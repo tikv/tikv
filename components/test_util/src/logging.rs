@@ -112,9 +112,10 @@ pub fn init_log_for_test() {
         "test_",
     ];
     let filtered = drain.filter(|record| {
-        ENABLED_TARGETS
-            .iter()
-            .any(|target| record.module().starts_with(target))
+        // ENABLED_TARGETS
+        //     .iter()
+        //     .any(|target| record.module().starts_with(target))
+        true
     });
 
     // CaseTraceLogger relies on test's thread name, however slog_async has
