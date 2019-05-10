@@ -1,3 +1,5 @@
+use std::error;
+
 #[derive(Debug)]
 pub enum ProfError {
     MemProfilingNotEnabled,
@@ -12,3 +14,5 @@ impl From<std::io::Error> for ProfError {
         ProfError::IOError(e)
     }
 }
+
+impl error::Error for ProfError {}
