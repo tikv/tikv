@@ -149,7 +149,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::Io` if `src` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
@@ -184,7 +184,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `src` is drained while expecting more data.
+    /// Returns `Error::Io` if `src` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `src` is incorrect.
     ///
@@ -214,7 +214,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
+    /// Returns `Error::Io` if `buffer` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
@@ -242,7 +242,7 @@ impl MemComparableByteCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::UnexpectedEOF` if `buffer` is drained while expecting more data.
+    /// Returns `Error::Io` if `buffer` is drained while expecting more data.
     ///
     /// Returns `Error::BadPadding` if padding in `buffer` is incorrect.
     ///
@@ -381,7 +381,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size is not enough.
+    /// Returns `Error::Io` if buffer remaining size is not enough.
     fn write_bytes(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
@@ -399,7 +399,7 @@ pub trait MemComparableByteEncoder: NumberEncoder {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size is not enough.
+    /// Returns `Error::Io` if buffer remaining size is not enough.
     fn write_bytes_desc(&mut self, bs: &[u8]) -> Result<()> {
         let len = MemComparableByteCodec::encoded_len(bs.len());
         let buf = unsafe { self.bytes_mut(len) };
