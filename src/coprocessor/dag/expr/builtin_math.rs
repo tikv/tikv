@@ -894,8 +894,6 @@ mod tests {
             assert!(got.is_some());
             assert_eq!(got.unwrap().to_bits(), expect);
         }
-        // TODO: this `expect_same_probability` need to be re-selected carefully
-        let expect_same_probability = 0.0001;
         let mut set: HashSet<u64> = HashSet::new();
         let test_cnt = 1024;
         for i in seed + 1..=seed + test_cnt {
@@ -907,7 +905,10 @@ mod tests {
                 .to_bits();
             set.insert(got);
         }
-        assert!(set.len() as f64 / test_cnt as f64 > 1.0 - expect_same_probability);
+        // If this assert failed, try to find another seed and retry.
+        // If `test_cnt-set.len()` is not very large,
+        // then this fail may be legal but not logical error of the code.
+        assert_eq!(set.len(), test_cnt as usize);
     }
 
     #[test]
