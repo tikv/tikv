@@ -561,6 +561,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
 
@@ -878,6 +879,12 @@ mod tests {
     #[test]
     fn test_rand_with_seed() {
         let seed: i64 = 20160101;
+        let expect = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+            .unwrap()
+            .as_real()
+            .unwrap()
+            .unwrap()
+            .to_bits();
         for _ in 1..3 {
             let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
                 .unwrap()
@@ -885,8 +892,22 @@ mod tests {
                 .unwrap();
 
             assert!(got.is_some());
-            assert_eq!(got.unwrap().to_bits(), (0.4545469470152683f64).to_bits());
+            assert_eq!(got.unwrap().to_bits(), expect);
         }
+        // TODO: this `expect_same_probability` need to be re-selected carefully
+        let expect_same_probability = 0.0001;
+        let mut set: HashSet<u64> = HashSet::new();
+        let test_cnt = 1024;
+        for i in seed + 1..=seed + test_cnt {
+            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(i)])
+                .unwrap()
+                .as_real()
+                .unwrap()
+                .unwrap()
+                .to_bits();
+            set.insert(got);
+        }
+        assert!(set.len() as f64 / test_cnt as f64 > 1.0 - expect_same_probability);
     }
 
     #[test]
