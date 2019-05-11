@@ -876,13 +876,11 @@ impl Peer {
         // the snapshot, and send remaining log entries, which may increase committed_index.
         // TODO: add more test
         self.last_applying_idx == self.get_store().applied_index()
-            // Requesting snapshots also triggers apply workers to write
-            // apply states even if there is no pending committed entry.
-            // TODO: Instead of sharing the counter, we should apply snapshots
-            //       in apply workers.
-            // TODO: Add a test to make sure apply state will not be updated
-            //       unexpectedly.
-            && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
+        // Requesting snapshots also triggers apply workers to write
+        // apply states even if there is no pending committed entry.
+        // TODO: Instead of sharing the counter, we should apply snapshots
+        //       in apply workers.
+        && self.pending_request_snapshot_count.load(Ordering::SeqCst) == 0
     }
 
     #[inline]
@@ -957,12 +955,14 @@ impl Peer {
 
         if let Some(snap) = self.get_pending_snapshot() {
             if !self.ready_to_handle_pending_snap() {
+                let count = self.pending_request_snapshot_count.load(Ordering::SeqCst);
                 debug!(
-                    "is not ready to apply snapshot";
+                    "not ready to apply snapshot";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                     "apply_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
+                    "pending_request_snapshot_count" => count,
                 );
                 return;
             }

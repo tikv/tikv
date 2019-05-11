@@ -10,12 +10,13 @@ use kvproto::errorpb::Error as PbError;
 use kvproto::metapb::{self, Peer, RegionEpoch};
 use kvproto::pdpb;
 use kvproto::raft_cmdpb::*;
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{RaftApplyState, RaftMessage, RaftTruncatedState};
 use tempdir::TempDir;
 
 use engine::rocks;
 use engine::rocks::DB;
 use engine::Engines;
+use engine::Peekable;
 use engine::CF_DEFAULT;
 use tikv::config::TiKvConfig;
 use tikv::pd::PdClient;
@@ -764,6 +765,14 @@ impl<T: Simulator> Cluster<T> {
         assert_eq!(status_resp.get_cmd_type(), StatusCmdType::RegionDetail);
         assert!(status_resp.has_region_detail());
         status_resp.take_region_detail()
+    }
+
+    pub fn truncated_state(&self, region_id: u64, store_id: u64) -> RaftTruncatedState {
+        self.get_raft_engine(store_id)
+            .get_msg::<RaftApplyState>(&keys::apply_state_key(region_id))
+            .unwrap()
+            .unwrap()
+            .take_truncated_state()
     }
 
     pub fn add_send_filter<F: FilterFactory>(&self, factory: F) {

@@ -2623,14 +2623,16 @@ impl ApplyFsm {
             apply_ctx.raft_wb = Some(WriteBatch::with_capacity(DEFAULT_RAFT_WB_SIZE));
         }
         self.delegate.write_apply_state(apply_ctx.raft_wb_mut());
+        fail_point!(
+            "apply_on_handle_snapshot_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
 
         // Because apply states are wrote to raft engine, so we have to
         // force sync to make sure there is no lost update after restart.
         apply_ctx.sync_log_hint = true;
         apply_ctx.flush();
-        self.delegate
-            .pending_request_snapshot_count
-            .fetch_sub(1, Ordering::SeqCst);
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
@@ -2641,6 +2643,14 @@ impl ApplyFsm {
                 "peer_id" => self.delegate.id()
             );
         }
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
+        fail_point!(
+            "apply_on_handle_snapshot_finish_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
