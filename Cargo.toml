@@ -123,6 +123,7 @@ tokio-io = "0.1.12"
 vlog = "0.1.4"
 twoway = "0.2.0"
 profiler = { path = "components/profiler" }
+mime = "0.3.13"
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
 tipb_helper = { path = "components/tipb_helper" }

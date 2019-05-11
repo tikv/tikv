@@ -163,7 +163,13 @@ impl StatusServer {
         Box::new(
             Self::dump_prof(seconds)
                 .and_then(|buf| {
-                    let response = Response::builder().body(buf.into()).unwrap();
+                    let response = Response::builder()
+                        .header("X-Content-Type-Options", "nosniff")
+                        .header("Content-Disposition", "attachment; filename=\"profile\"")
+                        .header("Content-Type", mime::APPLICATION_OCTET_STREAM.to_string())
+                        .header("Content-Length", buf.len())
+                        .body(buf.into())
+                        .unwrap();
                     ok(response)
                 })
                 .or_else(|_| {
