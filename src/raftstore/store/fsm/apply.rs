@@ -2578,7 +2578,8 @@ impl ApplyFsm {
         if apply_ctx.kv_wb.is_none() {
             apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
         }
-        self.delegate.write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+        self.delegate
+            .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
         fail_point!(
             "apply_on_handle_snapshot_1_1",
             self.delegate.id == 1 && self.delegate.region_id() == 1,
@@ -2589,7 +2590,6 @@ impl ApplyFsm {
         // force sync to make sure there is no lost update after restart.
         apply_ctx.sync_log_hint = true;
         apply_ctx.flush();
-
 
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
