@@ -1,5 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire server.
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -46,7 +51,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -1431,6 +1436,11 @@ impl TiKvConfig {
     }
 }
 
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
 pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.

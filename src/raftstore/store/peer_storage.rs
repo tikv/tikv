@@ -230,27 +230,6 @@ pub trait HandleRaftReadyContext {
     fn set_sync_log(&mut self, sync: bool);
 }
 
-pub struct PeerStorage {
-    pub engines: Engines,
-
-    peer_id: u64,
-    region: metapb::Region,
-    raft_state: RaftLocalState,
-    apply_state: RaftApplyState,
-    applied_index_term: u64,
-    last_term: u64,
-
-    snap_state: RefCell<SnapState>,
-    gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_sched: Scheduler<RegionTask>,
-    snap_tried_cnt: RefCell<usize>,
-
-    cache: EntryCache,
-    stats: CacheQueryStats,
-
-    pub tag: String,
-}
-
 fn storage_error<E>(error: E) -> raft::Error
 where
     E: Into<Box<dyn error::Error + Send + Sync>>,
@@ -377,6 +356,27 @@ fn init_last_term(
         )),
         Some(e) => Ok(e.get_term()),
     }
+}
+
+pub struct PeerStorage {
+    pub engines: Engines,
+
+    peer_id: u64,
+    region: metapb::Region,
+    raft_state: RaftLocalState,
+    apply_state: RaftApplyState,
+    applied_index_term: u64,
+    last_term: u64,
+
+    snap_state: RefCell<SnapState>,
+    gen_snap_task: RefCell<Option<GenSnapTask>>,
+    region_sched: Scheduler<RegionTask>,
+    snap_tried_cnt: RefCell<usize>,
+
+    cache: EntryCache,
+    stats: CacheQueryStats,
+
+    pub tag: String,
 }
 
 impl Storage for PeerStorage {

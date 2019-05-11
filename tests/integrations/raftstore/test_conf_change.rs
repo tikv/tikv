@@ -619,7 +619,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     )
     .unwrap();
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
 
     // Remove learner (4, 10) from region 1.
     pd_client.must_remove_peer(r1, new_learner_peer(4, 10));
@@ -649,6 +649,9 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.region_leader_must_be(r1, new_peer(1, 1));
     // To avoid using stale leader.
     cluster.reset_leader_of_region(r1);
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k4", b"v4");
 
     let mut add_peer = |peer: metapb::Peer| {
         let conf_type = if peer.get_is_learner() {
@@ -662,7 +665,7 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
     // Add learner on store which already has peer.
     let resp = add_peer(new_learner_peer(4, 13));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", err_msg);
     pd_client.must_have_peer(r1, new_peer(4, 12));
 
     // Add peer with different id on store which already has learner.
@@ -671,12 +674,12 @@ fn test_learner_conf_change<T: Simulator>(cluster: &mut Cluster<T>) {
 
     let resp = add_peer(new_learner_peer(4, 14));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
     pd_client.must_none_peer(r1, new_learner_peer(4, 14));
 
     let resp = add_peer(new_peer(4, 15));
     let err_msg = resp.get_header().get_error().get_message();
-    assert!(err_msg.contains("duplicated"));
+    assert!(err_msg.contains("duplicated"), "{:?}", resp);
     pd_client.must_none_peer(r1, new_peer(4, 15));
 }
 
@@ -714,6 +717,9 @@ fn test_conf_change_remove_leader() {
 
     // Transfer leader to the first peer.
     cluster.must_transfer_leader(r1, new_peer(1, 1));
+    // Put a new kv to ensure leader has applied to newest log, so that to avoid
+    // false warning about pending conf change.
+    cluster.must_put(b"k1", b"v1");
 
     // Try to remove leader, which should be ignored.
     let res =

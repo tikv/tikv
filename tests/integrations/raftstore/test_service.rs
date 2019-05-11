@@ -647,7 +647,8 @@ fn test_debug_region_size() {
     raft_engine.put_msg(&region_state_key, &state).unwrap();
 
     let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
-    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v"); // At lease 8 byets for the WRITE cf.
+    // At lease 8 bytes for the WRITE cf.
+    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
         let cf_handle = engine.cf_handle(cf).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
