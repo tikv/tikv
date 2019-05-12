@@ -52,6 +52,7 @@ use tikv::server::resolve;
 use tikv::server::status_server::StatusServer;
 use tikv::server::transport::ServerRaftStoreRouter;
 use tikv::server::{create_raft_storage, Node, Server, DEFAULT_CLUSTER_ID};
+use tikv::storage::lock_manager::{Detector, Service as DeadlockService};
 use tikv::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
@@ -230,6 +231,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         Arc::clone(&importer),
     );
 
+    // TODO: Deadlock service
+    let waiter_mgrscheduler = storage.get_waiter_mgr_scheduler();
+    let detect_scheduler = storage.get_detect_scheduler();
+    let deadlock_service = DeadlockService::new(detect_scheduler, waiter_mgrscheduler.clone());
+
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
@@ -247,6 +253,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
+        Some(deadlock_service),
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
     let trans = server.transport();
@@ -272,6 +279,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     )
     .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
     initial_metric(&cfg.metric, Some(node.id()));
+
+    // Start deadlock detector
+    let deadlock_detector = Detector::new(
+        node.id(),
+        waiter_mgrscheduler,
+        Arc::clone(&security_mgr),
+        Arc::clone(&pd_client),
+    );
+    storage
+        .start_deadlock_detector(deadlock_detector)
+        .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
 
     // Start auto gc
     let auto_gc_cfg = AutoGCConfig::new(pd_client, region_info_accessor.clone(), node.id());

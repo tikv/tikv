@@ -25,9 +25,9 @@ use tikv_util::time::SlowTimer;
 use tikv_util::worker::{self, ScheduleError};
 
 use super::super::metrics::*;
-use super::lock_manager::{self, LockManagerScheduler};
 use super::scheduler::Msg;
 use super::{Error, Result};
+use crate::storage::lock_manager::{self, DetectTask, DetectType, WaiterMgrScheduler};
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -116,19 +116,22 @@ pub struct Executor<E: Engine> {
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<worker::Scheduler<Msg>>,
     // If the task releases some locks, we wake up waiters waiting for them.
-    lm_scheduler: Option<LockManagerScheduler>,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detect_scheduler: Option<worker::FutureScheduler<DetectTask>>,
 }
 
 impl<E: Engine> Executor<E> {
     pub fn new(
         pool: threadpool::Scheduler<SchedContext<E>>,
         scheduler: worker::Scheduler<Msg>,
-        lm_scheduler: LockManagerScheduler,
+        waiter_mgr_scheduler: WaiterMgrScheduler,
+        detect_scheduler: worker::FutureScheduler<DetectTask>,
     ) -> Self {
         Executor {
             pool: Some(pool),
             scheduler: Some(scheduler),
-            lm_scheduler: Some(lm_scheduler),
+            waiter_mgr_scheduler: Some(waiter_mgr_scheduler),
+            detect_scheduler: Some(detect_scheduler),
         }
     }
 
@@ -140,8 +143,12 @@ impl<E: Engine> Executor<E> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_lm_scheduler(&mut self) -> LockManagerScheduler {
-        self.lm_scheduler.take().unwrap()
+    fn take_waiter_mgr_scheduler(&mut self) -> WaiterMgrScheduler {
+        self.waiter_mgr_scheduler.take().unwrap()
+    }
+
+    fn take_detect_scheduler(&mut self) -> worker::FutureScheduler<DetectTask> {
+        self.detect_scheduler.take().unwrap()
     }
 
     /// Start the execution of the task.
@@ -255,8 +262,15 @@ impl<E: Engine> Executor<E> {
         let ts = task.ts;
         let mut statistics = Statistics::default();
         let scheduler = self.take_scheduler();
-        let lm_scheduler = self.take_lm_scheduler();
-        let msg = match process_write_impl(task.cmd, snapshot, lm_scheduler, &mut statistics) {
+        let waiter_mgr_scheduler = self.take_waiter_mgr_scheduler();
+        let detect_scheduler = self.take_detect_scheduler();
+        let msg = match process_write_impl(
+            task.cmd,
+            snapshot,
+            waiter_mgr_scheduler,
+            detect_scheduler,
+            &mut statistics,
+        ) {
             // Initiates an async write operation on the storage engine, there'll be a `WriteFinished`
             // message when it finishes.
             Ok(WriteResult {
@@ -483,7 +497,8 @@ struct WriteResult {
 fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
-    lm_scheduler: LockManagerScheduler,
+    waiter_mgr_scheduler: WaiterMgrScheduler,
+    detect_scheduler: worker::FutureScheduler<DetectTask>,
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
@@ -580,7 +595,14 @@ fn process_write_impl<S: Snapshot>(
             for k in keys {
                 txn.commit(k, commit_ts)?;
             }
-            lm_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
+            waiter_mgr_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
+            detect_scheduler
+                .schedule(DetectTask::Detect {
+                    tp: DetectType::CleanUp,
+                    txn_ts: lock_ts,
+                    lock: lock_manager::Lock::default(),
+                })
+                .unwrap();
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -591,7 +613,14 @@ fn process_write_impl<S: Snapshot>(
             let key_hash = lock_manager::gen_key_hash(&key);
             txn.rollback(key)?;
 
-            lm_scheduler.wake_up(start_ts, vec![key_hash], 0);
+            waiter_mgr_scheduler.wake_up(start_ts, vec![key_hash], 0);
+            detect_scheduler
+                .schedule(DetectTask::Detect {
+                    tp: DetectType::CleanUp,
+                    txn_ts: start_ts,
+                    lock: lock_manager::Lock::default(),
+                })
+                .unwrap();
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
@@ -608,7 +637,14 @@ fn process_write_impl<S: Snapshot>(
                 txn.rollback(k)?;
             }
 
-            lm_scheduler.wake_up(start_ts, key_hashes, 0);
+            waiter_mgr_scheduler.wake_up(start_ts, key_hashes, 0);
+            detect_scheduler
+                .schedule(DetectTask::Detect {
+                    tp: DetectType::CleanUp,
+                    txn_ts: start_ts,
+                    lock: lock_manager::Lock::default(),
+                })
+                .unwrap();
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -657,9 +693,16 @@ fn process_write_impl<S: Snapshot>(
                     break;
                 }
             }
-            ts_to_keys
-                .into_iter()
-                .for_each(|(ts, hashes)| lm_scheduler.wake_up(ts, hashes, 0));
+            ts_to_keys.into_iter().for_each(|(ts, hashes)| {
+                waiter_mgr_scheduler.wake_up(ts, hashes, 0);
+                detect_scheduler
+                    .schedule(DetectTask::Detect {
+                        tp: DetectType::CleanUp,
+                        txn_ts: ts,
+                        lock: lock_manager::Lock::default(),
+                    })
+                    .unwrap();
+            });
 
             let pr = if scan_key.is_none() {
                 ProcessResult::Res

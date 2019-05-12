@@ -3,6 +3,7 @@
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
+pub mod lock_manager;
 mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
@@ -26,7 +27,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, FutureWorker, ScheduleError, Worker};
+use tikv_util::worker::{self, Builder, FutureScheduler, FutureWorker, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -41,10 +42,11 @@ pub use self::kv::{
     Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
+use self::lock_manager::{DetectTask, Detector, WaiterManager, WaiterMgrScheduler, WaiterTask};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
-pub use self::txn::{LmTask, LockManager, Msg, Scanner, Scheduler, SnapshotStore, Store};
+pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
 pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
 
@@ -526,8 +528,14 @@ pub struct Storage<E: Engine> {
     /// `worker_scheduler` is used to schedule tasks to run in `worker`.
     worker_scheduler: worker::Scheduler<Msg>,
 
-    /// The worker for lock manager
-    lm_worker: Arc<Mutex<FutureWorker<LmTask>>>,
+    /// The worker for waiter manager
+    waiter_mgr_worker: Arc<Mutex<FutureWorker<WaiterTask>>>,
+
+    waiter_mgr_scheduler: WaiterMgrScheduler,
+
+    detect_worker: Arc<Mutex<FutureWorker<DetectTask>>>,
+
+    detect_scheduler: FutureScheduler<DetectTask>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -554,9 +562,12 @@ impl<E: Engine> Clone for Storage<E> {
 
         Self {
             engine: self.engine.clone(),
-            lm_worker: self.lm_worker.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
+            waiter_mgr_worker: self.waiter_mgr_worker.clone(),
+            waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
+            detect_worker: self.detect_worker.clone(),
+            detect_scheduler: self.detect_scheduler.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
@@ -590,10 +601,17 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to join sched_handle"; "err" => ?e);
         }
 
-        let mut lm_worker = self.lm_worker.lock().unwrap();
-        let h = lm_worker.stop().unwrap();
+        let mut waiter_mgr_worker = self.waiter_mgr_worker.lock().unwrap();
+        let h = waiter_mgr_worker.stop().unwrap();
         if let Err(e) = h.join() {
             error!("Failed to join lock_manager"; "err" => ?e);
+        }
+
+        let mut detect_worker = self.detect_worker.lock().unwrap();
+        if let Some(h) = detect_worker.stop() {
+            if let Err(e) = h.join() {
+                error!("Failed to join detect_worker"; "err" => ?e);
+            }
         }
 
         let r = self.gc_worker.stop();
@@ -622,14 +640,19 @@ impl<E: Engine> Storage<E> {
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
 
-        let mut lm_worker = FutureWorker::new("lock-manager");
-        let lm_runner = LockManager::new(lm_worker.scheduler());
-        let lm_scheduler = lm_runner.scheduler();
+        let detect_worker = FutureWorker::new("deadlock");
+        let detect_scheduler = detect_worker.scheduler();
+
+        let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
+        let waiter_mgr_runner =
+            WaiterManager::new(waiter_mgr_worker.scheduler(), detect_scheduler.clone());
+        let waiter_mgr_scheduler = waiter_mgr_runner.scheduler();
 
         let runner = Scheduler::new(
             engine.clone(),
             worker_scheduler.clone(),
-            lm_scheduler,
+            waiter_mgr_scheduler.clone(),
+            detect_scheduler.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -642,16 +665,19 @@ impl<E: Engine> Storage<E> {
         );
 
         worker.lock().unwrap().start(runner)?;
-        lm_worker.start(lm_runner)?;
+        waiter_mgr_worker.start(waiter_mgr_runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
 
         Ok(Storage {
             engine,
-            lm_worker: Arc::new(Mutex::new(lm_worker)),
             worker,
             worker_scheduler,
+            waiter_mgr_worker: Arc::new(Mutex::new(waiter_mgr_worker)),
+            waiter_mgr_scheduler,
+            detect_worker: Arc::new(Mutex::new(detect_worker)),
+            detect_scheduler,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -670,6 +696,22 @@ impl<E: Engine> Storage<E> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
+    }
+
+    pub fn get_waiter_mgr_scheduler(&self) -> WaiterMgrScheduler {
+        self.waiter_mgr_scheduler.clone()
+    }
+
+    pub fn get_detect_scheduler(&self) -> FutureScheduler<DetectTask> {
+        self.detect_scheduler.clone()
+    }
+
+    pub fn start_deadlock_detector(&self, detector: Detector) -> Result<()> {
+        self.detect_worker
+            .lock()
+            .unwrap()
+            .start(detector)
+            .map_err(Error::Io)
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing

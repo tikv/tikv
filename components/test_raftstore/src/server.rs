@@ -169,6 +169,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
+                None,
             ));
             match server {
                 Some(Ok(_)) => break,

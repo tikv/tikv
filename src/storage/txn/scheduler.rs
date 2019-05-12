@@ -35,11 +35,11 @@ use tikv_util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
-use super::lock_manager::{self, LockManagerScheduler};
 use super::process::{
     execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
 };
 use super::Error;
+use crate::storage::lock_manager::{self, DetectTask, WaiterMgrScheduler};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 
@@ -151,7 +151,9 @@ pub struct Scheduler<E: Engine> {
     scheduler: worker::Scheduler<Msg>,
 
     // scheduler for lock manager
-    lm_scheduler: LockManagerScheduler,
+    waiter_mgr_scheduler: WaiterMgrScheduler,
+
+    detector_scheduler: worker::FutureScheduler<DetectTask>,
 
     // cmd id generator
     id_alloc: u64,
@@ -178,7 +180,8 @@ impl<E: Engine> Scheduler<E> {
     pub fn new(
         engine: E,
         scheduler: worker::Scheduler<Msg>,
-        lm_scheduler: LockManagerScheduler,
+        waiter_mgr_scheduler: WaiterMgrScheduler,
+        detector_scheduler: worker::FutureScheduler<DetectTask>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -190,7 +193,8 @@ impl<E: Engine> Scheduler<E> {
             pending_tasks: Default::default(),
             task_contexts: Default::default(),
             scheduler,
-            lm_scheduler,
+            waiter_mgr_scheduler,
+            detector_scheduler,
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold,
@@ -253,8 +257,14 @@ impl<E: Engine> Scheduler<E> {
         };
         let pool_scheduler = pool.scheduler();
         let scheduler = self.scheduler.clone();
-        let lm_scheduler = self.lm_scheduler.clone();
-        Executor::new(pool_scheduler, scheduler, lm_scheduler)
+        let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
+        let detector_scheduler = self.detector_scheduler.clone();
+        Executor::new(
+            pool_scheduler,
+            scheduler,
+            waiter_mgr_scheduler,
+            detector_scheduler,
+        )
     }
 
     /// Event handler for new command.
@@ -434,8 +444,14 @@ impl<E: Engine> Scheduler<E> {
             .with_label_values(&[tctx.tag, "lock_wait"])
             .inc();
         // TODO: timeout config
-        self.lm_scheduler
-            .wait_for(start_ts, for_update_ts, tctx.cb, pr, lock, 1000);
+        self.waiter_mgr_scheduler.wait_for(
+            start_ts,
+            for_update_ts,
+            tctx.cb,
+            pr,
+            lock.clone(),
+            1000,
+        );
         self.release_lock(&tctx.lock, cid);
     }
 

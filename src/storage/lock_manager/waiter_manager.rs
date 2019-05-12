@@ -1,24 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::process::{execute_callback, ProcessResult};
+use super::deadlock::{DetectType, Task as DeadlockTask};
+use super::Lock;
+
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
+use crate::storage::txn::{execute_callback, ProcessResult};
 use crate::storage::{Error as StorageError, Key, StorageCb};
 use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
+use kvproto::deadlock::WaitForEntry;
+use std::boxed::FnBox;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
-
-#[derive(Clone)]
-pub struct Lock {
-    ts: u64,
-    hash: u64,
-}
 
 pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
     match res {
@@ -29,6 +28,8 @@ pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
         _ => panic!("unsupported mvcc error"),
     }
 }
+
+pub type Callback = Box<dyn FnBox(Vec<WaitForEntry>) + Send>;
 
 pub enum Task {
     WaitFor {
@@ -48,6 +49,13 @@ pub enum Task {
     },
     Timeout {
         // which txn is timeout
+        start_ts: u64,
+        lock: Lock,
+    },
+    Dump {
+        cb: Callback,
+    },
+    Deadlock {
         start_ts: u64,
         lock: Lock,
     },
@@ -73,6 +81,8 @@ impl Display for Task {
                 "txn:{} waiting for {}:{} timeout",
                 start_ts, lock.ts, lock.hash,
             ),
+            Task::Dump { .. } => write!(f, "dump"),
+            Task::Deadlock { .. } => write!(f, "deadlock"),
         }
     }
 }
@@ -145,11 +155,26 @@ impl WaitTable {
         }
         None
     }
+
+    fn to_wait_for_entries(&self) -> Vec<WaitForEntry> {
+        self.wait_table
+            .iter()
+            .flat_map(|(_, waiters)| {
+                waiters.iter().map(|waiter| {
+                    let mut wait_for_entry = WaitForEntry::new();
+                    wait_for_entry.set_txn(waiter.start_ts);
+                    wait_for_entry.set_wait_for_txn(waiter.lock.ts);
+                    wait_for_entry.set_key_hash(waiter.lock.hash);
+                    wait_for_entry
+                })
+            })
+            .collect()
+    }
 }
 
 fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) {
     if let Err(Stopped(task)) = scheduler.schedule(task) {
-        error!("failed to send task to lock_manager: {}", task);
+        error!("failed to send task to waiter_manager: {}", task);
         match task {
             Task::WaitFor { cb, pr, .. } => execute_callback(cb, pr),
             Task::Timeout { .. } => panic!("schedule timeout msg failed"),
@@ -159,9 +184,9 @@ fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) {
 }
 
 #[derive(Clone)]
-pub struct LockManagerScheduler(FutureScheduler<Task>);
+pub struct Scheduler(FutureScheduler<Task>);
 
-impl LockManagerScheduler {
+impl Scheduler {
     pub fn new(scheduler: FutureScheduler<Task>) -> Self {
         Self(scheduler)
     }
@@ -198,40 +223,69 @@ impl LockManagerScheduler {
             },
         );
     }
+
+    pub fn dump_wait_table(&self, cb: Callback) {
+        // TODO: error handle
+        notify_scheduler(&self.0, Task::Dump { cb });
+    }
+
+    pub fn deadlock(&self, txn_ts: u64, lock: Lock, _deadlock_key_hash: u64) {
+        notify_scheduler(
+            &self.0,
+            Task::Deadlock {
+                start_ts: txn_ts,
+                lock,
+            },
+        );
+    }
 }
 
-/// LockManager handles waiting and wake-up of pessimistic lock
-pub struct LockManager {
+/// WaiterManager handles waiting and wake-up of pessimistic lock
+pub struct WaiterManager {
     wait_table: WaitTable,
     scheduler: FutureScheduler<Task>,
+    detect_scheduler: FutureScheduler<DeadlockTask>,
 }
 
-impl LockManager {
-    pub fn new(scheduler: FutureScheduler<Task>) -> Self {
+impl WaiterManager {
+    pub fn new(
+        scheduler: FutureScheduler<Task>,
+        detect_scheduler: FutureScheduler<DeadlockTask>,
+    ) -> Self {
         Self {
             wait_table: WaitTable::new(),
             scheduler,
+            detect_scheduler,
         }
     }
 
-    pub fn scheduler(&self) -> LockManagerScheduler {
-        LockManagerScheduler::new(self.scheduler.clone())
+    pub fn scheduler(&self) -> Scheduler {
+        Scheduler::new(self.scheduler.clone())
     }
 
     fn add_waiter(&mut self, waiter: Waiter, handle: &Handle) {
         let lock = waiter.lock.clone();
         let start_ts = waiter.start_ts;
         let timeout = waiter.timeout;
+
+        self.detect_scheduler
+            .schedule(DeadlockTask::Detect {
+                tp: DetectType::Detect,
+                txn_ts: start_ts,
+                lock: lock.clone(),
+            })
+            .unwrap();
+
         if self.wait_table.add_waiter(lock.ts, waiter) {
             let scheduler = self.scheduler.clone();
             let when = Instant::now() + Duration::from_millis(timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
-                .and_then(move |_| {
+                .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
+                .then(move |_| {
                     notify_scheduler(&scheduler, Task::Timeout { start_ts, lock });
                     Ok(())
-                })
-                .map_err(|e| info!("timeout timer delay errored"; "err" => ?e));
+                });
             handle.spawn(timer);
         }
     }
@@ -241,6 +295,13 @@ impl LockManager {
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             // Sleep a little so the transaction with small start_ts will more likely get the lock.
+            self.detect_scheduler
+                .schedule(DeadlockTask::Detect {
+                    tp: DetectType::CleanUpWaitFor,
+                    txn_ts: waiter.start_ts,
+                    lock: waiter.lock.clone(),
+                })
+                .unwrap();
             let when = Instant::now() + Duration::from_millis(10 * (i as u64));
             let timer = Delay::new(when)
                 .and_then(move |_| {
@@ -268,17 +329,49 @@ impl LockManager {
         }
     }
 
+    // TODO: remove timeout Task, use RefCell
     fn timeout(&mut self, start_ts: u64, lock: Lock) {
+        self.wait_table
+            .remove_waiter(start_ts, lock.clone())
+            .and_then(|waiter| {
+                self.detect_scheduler
+                    .schedule(DeadlockTask::Detect {
+                        tp: DetectType::CleanUpWaitFor,
+                        txn_ts: start_ts,
+                        lock,
+                    })
+                    .unwrap();
+                execute_callback(waiter.cb, waiter.pr);
+                Some(())
+            });
+    }
+
+    fn dump(&self, cb: Callback) {
+        cb(self.wait_table.to_wait_for_entries());
+    }
+
+    fn deadlock(&mut self, start_ts: u64, lock: Lock) {
         self.wait_table
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
-                execute_callback(waiter.cb, waiter.pr);
+                self.detect_scheduler
+                    .schedule(DeadlockTask::Detect {
+                        tp: DetectType::CleanUpWaitFor,
+                        txn_ts: waiter.start_ts,
+                        lock: waiter.lock.clone(),
+                    })
+                    .unwrap();
+
+                let pr = ProcessResult::Failed {
+                    err: StorageError::from(MvccError::Other("deadlock".into())),
+                };
+                execute_callback(waiter.cb, pr);
                 Some(())
             });
     }
 }
 
-impl FutureRunnable<Task> for LockManager {
+impl FutureRunnable<Task> for WaiterManager {
     fn run(&mut self, task: Task, handle: &Handle) {
         match task {
             Task::WaitFor {
@@ -310,6 +403,12 @@ impl FutureRunnable<Task> for LockManager {
             }
             Task::Timeout { start_ts, lock } => {
                 self.timeout(start_ts, lock);
+            }
+            Task::Dump { cb } => {
+                self.dump(cb);
+            }
+            Task::Deadlock { start_ts, lock } => {
+                self.deadlock(start_ts, lock);
             }
         }
     }
@@ -346,13 +445,13 @@ mod tests {
         assert_eq!(lock.hash, gen_key_hash(&key));
     }
 
-    fn dummy_waiter(ts: u64, hash: u64) -> Waiter {
+    fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
         Waiter {
-            start_ts: 0,
+            start_ts,
             for_update_ts: 0,
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
-            lock: Lock { ts, hash },
+            lock: Lock { ts: lock_ts, hash },
             timeout: 0,
         }
     }
@@ -362,7 +461,7 @@ mod tests {
         let mut wait_table = WaitTable::new();
         for i in 0..10 {
             let n = i as u64;
-            wait_table.add_waiter(n, dummy_waiter(n, n));
+            wait_table.add_waiter(n, dummy_waiter(0, n, n));
         }
         assert_eq!(10, wait_table.size());
         for i in (0..10).rev() {
@@ -386,8 +485,11 @@ mod tests {
             .into_iter()
             .map(|(key, _)| gen_key_hash(&Key::from_raw(&key)))
             .collect();
+
+        assert!(wait_table.get_ready_waiters(ts, hashes.clone()).is_empty());
+
         for hash in hashes.iter() {
-            wait_table.add_waiter(ts, dummy_waiter(ts, *hash));
+            wait_table.add_waiter(ts, dummy_waiter(0, ts, *hash));
         }
         hashes.sort();
 
@@ -405,14 +507,42 @@ mod tests {
     }
 
     #[test]
-    fn test_lock_manager() {
+    fn test_wait_table_to_wait_for_entries() {
+        let mut wait_table = WaitTable::new();
+        assert!(wait_table.to_wait_for_entries().is_empty());
+
+        for i in 1..5 {
+            for j in 0..i {
+                wait_table.add_waiter(i, dummy_waiter(i * 10 + j, i, j));
+            }
+        }
+
+        let mut wait_for_enties = wait_table.to_wait_for_entries();
+        wait_for_enties.sort_by_key(|e| e.txn);
+        wait_for_enties.reverse();
+        for i in 1..5 {
+            for j in 0..i {
+                let e = wait_for_enties.pop().unwrap();
+                assert_eq!(e.get_txn(), i * 10 + j);
+                assert_eq!(e.get_wait_for_txn(), i);
+                assert_eq!(e.get_key_hash(), j);
+            }
+        }
+        assert!(wait_for_enties.is_empty());
+    }
+
+    #[test]
+    fn test_waiter_manager() {
         use crate::tikv_util::worker::FutureWorker;
         use std::sync::mpsc;
 
-        let mut lm_worker = FutureWorker::new("lock-manager");
-        let lm_runner = LockManager::new(lm_worker.scheduler());
-        let lm_scheduler = lm_runner.scheduler();
-        lm_worker.start(lm_runner).unwrap();
+        let detect_worker = FutureWorker::new("dummy-deadlock");
+        let detect_scheduler = detect_worker.scheduler();
+
+        let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
+        let waiter_mgr_runner = WaiterManager::new(waiter_mgr_worker.scheduler(), detect_scheduler);
+        let waiter_mgr_scheduler = waiter_mgr_runner.scheduler();
+        waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
         // timeout
         let (tx, rx) = mpsc::channel();
@@ -420,7 +550,7 @@ mod tests {
             tx.send(result).unwrap();
         });
         let pr = ProcessResult::Res;
-        lm_scheduler.wait_for(
+        waiter_mgr_scheduler.wait_for(
             0,
             0,
             StorageCb::Boolean(cb),
@@ -440,7 +570,7 @@ mod tests {
         let cb = Box::new(move |result| {
             tx.send(result).unwrap();
         });
-        lm_scheduler.wait_for(
+        waiter_mgr_scheduler.wait_for(
             0,
             0,
             StorageCb::Boolean(cb),
@@ -448,7 +578,7 @@ mod tests {
             Lock { ts: 1, hash: 1 },
             100,
         );
-        lm_scheduler.wake_up(1, vec![3, 1, 2], 1);
+        waiter_mgr_scheduler.wake_up(1, vec![3, 1, 2], 1);
         assert!(rx.recv_timeout(Duration::from_millis(50)).unwrap().is_err());
     }
 }

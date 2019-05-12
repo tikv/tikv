@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod latch;
-mod lock_manager;
 mod process;
 mod scheduler;
 mod store;
@@ -9,8 +8,7 @@ mod store;
 use std::error;
 use std::io::Error as IoError;
 
-pub use self::lock_manager::{LockManager, Task as LmTask};
-pub use self::process::RESOLVE_LOCK_BATCH_SIZE;
+pub use self::process::{execute_callback, ProcessResult, RESOLVE_LOCK_BATCH_SIZE};
 pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
