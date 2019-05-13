@@ -253,7 +253,7 @@ impl Inner {
     }
 
     fn become_leader(&mut self, handle: &Handle) {
-        info!("become the leader of deadlock detector!");
+        info!("become the leader of deadlock detector!"; "self_id" => self.store_id);
         self.reset();
         self.leader_id = self.store_id;
 
@@ -265,9 +265,9 @@ impl Inner {
     }
 
     fn become_follower(&mut self, handle: &Handle, leader_id: u64) {
-        info!("leader changed"; "store_id" => leader_id);
+        info!("leader changed"; "leader_id" => leader_id);
         if self.is_leader() {
-            info!("change from leader to follower!");
+            info!("change from leader to follower!"; "self_id" => self.store_id);
             self.reset();
         }
         self.leader_id = leader_id;
@@ -311,7 +311,7 @@ impl Inner {
         let addrs = self.addrs.borrow();
         let addr = addrs.get(&self.leader_id);
         if addr.is_none() {
-            info!("leader address not found"; "store_id" => self.leader_id);
+            info!("leader address not found"; "leader_id" => self.leader_id);
             return;
         }
         let mut leader_client = Client::new(Arc::clone(&self.security_mgr), addr.unwrap().as_str());
@@ -335,7 +335,7 @@ impl Inner {
         handle.spawn(send.map_err(|e| error!("detect request sender failed"; "err" => ?e)));
         handle.spawn(recv.map_err(|e| error!("detect response receiver failed"; "err" => ?e)));
         self.leader_client = Some(leader_client);
-        info!("reconnect leader succeeded"; "store_id" => self.leader_id);
+        info!("reconnect leader succeeded"; "leader_id" => self.leader_id);
     }
 
     fn reconnect_follower(&self, store_id: u64) -> Option<Client> {
@@ -434,6 +434,7 @@ impl Detector {
                     if leader_client.detect(req).is_ok() {
                         return;
                     }
+                    inner.leader_client.take();
                 }
             }
             warn!("detect request dropped"; "tp" => ?tp, "txn_ts" =>  txn_ts, "lock" => ?lock);
