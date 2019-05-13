@@ -1,5 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire server.
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -46,7 +51,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -156,7 +161,7 @@ macro_rules! cf_config {
 }
 
 macro_rules! write_into_metrics {
-    ($cf:expr, $tag:expr,$metrics:expr) => {{
+    ($cf:expr, $tag:expr, $metrics:expr) => {{
         $metrics
             .with_label_values(&[$tag, "block_size"])
             .set($cf.block_size.0 as f64);
@@ -856,7 +861,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 2,
+            max_background_jobs: 4,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -867,7 +872,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 1,
+            max_sub_compactions: 2,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -1422,6 +1427,11 @@ impl TiKvConfig {
     }
 }
 
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
 pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.

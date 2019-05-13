@@ -66,7 +66,7 @@ mod tests {
     use crate::coprocessor::codec::data_type::VectorValue;
     use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
-    use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeTp};
+    use cop_datatype::{EvalType, FieldTypeTp};
     use tipb::expression::FieldType;
 
     struct MockExecutor {
@@ -75,12 +75,6 @@ mod tests {
         field_types: Vec<FieldType>,
         offset: usize,
         cfg: EvalConfig,
-    }
-
-    fn field_type(ft: FieldTypeTp) -> FieldType {
-        let mut f = FieldType::new();
-        f.as_mut_accessor().set_tp(ft);
-        f
     }
 
     impl MockExecutor {
@@ -93,11 +87,10 @@ mod tests {
                 (5, None, Some(0.1)),
                 (6, None, Some(4.5)),
             ];
-
             let field_types = vec![
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::Double),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::Double.into(),
             ];
 
             MockExecutor {
