@@ -110,7 +110,7 @@ impl StatusServer {
                             Err(path) => return Box::new(err(ProfError::PathError(path))),
                         };
 
-                        tikv_alloc::dump_prof(Some(&path));
+                        tikv_alloc::dump_prof(&path);
                         drop(guard);
                         Box::new(
                             tokio_fs::file::File::open(path)

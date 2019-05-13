@@ -64,7 +64,7 @@ mod tests {
 #[cfg(feature = "mem-profiling")]
 mod profiling {
     use std::ffi::CString;
-    use std::{env, ptr};
+    use std::ptr;
 
     use jemallocator;
     use libc::c_char;
@@ -117,26 +117,14 @@ mod profiling {
     /// Dump the profile to the `path`.
     ///
     /// If `path` is `None`, will dump it in the working directory with an auto-generated name.
-    pub fn dump_prof(path: Option<&str>) {
-        unsafe {
-            // First set the `prof.active` value in case profiling is deactivated
-            // as with MALLOC_CONF="opt.prof:true,opt.prof_active:false"
-            if let Err(e) = jemallocator::mallctl_set(PROF_ACTIVE, true) {
-                error!("failed to activate profiling: {}", e);
-                return;
-            }
-        }
-        let mut c_path = DumpPathGuard::from_cstring(path.map(|p| CString::new(p).unwrap()));
+    pub fn dump_prof(path: &str) {
+        // TODO: return errors in this function
+        let mut c_path = DumpPathGuard::from_cstring(Some(CString::new(path).unwrap()));
         let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, c_path.get_mut_ptr()) };
         match res {
             Err(e) => error!("failed to dump the profile to {:?}: {}", path, e),
             Ok(_) => {
-                if let Some(p) = path {
-                    info!("dump profile to {}", p);
-                    return;
-                }
-
-                info!("dump profile to {}", env::current_dir().unwrap().display());
+                info!("dump profile to {}", path);
             }
         }
     }
@@ -182,11 +170,11 @@ mod profiling {
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(Some(&path));
+            super::dump_prof(&path);
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(Some(&path));
+            super::dump_prof(&path);
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
@@ -213,7 +201,7 @@ mod profiling {
 mod profiling {
     use super::{ProfError, ProfResult};
 
-    pub fn dump_prof(_path: Option<&str>) {}
+    pub fn dump_prof(_path: &str) {}
     pub fn activate_prof() -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
     }
