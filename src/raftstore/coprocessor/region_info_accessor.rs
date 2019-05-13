@@ -98,9 +98,8 @@ impl Display for RegionInfoQuery {
 
 /// `RegionEventListener` implements observer traits. It simply send the events that we are interested in
 /// through the `scheduler`.
-#[derive(Clone)]
 struct RegionEventListener {
-    scheduler: Scheduler<RegionInfoQuery>,
+    scheduler: Mutex<Scheduler<RegionInfoQuery>>,
 }
 
 impl Coprocessor for RegionEventListener {}
@@ -119,6 +118,8 @@ impl RegionChangeObserver for RegionEventListener {
             RegionChangeEvent::Destroy => RaftStoreEvent::DestroyRegion { region },
         };
         self.scheduler
+            .lock()
+            .unwrap()
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
     }
@@ -129,8 +130,18 @@ impl RoleObserver for RegionEventListener {
         let region = context.region().clone();
         let event = RaftStoreEvent::RoleChange { region, role };
         self.scheduler
+            .lock()
+            .unwrap()
             .schedule(RegionInfoQuery::RaftStoreEvent(event))
             .unwrap();
+    }
+}
+
+impl Clone for RegionEventListener {
+    fn clone(&self) -> Self {
+        RegionEventListener {
+            scheduler: Mutex::new(self.scheduler.lock().unwrap().clone()),
+        }
     }
 }
 
@@ -139,7 +150,9 @@ fn register_region_event_listener(
     host: &mut CoprocessorHost,
     scheduler: Scheduler<RegionInfoQuery>,
 ) {
-    let listener = RegionEventListener { scheduler };
+    let listener = RegionEventListener {
+        scheduler: Mutex::new(scheduler),
+    };
 
     host.registry
         .register_role_observer(1, Box::new(listener.clone()));

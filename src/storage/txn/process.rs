@@ -22,7 +22,7 @@ use tikv_util::threadpool::{
     self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
 };
 use tikv_util::time::SlowTimer;
-use tikv_util::worker::{self, ScheduleError};
+use tikv_util::worker;
 
 use super::super::metrics::*;
 use super::scheduler::Msg;
@@ -593,14 +593,11 @@ fn process_write_impl<S: Snapshot>(
 }
 
 fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {
-    match scheduler.schedule(msg) {
+    match scheduler.force_schedule(msg) {
         Ok(_) => true,
-        e @ Err(ScheduleError::Stopped(_)) => {
+        Err(e) => {
             info!("scheduler stopped"; "err" => ?e);
             false
-        }
-        Err(e) => {
-            panic!("schedule msg failed, err:{:?}", e);
         }
     }
 }
@@ -685,4 +682,23 @@ fn find_mvcc_infos_by_key<S: Snapshot>(
         values.push((ts, v));
     }
     Ok((lock, writes, values))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::txn::process::notify_scheduler;
+    use crate::storage::txn::scheduler::Msg;
+    use tikv_util::worker::Builder;
+
+    #[test]
+    fn test_notify_scheduler() {
+        let worker = Builder::new("test-notify-scheduler")
+            .pending_capacity(3)
+            .create();
+        let scheduler = worker.scheduler();
+        for _i in 0..3 {
+            notify_scheduler(scheduler.clone(), Msg::Quit);
+        }
+        assert!(notify_scheduler(scheduler.clone(), Msg::Quit), true)
+    }
 }

@@ -17,7 +17,7 @@ Briefly speaking, this is a mpsc (multiple-producer-single-consumer) model.
 mod future;
 mod metrics;
 
-use crossbeam::channel::{RecvTimeoutError, TryRecvError, TrySendError};
+use crossbeam::channel::{RecvTimeoutError, SendError, TryRecvError, TrySendError};
 use prometheus::IntGauge;
 use std::error::Error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -28,7 +28,7 @@ use std::time::Duration;
 use std::{io, usize};
 
 use self::metrics::*;
-use crate::mpsc::{self, Receiver, Sender};
+use crate::mpsc::{self, LooseBoundedSender, Receiver};
 use crate::time::{Instant, SlowTimer};
 use crate::timer::Timer;
 
@@ -122,12 +122,12 @@ impl<T: Display, R: Runnable<T>> RunnableWithTimer<T, ()> for DefaultRunnerWithT
 pub struct Scheduler<T> {
     name: Arc<String>,
     counter: Arc<AtomicUsize>,
-    sender: Sender<Option<T>>,
+    sender: LooseBoundedSender<Option<T>>,
     metrics_pending_task_count: IntGauge,
 }
 
 impl<T: Display> Scheduler<T> {
-    fn new<S>(name: S, counter: AtomicUsize, sender: Sender<Option<T>>) -> Scheduler<T>
+    fn new<S>(name: S, counter: AtomicUsize, sender: LooseBoundedSender<Option<T>>) -> Scheduler<T>
     where
         S: Into<String>,
     {
@@ -145,10 +145,26 @@ impl<T: Display> Scheduler<T> {
     /// If the worker is stopped or number pending tasks exceeds capacity, an error will return.
     pub fn schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
         debug!("scheduling task {}", task);
-        if let Err(e) = self.sender.try_send(Some(task)) {
+        if let Err(e) = self.sender.try_send_normal(Some(task)) {
             match e {
                 TrySendError::Disconnected(Some(t)) => return Err(ScheduleError::Stopped(t)),
                 TrySendError::Full(Some(t)) => return Err(ScheduleError::Full(t)),
+                _ => unreachable!(),
+            }
+        }
+        self.counter.fetch_add(1, Ordering::SeqCst);
+        self.metrics_pending_task_count.inc();
+        Ok(())
+    }
+
+    /// Schedules a task to run forcibly.
+    ///
+    /// If the worker is stopped, an error will return.
+    pub fn force_schedule(&self, task: T) -> Result<(), ScheduleError<T>> {
+        debug!("force scheduling task {}", task);
+        if let Err(e) = self.sender.force_send(Some(task)) {
+            match e {
+                SendError(Some(t)) => return Err(ScheduleError::Stopped(t)),
                 _ => unreachable!(),
             }
         }
@@ -178,7 +194,7 @@ impl<T> Clone for Scheduler<T> {
 ///
 /// Useful for test purpose.
 pub fn dummy_scheduler<T: Display>() -> (Scheduler<T>, Receiver<Option<T>>) {
-    let (tx, rx) = mpsc::unbounded::<Option<T>>();
+    let (tx, rx) = mpsc::loose_bounded::<Option<T>>(usize::MAX);
     (
         Scheduler::new("dummy scheduler", AtomicUsize::new(0), tx),
         rx,
@@ -214,9 +230,9 @@ impl<S: Into<String>> Builder<S> {
 
     pub fn create<T: Display>(self) -> Worker<T> {
         let (tx, rx) = if self.pending_capacity == usize::MAX {
-            mpsc::unbounded::<Option<T>>()
+            mpsc::loose_bounded::<Option<T>>(usize::MAX)
         } else {
-            mpsc::bounded::<Option<T>>(self.pending_capacity)
+            mpsc::loose_bounded::<Option<T>>(self.pending_capacity)
         };
 
         Worker {
@@ -373,7 +389,7 @@ impl<T: Display + Send + 'static> Worker<T> {
         // Closes sender explicitly so the background thread will exit.
         info!("stoping worker"; "worker" => &self.scheduler.name);
         let handle = self.handle.take()?;
-        if let Err(e) = self.scheduler.sender.send(None) {
+        if let Err(e) = self.scheduler.sender.force_send(None) {
             warn!("failed to stop worker thread"; "err" => ?e);
         }
         Some(handle)

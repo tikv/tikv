@@ -200,7 +200,7 @@ pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
 
 const CHECK_INTERVAL: usize = 8;
 
-/// A sender of channel that limits the maximun pending messages count loosely.
+/// A sender of channel that limits the maximum pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
     tried_cnt: Cell<usize>,
@@ -239,6 +239,19 @@ impl<T> LooseBoundedSender<T> {
         } else if self.len() < self.limit {
             self.tried_cnt.set(1);
         } else {
+            return Err(TrySendError::Full(t));
+        }
+
+        match self.sender.send(t) {
+            Ok(()) => Ok(()),
+            Err(SendError(t)) => Err(TrySendError::Disconnected(t)),
+        }
+    }
+
+    #[inline]
+    /// Attempts to send a message into the channel without considering try count.
+    pub fn try_send_normal(&self, t: T) -> Result<(), TrySendError<T>> {
+        if self.len() >= self.limit {
             return Err(TrySendError::Full(t));
         }
 
