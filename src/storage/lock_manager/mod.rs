@@ -4,7 +4,6 @@ mod client;
 pub mod deadlock;
 pub mod waiter_manager;
 
-
 pub use self::deadlock::{DetectType, Detector, Service, Task as DetectTask};
 pub use self::waiter_manager::{
     extract_lock_from_result, gen_key_hash, gen_key_hashes, Scheduler as WaiterMgrScheduler,

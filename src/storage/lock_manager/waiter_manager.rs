@@ -2,7 +2,6 @@
 
 use super::deadlock::{DetectType, Task as DeadlockTask};
 use super::Lock;
-
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
@@ -12,9 +11,11 @@ use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use std::boxed::FnBox;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
@@ -47,11 +48,6 @@ pub enum Task {
         hashes: Vec<u64>,
         commit_ts: u64,
     },
-    Timeout {
-        // which txn is timeout
-        start_ts: u64,
-        lock: Lock,
-    },
     Dump {
         cb: Callback,
     },
@@ -76,11 +72,6 @@ impl Display for Task {
                 write!(f, "txn:{} waiting for {}:{}", start_ts, lock.ts, lock.hash)
             }
             Task::WakeUp { lock_ts, .. } => write!(f, "waking up txns waiting for {}", lock_ts),
-            Task::Timeout { start_ts, lock } => write!(
-                f,
-                "txn:{} waiting for {}:{} timeout",
-                start_ts, lock.ts, lock.hash,
-            ),
             Task::Dump { .. } => write!(f, "dump"),
             Task::Deadlock { .. } => write!(f, "deadlock"),
         }
@@ -177,7 +168,6 @@ fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) {
         error!("failed to send task to waiter_manager: {}", task);
         match task {
             Task::WaitFor { cb, pr, .. } => execute_callback(cb, pr),
-            Task::Timeout { .. } => panic!("schedule timeout msg failed"),
             _ => (),
         }
     }
@@ -242,10 +232,12 @@ impl Scheduler {
 
 /// WaiterManager handles waiting and wake-up of pessimistic lock
 pub struct WaiterManager {
-    wait_table: WaitTable,
+    wait_table: Rc<RefCell<WaitTable>>,
     scheduler: FutureScheduler<Task>,
     detect_scheduler: FutureScheduler<DeadlockTask>,
 }
+
+unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
     pub fn new(
@@ -253,7 +245,7 @@ impl WaiterManager {
         detect_scheduler: FutureScheduler<DeadlockTask>,
     ) -> Self {
         Self {
-            wait_table: WaitTable::new(),
+            wait_table: Rc::new(RefCell::new(WaitTable::new())),
             scheduler,
             detect_scheduler,
         }
@@ -263,7 +255,7 @@ impl WaiterManager {
         Scheduler::new(self.scheduler.clone())
     }
 
-    fn add_waiter(&mut self, waiter: Waiter, handle: &Handle) {
+    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
         let lock = waiter.lock.clone();
         let start_ts = waiter.start_ts;
         let timeout = waiter.timeout;
@@ -276,22 +268,39 @@ impl WaiterManager {
             })
             .unwrap();
 
-        if self.wait_table.add_waiter(lock.ts, waiter) {
-            let scheduler = self.scheduler.clone();
+        if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
+            let wait_table = Rc::clone(&self.wait_table);
+            let detect_scheduler = self.detect_scheduler.clone();
             let when = Instant::now() + Duration::from_millis(timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
                 .then(move |_| {
-                    notify_scheduler(&scheduler, Task::Timeout { start_ts, lock });
+                    wait_table
+                        .borrow_mut()
+                        .remove_waiter(start_ts, lock.clone())
+                        .and_then(|waiter| {
+                            detect_scheduler
+                                .schedule(DeadlockTask::Detect {
+                                    tp: DetectType::CleanUpWaitFor,
+                                    txn_ts: start_ts,
+                                    lock,
+                                })
+                                .unwrap();
+                            execute_callback(waiter.cb, waiter.pr);
+                            Some(())
+                        });
                     Ok(())
                 });
             handle.spawn(timer);
         }
     }
 
-    fn wake_up(&mut self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64, handle: &Handle) {
-        let mut ready_waiters = self.wait_table.get_ready_waiters(lock_ts, hashes);
+    fn handle_wake_up(&mut self, handle: &Handle, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
+        let mut ready_waiters = self
+            .wait_table
+            .borrow_mut()
+            .get_ready_waiters(lock_ts, hashes);
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             // Sleep a little so the transaction with small start_ts will more likely get the lock.
@@ -329,29 +338,13 @@ impl WaiterManager {
         }
     }
 
-    // TODO: remove timeout Task, use RefCell
-    fn timeout(&mut self, start_ts: u64, lock: Lock) {
-        self.wait_table
-            .remove_waiter(start_ts, lock.clone())
-            .and_then(|waiter| {
-                self.detect_scheduler
-                    .schedule(DeadlockTask::Detect {
-                        tp: DetectType::CleanUpWaitFor,
-                        txn_ts: start_ts,
-                        lock,
-                    })
-                    .unwrap();
-                execute_callback(waiter.cb, waiter.pr);
-                Some(())
-            });
+    fn handle_dump(&self, cb: Callback) {
+        cb(self.wait_table.borrow().to_wait_for_entries());
     }
 
-    fn dump(&self, cb: Callback) {
-        cb(self.wait_table.to_wait_for_entries());
-    }
-
-    fn deadlock(&mut self, start_ts: u64, lock: Lock) {
+    fn handle_deadlock(&mut self, start_ts: u64, lock: Lock) {
         self.wait_table
+            .borrow_mut()
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 self.detect_scheduler
@@ -382,7 +375,8 @@ impl FutureRunnable<Task> for WaiterManager {
                 lock,
                 timeout,
             } => {
-                self.add_waiter(
+                self.handle_wait_for(
+                    handle,
                     Waiter {
                         start_ts,
                         for_update_ts,
@@ -391,7 +385,6 @@ impl FutureRunnable<Task> for WaiterManager {
                         lock,
                         timeout,
                     },
-                    handle,
                 );
             }
             Task::WakeUp {
@@ -399,16 +392,13 @@ impl FutureRunnable<Task> for WaiterManager {
                 hashes,
                 commit_ts,
             } => {
-                self.wake_up(lock_ts, hashes, commit_ts, handle);
-            }
-            Task::Timeout { start_ts, lock } => {
-                self.timeout(start_ts, lock);
+                self.handle_wake_up(handle, lock_ts, hashes, commit_ts);
             }
             Task::Dump { cb } => {
-                self.dump(cb);
+                self.handle_dump(cb);
             }
             Task::Deadlock { start_ts, lock } => {
-                self.deadlock(start_ts, lock);
+                self.handle_deadlock(start_ts, lock);
             }
         }
     }
