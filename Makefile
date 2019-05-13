@@ -77,19 +77,32 @@ run:
 	cargo run --no-default-features --features  "${ENABLE_FEATURES}" --bin tikv-server
 
 release:
+	make dist_release
+
+unportable_release:
+	make dist_unportable_release
+
+prof_release:
+	make dist_prof_release
+
+fail_release:
+	make dist_fail_release
+
+dist_release:
 	cargo build --no-default-features --release --features "${ENABLE_FEATURES}"
 	@mkdir -p ${BIN_PATH}
 	@cp -f ${CARGO_TARGET_DIR}/release/tikv-ctl ${CARGO_TARGET_DIR}/release/tikv-server ${CARGO_TARGET_DIR}/release/tikv-importer ${BIN_PATH}/
 	bash scripts/check-sse4_2.sh
 
-unportable_release:
+dist_unportable_release:
 	ROCKSDB_SYS_PORTABLE=0 make release
 
-prof_release:
+dist_prof_release:
 	ENABLE_FEATURES=mem-profiling make release
 
-fail_release:
+dist_fail_release:
 	FAIL_POINT=1 make release
+
 
 # unlike test, this target will trace tests and output logs when fail test is detected.
 trace_test:
