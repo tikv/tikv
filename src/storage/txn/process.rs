@@ -285,13 +285,14 @@ impl<E: Engine> Executor<E> {
                     .inc();
 
                 if lock_info.is_some() {
-                    let (lock, for_update_ts) = lock_info.unwrap();
+                    let (lock, for_update_ts, is_first_lock) = lock_info.unwrap();
                     Msg::PessimisticLockWait {
                         cid,
                         start_ts: ts,
                         for_update_ts,
                         pr,
                         lock,
+                        is_first_lock,
                     }
                 } else if to_be_write.is_empty() {
                     Msg::WriteFinished {
@@ -491,7 +492,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
-    lock_info: Option<(lock_manager::Lock, u64)>,
+    lock_info: Option<(lock_manager::Lock, u64, bool)>,
 }
 
 fn process_write_impl<S: Snapshot>(
@@ -548,7 +549,6 @@ fn process_write_impl<S: Snapshot>(
             options,
             ..
         } => {
-            // TODO: support is_first_lock
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = keys.len();
@@ -573,7 +573,13 @@ fn process_write_impl<S: Snapshot>(
                 let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
                 // Wait for lock released
-                (pr, vec![], 0, ctx, Some((lock, for_update_ts)))
+                (
+                    pr,
+                    vec![],
+                    0,
+                    ctx,
+                    Some((lock, for_update_ts, options.is_first_lock)),
+                )
             }
         }
         Command::Commit {

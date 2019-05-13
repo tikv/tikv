@@ -72,6 +72,7 @@ pub enum Msg {
         for_update_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
+        is_first_lock: bool,
     },
 }
 
@@ -437,6 +438,7 @@ impl<E: Engine> Scheduler<E> {
         for_update_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
+        is_first_lock: bool,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.dequeue_task_context(cid);
@@ -450,6 +452,7 @@ impl<E: Engine> Scheduler<E> {
             tctx.cb,
             pr,
             lock.clone(),
+            is_first_lock,
             1000,
         );
         self.release_lock(&tctx.lock, cid);
@@ -507,7 +510,15 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                     for_update_ts,
                     pr,
                     lock,
-                } => self.pessimistic_lock_wait(cid, start_ts, for_update_ts, pr, lock),
+                    is_first_lock,
+                } => self.pessimistic_lock_wait(
+                    cid,
+                    start_ts,
+                    for_update_ts,
+                    pr,
+                    lock,
+                    is_first_lock,
+                ),
             }
         }
     }

@@ -30,6 +30,7 @@ pub enum Task {
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
+        is_first_lock: bool,
         timeout: u64,
     },
     WakeUp {
@@ -179,6 +180,7 @@ impl Scheduler {
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
+        is_first_lock: bool,
         timeout: u64,
     ) {
         self.notify_scheduler(Task::WaitFor {
@@ -187,6 +189,7 @@ impl Scheduler {
             cb,
             pr,
             lock,
+            is_first_lock,
             timeout,
         });
     }
@@ -227,12 +230,15 @@ impl WaiterManager {
         }
     }
 
-    fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
+    fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
         let lock = waiter.lock.clone();
         let start_ts = waiter.start_ts;
         let timeout = waiter.timeout;
 
-        self.detector_scheduler.detect(start_ts, lock.clone());
+        // If it is the first lock, deadlock never occur
+        if !is_first_lock {
+            self.detector_scheduler.detect(start_ts, lock.clone());
+        }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             let detector_scheduler = self.detector_scheduler.clone();
@@ -319,10 +325,12 @@ impl FutureRunnable<Task> for WaiterManager {
                 cb,
                 pr,
                 lock,
+                is_first_lock,
                 timeout,
             } => {
                 self.handle_wait_for(
                     handle,
+                    is_first_lock,
                     Waiter {
                         start_ts,
                         for_update_ts,
@@ -502,6 +510,7 @@ mod tests {
             StorageCb::Boolean(cb),
             pr,
             Lock { ts: 0, hash: 0 },
+            true,
             100,
         );
         assert_eq!(
@@ -522,6 +531,7 @@ mod tests {
             StorageCb::Boolean(cb),
             ProcessResult::Res,
             Lock { ts: 1, hash: 1 },
+            true,
             100,
         );
         waiter_mgr_scheduler.wake_up(1, vec![3, 1, 2], 1);
