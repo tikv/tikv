@@ -175,10 +175,10 @@ impl StatusServer {
                         .unwrap();
                     ok(response)
                 })
-                .or_else(|_| {
+                .or_else(|err| {
                     let response = Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::empty())
+                        .body(Body::from(err.to_string()))
                         .unwrap();
                     ok(response)
                 }),
