@@ -39,7 +39,7 @@ use super::process::{
     execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
 };
 use super::Error;
-use crate::storage::lock_manager::{self, DetectTask, WaiterMgrScheduler};
+use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 
 pub const CMD_BATCH_SIZE: usize = 256;
 
@@ -153,7 +153,7 @@ pub struct Scheduler<E: Engine> {
     // scheduler for lock manager
     waiter_mgr_scheduler: WaiterMgrScheduler,
 
-    detector_scheduler: worker::FutureScheduler<DetectTask>,
+    detector_scheduler: DetectorScheduler,
 
     // cmd id generator
     id_alloc: u64,
@@ -181,7 +181,7 @@ impl<E: Engine> Scheduler<E> {
         engine: E,
         scheduler: worker::Scheduler<Msg>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: worker::FutureScheduler<DetectTask>,
+        detector_scheduler: DetectorScheduler,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,

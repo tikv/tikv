@@ -27,7 +27,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, FutureScheduler, FutureWorker, ScheduleError, Worker};
+use tikv_util::worker::{self, Builder, FutureWorker, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -42,7 +42,9 @@ pub use self::kv::{
     Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
-use self::lock_manager::{DetectTask, Detector, WaiterManager, WaiterMgrScheduler, WaiterTask};
+use self::lock_manager::{
+    DetectTask, Detector, DetectorScheduler, WaiterManager, WaiterMgrScheduler, WaiterTask,
+};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
@@ -535,7 +537,7 @@ pub struct Storage<E: Engine> {
 
     detect_worker: Arc<Mutex<FutureWorker<DetectTask>>>,
 
-    detect_scheduler: FutureScheduler<DetectTask>,
+    detect_scheduler: DetectorScheduler,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -641,7 +643,7 @@ impl<E: Engine> Storage<E> {
         let worker_scheduler = worker.lock().unwrap().scheduler();
 
         let detect_worker = FutureWorker::new("deadlock");
-        let detect_scheduler = detect_worker.scheduler();
+        let detect_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
         let waiter_mgr_runner = WaiterManager::new(detect_scheduler.clone());
@@ -701,7 +703,7 @@ impl<E: Engine> Storage<E> {
         self.waiter_mgr_scheduler.clone()
     }
 
-    pub fn get_detect_scheduler(&self) -> FutureScheduler<DetectTask> {
+    pub fn get_detect_scheduler(&self) -> DetectorScheduler {
         self.detect_scheduler.clone()
     }
 

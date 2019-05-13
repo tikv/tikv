@@ -109,11 +109,52 @@ pub enum Task {
 impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Task::Detect { tp, txn_ts, lock } => {
-                write!(f, "tp: {:?}, txn_ts: {:?}, lock: {:?}", tp, txn_ts, lock)
-            }
+            Task::Detect { tp, txn_ts, lock } => write!(
+                f,
+                "Detect {{ tp: {:?}, txn_ts: {:?}, lock: {:?} }}",
+                tp, txn_ts, lock
+            ),
             Task::DetectRpc { .. } => write!(f, "detect rpc"),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Scheduler(FutureScheduler<Task>);
+
+impl Scheduler {
+    pub fn new(scheduler: FutureScheduler<Task>) -> Self {
+        Self(scheduler)
+    }
+
+    fn notify_scheduler(&self, task: Task) {
+        if let Err(Stopped(task)) = self.0.schedule(task) {
+            error!("failed to send task to deadlock_detector"; "task" => %task);
+        }
+    }
+
+    pub fn detect(&self, txn_ts: u64, lock: Lock) {
+        self.notify_scheduler(Task::Detect {
+            tp: DetectType::Detect,
+            txn_ts,
+            lock,
+        });
+    }
+
+    pub fn clean_up_wait_for(&self, txn_ts: u64, lock: Lock) {
+        self.notify_scheduler(Task::Detect {
+            tp: DetectType::CleanUpWaitFor,
+            txn_ts,
+            lock,
+        });
+    }
+
+    pub fn clean_up(&self, txn_ts: u64) {
+        self.notify_scheduler(Task::Detect {
+            tp: DetectType::CleanUp,
+            txn_ts,
+            lock: Lock::default(),
+        });
     }
 }
 
@@ -485,16 +526,12 @@ impl FutureRunnable<Task> for Detector {
 
 #[derive(Clone)]
 pub struct Service {
-    // TODO: all FutureScheduler? or all scheduler wrapper?
-    detector_scheduler: FutureScheduler<Task>,
+    detector_scheduler: Scheduler,
     waiter_mgr_scheduler: WaiterMgrScheduler,
 }
 
 impl Service {
-    pub fn new(
-        detector_scheduler: FutureScheduler<Task>,
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-    ) -> Self {
+    pub fn new(detector_scheduler: Scheduler, waiter_mgr_scheduler: WaiterMgrScheduler) -> Self {
         Self {
             detector_scheduler,
             waiter_mgr_scheduler,
@@ -536,7 +573,8 @@ impl deadlock_grpc::Deadlock for Service {
         sink: DuplexSink<DeadlockResponse>,
     ) {
         let task = Task::DetectRpc { stream, sink };
-        if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.schedule(task) {
+        if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
+        {
             let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
             ctx.spawn(sink.fail(status).map_err(|_| ()));
         }
