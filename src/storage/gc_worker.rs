@@ -49,6 +49,9 @@ const POLL_SAFE_POINT_INTERVAL_SECS: u64 = 60;
 
 const BEGIN_KEY: &[u8] = b"";
 
+const PROCESS_TYPE_GC: &str = "gc";
+const PROCESS_TYPE_SCAN: &str = "scan";
+
 /// Provides safe point.
 /// TODO: Give it a better name?
 pub trait GCSafePointProvider: Send + 'static {
@@ -729,6 +732,13 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         self.initialize()?;
 
         loop {
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_GC])
+                .set(0);
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_SCAN])
+                .set(0);
+
             set_status_metrics(GCManagerState::Idle);
             self.wait_for_next_safe_point()?;
 
@@ -778,6 +788,8 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                 return false;
             }
         };
+
+        AUTO_GC_SAFE_POINT_GAUGE.set(safe_point as i64);
 
         match safe_point.cmp(&self.safe_point) {
             Ordering::Less => {
@@ -868,7 +880,15 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
                     info!(
                         "gc_worker: auto gc rewinds"; "processed_regions" => processed_regions
                     );
+
                     processed_regions = 0;
+                    // Set the metric to zero to show that rewinding has happened.
+                    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&[PROCESS_TYPE_GC])
+                        .set(0);
+                    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&[PROCESS_TYPE_SCAN])
+                        .set(0);
                 }
             } else {
                 // We are not going to rewind, So we will stop if `progress` reaches `end`.
@@ -964,6 +984,9 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             );
         }
         *processed_regions += 1;
+        AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+            .with_label_values(&[PROCESS_TYPE_GC])
+            .inc();
 
         Ok(next_key)
     }
@@ -979,15 +1002,17 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
         let res = self.cfg.region_info_provider.seek_region(
             key.as_encoded(),
             Box::new(move |iter| {
+                let mut scanned_regions = 0;
                 for info in iter {
+                    scanned_regions += 1;
                     if info.role == StateRole::Leader {
                         if find_peer(&info.region, store_id).is_some() {
-                            let _ = tx.send(Some(info.region.clone()));
+                            let _ = tx.send((Some(info.region.clone()), scanned_regions));
                             return;
                         }
                     }
                 }
-                let _ = tx.send(None);
+                let _ = tx.send((None, scanned_regions));
             }),
         );
 
@@ -998,7 +1023,14 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
             return (None, None);
         };
 
-        match rx.recv() {
+        let seek_region_res = rx.recv().map(|(region, scanned_regions)| {
+            AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                .with_label_values(&[PROCESS_TYPE_SCAN])
+                .add(scanned_regions);
+            region
+        });
+
+        match seek_region_res {
             Ok(Some(mut region)) => {
                 let peer = find_peer(&region, store_id).unwrap().clone();
                 let end_key = region.take_end_key();
