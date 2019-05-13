@@ -117,14 +117,18 @@ mod profiling {
     /// Dump the profile to the `path`.
     ///
     /// If `path` is `None`, will dump it in the working directory with an auto-generated name.
-    pub fn dump_prof(path: &str) {
+    pub fn dump_prof(path: &str) -> ProfResult<()> {
         // TODO: return errors in this function
         let mut c_path = DumpPathGuard::from_cstring(Some(CString::new(path).unwrap()));
         let res = unsafe { jemallocator::mallctl_set(PROF_DUMP, c_path.get_mut_ptr()) };
         match res {
-            Err(e) => error!("failed to dump the profile to {:?}: {}", path, e),
+            Err(e) => {
+                error!("failed to dump the profile to {:?}: {}", path, e);
+                Err(ProfError::JemallocError(e))
+            }
             Ok(_) => {
                 info!("dump profile to {}", path);
+                Ok(())
             }
         }
     }
@@ -201,7 +205,9 @@ mod profiling {
 mod profiling {
     use super::{ProfError, ProfResult};
 
-    pub fn dump_prof(_path: &str) {}
+    pub fn dump_prof(_path: &str) -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
     pub fn activate_prof() -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
     }
