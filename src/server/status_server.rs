@@ -98,31 +98,34 @@ impl StatusServer {
         Box::new(lock.then(move |guard| {
             timer
                 .delay(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
-                .then(|_| match TempDir::new("") {
-                    Ok(tmp_dir) => ok(tmp_dir),
-                    Err(e) => err(e.into()),
-                })
-                .and_then(|tmp_dir| {
-                    let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
-                    match os_path.into_string() {
-                        Ok(path) => ok((tmp_dir, path)),
-                        Err(path) => err(ProfError::PathError(path)),
-                    }
-                })
-                .and_then(move |(tmp_dir, path)| {
-                    tikv_alloc::dump_prof(Some(&path));
-                    drop(guard);
-                    tokio_fs::file::File::open(path)
-                        .and_then(|file| {
-                            let buf: Vec<u8> = Vec::new();
-                            tokio_io::io::read_to_end(file, buf)
-                        })
-                        .and_then(move |(_, buf)| {
-                            drop(tmp_dir);
-                            ok(buf)
-                        })
-                        .map_err(|e| -> ProfError { e.into() })
-                })
+                .then(
+                    move |_| -> Box<dyn Future<Item = Vec<u8>, Error = ProfError> + Send> {
+                        let tmp_dir = match TempDir::new("") {
+                            Ok(tmp_dir) => tmp_dir,
+                            Err(e) => return Box::new(err(e.into())),
+                        };
+                        let os_path = tmp_dir.path().join("tikv_dump_profile").into_os_string();
+                        let path = match os_path.into_string() {
+                            Ok(path) => path,
+                            Err(path) => return Box::new(err(ProfError::PathError(path))),
+                        };
+
+                        tikv_alloc::dump_prof(Some(&path));
+                        drop(guard);
+                        Box::new(
+                            tokio_fs::file::File::open(path)
+                                .and_then(|file| {
+                                    let buf: Vec<u8> = Vec::new();
+                                    tokio_io::io::read_to_end(file, buf)
+                                })
+                                .and_then(move |(_, buf)| {
+                                    drop(tmp_dir);
+                                    ok(buf)
+                                })
+                                .map_err(|e| -> ProfError { e.into() }),
+                        )
+                    },
+                )
         }))
     }
 
