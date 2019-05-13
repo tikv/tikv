@@ -282,7 +282,6 @@ impl Inner {
                 key_hash,
                 ..
             } = resp.take_entry();
-            // TODO: error handle
             waiter_mgr_scheduler.deadlock(
                 txn,
                 Lock {
@@ -362,7 +361,6 @@ impl Detector {
                         .borrow_mut()
                         .detect(txn_ts, lock.ts, lock.hash)
                     {
-                        // TODO: error handle
                         inner
                             .waiter_mgr_scheduler
                             .deadlock(txn_ts, lock, deadlock_key_hash);
@@ -512,20 +510,23 @@ impl deadlock_grpc::Deadlock for Service {
         sink: UnarySink<WaitForEntriesResponse>,
     ) {
         let (cb, f) = paired_future_callback();
-        // TODO: error handle
-        self.waiter_mgr_scheduler.dump_wait_table(cb);
-        ctx.spawn(
-            f.map_err(Error::from)
-                .map(|v| {
-                    let mut resp = WaitForEntriesResponse::new();
-                    resp.set_entries(RepeatedField::from_vec(v));
-                    resp
-                })
-                .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
-                .map_err(move |e| {
-                    debug!("get_wait_for_entries failed"; "err" => ?e);
-                }),
-        );
+        if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
+            let status = RpcStatus::new(RpcStatusCode::ResourceExhausted, None);
+            ctx.spawn(sink.fail(status).map_err(|_| ()))
+        } else {
+            ctx.spawn(
+                f.map_err(Error::from)
+                    .map(|v| {
+                        let mut resp = WaitForEntriesResponse::new();
+                        resp.set_entries(RepeatedField::from_vec(v));
+                        resp
+                    })
+                    .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
+                    .map_err(move |e| {
+                        debug!("get_wait_for_entries failed"; "err" => ?e);
+                    }),
+            );
+        }
     }
 
     fn detect(

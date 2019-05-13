@@ -20,16 +20,6 @@ use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
-    match res {
-        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { key, ts, .. }))) => Lock {
-            ts: *ts,
-            hash: gen_key_hash(&Key::from_raw(&key)),
-        },
-        _ => panic!("unsupported mvcc error"),
-    }
-}
-
 pub type Callback = Box<dyn FnBox(Vec<WaitForEntry>) + Send>;
 
 pub enum Task {
@@ -163,14 +153,15 @@ impl WaitTable {
     }
 }
 
-fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) {
+fn notify_scheduler(scheduler: &FutureScheduler<Task>, task: Task) -> bool {
     if let Err(Stopped(task)) = scheduler.schedule(task) {
         error!("failed to send task to waiter_manager: {}", task);
-        match task {
-            Task::WaitFor { cb, pr, .. } => execute_callback(cb, pr),
-            _ => (),
+        if let Task::WaitFor { cb, pr, .. } = task {
+            execute_callback(cb, pr);
         }
+        return false;
     }
+    true
 }
 
 #[derive(Clone)]
@@ -214,9 +205,8 @@ impl Scheduler {
         );
     }
 
-    pub fn dump_wait_table(&self, cb: Callback) {
-        // TODO: error handle
-        notify_scheduler(&self.0, Task::Dump { cb });
+    pub fn dump_wait_table(&self, cb: Callback) -> bool {
+        notify_scheduler(&self.0, Task::Dump { cb })
     }
 
     pub fn deadlock(&self, txn_ts: u64, lock: Lock, _deadlock_key_hash: u64) {
@@ -401,6 +391,16 @@ impl FutureRunnable<Task> for WaiterManager {
                 self.handle_deadlock(start_ts, lock);
             }
         }
+    }
+}
+
+pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
+    match res {
+        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { key, ts, .. }))) => Lock {
+            ts: *ts,
+            hash: gen_key_hash(&Key::from_raw(&key)),
+        },
+        _ => panic!("unsupported mvcc error"),
     }
 }
 
