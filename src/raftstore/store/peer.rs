@@ -194,27 +194,23 @@ pub struct PeerStat {
 
 pub struct RecentConfChangedPeer {
     pub reject_duration_as_secs: u64,
-    pub id: u64,
-    pub added_time: Instant,
+    pub changed_time: Instant,
 }
 
 impl RecentConfChangedPeer {
     pub fn new(reject_duration_as_secs: u64) -> RecentConfChangedPeer {
         RecentConfChangedPeer {
             reject_duration_as_secs,
-            id: Default::default(),
-            added_time: Instant::now(),
+            changed_time: Instant::now(),
         }
     }
 
-    pub fn update(&mut self, id: u64, now: Instant) {
-        self.id = id;
-        self.added_time = now;
+    pub fn update(&mut self, now: Instant) {
+        self.changed_time = now;
     }
 
-    pub fn contains(&self, id: u64) -> bool {
-        self.id == id
-            && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
+    pub fn safe_to_transfer(&self) -> bool {
+        duration_to_sec(self.changed_time.elapsed()) > self.reject_duration_as_secs as f64
     }
 }
 
@@ -1601,7 +1597,7 @@ impl Peer {
                 return false;
             }
         }
-        if self.recent_conf_change_region.contains(self.region_id) {
+        if !self.recent_conf_change_region.safe_to_transfer() {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
                 "region_id" => self.region_id,

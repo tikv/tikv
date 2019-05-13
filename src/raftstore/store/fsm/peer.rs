@@ -1322,10 +1322,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm
-                    .peer
-                    .recent_conf_change_region
-                    .update(cp.region.get_id(), now);
+                self.fsm.peer.recent_conf_change_region.update(now);
+                self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
                 // Remove this peer from cache.
@@ -1336,10 +1334,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .peers_start_pending_time
                         .retain(|&(p, _)| p != peer_id);
                 }
-                self.fsm
-                    .peer
-                    .recent_conf_change_region
-                    .update(cp.region.get_id(), now);
+                self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm.peer.recent_conf_change_region.update(now);
             }
         }
 
