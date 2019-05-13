@@ -150,7 +150,7 @@ impl<S: Snapshot> MvccTxn<S> {
             // Abort on lock belonging to other transaction.
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: key.to_raw()?,
+                    key: key.into_raw()?,
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
@@ -170,7 +170,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Err(Error::TxnLockNotFound {
                 start_ts: self.start_ts,
                 commit_ts: 0,
-                key: key.to_raw()?,
+                key: key.into_raw()?,
             });
         }
 
@@ -181,17 +181,16 @@ impl<S: Snapshot> MvccTxn<S> {
                 // current start timestamp, we should abort current prewrite, even if the commit
                 // type is Rollback.
                 //
-                // If the key is pessimisticly locked, the data conflict is resolved by
-                // `for_update_ts`.
+                // If the transaction is pessimistic, the data conflict is resolved by `for_update_ts`
                 if commit_ts == self.start_ts
-                    || (!options.prewrite_pessimistic_lock && commit_ts > self.start_ts)
+                    || (options.is_pessimistic_lock.is_empty() && commit_ts > self.start_ts)
                 {
                     MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
                     return Err(Error::WriteConflict {
                         start_ts: self.start_ts,
                         conflict_start_ts: write.start_ts,
                         conflict_commit_ts: commit_ts,
-                        key: key.to_raw()?,
+                        key: key.into_raw()?,
                         primary: primary.to_vec(),
                     });
                 }
@@ -200,7 +199,9 @@ impl<S: Snapshot> MvccTxn<S> {
                         || (write.write_type != WriteType::Delete
                             && self.key_exist(&key, write.start_ts - 1)?)
                     {
-                        return Err(Error::AlreadyExist { key: key.to_raw()? });
+                        return Err(Error::AlreadyExist {
+                            key: key.into_raw()?,
+                        });
                     }
                 }
             }
@@ -229,7 +230,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
-                    key: key.to_raw()?,
+                    key: key.into_raw()?,
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
@@ -253,7 +254,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     start_ts: for_update_ts,
                     conflict_start_ts: write.start_ts,
                     conflict_commit_ts: commit_ts,
-                    key: key.to_raw()?,
+                    key: key.into_raw()?,
                     primary: primary.to_vec(),
                 });
             }
@@ -269,7 +270,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             start_ts: for_update_ts,
                             conflict_start_ts: write.start_ts,
                             conflict_commit_ts: commit_ts,
-                            key: key.to_raw()?,
+                            key: key.into_raw()?,
                             primary: primary.to_vec(),
                         });
                     }
@@ -302,7 +303,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     return Err(Error::TxnLockNotFound {
                         start_ts: self.start_ts,
                         commit_ts,
-                        key: key.to_raw()?,
+                        key: key.into_raw()?,
                     });
                 }
                 (lock.lock_type, lock.short_value.take())
@@ -322,7 +323,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         Err(Error::TxnLockNotFound {
                             start_ts: self.start_ts,
                             commit_ts,
-                            key: key.to_raw()?,
+                            key: key.into_raw()?,
                         })
                     }
                     // Committed by concurrent transaction.
