@@ -1023,7 +1023,6 @@ impl Peer {
         );
 
         let mut ready = self.raft_group.ready_since(self.last_applying_idx);
-        error!("ready: {:?}", ready);
 
         self.on_role_changed(ctx, &ready);
 
@@ -1700,7 +1699,6 @@ impl Peer {
 
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
         cmds.push((req, cb));
-        println!("append to new pending reads");
         self.pending_reads.reads.push_back(ReadIndexRequest {
             id,
             cmds,
@@ -1710,7 +1708,6 @@ impl Peer {
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
-            println!("propose an empty entry for read index");
             let req = RaftCmdRequest::new();
             if let Ok(index) = self.propose_normal(poll_ctx, req) {
                 let meta = ProposalMeta {
@@ -1970,7 +1967,6 @@ impl Peer {
             false, /* we don't need snapshot time */
         )
         .execute(&req, self.region());
-        println!("handle_read resp: {:?}", resp);
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -1983,7 +1979,6 @@ impl Peer {
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
         for mut read in self.pending_reads.reads.drain(..) {
-            println!("cluster.stop is called, clear pending reads");
             read.cmds.clear();
         }
     }

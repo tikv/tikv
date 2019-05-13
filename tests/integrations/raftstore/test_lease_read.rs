@@ -7,9 +7,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
 use std::{mem, thread};
 
+use futures::future::Future;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use futures::future::Future;
 
 use engine::Peekable;
 use test_raftstore::*;
@@ -337,7 +337,7 @@ fn test_read_index_when_transfer_leader() {
     cluster.must_put(b"k1", b"v2");
     sleep_ms(100);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v2");
-    let r1 = cluster.pd_client.get_region_by_id(r1).wait().unwrap().unwrap();
+    let r1 = cluster.get_region(b"k1").unwrap();
     let leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
     // Use a macro instead of a closure to avoid any capture of local variables.
