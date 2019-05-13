@@ -644,9 +644,8 @@ impl<E: Engine> Storage<E> {
         let detect_scheduler = detect_worker.scheduler();
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner =
-            WaiterManager::new(waiter_mgr_worker.scheduler(), detect_scheduler.clone());
-        let waiter_mgr_scheduler = waiter_mgr_runner.scheduler();
+        let waiter_mgr_runner = WaiterManager::new(detect_scheduler.clone());
+        let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
 
         let runner = Scheduler::new(
             engine.clone(),

@@ -223,26 +223,17 @@ impl Scheduler {
 /// WaiterManager handles waiting and wake-up of pessimistic lock
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
-    scheduler: FutureScheduler<Task>,
     detect_scheduler: FutureScheduler<DeadlockTask>,
 }
 
 unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
-    pub fn new(
-        scheduler: FutureScheduler<Task>,
-        detect_scheduler: FutureScheduler<DeadlockTask>,
-    ) -> Self {
+    pub fn new(detect_scheduler: FutureScheduler<DeadlockTask>) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
-            scheduler,
             detect_scheduler,
         }
-    }
-
-    pub fn scheduler(&self) -> Scheduler {
-        Scheduler::new(self.scheduler.clone())
     }
 
     fn handle_wait_for(&mut self, handle: &Handle, waiter: Waiter) {
@@ -530,8 +521,8 @@ mod tests {
         let detect_scheduler = detect_worker.scheduler();
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(waiter_mgr_worker.scheduler(), detect_scheduler);
-        let waiter_mgr_scheduler = waiter_mgr_runner.scheduler();
+        let waiter_mgr_runner = WaiterManager::new(detect_scheduler);
+        let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
         // timeout
