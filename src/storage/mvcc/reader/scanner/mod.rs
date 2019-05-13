@@ -218,9 +218,9 @@ mod tests {
             must_commit(&engine, &[i], 10, 100);
         }
 
-        must_pessimistic_lock(&engine, &[1], &[1], 20, 110);
-        must_pessimistic_lock(&engine, &[2], &[2], 50, 110);
-        must_pessimistic_lock(&engine, &[3], &[3], 105, 110);
+        must_acquire_pessimistic_lock(&engine, &[1], &[1], 20, 110);
+        must_acquire_pessimistic_lock(&engine, &[2], &[2], 50, 110);
+        must_acquire_pessimistic_lock(&engine, &[3], &[3], 105, 110);
         must_prewrite_put(&engine, &[4], b"a", &[4], 105);
 
         let snapshot = engine.snapshot(&Context::new()).unwrap();

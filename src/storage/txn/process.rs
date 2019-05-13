@@ -553,7 +553,7 @@ fn process_write_impl<S: Snapshot>(
             let mut locks = vec![];
             let rows = keys.len();
             for k in keys {
-                match txn.pessimistic_lock(k, &primary, for_update_ts, &options) {
+                match txn.acquire_pessimistic_lock(k, &primary, for_update_ts, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));

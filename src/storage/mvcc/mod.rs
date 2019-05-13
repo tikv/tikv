@@ -344,7 +344,7 @@ pub mod tests {
             .is_err());
     }
 
-    pub fn must_pessimistic_lock<E: Engine>(
+    pub fn must_acquire_pessimistic_lock<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],
@@ -354,7 +354,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
             .unwrap();
         let modifies = txn.into_modifies();
         if !modifies.is_empty() {
@@ -362,7 +362,7 @@ pub mod tests {
         }
     }
 
-    pub fn must_pessimistic_lock_err<E: Engine>(
+    pub fn must_acquire_pessimistic_lock_err<E: Engine>(
         engine: &E,
         key: &[u8],
         pk: &[u8],
@@ -372,7 +372,7 @@ pub mod tests {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
-        txn.pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
+        txn.acquire_pessimistic_lock(Key::from_raw(key), pk, for_update_ts, &Options::default())
             .unwrap_err();
     }
 
