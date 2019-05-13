@@ -249,6 +249,7 @@ impl Inner {
                     recving.remove(id);
                 }
             });
+            self.failed.borrow_mut().clear();
         }
     }
 
