@@ -7,7 +7,8 @@ publish = false
 [dependencies]
 libc = "0.2"
 byteorder = "1.2"
-quick-error = "1.2"
+failure = "0.1"
+static_assertions = { version = "0.3", features = ["nightly"] }
 tikv_alloc = { path = "../tikv_alloc", default-features = false }
 
 [dev-dependencies]
