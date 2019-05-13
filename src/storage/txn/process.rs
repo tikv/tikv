@@ -17,6 +17,7 @@ use crate::storage::{
     Statistics, StorageCb,
 };
 use crate::storage::{Key, MvccInfo, Value};
+use tikv_util::time::Instant;
 use tikv_util::time::SlowTimer;
 use tikv_util::worker::{self, ScheduleError};
 
@@ -181,7 +182,7 @@ impl<E: Engine> Executor<E> {
         sched_pool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
 
-            let read_duration = tikv_util::time::Instant::now_coarse();
+            let read_duration = Instant::now_coarse();
 
             let region_id = task.region_id;
             let ts = task.ts;
