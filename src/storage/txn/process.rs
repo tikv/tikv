@@ -540,7 +540,7 @@ fn process_write_impl<S: Snapshot>(
                 (pr, vec![], 0, ctx, None)
             }
         }
-        Command::PessimisticLock {
+        Command::AcquirePessimisticLock {
             ctx,
             keys,
             primary,

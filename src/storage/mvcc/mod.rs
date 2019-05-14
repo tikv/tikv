@@ -236,7 +236,10 @@ pub mod tests {
         let snapshot = engine.snapshot(&ctx).unwrap();
         let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
         let mut options = Options::default();
-        options.prewrite_pessimistic_lock = is_pessimistic_lock;
+        if is_pessimistic_lock {
+            options.is_pessimistic_lock.push(true);
+            options.prewrite_pessimistic_lock = true;
+        }
         txn.prewrite(
             Mutation::Put((Key::from_raw(key), value.to_vec())),
             pk,

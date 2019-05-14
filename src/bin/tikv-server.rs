@@ -233,8 +233,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Create deadlock detect service
     let waiter_mgrscheduler = storage.get_waiter_mgr_scheduler();
-    let detect_scheduler = storage.get_detect_scheduler();
-    let deadlock_service = DeadlockService::new(detect_scheduler, waiter_mgrscheduler.clone());
+    let detector_scheduler = storage.get_detector_scheduler();
+    let deadlock_service = DeadlockService::new(detector_scheduler, waiter_mgrscheduler.clone());
 
     let server_cfg = Arc::new(cfg.server.clone());
     // Create server

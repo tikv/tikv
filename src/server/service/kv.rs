@@ -147,7 +147,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         let timer = GRPC_MSG_HISTOGRAM_VEC
             .kv_pessimistic_lock
             .start_coarse_timer();
-        let future = future_pessimistic_lock(&self.storage, req)
+        let future = future_acquire_pessimistic_lock(&self.storage, req)
             .and_then(|res| sink.success(res).map_err(Error::from))
             .map(|_| timer.observe_duration())
             .map_err(move |e| {
@@ -1152,7 +1152,7 @@ fn handle_batch_commands_request<E: Engine>(
             let timer = GRPC_MSG_HISTOGRAM_VEC
                 .kv_pessimistic_lock
                 .start_coarse_timer();
-            let resp = future_pessimistic_lock(&storage, req)
+            let resp = future_acquire_pessimistic_lock(&storage, req)
                 .map(oneof!(
                     BatchCommandsResponse_Response_oneof_cmd::PessimisticLock
                 ))
@@ -1262,7 +1262,7 @@ fn future_prewrite<E: Engine>(
     })
 }
 
-fn future_pessimistic_lock<E: Engine>(
+fn future_acquire_pessimistic_lock<E: Engine>(
     storage: &Storage<E>,
     mut req: PessimisticLockRequest,
 ) -> impl Future<Item = PessimisticLockResponse, Error = Error> {
@@ -1279,7 +1279,7 @@ fn future_pessimistic_lock<E: Engine>(
     options.is_first_lock = req.get_is_first_lock();
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_pessimistic_lock(
+    let res = storage.async_acquire_pessimistic_lock(
         req.take_context(),
         keys,
         req.take_primary_lock(),

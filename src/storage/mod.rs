@@ -98,7 +98,7 @@ pub enum Command {
         start_ts: u64,
         options: Options,
     },
-    PessimisticLock {
+    AcquirePessimisticLock {
         ctx: Context,
         keys: Vec<Key>,
         primary: Vec<u8>,
@@ -170,7 +170,7 @@ impl Display for Command {
                 start_ts,
                 ctx
             ),
-            Command::PessimisticLock {
+            Command::AcquirePessimisticLock {
                 ref ctx,
                 ref keys,
                 start_ts,
@@ -178,7 +178,7 @@ impl Display for Command {
                 ..
             } => write!(
                 f,
-                "kv::command::pessimisticlock keys({}) @ {},{} | {:?}",
+                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
                 keys.len(),
                 start_ts,
                 for_update_ts,
@@ -302,7 +302,7 @@ impl Command {
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Prewrite { .. } => "prewrite",
-            Command::PessimisticLock { .. } => "pessimistic_lock",
+            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
@@ -318,7 +318,7 @@ impl Command {
     pub fn ts(&self) -> u64 {
         match *self {
             Command::Prewrite { start_ts, .. }
-            | Command::PessimisticLock { start_ts, .. }
+            | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
@@ -334,7 +334,7 @@ impl Command {
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
-            | Command::PessimisticLock { ref ctx, .. }
+            | Command::AcquirePessimisticLock { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
@@ -350,7 +350,7 @@ impl Command {
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Prewrite { ref mut ctx, .. }
-            | Command::PessimisticLock { ref mut ctx, .. }
+            | Command::AcquirePessimisticLock { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
@@ -380,7 +380,7 @@ impl Command {
                     }
                 }
             }
-            Command::PessimisticLock { ref keys, .. }
+            Command::AcquirePessimisticLock { ref keys, .. }
             | Command::Commit { ref keys, .. }
             | Command::Rollback { ref keys, .. }
             | Command::Pause { ref keys, .. } => {
@@ -535,9 +535,9 @@ pub struct Storage<E: Engine> {
 
     waiter_mgr_scheduler: WaiterMgrScheduler,
 
-    detect_worker: Arc<Mutex<FutureWorker<DetectTask>>>,
+    detector_worker: Arc<Mutex<FutureWorker<DetectTask>>>,
 
-    detect_scheduler: DetectorScheduler,
+    detector_scheduler: DetectorScheduler,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -568,8 +568,8 @@ impl<E: Engine> Clone for Storage<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             waiter_mgr_worker: self.waiter_mgr_worker.clone(),
             waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
-            detect_worker: self.detect_worker.clone(),
-            detect_scheduler: self.detect_scheduler.clone(),
+            detector_worker: self.detector_worker.clone(),
+            detector_scheduler: self.detector_scheduler.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
@@ -609,10 +609,10 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to join lock_manager"; "err" => ?e);
         }
 
-        let mut detect_worker = self.detect_worker.lock().unwrap();
-        if let Some(h) = detect_worker.stop() {
+        let mut detector_worker = self.detector_worker.lock().unwrap();
+        if let Some(h) = detector_worker.stop() {
             if let Err(e) = h.join() {
-                error!("Failed to join detect_worker"; "err" => ?e);
+                error!("Failed to join detector_worker"; "err" => ?e);
             }
         }
 
@@ -642,18 +642,18 @@ impl<E: Engine> Storage<E> {
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
 
-        let detect_worker = FutureWorker::new("deadlock");
-        let detect_scheduler = DetectorScheduler::new(detect_worker.scheduler());
+        let detector_worker = FutureWorker::new("deadlock");
+        let detector_scheduler = DetectorScheduler::new(detector_worker.scheduler());
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(detect_scheduler.clone());
+        let waiter_mgr_runner = WaiterManager::new(detector_scheduler.clone());
         let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
 
         let runner = Scheduler::new(
             engine.clone(),
             worker_scheduler.clone(),
             waiter_mgr_scheduler.clone(),
-            detect_scheduler.clone(),
+            detector_scheduler.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -677,8 +677,8 @@ impl<E: Engine> Storage<E> {
             worker_scheduler,
             waiter_mgr_worker: Arc::new(Mutex::new(waiter_mgr_worker)),
             waiter_mgr_scheduler,
-            detect_worker: Arc::new(Mutex::new(detect_worker)),
-            detect_scheduler,
+            detector_worker: Arc::new(Mutex::new(detector_worker)),
+            detector_scheduler,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -703,12 +703,12 @@ impl<E: Engine> Storage<E> {
         self.waiter_mgr_scheduler.clone()
     }
 
-    pub fn get_detect_scheduler(&self) -> DetectorScheduler {
-        self.detect_scheduler.clone()
+    pub fn get_detector_scheduler(&self) -> DetectorScheduler {
+        self.detector_scheduler.clone()
     }
 
     pub fn start_deadlock_detector(&self, detector: Detector) -> Result<()> {
-        self.detect_worker
+        self.detector_worker
             .lock()
             .unwrap()
             .start(detector)
@@ -971,7 +971,7 @@ impl<E: Engine> Storage<E> {
         Ok(())
     }
 
-    pub fn async_pessimistic_lock(
+    pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
         keys: Vec<Key>,
@@ -988,7 +988,7 @@ impl<E: Engine> Storage<E> {
                 return Ok(());
             }
         }
-        let cmd = Command::PessimisticLock {
+        let cmd = Command::AcquirePessimisticLock {
             ctx,
             keys,
             primary,
