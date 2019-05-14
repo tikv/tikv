@@ -115,7 +115,8 @@ test:
 	bash scripts/check-bins-for-jemalloc.sh
 
 bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --lib --bins --tests --bench misc --bench channel --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture && \
+	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --bench raftstore --bench coprocessor_executors --bench hierarchy --no-default-features --features "${ENABLE_FEATURES}"
 
 unset-override:
 	@# unset first in case of any previous overrides

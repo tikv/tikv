@@ -5,8 +5,10 @@
 
 #[macro_use]
 extern crate lazy_static;
+#[cfg(not(feature = "no-fail"))]
 #[macro_use(slog_kv, slog_debug, slog_log, slog_record, slog_b, slog_record_static)]
 extern crate slog;
+#[cfg(not(feature = "no-fail"))]
 #[macro_use]
 extern crate slog_global;
 
