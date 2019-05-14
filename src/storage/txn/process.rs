@@ -286,7 +286,7 @@ impl<E: Engine> Executor<E> {
 
                 if lock_info.is_some() {
                     let (lock, for_update_ts, is_first_lock) = lock_info.unwrap();
-                    Msg::PessimisticLockWait {
+                    Msg::WaitForLock {
                         cid,
                         start_ts: ts,
                         for_update_ts,

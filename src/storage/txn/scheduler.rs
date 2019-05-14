@@ -66,7 +66,7 @@ pub enum Msg {
         err: Error,
         tag: &'static str,
     },
-    PessimisticLockWait {
+    WaitForLock {
         cid: u64,
         start_ts: u64,
         for_update_ts: u64,
@@ -92,7 +92,7 @@ impl Display for Msg {
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
-            Msg::PessimisticLockWait { cid, .. } => write!(f, "PessimisticLockWait [cid={}]", cid),
+            Msg::WaitForLock { cid, .. } => write!(f, "WaitForLock [cid={}]", cid),
         }
     }
 }
@@ -430,8 +430,8 @@ impl<E: Engine> Scheduler<E> {
         self.release_lock(&tctx.lock, cid);
     }
 
-    /// Event handler for the request of pessimistic_lock waiting
-    fn pessimistic_lock_wait(
+    /// Event handler for the request of waiting for lock
+    fn on_wait_for_lock(
         &mut self,
         cid: u64,
         start_ts: u64,
@@ -504,21 +504,14 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                     result,
                 } => self.on_write_finished(cid, pr, result, tag),
                 Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
-                Msg::PessimisticLockWait {
+                Msg::WaitForLock {
                     cid,
                     start_ts,
                     for_update_ts,
                     pr,
                     lock,
                     is_first_lock,
-                } => self.pessimistic_lock_wait(
-                    cid,
-                    start_ts,
-                    for_update_ts,
-                    pr,
-                    lock,
-                    is_first_lock,
-                ),
+                } => self.on_wait_for_lock(cid, start_ts, for_update_ts, pr, lock, is_first_lock),
             }
         }
     }
