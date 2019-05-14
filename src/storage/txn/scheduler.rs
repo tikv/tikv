@@ -69,7 +69,6 @@ pub enum Msg {
     WaitForLock {
         cid: u64,
         start_ts: u64,
-        for_update_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
@@ -435,7 +434,6 @@ impl<E: Engine> Scheduler<E> {
         &mut self,
         cid: u64,
         start_ts: u64,
-        for_update_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
         is_first_lock: bool,
@@ -448,7 +446,6 @@ impl<E: Engine> Scheduler<E> {
         // TODO: timeout config
         self.waiter_mgr_scheduler.wait_for(
             start_ts,
-            for_update_ts,
             tctx.cb,
             pr,
             lock.clone(),
@@ -507,11 +504,10 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                 Msg::WaitForLock {
                     cid,
                     start_ts,
-                    for_update_ts,
                     pr,
                     lock,
                     is_first_lock,
-                } => self.on_wait_for_lock(cid, start_ts, for_update_ts, pr, lock, is_first_lock),
+                } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
             }
         }
     }

@@ -285,11 +285,10 @@ impl<E: Engine> Executor<E> {
                     .inc();
 
                 if lock_info.is_some() {
-                    let (lock, for_update_ts, is_first_lock) = lock_info.unwrap();
+                    let (lock, is_first_lock) = lock_info.unwrap();
                     Msg::WaitForLock {
                         cid,
                         start_ts: ts,
-                        for_update_ts,
                         pr,
                         lock,
                         is_first_lock,
@@ -492,7 +491,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
-    lock_info: Option<(lock_manager::Lock, u64, bool)>,
+    lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
 fn process_write_impl<S: Snapshot>(
@@ -573,13 +572,7 @@ fn process_write_impl<S: Snapshot>(
                 let lock = lock_manager::extract_lock_from_result(&locks[0]);
                 let pr = ProcessResult::MultiRes { results: locks };
                 // Wait for lock released
-                (
-                    pr,
-                    vec![],
-                    0,
-                    ctx,
-                    Some((lock, for_update_ts, options.is_first_lock)),
-                )
+                (pr, vec![], 0, ctx, Some((lock, options.is_first_lock)))
             }
         }
         Command::Commit {

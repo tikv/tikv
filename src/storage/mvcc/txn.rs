@@ -247,7 +247,7 @@ impl<S: Snapshot> MvccTxn<S> {
             return Ok(());
         }
 
-        if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
+        if let Some((commit_ts, _)) = self.reader.seek_write(&key, u64::max_value())? {
             // The isolation level of pessimistic transactions is RC. `for_update_ts` is
             // the commit_ts of the data this transaction read. If exists a commit version
             // whose commit timestamp is larger than current `for_update_ts`, the
@@ -255,8 +255,11 @@ impl<S: Snapshot> MvccTxn<S> {
             if commit_ts > for_update_ts {
                 MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
                 return Err(Error::WriteConflict {
-                    start_ts: for_update_ts,
-                    conflict_start_ts: write.start_ts,
+                    start_ts: self.start_ts,
+                    // TiDB will try to extract the latest `commit_ts` from WriteConflict
+                    // error to avoid getting a timestamp from tso. So we set
+                    // `conflict_start_ts` to `commit_ts` here.
+                    conflict_start_ts: commit_ts,
                     conflict_commit_ts: commit_ts,
                     key: key.into_raw()?,
                     primary: primary.to_vec(),
@@ -1145,7 +1148,6 @@ mod tests {
         must_prewrite_pessimistic_put(&engine, k, v, k, 13);
         must_locked(&engine, k, 13);
         must_prewrite_pessimistic_put(&engine, k, v, k, 13);
-        must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
         must_locked(&engine, k, 13);
         must_commit(&engine, k, 13, 14);
         must_unlocked(&engine, k);
@@ -1169,6 +1171,16 @@ mod tests {
 
         // Prewrite non-exist pessimistic lock
         must_prewrite_pessimistic_put_err(&engine, k, v, k, 22);
+
+        // LockTypeNotMatch
+        must_prewrite_put(&engine, k, v, k, 23);
+        must_locked(&engine, k, 23);
+        must_acquire_pessimistic_lock_err(&engine, k, k, 23, 23);
+        must_rollback(&engine, k, 23);
+        must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
+        must_pessimistic_locked(&engine, k, 24);
+        must_commit_err(&engine, k, 24, 25);
+        must_rollback(&engine, k, 24);
 
         // start_ts and commit_ts interlacing
         for start_ts in &[40, 50, 60] {

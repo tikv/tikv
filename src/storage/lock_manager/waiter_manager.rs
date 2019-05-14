@@ -26,7 +26,6 @@ pub enum Task {
     WaitFor {
         // which txn waiting for the lock
         start_ts: u64,
-        for_update_ts: u64,
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
@@ -72,7 +71,6 @@ impl Display for Task {
 
 struct Waiter {
     start_ts: u64,
-    for_update_ts: u64,
     cb: StorageCb,
     pr: ProcessResult,
     lock: Lock,
@@ -177,7 +175,6 @@ impl Scheduler {
     pub fn wait_for(
         &self,
         start_ts: u64,
-        for_update_ts: u64,
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
@@ -186,7 +183,6 @@ impl Scheduler {
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
-            for_update_ts,
             cb,
             pr,
             lock,
@@ -277,14 +273,17 @@ impl WaiterManager {
             let timer = Delay::new(when)
                 .and_then(move |_| {
                     // Maybe we can store the latest commit_ts in TiKV, and use
-                    // it as conflict_commit_ts when waker's commit_ts is smaller
+                    // it as `conflict_start_ts` when waker's `commit_ts` is smaller
                     // than waiter's for_update_ts.
                     //
-                    // If so TiDB can use this conflict_commit_ts as for_update_ts
+                    // If so TiDB can use this `conflict_start_ts` as `for_update_ts`
                     // directly, there is no need to get a ts from PD.
                     let mvcc_err = MvccError::WriteConflict {
-                        start_ts: waiter.for_update_ts,
-                        conflict_start_ts: lock_ts,
+                        start_ts: waiter.start_ts,
+                        // TiDB will try to extract the latest `commit_ts` from WriteConflict
+                        // error to avoid getting a timestamp from tso. So we set
+                        // `conflict_start_ts` to `commit_ts` here.
+                        conflict_start_ts: commit_ts,
                         conflict_commit_ts: commit_ts,
                         key: vec![],
                         primary: vec![],
@@ -328,7 +327,6 @@ impl FutureRunnable<Task> for WaiterManager {
         match task {
             Task::WaitFor {
                 start_ts,
-                for_update_ts,
                 cb,
                 pr,
                 lock,
@@ -340,7 +338,6 @@ impl FutureRunnable<Task> for WaiterManager {
                     is_first_lock,
                     Waiter {
                         start_ts,
-                        for_update_ts,
                         cb,
                         pr,
                         lock,
@@ -413,7 +410,6 @@ mod tests {
     fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
         Waiter {
             start_ts,
-            for_update_ts: 0,
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
@@ -517,7 +513,6 @@ mod tests {
         let pr = ProcessResult::Res;
         waiter_mgr_scheduler.wait_for(
             0,
-            0,
             StorageCb::Boolean(cb),
             pr,
             Lock { ts: 0, hash: 0 },
@@ -537,7 +532,6 @@ mod tests {
             tx.send(result).unwrap();
         });
         waiter_mgr_scheduler.wait_for(
-            0,
             0,
             StorageCb::Boolean(cb),
             ProcessResult::Res,
