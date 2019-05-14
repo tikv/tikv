@@ -1669,7 +1669,7 @@ impl Peer {
 
         let renew_lease_time = monotonic_raw_now();
         match self.inspect_lease() {
-            LeaseState::Valid | LeaseState::Invalid => {
+            LeaseState::Valid | LeaseState::Expired => {
                 if let Some(read) = self.pending_reads.reads.back_mut() {
                     let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                     if read.renew_lease_time + max_lease > renew_lease_time {
@@ -1678,6 +1678,7 @@ impl Peer {
                     }
                 }
             }
+            _ => {}
         }
 
         // Should we call pre_propose here?
