@@ -254,6 +254,8 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
 
+    /// If it fails to send messages to leader.
+    pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
@@ -358,6 +360,7 @@ impl Peer {
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
+            leader_unreachable: false,
             pending_remove: false,
             pending_merge_state: None,
             last_committed_prepare_merge_idx: 0,
@@ -2087,7 +2090,9 @@ impl Peer {
                 "target_store_id" => to_store_id,
                 "err" => ?e,
             );
-
+            if to_peer_id == self.leader_id() {
+                self.leader_unreachable = true;
+            }
             // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
             if msg_type == eraftpb::MessageType::MsgSnapshot {
@@ -2140,7 +2145,7 @@ pub trait RequestInspector {
                 CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
                     has_write = true
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe corrupted",
                         r.get_cmd_type()
@@ -2330,6 +2335,7 @@ impl ReadExecutor {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::IngestSST
+                | CmdType::ReadIndex
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);

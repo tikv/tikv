@@ -828,6 +828,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn read_index(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: ReadIndexRequest,
+        sink: UnarySink<ReadIndexResponse>,
+    ) {
+        let f = sink
+            .fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map_err(|e| error!("read index error"; "err" => %e));
+        ctx.spawn(f);
+    }
+
     fn batch_commands(
         &mut self,
         ctx: RpcContext<'_>,

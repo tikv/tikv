@@ -455,11 +455,10 @@ pub mod tests {
     use super::super::router::*;
     use super::*;
     use std::borrow::Cow;
-    use std::boxed::FnBox;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    pub type Message = Option<Box<dyn FnBox(&mut Runner) + Send>>;
+    pub type Message = Option<Box<dyn FnOnce(&mut Runner) + Send>>;
 
     pub struct Runner {
         is_stopped: bool,
@@ -517,7 +516,7 @@ pub mod tests {
             self.local.control += 1;
             while let Ok(r) = control.recv.try_recv() {
                 if let Some(r) = r {
-                    r.call_box((control,));
+                    r(control);
                 }
             }
             Some(0)
@@ -527,7 +526,7 @@ pub mod tests {
             self.local.normal += 1;
             while let Ok(r) = normal.recv.try_recv() {
                 if let Some(r) = r {
-                    r.call_box((normal,));
+                    r(normal);
                 }
             }
             Some(0)

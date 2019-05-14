@@ -73,7 +73,7 @@ macro_rules! impl_as_ref {
                     other => panic!(
                         "Cannot cast {} scalar value into {}",
                         other.eval_type(),
-                        stringify!($tt),
+                        stringify!($ty),
                     ),
                 }
             }
