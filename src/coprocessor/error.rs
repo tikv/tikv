@@ -78,3 +78,16 @@ impl From<storage::txn::Error> for Error {
         }
     }
 }
+
+impl From<cop_dag::Error> for Error {
+    fn from(e: cop_dag::Error) -> Error {
+        match e {
+            cop_dag::Error::Region(e) => Error::Region(e),
+            cop_dag::Error::Locked(e) => Error::Locked(e),
+            cop_dag::Error::Outdated(e, t) => Error::Outdated(e, t),
+            cop_dag::Error::Full => Error::Full,
+            cop_dag::Error::Eval(e) => Error::Eval(e),
+            cop_dag::Error::Other(e) => Error::Other(e),
+        }
+    }
+}

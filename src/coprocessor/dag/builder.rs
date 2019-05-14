@@ -9,11 +9,11 @@ use tipb::select::DAGRequest;
 use crate::storage::Store;
 
 use super::batch::executors::*;
-use super::batch::interface::*;
 use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
-    TopNExecutor,
+    TopNExecutor
 };
+use crate::coprocessor::dag::batch::interface::BatchExecutor;
 use crate::coprocessor::dag::exec_summary::*;
 use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
@@ -36,15 +36,15 @@ impl DAGBuilder {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)?;
+                    table_scan_executor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)?;
+                    index_scan_executor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)?;
+                    selection_executor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {

@@ -18,7 +18,7 @@
 //! Please refer to `Endpoint` for more details.
 
 mod checksum;
-pub mod codec;
+pub use cop_dag::codec;
 pub mod dag;
 mod endpoint;
 mod error;
@@ -36,13 +36,11 @@ use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use tikv_util::time::{Duration, Instant};
+use tikv_util::time::Duration;
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
 pub const REQ_TYPE_CHECKSUM: i64 = 105;
-
-const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
 type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
 
@@ -71,45 +69,7 @@ pub trait RequestHandler: Send {
     }
 }
 
-/// Request process dead line.
-///
-/// When dead line exceeded, the request handling should be stopped.
-// TODO: This struct can be removed.
-#[derive(Debug, Clone, Copy)]
-pub struct Deadline {
-    /// Used to construct the Error when deadline exceeded
-    tag: &'static str,
-
-    start_time: Instant,
-    deadline: Instant,
-}
-
-impl Deadline {
-    /// Initializes a deadline that counting from current.
-    pub fn from_now(tag: &'static str, after_duration: Duration) -> Self {
-        let start_time = Instant::now_coarse();
-        let deadline = start_time + after_duration;
-        Self {
-            tag,
-            start_time,
-            deadline,
-        }
-    }
-
-    /// Returns error if the deadline is exceeded.
-    pub fn check_if_exceeded(&self) -> Result<()> {
-        fail_point!("coprocessor_deadline_check_exceeded", |_| Err(
-            Error::Outdated(Duration::from_secs(60), self.tag)
-        ));
-
-        let now = Instant::now_coarse();
-        if self.deadline <= now {
-            let elapsed = now.duration_since(self.start_time);
-            return Err(Error::Outdated(elapsed, self.tag));
-        }
-        Ok(())
-    }
-}
+pub use cop_dag::Deadline;
 
 /// Denotes for a function that builds a `RequestHandler`.
 /// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.

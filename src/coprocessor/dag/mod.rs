@@ -23,17 +23,17 @@
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
 pub mod aggr_fn;
-pub mod batch;
 pub mod batch_handler;
 pub mod builder;
-pub mod exec_summary;
-pub mod executor;
-pub mod expr;
 pub mod handler;
-pub mod rpn_expr;
-mod scanner;
+
+pub use cop_dag::batch;
+pub use cop_dag::executor;
+pub use cop_dag::expr;
+pub use cop_dag::rpn_expr;
+pub use cop_dag::{ScanOn, Scanner};
+pub use cop_dag::exec_summary;
 
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::builder::DAGBuilder;
 pub use self::handler::DAGRequestHandler;
-pub use self::scanner::{ScanOn, Scanner};

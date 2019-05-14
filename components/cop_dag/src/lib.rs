@@ -29,7 +29,6 @@ extern crate slog_global;
 #[cfg(test)]
 extern crate test;
 
-pub mod builder;
 
 mod redundant_files;
 pub use redundant_files::*;
@@ -45,7 +44,6 @@ pub mod rpn_expr;
 mod scanner;
 
 pub use self::batch_handler::BatchDAGHandler;
-pub use self::builder::DAGBuilder;
 pub use self::error::{Error, Result};
 pub use self::handler::DAGRequestHandler;
 pub use self::scanner::{ScanOn, Scanner};

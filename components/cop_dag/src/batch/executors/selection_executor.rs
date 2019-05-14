@@ -20,18 +20,15 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     conditions: Vec<RpnExpression>,
 }
 
-impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
-    /// Checks whether this executor can be used.
-    #[inline]
-    pub fn check_supported(descriptor: &Selection) -> Result<()> {
-        let conditions = descriptor.get_conditions();
-        for c in conditions {
-            RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
-                Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-            })?;
-        }
-        Ok(())
+#[inline]
+pub fn check_supported(descriptor: &Selection) -> Result<()> {
+    let conditions = descriptor.get_conditions();
+    for c in conditions {
+        RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
+            Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+        })?;
     }
+    Ok(())
 }
 
 impl<Src: BatchExecutor> BatchSelectionExecutor<ExecSummaryCollectorDisabled, Src> {

@@ -44,11 +44,3 @@ impl From<crate::codec::error::Error> for Error {
         Error::from(<crate::codec::error::Error as Into<tipb::select::Error>>::into(e))
     }
 }
-
-impl From<crate::storage::store::Error> for Error {
-    fn from(e: crate::storage::store::Error) -> Error {
-        match e {
-            _ => Error::Other(Box::new(e)),
-        }
-    }
-}

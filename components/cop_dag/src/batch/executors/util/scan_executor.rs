@@ -122,7 +122,10 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         let mut statistics = crate::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
         let key = range.take_start();
-        let value = self.store.get(&Key::from_raw(&key), &mut statistics)?;
+        let value = match self.store.get(&Key::from_raw(&key), &mut statistics) {
+            Ok(val) => val,
+            Err(e) => return Err(e.into())
+        };
         Ok(value.map(move |v| (key, v)))
     }
 

@@ -97,4 +97,10 @@ impl Error {
     }
 }
 
+impl Into<cop_dag::Error> for Error {
+    fn into(self) -> cop_dag::Error {
+        cop_dag::Error::Other(Box::new(self))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;

@@ -8,13 +8,15 @@ use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
-use crate::storage::txn::Result as TxnResult;
+use crate::storage::txn::{Result as TxnResult, Error as TxnError};
+use crate::storage::mvcc::Error as MvccError;
 use crate::storage::{
     Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
 use self::backward::BackwardScanner;
 use self::forward::ForwardScanner;
+use cop_dag::storage::KvPair;
 
 /// `Scanner` factory.
 pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
@@ -105,12 +107,33 @@ pub enum Scanner<S: Snapshot> {
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
+    type Error = TxnError;
+
     fn next(&mut self) -> TxnResult<Option<(Key, Value)>> {
         match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
         }
     }
+
+    // TODO: scan codes in here and store are duplicated. Remove one of them
+    fn scan(&mut self, limit: usize) -> TxnResult<Vec<TxnResult<KvPair>>> {
+        let mut results = Vec::with_capacity(limit);
+        while results.len() < limit {
+            match self.next() {
+                Ok(Some((k, v))) => {
+                    results.push(Ok((k.to_raw()?, v)));
+                }
+                Ok(None) => break,
+                Err(e @ TxnError::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                    results.push(Err(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(results)
+    }
+
     /// Take out and reset the statistics collected so far.
     fn take_statistics(&mut self) -> Statistics {
         match self {

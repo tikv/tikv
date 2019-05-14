@@ -10,10 +10,10 @@ use super::executor::{Executor, ExecutorMetrics};
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
-    deadline: Deadline,
-    executor: Box<dyn Executor + Send>,
-    output_offsets: Vec<u32>,
-    batch_row_limit: usize,
+    pub deadline: Deadline,
+    pub executor: Box<dyn Executor + Send>,
+    pub output_offsets: Vec<u32>,
+    pub batch_row_limit: usize,
 }
 
 impl DAGRequestHandler {
@@ -31,7 +31,7 @@ impl DAGRequestHandler {
         }
     }
 
-    fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+    pub fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
         let mut s_resp = StreamResponse::new();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         if let Some(eval_warnings) = self.executor.take_eval_warnings() {
@@ -47,92 +47,5 @@ impl DAGRequestHandler {
             resp.set_range(range);
         }
         Ok(resp)
-    }
-}
-
-impl RequestHandler for DAGRequestHandler {
-    fn handle_request(&mut self) -> Result<Response> {
-        let mut record_cnt = 0;
-        let mut chunks = Vec::new();
-        loop {
-            match self.executor.next() {
-                Ok(Some(row)) => {
-                    self.deadline.check_if_exceeded()?;
-                    if chunks.is_empty() || record_cnt >= self.batch_row_limit {
-                        let chunk = Chunk::new();
-                        chunks.push(chunk);
-                        record_cnt = 0;
-                    }
-                    let chunk = chunks.last_mut().unwrap();
-                    record_cnt += 1;
-                    // for default encode type
-                    let value = row.get_binary(&self.output_offsets)?;
-                    chunk.mut_rows_data().extend_from_slice(&value);
-                }
-                Ok(None) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_chunks(RepeatedField::from_vec(chunks));
-                    if let Some(eval_warnings) = self.executor.take_eval_warnings() {
-                        sel_resp.set_warnings(RepeatedField::from_vec(eval_warnings.warnings));
-                        sel_resp.set_warning_count(eval_warnings.warning_cnt as i64);
-                    }
-                    self.executor
-                        .collect_output_counts(sel_resp.mut_output_counts());
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(resp);
-                }
-                Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = SelectResponse::new();
-                    sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok(resp);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    fn handle_streaming_request(&mut self) -> Result<(Option<Response>, bool)> {
-        let (mut record_cnt, mut finished) = (0, false);
-        let mut chunk = Chunk::new();
-        self.executor.start_scan();
-        while record_cnt < self.batch_row_limit {
-            match self.executor.next() {
-                Ok(Some(row)) => {
-                    self.deadline.check_if_exceeded()?;
-                    record_cnt += 1;
-                    let value = row.get_binary(&self.output_offsets)?;
-                    chunk.mut_rows_data().extend_from_slice(&value);
-                }
-                Ok(None) => {
-                    finished = true;
-                    break;
-                }
-                Err(Error::Eval(err)) => {
-                    let mut resp = Response::new();
-                    let mut sel_resp = StreamResponse::new();
-                    sel_resp.set_error(err);
-                    let data = box_try!(sel_resp.write_to_bytes());
-                    resp.set_data(data);
-                    return Ok((Some(resp), true));
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        if record_cnt > 0 {
-            let range = self.executor.stop_scan();
-            return self
-                .make_stream_response(chunk, range)
-                .map(|r| (Some(r), finished));
-        }
-        Ok((None, true))
-    }
-
-    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
-        self.executor.collect_metrics_into(metrics);
     }
 }

@@ -9,44 +9,7 @@ use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
-pub trait Store: Send {
-    type Scanner: Scanner;
-
-    fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>>;
-
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>>;
-
-    fn scanner(
-        &self,
-        desc: bool,
-        key_only: bool,
-        lower_bound: Option<Key>,
-        upper_bound: Option<Key>,
-    ) -> Result<Self::Scanner>;
-}
-
-pub trait Scanner: Send {
-    fn next(&mut self) -> Result<Option<(Key, Value)>>;
-
-    fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
-        let mut results = Vec::with_capacity(limit);
-        while results.len() < limit {
-            match self.next() {
-                Ok(Some((k, v))) => {
-                    results.push(Ok((k.to_raw()?, v)));
-                }
-                Ok(None) => break,
-                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
-                    results.push(Err(e));
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(results)
-    }
-
-    fn take_statistics(&mut self) -> Statistics;
-}
+pub use cop_dag::storage::{Store, Scanner};
 
 pub struct SnapshotStore<S: Snapshot> {
     snapshot: S,
@@ -56,6 +19,7 @@ pub struct SnapshotStore<S: Snapshot> {
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
+    type Error = Error;
     type Scanner = MvccScanner<S>;
 
     #[inline]
@@ -190,6 +154,7 @@ impl FixtureStore {
 }
 
 impl Store for FixtureStore {
+    type Error = Error;
     type Scanner = FixtureStoreScanner;
 
     #[inline]
@@ -269,6 +234,8 @@ pub struct FixtureStoreScanner {
 }
 
 impl Scanner for FixtureStoreScanner {
+    type Error = Error;
+
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
         let value = self.data.next();
@@ -279,11 +246,30 @@ impl Scanner for FixtureStoreScanner {
         }
     }
 
+    // TODO: scan codes in mvcc and here are duplicated. Remove one of them
+    fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
+        let mut results = Vec::with_capacity(limit);
+        while results.len() < limit {
+            match self.next() {
+                Ok(Some((k, v))) => {
+                    results.push(Ok((k.to_raw()?, v)));
+                }
+                Ok(None) => break,
+                Err(e @ Error::Mvcc(MvccError::KeyIsLocked { .. })) => {
+                    results.push(Err(e));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(results)
+    }
+
     #[inline]
     fn take_statistics(&mut self) -> Statistics {
         Statistics::default()
     }
 }
+
 
 #[cfg(test)]
 mod tests {
