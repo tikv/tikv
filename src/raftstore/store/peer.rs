@@ -1668,12 +1668,14 @@ impl Peer {
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         let renew_lease_time = monotonic_raw_now();
-        if let LeaseState::Valid = self.inspect_lease() {
-            if let Some(read) = self.pending_reads.reads.back_mut() {
-                let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
-                if read.renew_lease_time + max_lease > renew_lease_time {
-                    read.cmds.push((req, cb));
-                    return false;
+        match self.inspect_lease() {
+            LeaseState::Valid | LeaseState::Invalid => {
+                if let Some(read) = self.pending_reads.reads.back_mut() {
+                    let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
+                    if read.renew_lease_time + max_lease > renew_lease_time {
+                        read.cmds.push((req, cb));
+                        return false;
+                    }
                 }
             }
         }
