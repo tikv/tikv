@@ -184,7 +184,7 @@ impl<E: Engine> Scheduler<E> {
                 .thread_count(worker_pool_size)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
-                .thread_count(worker_pool_size / 2)
+                .thread_count(std::cmp::max(1, worker_pool_size / 2))
                 .build(),
             running_write_bytes: 0,
         }
