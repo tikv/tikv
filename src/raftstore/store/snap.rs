@@ -1597,7 +1597,12 @@ pub mod tests {
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(Engines { kv, raft })
+        let shared_block_cache = false;
+        Ok(Engines {
+            kv,
+            raft,
+            shared_block_cache,
+        })
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
