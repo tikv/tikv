@@ -45,6 +45,7 @@ pub enum Task {
     Deadlock {
         start_ts: u64,
         lock: Lock,
+        deadlock_key_hash: u64,
     },
 }
 
@@ -206,10 +207,11 @@ impl Scheduler {
         self.notify_scheduler(Task::Dump { cb })
     }
 
-    pub fn deadlock(&self, txn_ts: u64, lock: Lock, _deadlock_key_hash: u64) {
+    pub fn deadlock(&self, txn_ts: u64, lock: Lock, deadlock_key_hash: u64) {
         self.notify_scheduler(Task::Deadlock {
             start_ts: txn_ts,
             lock,
+            deadlock_key_hash,
         });
     }
 }
@@ -302,13 +304,18 @@ impl WaiterManager {
         cb(self.wait_table.borrow().to_wait_for_entries());
     }
 
-    fn handle_deadlock(&mut self, start_ts: u64, lock: Lock) {
+    fn handle_deadlock(&mut self, start_ts: u64, lock: Lock, deadlock_key_hash: u64) {
         self.wait_table
             .borrow_mut()
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 let pr = ProcessResult::Failed {
-                    err: StorageError::from(MvccError::Other("deadlock".into())),
+                    err: StorageError::from(MvccError::Deadlock {
+                        start_ts,
+                        lock_ts: waiter.lock.ts,
+                        key_hash: waiter.lock.hash,
+                        deadlock_key_hash,
+                    }),
                 };
                 execute_callback(waiter.cb, pr);
                 Some(())
@@ -351,8 +358,12 @@ impl FutureRunnable<Task> for WaiterManager {
             Task::Dump { cb } => {
                 self.handle_dump(cb);
             }
-            Task::Deadlock { start_ts, lock } => {
-                self.handle_deadlock(start_ts, lock);
+            Task::Deadlock {
+                start_ts,
+                lock,
+                deadlock_key_hash,
+            } => {
+                self.handle_deadlock(start_ts, lock, deadlock_key_hash);
             }
         }
     }

@@ -52,7 +52,7 @@ quick_error! {
         }
         Rollbacked { start_ts: u64, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
-            display("pessimistic lock already rollbacked, start_ts: {}, key: {}", start_ts, escape(key))
+            display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, escape(key))
         }
         TxnLockNotFound { start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
@@ -60,12 +60,17 @@ quick_error! {
         }
         LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
             description("lock type not match")
-            display("lock type not match, start_ts: {}, key: {}, pessimistic: {}", start_ts, escape(key), pessimistic)
+            display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, escape(key), pessimistic)
         }
         WriteConflict { start_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
-             start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+                    start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
+        }
+        Deadlock { start_ts: u64, lock_ts: u64, key_hash: u64, deadlock_key_hash: u64 } {
+            description("deadlock")
+            display("deadlock occurs between txn:{} and txn:{}, key_hash:{}, deadlock_key_hash:{}",
+                    start_ts, lock_ts, key_hash, deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
@@ -133,6 +138,17 @@ impl Error {
                 conflict_commit_ts,
                 key: key.to_owned(),
                 primary: primary.to_owned(),
+            }),
+            Error::Deadlock {
+                start_ts,
+                lock_ts,
+                key_hash,
+                deadlock_key_hash,
+            } => Some(Error::Deadlock {
+                start_ts,
+                lock_ts,
+                key_hash,
+                deadlock_key_hash,
             }),
             Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),
             Error::DefaultNotFound { ref key, ref write } => Some(Error::DefaultNotFound {
