@@ -245,10 +245,7 @@ impl<S: Snapshot> MvccTxn<S> {
             // the commit_ts of the data this transaction read. If exists a commit version
             // whose commit timestamp is larger than current `for_update_ts`, the
             // transaction should retry to get the latest data.
-            //
-            // If the commit timestamp is equal to transaction's start timestamp, the
-            // transaction is already rollbacked.
-            if commit_ts > for_update_ts || commit_ts == self.start_ts {
+            if commit_ts > for_update_ts {
                 MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
                 return Err(Error::WriteConflict {
                     start_ts: for_update_ts,
@@ -260,18 +257,22 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Handle rollback.
+            // If the commit timestamp is equal to transaction's start timestamp, the
+            // lock is already rollbacked.
+            if commit_ts == self.start_ts {
+                return Err(Error::Rollbacked {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                });
+            }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
-                if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
+                if let Some((commit_ts, _)) = self.reader.seek_write(&key, self.start_ts)? {
                     // Rollback's commit_ts is equal to start_ts
                     if commit_ts == self.start_ts {
-                        MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
-                        return Err(Error::WriteConflict {
-                            start_ts: for_update_ts,
-                            conflict_start_ts: write.start_ts,
-                            conflict_commit_ts: commit_ts,
+                        return Err(Error::Rollbacked {
+                            start_ts: self.start_ts,
                             key: key.into_raw()?,
-                            primary: primary.to_vec(),
                         });
                     }
                 }

@@ -36,7 +36,7 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked {key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64} {
+        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64 } {
             description("key is locked (backoff or cleanup)")
             display("key is locked (backoff or cleanup) {}-{}@{} ttl {}",
                         escape(key),
@@ -44,13 +44,17 @@ quick_error! {
                         ts,
                         ttl)
         }
-        BadFormatLock {description("bad format lock data")}
-        BadFormatWrite {description("bad format write data")}
-        Committed {commit_ts: u64} {
+        BadFormatLock { description("bad format lock data") }
+        BadFormatWrite { description("bad format write data") }
+        Committed { commit_ts: u64 } {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        TxnLockNotFound {start_ts: u64, commit_ts: u64, key: Vec<u8> } {
+        Rollbacked { start_ts: u64, key: Vec<u8> } {
+            description("pessimistic lock already rollbacked")
+            display("pessimistic lock already rollbacked, start_ts: {}, key: {}", start_ts, escape(key))
+        }
+        TxnLockNotFound { start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, escape(key))
         }
@@ -67,7 +71,7 @@ quick_error! {
             description("write cf corresponding value not found in default cf")
             display("default not found: key:{:?}, write:{:?}, maybe read truncated/dropped table data?", escape(key), write)
         }
-        KeyVersion {description("bad format key(version)")}
+        KeyVersion { description("bad format key(version)") }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -124,6 +128,10 @@ impl Error {
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
+            Error::Rollbacked { start_ts, ref key } => Some(Error::Rollbacked {
+                start_ts,
+                key: key.to_owned(),
+            }),
             Error::Io(_) | Error::Other(_) => None,
         }
     }
