@@ -180,7 +180,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
         &cfg.readpool.storage.build_config(),
