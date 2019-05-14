@@ -7,13 +7,11 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::*;
 use std::{mem, thread};
 
-use futures::future::Future;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::{ConfChangeType, MessageType};
 
 use engine::Peekable;
 use test_raftstore::*;
-use tikv::pd::PdClient;
 use tikv::raftstore::store::{keys, Callback};
 use tikv_util::config::*;
 use tikv_util::HandyRwLock;
@@ -317,7 +315,6 @@ fn test_node_callback_when_destroyed() {
 
 #[test]
 fn test_read_index_when_transfer_leader() {
-    test_util::setup_for_ci();
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -337,7 +334,7 @@ fn test_read_index_when_transfer_leader() {
     cluster.must_put(b"k1", b"v2");
     sleep_ms(100);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v2");
-    let r1 = cluster.get_region(b"k1").unwrap();
+    let r1 = cluster.get_region(b"k1");
     let leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
     // Use a macro instead of a closure to avoid any capture of local variables.
