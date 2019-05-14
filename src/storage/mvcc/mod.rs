@@ -58,6 +58,10 @@ quick_error! {
             description("txn lock not found")
             display("txn lock not found {}-{} key:{:?}", start_ts, commit_ts, escape(key))
         }
+        LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
+            description("lock type not match")
+            display("lock type not match, start_ts: {}, key: {}, pessimistic: {}", start_ts, escape(key), pessimistic)
+        }
         WriteConflict { start_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
@@ -107,6 +111,15 @@ impl Error {
                 start_ts,
                 commit_ts,
                 key: key.to_owned(),
+            }),
+            Error::LockTypeNotMatch {
+                start_ts,
+                ref key,
+                pessimistic,
+            } => Some(Error::LockTypeNotMatch {
+                start_ts,
+                key: key.to_owned(),
+                pessimistic,
             }),
             Error::WriteConflict {
                 start_ts,

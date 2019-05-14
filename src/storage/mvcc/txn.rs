@@ -236,6 +236,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     ttl: lock.ttl,
                 });
             }
+            if lock.lock_type != LockType::Pessimistic {
+                return Err(Error::LockTypeNotMatch {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                    pessimistic: false,
+                });
+            }
             MVCC_DUPLICATE_CMD_COUNTER_VEC.pessimistic_lock.inc();
             return Ok(());
         }
@@ -301,10 +308,10 @@ impl<S: Snapshot> MvccTxn<S> {
                         "start_ts" => self.start_ts,
                         "commit_ts" => commit_ts,
                     );
-                    return Err(Error::TxnLockNotFound {
+                    return Err(Error::LockTypeNotMatch {
                         start_ts: self.start_ts,
-                        commit_ts,
                         key: key.into_raw()?,
+                        pessimistic: true,
                     });
                 }
                 (lock.lock_type, lock.short_value.take())
