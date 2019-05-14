@@ -1678,6 +1678,9 @@ impl Peer {
                     }
                 }
             }
+            // If the current lease is suspect, new read requests can't be appended into
+            // `pending_reads` because if the leader is transfered, the latest read could
+            // be dirty.
             _ => {}
         }
 
