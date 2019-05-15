@@ -324,16 +324,15 @@ fn test_read_index_when_transfer_leader() {
 
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
-    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k0", b"v0");
     cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
     cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
 
     // Put and test again to ensure that peer 3 get the latest writes by message append
     // instead of snapshot, so that transfer leader to peer 3 can 100% success.
-    cluster.must_put(b"k1", b"v2");
-    sleep_ms(100);
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v2");
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     let r1 = cluster.get_region(b"k1");
     let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
@@ -393,7 +392,7 @@ fn test_read_index_when_transfer_leader() {
     }
 
     let resp1 = resp1.recv().unwrap();
-    assert_eq!(resp1.get_responses()[0].get_get().get_value(), b"v2");
+    assert_eq!(resp1.get_responses()[0].get_get().get_value(), b"v1");
 
     // Response 2 should contains an error.
     let resp2 = resp2.recv().unwrap();
