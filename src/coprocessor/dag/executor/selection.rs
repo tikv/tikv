@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 /// Retrieves rows from the source executor and filter rows by expressions.
-pub struct SelectionExecutor {
+pub struct SelectionExecutor<C: ExecSummaryCollector> {
+    summary_collector: C,
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
@@ -19,17 +20,19 @@ pub struct SelectionExecutor {
     first_collect: bool,
 }
 
-impl SelectionExecutor {
+impl<C: ExecSummaryCollector> SelectionExecutor<C> {
     pub fn new(
+        summary_collector: C,
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<SelectionExecutor> {
+    ) -> Result<Self> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
         let ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
+            summary_collector,
             conditions: Expression::batch_build(&ctx, conditions)?,
             related_cols_offset: visitor.column_offsets(),
             ctx,
@@ -39,8 +42,9 @@ impl SelectionExecutor {
     }
 }
 
-impl Executor for SelectionExecutor {
+impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
     fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin();
             let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
@@ -50,8 +54,10 @@ impl Executor for SelectionExecutor {
                     continue 'next;
                 }
             }
+            self.summary_collector.on_finish_iterate(timer, 1);
             return Ok(Some(Row::Origin(row)));
         }
+        self.summary_collector.on_finish_iterate(timer, 0);
         Ok(None)
     }
 
@@ -67,6 +73,15 @@ impl Executor for SelectionExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             warnings.merge(&mut self.ctx.take_warnings());
@@ -74,14 +89,6 @@ impl Executor for SelectionExecutor {
         } else {
             Some(self.ctx.take_warnings())
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
-    }
-
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
     }
 }
 
@@ -98,6 +105,7 @@ mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();
@@ -187,9 +195,13 @@ mod tests {
         let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor =
-            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
-                .unwrap();
+        let mut selection_executor = SelectionExecutor::new(
+            ExecSummaryCollectorDisabled,
+            selection,
+            Arc::new(EvalConfig::default()),
+            inner_table_scan,
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -226,9 +238,13 @@ mod tests {
         let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor =
-            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
-                .unwrap();
+        let mut selection_executor = SelectionExecutor::new(
+            ExecSummaryCollectorDisabled,
+            selection,
+            Arc::new(EvalConfig::default()),
+            inner_table_scan,
+        )
+        .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {

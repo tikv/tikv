@@ -58,17 +58,17 @@ impl<C: ExecSummaryCollector> Executor for LimitExecutor<C> {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.src.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-        self.summary_collector.collect_into(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
     }
 }
 
