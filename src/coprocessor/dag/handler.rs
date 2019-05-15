@@ -86,7 +86,7 @@ impl RequestHandler for DAGRequestHandler {
             let range = self.executor.stop_scan();
             return self
                 .make_stream_response(chunk, range)
-                .map_err(|e| {e.into()})
+                .map_err(|e| e.into())
                 .map(|r| (Some(r), finished));
         }
         Ok((None, true))

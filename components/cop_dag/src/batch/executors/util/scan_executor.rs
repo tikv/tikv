@@ -124,7 +124,7 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
         let key = range.take_start();
         let value = match self.store.get(&Key::from_raw(&key), &mut statistics) {
             Ok(val) => val,
-            Err(e) => return Err(e.into())
+            Err(e) => return Err(e.into()),
         };
         Ok(value.map(move |v| (key, v)))
     }

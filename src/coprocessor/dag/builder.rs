@@ -11,7 +11,7 @@ use crate::storage::Store;
 use super::batch::executors::*;
 use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
-    TopNExecutor
+    TopNExecutor,
 };
 use crate::coprocessor::dag::batch::interface::BatchExecutor;
 use crate::coprocessor::dag::exec_summary::*;

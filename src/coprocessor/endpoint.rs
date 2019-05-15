@@ -220,9 +220,7 @@ impl<E: Engine> Endpoint<E> {
         // When this function is being executed, it may be queued for a long time, so that
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
-            .map_err(|e| {
-                e.into()
-            })
+            .map_err(|e| e.into())
             .and_then(move |_| {
                 Self::async_snapshot(engine, &tracker.req_ctx.context)
                     .map(|snapshot| (tracker, snapshot))
@@ -231,9 +229,7 @@ impl<E: Engine> Endpoint<E> {
                 // When snapshot is retrieved, deadline may exceed.
                 future::result(tracker.req_ctx.deadline.check_if_exceeded())
                     .map(|_| (tracker, snapshot))
-                    .map_err(|e| {
-                        e.into()
-                    })
+                    .map_err(|e| e.into())
             })
             .and_then(move |(tracker, snapshot)| {
                 future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))
@@ -323,9 +319,7 @@ impl<E: Engine> Endpoint<E> {
 
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check_if_exceeded())
-                .map_err(|e| {
-                    e.into()
-                })
+                .map_err(|e| e.into())
                 .and_then(move |_| {
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
                         .map(|snapshot| (tracker, snapshot))
@@ -334,9 +328,7 @@ impl<E: Engine> Endpoint<E> {
                     // When snapshot is retrieved, deadline may exceed.
                     future::result(tracker.req_ctx.deadline.check_if_exceeded())
                         .map(|_| (tracker, snapshot))
-                        .map_err(|e| {
-                            e.into()
-                        })
+                        .map_err(|e| e.into())
                 })
                 .and_then(move |(tracker, snapshot)| {
                     future::result(handler_builder.call_box((snapshot, &tracker.req_ctx)))

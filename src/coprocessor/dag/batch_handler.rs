@@ -4,11 +4,11 @@ use crate::coprocessor::*;
 
 use protobuf::{Message, RepeatedField};
 
+use crate::coprocessor::dag::executor::ExecutorMetrics;
+pub use cop_dag::{BatchDAGHandler, Error as DagError};
 use kvproto::coprocessor::Response;
 use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse};
-pub use cop_dag::{BatchDAGHandler, Error as DagError};
-use crate::coprocessor::dag::executor::ExecutorMetrics;
 
 // TODO: The value is chosen according to some very subjective experience, which is not tuned
 // carefully. We need to benchmark to find a best value. Also we may consider accepting this value

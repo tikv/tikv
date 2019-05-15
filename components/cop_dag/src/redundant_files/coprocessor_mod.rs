@@ -3,9 +3,6 @@ use tikv_util::time::{Duration, Instant};
 
 pub const SINGLE_GROUP: &[u8] = b"SingleGroup";
 
-use kvproto::coprocessor as coppb;
-type HandlerStreamStepResult = Result<(Option<coppb::Response>, bool)>;
-
 /// Request process dead line.
 ///
 /// When dead line exceeded, the request handling should be stopped.

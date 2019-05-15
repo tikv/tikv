@@ -10,7 +10,11 @@ pub trait Store: Send {
 
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>, Self::Error>;
 
-    fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>, Self::Error>>;
+    fn batch_get(
+        &self,
+        keys: &[Key],
+        statistics: &mut Statistics,
+    ) -> Vec<Result<Option<Value>, Self::Error>>;
 
     fn scanner(
         &self,

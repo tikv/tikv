@@ -2,11 +2,11 @@
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use tipb::select::{Chunk, SelectResponse, StreamResponse};
+use tipb::select::{Chunk, StreamResponse};
 
 use crate::*;
 
-use super::executor::{Executor, ExecutorMetrics};
+use super::executor::Executor;
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
@@ -31,7 +31,11 @@ impl DAGRequestHandler {
         }
     }
 
-    pub fn make_stream_response(&mut self, chunk: Chunk, range: Option<KeyRange>) -> Result<Response> {
+    pub fn make_stream_response(
+        &mut self,
+        chunk: Chunk,
+        range: Option<KeyRange>,
+    ) -> Result<Response> {
         let mut s_resp = StreamResponse::new();
         s_resp.set_data(box_try!(chunk.write_to_bytes()));
         if let Some(eval_warnings) = self.executor.take_eval_warnings() {

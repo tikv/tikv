@@ -4,7 +4,7 @@
 use std::u64;
 
 use crate::storage::mvcc::{Lock, Write};
-pub use cop_dag::storage::{Value, KvPair, Key};
+pub use cop_dag::storage::{Key, KvPair, Value};
 
 /// `MvccInfo` stores all mvcc information of given key.
 /// Used by `MvccGetByKey` and `MvccGetByStartTs`.

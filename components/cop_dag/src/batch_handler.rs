@@ -2,12 +2,6 @@
 
 use std::sync::Arc;
 
-use protobuf::{Message, RepeatedField};
-
-use kvproto::coprocessor::Response;
-use tipb::executor::ExecutorExecutionSummary;
-use tipb::select::{Chunk, SelectResponse};
-
 use super::batch::interface::{BatchExecuteStatistics, BatchExecutor};
 use super::executor::ExecutorMetrics;
 use crate::expr::EvalConfig;

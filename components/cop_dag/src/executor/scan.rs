@@ -90,9 +90,10 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
         let key = range.take_start();
         let value = match self
             .store
-            .get(&Key::from_raw(&key), &mut self.metrics.cf_stats) {
+            .get(&Key::from_raw(&key), &mut self.metrics.cf_stats)
+        {
             Ok(val) => val,
-            Err(e) => return Err(e.into())
+            Err(e) => return Err(e.into()),
         };
         if let Some(value) = value {
             return self.inner.decode_row(key, value, self.columns.clone());

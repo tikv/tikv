@@ -28,11 +28,11 @@ pub mod builder;
 pub mod handler;
 
 pub use cop_dag::batch;
+pub use cop_dag::exec_summary;
 pub use cop_dag::executor;
 pub use cop_dag::expr;
 pub use cop_dag::rpn_expr;
 pub use cop_dag::{ScanOn, Scanner};
-pub use cop_dag::exec_summary;
 
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::builder::DAGBuilder;

@@ -24,10 +24,12 @@ fn create_range_scanner<S: Store>(
 ) -> Result<S::Scanner> {
     let lower_bound = Some(Key::from_raw(range.get_start()));
     let upper_bound = Some(Key::from_raw(range.get_end()));
-    Ok(match store.scanner(desc, key_only, lower_bound, upper_bound) {
-        Ok(val) => val,
-        Err(e) => return Err(e.into())
-    })
+    Ok(
+        match store.scanner(desc, key_only, lower_bound, upper_bound) {
+            Ok(val) => val,
+            Err(e) => return Err(e.into()),
+        },
+    )
 }
 
 // `Scanner` is a helper struct to wrap all common scan operations
@@ -82,7 +84,7 @@ impl<S: Store> Scanner<S> {
 
         let kv = match self.scanner.next() {
             Ok(val) => val,
-            Err(e) => return Err(e.into())
+            Err(e) => return Err(e.into()),
         };
 
         let (key, value) = match kv {

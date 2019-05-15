@@ -9,7 +9,7 @@ use crate::storage::{Key, KvPair, Snapshot, Statistics, Value};
 
 use super::{Error, Result};
 
-pub use cop_dag::storage::{Store, Scanner};
+pub use cop_dag::storage::{Scanner, Store};
 
 pub struct SnapshotStore<S: Snapshot> {
     snapshot: S,
@@ -269,7 +269,6 @@ impl Scanner for FixtureStoreScanner {
         Statistics::default()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -29,7 +29,6 @@ extern crate slog_global;
 #[cfg(test)]
 extern crate test;
 
-
 mod redundant_files;
 pub use redundant_files::*;
 
