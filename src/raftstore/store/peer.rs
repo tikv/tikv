@@ -192,28 +192,6 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
-pub struct RecentConfChangedPeer {
-    pub reject_duration_as_secs: u64,
-    pub changed_time: Instant,
-}
-
-impl RecentConfChangedPeer {
-    pub fn new(reject_duration_as_secs: u64) -> RecentConfChangedPeer {
-        RecentConfChangedPeer {
-            reject_duration_as_secs,
-            changed_time: Instant::now(),
-        }
-    }
-
-    pub fn update(&mut self, now: Instant) {
-        self.changed_time = now;
-    }
-
-    pub fn safe_to_transfer(&self) -> bool {
-        duration_to_sec(self.changed_time.elapsed()) > self.reject_duration_as_secs as f64
-    }
-}
-
 /// A struct that stores the state to wait for `PrepareMerge` apply result.
 ///
 /// When handling the apply result of a `CommitMerge`, the source peer may have
@@ -260,7 +238,7 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
-    pub recent_conf_change_region: RecentConfChangedPeer,
+    pub recent_conf_change_time: Instant,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -348,9 +326,7 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            recent_conf_change_region: RecentConfChangedPeer::new(
-                cfg.raft_reject_transfer_leader_duration.as_secs(),
-            ),
+            recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -1597,7 +1573,11 @@ impl Peer {
                 return false;
             }
         }
-        if !self.recent_conf_change_region.safe_to_transfer() {
+
+        // Checks if safe to transfer leader.
+        if duration_to_sec(self.recent_conf_change_time.elapsed())
+            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
                 "region_id" => self.region_id,

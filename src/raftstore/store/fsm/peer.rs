@@ -1302,7 +1302,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             meta.set_region(
                 &self.ctx.coprocessor_host,
                 &self.ctx.local_reader,
-                cp.region.clone(),
+                cp.region,
                 &mut self.fsm.peer,
             );
         }
@@ -1322,7 +1322,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_conf_change_region.update(now);
+                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1335,7 +1335,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
-                self.fsm.peer.recent_conf_change_region.update(now);
+                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
