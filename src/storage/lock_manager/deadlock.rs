@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 
@@ -378,7 +378,7 @@ impl Detector {
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
         let handle_copy = handle.clone();
-        let timer = Interval::new_interval(Duration::from_secs(5))
+        let timer = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 if let Err(e) = inner
                     .borrow_mut()
