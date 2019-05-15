@@ -38,7 +38,7 @@ quick_error! {
         }
         KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64 } {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {}-{}@{} ttl {}",
+            display("key is locked (backoff or cleanup) {:?}-{:?}@{} ttl {}",
                         escape(key),
                         escape(primary),
                         ts,
@@ -52,7 +52,7 @@ quick_error! {
         }
         Rollbacked { start_ts: u64, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
-            display("pessimistic lock already rollbacked, start_ts:{}, key:{}", start_ts, escape(key))
+            display("pessimistic lock already rollbacked, start_ts:{}, key:{:?}", start_ts, escape(key))
         }
         TxnLockNotFound { start_ts: u64, commit_ts: u64, key: Vec<u8> } {
             description("txn lock not found")
@@ -60,7 +60,7 @@ quick_error! {
         }
         LockTypeNotMatch { start_ts: u64, key: Vec<u8>, pessimistic: bool } {
             description("lock type not match")
-            display("lock type not match, start_ts:{}, key:{}, pessimistic:{}", start_ts, escape(key), pessimistic)
+            display("lock type not match, start_ts:{}, key:{:?}, pessimistic:{}", start_ts, escape(key), pessimistic)
         }
         WriteConflict { start_ts: u64, conflict_start_ts: u64, conflict_commit_ts: u64, key: Vec<u8>, primary: Vec<u8> } {
             description("write conflict")
@@ -81,6 +81,10 @@ quick_error! {
             display("default not found: key:{:?}, write:{:?}, maybe read truncated/dropped table data?", escape(key), write)
         }
         KeyVersion { description("bad format key(version)") }
+        PessimisticLockNotFound { start_ts: u64, key: Vec<u8> } {
+            description("pessimistic lock not found when prewrite")
+            display("pessimistic lock not found, start_ts:{}, key:{:?}", start_ts, escape(key))
+        }
         Other(err: Box<dyn error::Error + Sync + Send>) {
             from()
             cause(err.as_ref())
@@ -161,6 +165,12 @@ impl Error {
                 start_ts,
                 key: key.to_owned(),
             }),
+            Error::PessimisticLockNotFound { start_ts, ref key } => {
+                Some(Error::PessimisticLockNotFound {
+                    start_ts,
+                    key: key.to_owned(),
+                })
+            }
             Error::Io(_) | Error::Other(_) => None,
         }
     }

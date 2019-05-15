@@ -164,12 +164,11 @@ impl<S: Snapshot> MvccTxn<S> {
         } else if options.prewrite_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
             info!("prewrite failed (pessimistic lock not found)";
-                    "key" => %key,
-                    "start_ts" => self.start_ts);
+                    "start_ts" => self.start_ts,
+                    "key" => %key);
 
-            return Err(Error::TxnLockNotFound {
+            return Err(Error::PessimisticLockNotFound {
                 start_ts: self.start_ts,
-                commit_ts: 0,
                 key: key.into_raw()?,
             });
         }
