@@ -367,7 +367,10 @@ fn test_read_index_when_transfer_leader() {
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(old_leader.get_id(), filter.clone());
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(old_leader.get_id(), filter);
 
     let resp1 = read_on_old_leader!();
 
@@ -394,6 +397,10 @@ fn test_read_index_when_transfer_leader() {
 
     // Response 2 should contains an error.
     let resp2 = resp2.recv().unwrap();
-    assert!(resp2.get_header().get_error().has_stale_command(), "{:?}", resp2);
+    assert!(
+        resp2.get_header().get_error().has_stale_command(),
+        "{:?}",
+        resp2
+    );
     drop(cluster);
 }
