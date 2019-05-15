@@ -335,7 +335,7 @@ fn test_read_index_when_transfer_leader() {
     sleep_ms(100);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v2");
     let r1 = cluster.get_region(b"k1");
-    let leader = cluster.leader_of_region(r1.get_id()).unwrap();
+    let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
 
     // Use a macro instead of a closure to avoid any capture of local variables.
     macro_rules! read_on_old_leader {
@@ -350,7 +350,7 @@ fn test_read_index_when_transfer_leader() {
             read_request.mut_header().set_peer(new_peer(1, 1));
             let sim = cluster.sim.wl();
             sim.async_command_on_node(
-                leader.get_id(),
+                old_leader.get_id(),
                 read_request,
                 Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
             )
@@ -362,12 +362,12 @@ fn test_read_index_when_transfer_leader() {
     // Delay all raft messages to peer 1.
     let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
     let filter = Box::new(
-        RegionPacketFilter::new(r1.get_id(), leader.get_store_id())
+        RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
             .direction(Direction::Recv)
             .when(Arc::new(AtomicBool::new(true)))
             .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
-    cluster.sim.wl().add_recv_filter(leader.get_id(), filter);
+    cluster.sim.wl().add_recv_filter(old_leader.get_id(), filter.clone());
 
     let resp1 = read_on_old_leader!();
 
@@ -376,21 +376,24 @@ fn test_read_index_when_transfer_leader() {
     let resp2 = read_on_old_leader!();
 
     // Unpark all pending messages and clear all filters.
-    let router = cluster.sim.wl().get_router(leader.get_id()).unwrap();
+    let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
     'LOOP: loop {
         for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
-            if raft_msg.get_message().get_msg_type() == MessageType::MsgAppend {
-                // All heartbeat responses are received before the new leader's MsgAppend.
-                cluster.sim.wl().clear_recv_filters(leader.get_id());
-                break 'LOOP;
+            let msg_type = raft_msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgHeartbeatResponse {
+                router.send_raft_message(raft_msg).unwrap();
+                continue;
             }
-            router.send_raft_message(raft_msg).unwrap();
+            cluster.sim.wl().clear_recv_filters(old_leader.get_id());
+            break 'LOOP;
         }
     }
 
+    let resp1 = resp1.recv().unwrap();
+    assert_eq!(resp1.get_responses()[0].get_get().get_value(), b"v2");
+
     // Response 2 should contains an error.
-    drop(resp1.recv().unwrap());
     let resp2 = resp2.recv().unwrap();
-    assert!(resp2.get_header().get_error().has_not_leader());
+    assert!(resp2.get_header().get_error().has_stale_command(), "{:?}", resp2);
     drop(cluster);
 }
