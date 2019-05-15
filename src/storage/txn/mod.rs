@@ -13,6 +13,7 @@ pub use self::scheduler::{Msg, Scheduler, CMD_BATCH_SIZE};
 pub use self::store::{FixtureStore, FixtureStoreScanner};
 pub use self::store::{Scanner, SnapshotStore, Store};
 use tikv_util::escape;
+use kvproto::kvrpcpb;
 
 quick_error! {
     #[derive(Debug)]
@@ -99,7 +100,22 @@ impl Error {
 
 impl Into<cop_dag::Error> for Error {
     fn into(self) -> cop_dag::Error {
-        cop_dag::Error::Other(Box::new(self))
+        match self {
+            Error::Mvcc(crate::storage::mvcc::Error::KeyIsLocked {
+                            primary,
+                            ts,
+                            key,
+                            ttl,
+                        }) => {
+                let mut info = kvrpcpb::LockInfo::new();
+                info.set_primary_lock(primary);
+                info.set_lock_version(ts);
+                info.set_key(key);
+                info.set_lock_ttl(ttl);
+                cop_dag::Error::Locked(info)
+            }
+            _ => cop_dag::Error::Other(Box::new(self))
+        }
     }
 }
 
