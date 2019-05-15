@@ -287,17 +287,21 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
             })
             .collect();
 
-        let src_schema = src.schema();
         let ordered_aggr_fn_input_types = ordered_aggr_fn_input_exprs
             .iter()
             .map(|expr| {
                 // The eval type of the aggr input is the return type of the aggr input expression.
-                let ft = expr.ret_field_type(src_schema);
+                let ft = expr.ret_field_type(schema);
                 // The unwrap is also fine because the expression must be valid, otherwise it is
                 // unexpected behaviour and should panic.
                 EvalType::try_from(ft.tp()).unwrap()
             })
             .collect();
+
+        // Finally append group columns to the schema
+        for group_by in &group_bys {
+            ordered_schema.push(group_by.ret_field_type(schema).clone());
+        }
 
         Ok(Self {
             summary_collector,
