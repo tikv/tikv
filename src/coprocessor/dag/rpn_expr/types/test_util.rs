@@ -1,14 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(unused)]
-
-use tipb::expression::FieldType;
+use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
-use crate::coprocessor::dag::rpn_expr::{RpnExpressionBuilder, RpnFunction};
+use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 use crate::coprocessor::Result;
 
 /// Helper utility to evaluate RPN function over scalar inputs.
@@ -68,7 +66,7 @@ impl RpnFnScalarEvaluator {
     }
 
     /// Evaluates the given function by using collected parameters.
-    pub fn evaluate<T: Evaluable>(self, func: impl RpnFunction) -> Result<Option<T>> {
+    pub fn evaluate<T: Evaluable>(self, sig: ScalarFuncSig) -> Result<Option<T>> {
         let return_field_type = match self.return_field_type {
             Some(ft) => ft,
             None => T::EVAL_TYPE.into_certain_field_type_tp_for_test().into(),
@@ -77,10 +75,25 @@ impl RpnFnScalarEvaluator {
             Some(ctx) => ctx,
             None => EvalContext::default(),
         };
+
+        // Children expr descriptors are needed to map the signature into the actual function impl.
+        let children_ed: Vec<_> = self
+            .rpn_expr_builder
+            .as_ref()
+            .iter()
+            .map(|expr_node| {
+                let mut ed = Expr::new();
+                ed.set_field_type(expr_node.field_type().unwrap().clone());
+                ed
+            })
+            .collect();
+        let func = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
+
         let expr = self
             .rpn_expr_builder
             .push_fn_call(func, return_field_type)
             .build();
+
         let mut columns = LazyBatchColumnVec::empty();
         let ret = expr.eval(&mut context, 1, &[], &mut columns)?;
         match ret {

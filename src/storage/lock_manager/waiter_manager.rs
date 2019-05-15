@@ -10,7 +10,6 @@ use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
-use std::boxed::FnBox;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -20,7 +19,7 @@ use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Delay;
 
-pub type Callback = Box<dyn FnBox(Vec<WaitForEntry>) + Send>;
+pub type Callback = Box<dyn FnOnce(Vec<WaitForEntry>) + Send>;
 
 pub enum Task {
     WaitFor {

@@ -141,6 +141,7 @@ trait MockKvService {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 
@@ -200,6 +201,7 @@ impl<T: MockKvService + Clone + Send + 'static> Tikv for MockKv<T> {
     );
     unary_call!(mvcc_get_by_key, MvccGetByKeyRequest, MvccGetByKeyResponse);
     unary_call_dispatch!(split_region, SplitRegionRequest, SplitRegionResponse);
+    unary_call_dispatch!(read_index, ReadIndexRequest, ReadIndexResponse);
     bstream_call_dispatch!(batch_commands, BatchCommandsRequest, BatchCommandsResponse);
 }
 

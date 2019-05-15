@@ -21,13 +21,13 @@ pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
 impl<S: Snapshot> std::ops::Deref for ScannerBuilder<S> {
     type Target = ScannerConfig<S>;
-    fn deref<'a>(&'a self) -> &'a ScannerConfig<S> {
+    fn deref(&self) -> &ScannerConfig<S> {
         &self.0
     }
 }
 
 impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut ScannerConfig<S> {
+    fn deref_mut(&mut self) -> &mut ScannerConfig<S> {
         &mut self.0
     }
 }

@@ -237,12 +237,14 @@ impl SSTWriter {
         // some properties about SST
         let mut default_opts = db_cfg.defaultcf.build_opt(&cache);
         default_opts.set_env(Arc::clone(&env));
+        default_opts.compression_per_level(&db_cfg.defaultcf.compression_per_level);
         let mut default = SstFileWriter::new(EnvOptions::new(), default_opts);
         default.open(&format!("{}{}.{}:default", path, MAIN_SEPARATOR, uuid))?;
 
         // Creates a writer for write CF
         let mut write_opts = db_cfg.writecf.build_opt(&cache);
         write_opts.set_env(Arc::clone(&env));
+        write_opts.compression_per_level(&db_cfg.writecf.compression_per_level);
         let mut write = SstFileWriter::new(EnvOptions::new(), write_opts);
         write.open(&format!("{}{}.{}:write", path, MAIN_SEPARATOR, uuid))?;
 
