@@ -135,6 +135,8 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
+            None,
+            None,
         )?;
         self.storages.insert(node_id, store.get_engine());
 

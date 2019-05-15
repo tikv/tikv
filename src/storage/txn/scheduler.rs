@@ -150,10 +150,9 @@ pub struct Scheduler<E: Engine> {
     // actual scheduler to schedule the execution of commands
     scheduler: worker::Scheduler<Msg>,
 
-    // scheduler for lock manager
-    waiter_mgr_scheduler: WaiterMgrScheduler,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
 
-    detector_scheduler: DetectorScheduler,
+    detector_scheduler: Option<DetectorScheduler>,
 
     // cmd id generator
     id_alloc: u64,
@@ -180,8 +179,8 @@ impl<E: Engine> Scheduler<E> {
     pub fn new(
         engine: E,
         scheduler: worker::Scheduler<Msg>,
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: DetectorScheduler,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -255,15 +254,11 @@ impl<E: Engine> Scheduler<E> {
             CommandPri::Low | CommandPri::Normal => &self.worker_pool,
             CommandPri::High => &self.high_priority_pool,
         };
-        let pool_scheduler = pool.scheduler();
-        let scheduler = self.scheduler.clone();
-        let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
-        let detector_scheduler = self.detector_scheduler.clone();
         Executor::new(
-            pool_scheduler,
-            scheduler,
-            waiter_mgr_scheduler,
-            detector_scheduler,
+            pool.scheduler(),
+            self.scheduler.clone(),
+            self.waiter_mgr_scheduler.clone(),
+            self.detector_scheduler.clone(),
         )
     }
 
@@ -444,7 +439,7 @@ impl<E: Engine> Scheduler<E> {
             .with_label_values(&[tctx.tag, "lock_wait"])
             .inc();
         // TODO: timeout config
-        self.waiter_mgr_scheduler.wait_for(
+        self.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
             start_ts,
             tctx.cb,
             pr,

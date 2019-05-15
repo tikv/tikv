@@ -27,7 +27,7 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, FutureWorker, ScheduleError, Worker};
+use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
@@ -42,9 +42,7 @@ pub use self::kv::{
     Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
     TestEngineBuilder,
 };
-use self::lock_manager::{
-    DetectTask, Detector, DetectorScheduler, WaiterManager, WaiterMgrScheduler, WaiterTask,
-};
+use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
@@ -498,6 +496,8 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
+            None,
+            None,
         )
     }
 }
@@ -530,15 +530,6 @@ pub struct Storage<E: Engine> {
     /// `worker_scheduler` is used to schedule tasks to run in `worker`.
     worker_scheduler: worker::Scheduler<Msg>,
 
-    /// The worker for waiter manager
-    waiter_mgr_worker: Arc<Mutex<FutureWorker<WaiterTask>>>,
-
-    waiter_mgr_scheduler: WaiterMgrScheduler,
-
-    detector_worker: Arc<Mutex<FutureWorker<DetectTask>>>,
-
-    detector_scheduler: DetectorScheduler,
-
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
 
@@ -551,6 +542,8 @@ pub struct Storage<E: Engine> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    pessimistic_txn_enabled: bool,
 }
 
 impl<E: Engine> Clone for Storage<E> {
@@ -566,14 +559,11 @@ impl<E: Engine> Clone for Storage<E> {
             engine: self.engine.clone(),
             worker: self.worker.clone(),
             worker_scheduler: self.worker_scheduler.clone(),
-            waiter_mgr_worker: self.waiter_mgr_worker.clone(),
-            waiter_mgr_scheduler: self.waiter_mgr_scheduler.clone(),
-            detector_worker: self.detector_worker.clone(),
-            detector_scheduler: self.detector_scheduler.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            pessimistic_txn_enabled: self.pessimistic_txn_enabled,
         }
     }
 }
@@ -603,19 +593,6 @@ impl<E: Engine> Drop for Storage<E> {
             error!("Failed to join sched_handle"; "err" => ?e);
         }
 
-        let mut waiter_mgr_worker = self.waiter_mgr_worker.lock().unwrap();
-        let h = waiter_mgr_worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            error!("Failed to join lock_manager"; "err" => ?e);
-        }
-
-        let mut detector_worker = self.detector_worker.lock().unwrap();
-        if let Some(h) = detector_worker.stop() {
-            if let Err(e) = h.join() {
-                error!("Failed to join detector_worker"; "err" => ?e);
-            }
-        }
-
         let r = self.gc_worker.stop();
         if let Err(e) = r {
             error!("Failed to stop gc_worker:"; "err" => ?e);
@@ -633,7 +610,11 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
     ) -> Result<Self> {
+        let pessimistic_txn_enabled = waiter_mgr_scheduler.is_some();
+
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
                 .batch_size(CMD_BATCH_SIZE)
@@ -642,18 +623,11 @@ impl<E: Engine> Storage<E> {
         ));
         let worker_scheduler = worker.lock().unwrap().scheduler();
 
-        let detector_worker = FutureWorker::new("deadlock");
-        let detector_scheduler = DetectorScheduler::new(detector_worker.scheduler());
-
-        let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(detector_scheduler.clone());
-        let waiter_mgr_scheduler = WaiterMgrScheduler::new(waiter_mgr_worker.scheduler());
-
         let runner = Scheduler::new(
             engine.clone(),
             worker_scheduler.clone(),
-            waiter_mgr_scheduler.clone(),
-            detector_scheduler.clone(),
+            waiter_mgr_scheduler,
+            detector_scheduler,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -666,7 +640,6 @@ impl<E: Engine> Storage<E> {
         );
 
         worker.lock().unwrap().start(runner)?;
-        waiter_mgr_worker.start(waiter_mgr_runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
@@ -675,14 +648,11 @@ impl<E: Engine> Storage<E> {
             engine,
             worker,
             worker_scheduler,
-            waiter_mgr_worker: Arc::new(Mutex::new(waiter_mgr_worker)),
-            waiter_mgr_scheduler,
-            detector_worker: Arc::new(Mutex::new(detector_worker)),
-            detector_scheduler,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            pessimistic_txn_enabled,
         })
     }
 
@@ -697,22 +667,6 @@ impl<E: Engine> Storage<E> {
     /// Get the underlying `Engine` of the `Storage`.
     pub fn get_engine(&self) -> E {
         self.engine.clone()
-    }
-
-    pub fn get_waiter_mgr_scheduler(&self) -> WaiterMgrScheduler {
-        self.waiter_mgr_scheduler.clone()
-    }
-
-    pub fn get_detector_scheduler(&self) -> DetectorScheduler {
-        self.detector_scheduler.clone()
-    }
-
-    pub fn start_deadlock_detector(&self, detector: Detector) -> Result<()> {
-        self.detector_worker
-            .lock()
-            .unwrap()
-            .start(detector)
-            .map_err(Error::Io)
     }
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
@@ -981,6 +935,11 @@ impl<E: Engine> Storage<E> {
         options: Options,
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
         for k in &keys {
             let size = k.as_encoded().len();
             if size > self.max_key_size {
@@ -1748,6 +1707,9 @@ quick_error! {
         InvalidCf (cf_name: String) {
             description("invalid cf name")
             display("invalid cf name: {}", cf_name)
+        }
+        PessimisticTxnNotEnabled {
+            description("pessimistic transaction is not enabled")
         }
     }
 }

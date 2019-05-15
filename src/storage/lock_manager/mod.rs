@@ -1,9 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod client;
+mod config;
 pub mod deadlock;
 pub mod waiter_manager;
 
+pub use self::config::Config;
 pub use self::deadlock::{
     DetectType, Detector, Scheduler as DetectorScheduler, Service, Task as DetectTask,
 };

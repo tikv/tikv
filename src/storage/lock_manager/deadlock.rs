@@ -528,15 +528,15 @@ impl FutureRunnable<Task> for Detector {
 
 #[derive(Clone)]
 pub struct Service {
-    detector_scheduler: Scheduler,
     waiter_mgr_scheduler: WaiterMgrScheduler,
+    detector_scheduler: Scheduler,
 }
 
 impl Service {
-    pub fn new(detector_scheduler: Scheduler, waiter_mgr_scheduler: WaiterMgrScheduler) -> Self {
+    pub fn new(waiter_mgr_scheduler: WaiterMgrScheduler, detector_scheduler: Scheduler) -> Self {
         Self {
-            detector_scheduler,
             waiter_mgr_scheduler,
+            detector_scheduler,
         }
     }
 }

@@ -124,14 +124,14 @@ impl<E: Engine> Executor<E> {
     pub fn new(
         pool: threadpool::Scheduler<SchedContext<E>>,
         scheduler: worker::Scheduler<Msg>,
-        waiter_mgr_scheduler: WaiterMgrScheduler,
-        detector_scheduler: DetectorScheduler,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
     ) -> Self {
         Executor {
             pool: Some(pool),
             scheduler: Some(scheduler),
-            waiter_mgr_scheduler: Some(waiter_mgr_scheduler),
-            detector_scheduler: Some(detector_scheduler),
+            waiter_mgr_scheduler,
+            detector_scheduler,
         }
     }
 
@@ -143,12 +143,12 @@ impl<E: Engine> Executor<E> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_waiter_mgr_scheduler(&mut self) -> WaiterMgrScheduler {
-        self.waiter_mgr_scheduler.take().unwrap()
+    fn take_waiter_mgr_scheduler(&mut self) -> Option<WaiterMgrScheduler> {
+        self.waiter_mgr_scheduler.take()
     }
 
-    fn take_detector_scheduler(&mut self) -> DetectorScheduler {
-        self.detector_scheduler.take().unwrap()
+    fn take_detector_scheduler(&mut self) -> Option<DetectorScheduler> {
+        self.detector_scheduler.take()
     }
 
     /// Start the execution of the task.
@@ -497,8 +497,8 @@ struct WriteResult {
 fn process_write_impl<S: Snapshot>(
     cmd: Command,
     snapshot: S,
-    waiter_mgr_scheduler: WaiterMgrScheduler,
-    detector_scheduler: DetectorScheduler,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detector_scheduler: Option<DetectorScheduler>,
     statistics: &mut Statistics,
 ) -> Result<WriteResult> {
     let (pr, to_be_write, rows, ctx, lock_info) = match cmd {
@@ -588,26 +588,45 @@ fn process_write_impl<S: Snapshot>(
                     commit_ts,
                 });
             }
+            // Pessimistic txn needs key_hashes to wake up waiters
+            let key_hashes = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hashes(&keys))
+            } else {
+                None
+            };
+
             let mut txn = MvccTxn::new(snapshot, lock_ts, !ctx.get_not_fill_cache())?;
-            let key_hashes = lock_manager::gen_key_hashes(&keys);
             let rows = keys.len();
             for k in keys {
                 txn.commit(k, commit_ts)?;
             }
-            waiter_mgr_scheduler.wake_up(lock_ts, key_hashes, commit_ts);
-            detector_scheduler.clean_up(lock_ts);
+            if waiter_mgr_scheduler.is_some() {
+                waiter_mgr_scheduler
+                    .unwrap()
+                    .wake_up(lock_ts, key_hashes.unwrap(), commit_ts);
+                detector_scheduler.unwrap().clean_up(lock_ts);
+            }
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Cleanup {
             ctx, key, start_ts, ..
         } => {
+            let key_hash = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hash(&key))
+            } else {
+                None
+            };
+
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let key_hash = lock_manager::gen_key_hash(&key);
             txn.rollback(key)?;
 
-            waiter_mgr_scheduler.wake_up(start_ts, vec![key_hash], 0);
-            detector_scheduler.clean_up(start_ts);
+            if waiter_mgr_scheduler.is_some() {
+                waiter_mgr_scheduler
+                    .unwrap()
+                    .wake_up(start_ts, vec![key_hash.unwrap()], 0);
+                detector_scheduler.unwrap().clean_up(start_ts);
+            }
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), 1, ctx, None)
         }
@@ -617,15 +636,24 @@ fn process_write_impl<S: Snapshot>(
             start_ts,
             ..
         } => {
+            let key_hashes = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hashes(&keys))
+            } else {
+                None
+            };
+
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
-            let key_hashes = lock_manager::gen_key_hashes(&keys);
             let rows = keys.len();
             for k in keys {
                 txn.rollback(k)?;
             }
 
-            waiter_mgr_scheduler.wake_up(start_ts, key_hashes, 0);
-            detector_scheduler.clean_up(start_ts);
+            if waiter_mgr_scheduler.is_some() {
+                waiter_mgr_scheduler
+                    .unwrap()
+                    .wake_up(start_ts, key_hashes.unwrap(), 0);
+                detector_scheduler.unwrap().clean_up(start_ts);
+            }
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
@@ -635,16 +663,25 @@ fn process_write_impl<S: Snapshot>(
             mut scan_key,
             key_locks,
         } => {
+            let mut ts_to_keys = if waiter_mgr_scheduler.is_some() {
+                Some(HashMap::new())
+            } else {
+                None
+            };
+
             let mut scan_key = scan_key.take();
             let mut modifies: Vec<Modify> = vec![];
             let mut write_size = 0;
             let rows = key_locks.len();
-            let mut ts_to_keys = HashMap::new();
             for (current_key, current_lock) in key_locks {
-                ts_to_keys
-                    .entry(current_lock.ts)
-                    .or_insert(vec![])
-                    .push(lock_manager::gen_key_hash(&current_key));
+                if ts_to_keys.is_some() {
+                    ts_to_keys
+                        .as_mut()
+                        .unwrap()
+                        .entry(current_lock.ts)
+                        .or_insert(vec![])
+                        .push(lock_manager::gen_key_hash(&current_key));
+                }
 
                 let mut txn =
                     MvccTxn::new(snapshot.clone(), current_lock.ts, !ctx.get_not_fill_cache())?;
@@ -674,10 +711,15 @@ fn process_write_impl<S: Snapshot>(
                     break;
                 }
             }
-            ts_to_keys.into_iter().for_each(|(ts, hashes)| {
-                waiter_mgr_scheduler.wake_up(ts, hashes, 0);
-                detector_scheduler.clean_up(ts);
-            });
+            if waiter_mgr_scheduler.is_some() {
+                ts_to_keys.unwrap().into_iter().for_each(|(ts, hashes)| {
+                    waiter_mgr_scheduler
+                        .as_ref()
+                        .unwrap()
+                        .wake_up(ts, hashes, 0);
+                    detector_scheduler.as_ref().unwrap().clean_up(ts);
+                });
+            }
 
             let pr = if scan_key.is_none() {
                 ProcessResult::Res
