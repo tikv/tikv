@@ -52,6 +52,10 @@ impl DAGBuilder {
                     let descriptor = ed.get_aggregation();
                     BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
                 }
+                ExecType::TypeAggregation => {
+                    let descriptor = ed.get_aggregation();
+                    BatchHashAggregationExecutor::check_supported(&descriptor)?;
+                }
                 ExecType::TypeLimit => {}
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
@@ -142,6 +146,19 @@ impl DAGBuilder {
                         C::new(summary_slot_index),
                         config.clone(),
                         executor,
+                        ed.mut_aggregation().take_agg_func().into_vec(),
+                    )?)
+                }
+                ExecType::TypeAggregation => {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["hash_aggregation"])
+                        .inc();
+
+                    Box::new(BatchHashAggregationExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.mut_aggregation().take_group_by().into_vec(),
                         ed.mut_aggregation().take_agg_func().into_vec(),
                     )?)
                 }

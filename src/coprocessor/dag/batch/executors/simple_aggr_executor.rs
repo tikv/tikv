@@ -22,72 +22,6 @@ use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
 
-// TODO: This macro may be able to be reused elsewhere.
-macro_rules! match_each_eval_type_and_call {
-    (match $target:expr => $fn_name:ident<T>($($parameters:expr),*)) => {{
-        match $target {
-            EvalType::Int => $fn_name::<Int>($($parameters),*),
-            EvalType::Real => $fn_name::<Real>($($parameters),*),
-            EvalType::Decimal => $fn_name::<Decimal>($($parameters),*),
-            EvalType::Bytes => $fn_name::<Bytes>($($parameters),*),
-            EvalType::DateTime => $fn_name::<DateTime>($($parameters),*),
-            EvalType::Duration => $fn_name::<Duration>($($parameters),*),
-            EvalType::Json => $fn_name::<Json>($($parameters),*),
-        }
-    }};
-}
-
-#[inline]
-// The `Box<>` wrapper cannot be remove actually. Thus disable the clippy rule. Additionally this
-// function will be inlined so that performance will not be affected.
-#[allow(clippy::borrowed_box)]
-fn update_from_scalar_eval_output<T>(
-    aggr_fn_state: &mut Box<dyn AggrFunctionState>,
-    ctx: &mut EvalContext,
-    value: &ScalarValue,
-    rows: usize,
-) -> Result<()>
-where
-    T: Evaluable,
-    ScalarValue: AsRef<Option<T>>,
-    (dyn AggrFunctionState + 'static): AggrFunctionStateUpdatePartial<T>,
-{
-    let concrete_value = AsRef::<Option<T>>::as_ref(value);
-    aggr_fn_state.update_repeat(ctx, concrete_value, rows)
-}
-
-#[inline]
-#[allow(clippy::borrowed_box)]
-fn update_from_vector_eval_output<T>(
-    aggr_fn_state: &mut Box<dyn AggrFunctionState>,
-    ctx: &mut EvalContext,
-    value: &VectorValue,
-) -> Result<()>
-where
-    T: Evaluable,
-    VectorValue: AsRef<[Option<T>]>,
-    (dyn AggrFunctionState + 'static): AggrFunctionStateUpdatePartial<T>,
-{
-    let vector_value = AsRef::<[Option<T>]>::as_ref(value.as_ref());
-    aggr_fn_state.update_vector(ctx, vector_value)
-}
-
-#[inline]
-#[allow(clippy::borrowed_box)]
-fn push_result_to_column<T>(
-    aggr_fn_state: &mut Box<dyn AggrFunctionState>,
-    ctx: &mut EvalContext,
-    output_column: &mut VectorValue,
-) -> Result<()>
-where
-    T: Evaluable,
-    VectorValue: AsMut<Vec<Option<T>>>,
-    dyn AggrFunctionState: AggrFunctionStateResultPartial<Vec<Option<T>>>,
-{
-    let concrete_output_column = AsMut::<Vec<Option<T>>>::as_mut(output_column);
-    aggr_fn_state.push_result(ctx, concrete_output_column)
-}
-
 pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     summary_collector: C,
     context: EvalContext,
@@ -286,24 +220,25 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
                 RpnStackNode::Scalar { value, field_type } => {
                     // TODO: We should be able to know `update_type()` from parser.
                     assert_eq!(input_type, EvalType::try_from(field_type.tp()).unwrap());
-                    match_each_eval_type_and_call!(
-                        match input_type => update_from_scalar_eval_output<T>(
-                            aggr_fn_state,
-                            &mut self.context,
-                            value,
-                            rows_len
-                        )
-                    )?;
+                    match_template_evaluable! {
+                        TT, match input_type {
+                            EvalType::TT => {
+                                let concrete_value: &Option<TT> = value.as_ref();
+                                aggr_fn_state.update_repeat(&mut self.context, concrete_value, rows_len)?;
+                            },
+                        }
+                    }
                 }
                 RpnStackNode::Vector { value, field_type } => {
                     assert_eq!(input_type, EvalType::try_from(field_type.tp()).unwrap());
-                    match_each_eval_type_and_call!(
-                        match input_type => update_from_vector_eval_output<T>(
-                            aggr_fn_state,
-                            &mut self.context,
-                            value.as_ref()
-                        )
-                    )?;
+                    match_template_evaluable! {
+                        TT, match input_type {
+                            EvalType::TT => {
+                                let vector_value: &[Option<TT>] = value.as_ref();
+                                aggr_fn_state.update_vector(&mut self.context, vector_value)?;
+                            },
+                        }
+                    }
                 }
             }
         }
@@ -322,20 +257,21 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             .collect();
 
         let mut output_offset = 0;
-        for (index, aggr_fn_state) in &mut self.aggr_fn_states.iter_mut().enumerate() {
+        for (index, aggr_fn_state) in &mut self.aggr_fn_states.iter().enumerate() {
             let output_cardinality = self.aggr_fn_output_cardinality[index];
             assert!(output_cardinality > 0);
 
             if output_cardinality == 1 {
                 // Single output column, we use `Vec<Option<T>>` as container.
                 let output_type = self.ordered_aggr_fn_output_types[output_offset];
-                match_each_eval_type_and_call!(
-                    match output_type => push_result_to_column<T>(
-                        aggr_fn_state,
-                        &mut self.context,
-                        &mut output_columns[output_offset]
-                    )
-                )?;
+                match_template_evaluable! {
+                    TT, match output_type {
+                        EvalType::TT => {
+                            let concrete_output_column = AsMut::<Vec<Option<TT>>>::as_mut(&mut output_columns[output_offset]);
+                            aggr_fn_state.push_result(&mut self.context, concrete_output_column)?;
+                        }
+                    }
+                }
             } else {
                 // Multi output column, we use `[VectorValue]` as container.
                 aggr_fn_state.push_result(
@@ -474,8 +410,13 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Some(7.0), None, None]),
-                        VectorValue::Real(vec![Some(1.0), Some(2.0), None, Some(4.5)]),
+                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
+                        VectorValue::Real(vec![
+                            Real::new(1.0).ok(),
+                            Real::new(2.0).ok(),
+                            None,
+                            Real::new(4.5).ok(),
+                        ]),
                         VectorValue::Bytes(vec![
                             Some(b"abc".to_vec()),
                             None,
@@ -494,8 +435,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Some(1.5)]),
-                        VectorValue::Real(vec![Some(4.5)]),
+                        VectorValue::Real(vec![Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![Real::new(4.5).ok()]),
                         VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
                         VectorValue::Int(vec![Some(5)]),
                     ]),
@@ -528,7 +469,7 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Bytes;
-            type ResultTargetType = Vec<Option<i64>>;
+            type ResultTargetType = Vec<Option<Int>>;
 
             fn update_concrete(
                 &mut self,
@@ -567,7 +508,7 @@ mod tests {
         struct AggrFnBarState {
             rows_with_null: usize,
             rows_without_null: usize,
-            sum: f64,
+            sum: Real,
         }
 
         impl AggrFnBarState {
@@ -575,7 +516,7 @@ mod tests {
                 Self {
                     rows_with_null: 0,
                     rows_without_null: 0,
-                    sum: 0.0,
+                    sum: Real::from(0.0),
                 }
             }
         }
@@ -592,7 +533,7 @@ mod tests {
                 self.rows_with_null += 1;
                 if let Some(value) = value {
                     self.rows_without_null += 1;
-                    self.sum += value;
+                    self.sum += *value;
                 }
                 Ok(())
             }
@@ -715,17 +656,23 @@ mod tests {
         // Bar(42.5) for 5 rows, so it is (5, 5, 42.5*5).
         assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[4].decoded().as_real_slice(), &[Some(212.5)]);
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[Real::new(212.5).ok()]
+        );
         // Bar(NULL) for 5 rows, so it is (5, 0, 0).
         assert_eq!(r.data[5].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
-        assert_eq!(r.data[7].decoded().as_real_slice(), &[Some(0.0)]);
+        assert_eq!(r.data[7].decoded().as_real_slice(), &[Real::new(0.0).ok()]);
         // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
         assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(18)]);
         // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
         assert_eq!(r.data[9].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[10].decoded().as_int_slice(), &[Some(4)]);
-        assert_eq!(r.data[11].decoded().as_real_slice(), &[Some(12.0)]);
+        assert_eq!(
+            r.data[11].decoded().as_real_slice(),
+            &[Real::new(12.0).ok()]
+        );
         assert!(r.is_drained.unwrap());
     }
 
@@ -795,13 +742,16 @@ mod tests {
         assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(4)]);
         // AVG(42.5) for 5 rows, so it is (5, 212.5). Notice that AVG returns sum.
         assert_eq!(r.data[4].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[5].decoded().as_real_slice(), &[Some(212.5)]);
+        assert_eq!(
+            r.data[5].decoded().as_real_slice(),
+            &[Real::new(212.5).ok()]
+        );
         // AVG(NULL) for 5 rows, so it is (0, NULL).
         assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
         assert_eq!(r.data[7].decoded().as_decimal_slice(), &[None]);
         // Foo([NULL, 7.0, NULL, NULL, 1.5]) => (2, 8.5)
         assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(2)]);
-        assert_eq!(r.data[9].decoded().as_real_slice(), &[Some(8.5)]);
+        assert_eq!(r.data[9].decoded().as_real_slice(), &[Real::new(8.5).ok()]);
         assert!(r.is_drained.unwrap());
     }
 
@@ -815,8 +765,8 @@ mod tests {
         struct AggrFnFooState;
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = f64;
-            type ResultTargetType = Vec<Option<i64>>;
+            type ParameterType = Real;
+            type ResultTargetType = Vec<Option<Int>>;
 
             fn update_concrete(
                 &mut self,

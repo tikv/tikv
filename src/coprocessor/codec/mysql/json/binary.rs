@@ -7,8 +7,10 @@ use std::{f64, str};
 use super::{Json, ERR_CONVERT_FAILED};
 use crate::coprocessor::codec::{Error, Result};
 use byteorder::WriteBytesExt;
+use ordered_float::NotNan;
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::{read_slice, BytesSlice};
+
 const TYPE_CODE_OBJECT: u8 = 0x01;
 const TYPE_CODE_ARRAY: u8 = 0x03;
 const TYPE_CODE_LITERAL: u8 = 0x04;
@@ -173,8 +175,8 @@ pub trait JsonEncoder: NumberEncoder {
         self.encode_u64_le(data).map_err(Error::from)
     }
 
-    fn encode_json_f64(&mut self, data: f64) -> Result<()> {
-        self.encode_f64_le(data).map_err(Error::from)
+    fn encode_json_f64(&mut self, data: NotNan<f64>) -> Result<()> {
+        self.encode_f64_le(data.into_inner()).map_err(Error::from)
     }
 
     fn encode_str(&mut self, data: &str) -> Result<()> {
@@ -304,7 +306,7 @@ impl Json {
 
     fn decode_double(buf: &mut BytesSlice<'_>) -> Result<Json> {
         let value = number::decode_f64_le(buf)?;
-        Ok(Json::Double(value))
+        Ok(Json::Double(box_try!(NotNan::<f64>::new(value))))
     }
 
     fn decode_i64(buf: &mut BytesSlice<'_>) -> Result<Json> {
@@ -395,7 +397,7 @@ mod tests {
         let json_bool = Json::Boolean(true);
         let json_int = Json::I64(30);
         let json_uint = Json::U64(30);
-        let json_double = Json::Double(3.24);
+        let json_double = Json::Double((3.24).into());
         let json_str = Json::String(String::from("hello, 世界"));
         let test_cases = vec![
             json_nil,

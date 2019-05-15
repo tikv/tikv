@@ -10,6 +10,7 @@ use std::{f64, str};
 
 use super::Json;
 use crate::coprocessor::codec::Error;
+use ordered_float::NotNan;
 
 impl Json {
     pub fn to_string(&self) -> String {
@@ -50,7 +51,7 @@ impl Serialize for Json {
                 }
                 tup.end()
             }
-            Json::Double(d) => serializer.serialize_f64(d),
+            Json::Double(d) => serializer.serialize_f64(d.into_inner()),
             Json::I64(d) => serializer.serialize_i64(d),
             Json::U64(d) => serializer.serialize_u64(d),
         }
@@ -96,7 +97,9 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        Ok(Json::Double(v))
+        NotNan::<f64>::new(v)
+            .map(|f| Json::Double(f))
+            .map_err(|_| E::custom("Invalid value: NaN".to_string()))
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>

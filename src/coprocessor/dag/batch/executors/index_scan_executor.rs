@@ -250,6 +250,7 @@ mod tests {
     use kvproto::coprocessor::KeyRange;
     use tipb::schema::ColumnInfo;
 
+    use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::exec_summary::*;
@@ -356,7 +357,11 @@ mod tests {
             result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(10.5), Some(5.1), Some(0.3)]
+                &[
+                    Real::new(10.5).ok(),
+                    Real::new(5.1).ok(),
+                    Real::new(0.3).ok()
+                ]
             );
         }
 
@@ -400,7 +405,7 @@ mod tests {
             result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(5.1), Some(10.5)]
+                &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
@@ -467,7 +472,7 @@ mod tests {
             result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(5.1), Some(10.5)]
+                &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
@@ -510,7 +515,10 @@ mod tests {
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5)]);
             assert!(result.data[1].is_raw());
             result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
-            assert_eq!(result.data[1].decoded().as_real_slice(), &[Some(5.1)]);
+            assert_eq!(
+                result.data[1].decoded().as_real_slice(),
+                &[Real::new(5.1).ok()]
+            );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5)]);
         }

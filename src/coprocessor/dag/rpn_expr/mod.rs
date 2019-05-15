@@ -6,7 +6,6 @@ pub mod types;
 
 pub mod impl_cast;
 pub mod impl_compare;
-pub mod impl_dummy;
 pub mod impl_op;
 
 pub use self::function::RpnFunction;

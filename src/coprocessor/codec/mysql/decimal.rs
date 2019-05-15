@@ -2112,6 +2112,16 @@ impl PartialOrd for Decimal {
     }
 }
 
+impl std::hash::Hash for Decimal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.int_cnt.hash(state);
+        self.frac_cnt.hash(state);
+        self.result_frac_cnt.hash(state);
+        self.negative.hash(state);
+        self.word_buf.hash(state);
+    }
+}
+
 impl Eq for Decimal {}
 
 impl Ord for Decimal {

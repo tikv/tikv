@@ -48,6 +48,8 @@ extern crate more_asserts;
 extern crate vlog;
 #[macro_use]
 extern crate tikv_util;
+#[macro_use]
+extern crate match_template;
 #[cfg(test)]
 extern crate test;
 

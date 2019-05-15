@@ -140,7 +140,7 @@ mod tests {
             Json::Object(BTreeMap::new()),
             Json::Array(vec![]),
             Json::I64(2017),
-            Json::Double(19.28),
+            Json::Double((19.28).into()),
             Json::Boolean(true),
             Json::None,
         ];

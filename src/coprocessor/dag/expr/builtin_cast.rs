@@ -13,6 +13,7 @@ use crate::coprocessor::codec::mysql::decimal::RoundMode;
 use crate::coprocessor::codec::mysql::{charset, Decimal, Duration, Json, Res, Time, TimeType};
 use crate::coprocessor::codec::{mysql, Datum};
 use crate::coprocessor::dag::expr::Flag;
+use ordered_float::NotNan;
 
 impl ScalarFunc {
     pub fn cast_int_as_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
@@ -537,7 +538,7 @@ impl ScalarFunc {
         row: &'a [Datum],
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_real(ctx, row));
-        let j = Json::Double(val);
+        let j = Json::Double(box_try!(NotNan::<f64>::new(val)));
         Ok(Some(Cow::Owned(j)))
     }
 
@@ -548,7 +549,7 @@ impl ScalarFunc {
     ) -> Result<Option<Cow<'a, Json>>> {
         let val = try_opt!(self.children[0].eval_decimal(ctx, row));
         let val = val.as_f64()?;
-        let j = Json::Double(val);
+        let j = Json::Double(box_try!(NotNan::<f64>::new(val)));
         Ok(Some(Cow::Owned(j)))
     }
 
@@ -1703,7 +1704,10 @@ mod tests {
     fn test_cast_real_as_json() {
         let mut ctx = EvalContext::new(Arc::new(EvalConfig::default_for_test()));
         let cases = vec![
-            (vec![Datum::F64(32.0001)], Some(Json::Double(32.0001))),
+            (
+                vec![Datum::F64(32.0001)],
+                Some(Json::Double((32.0001).into())),
+            ),
             (vec![Datum::Null], None),
         ];
         for (cols, exp) in cases {
@@ -1725,7 +1729,7 @@ mod tests {
         let cases = vec![
             (
                 vec![Datum::Dec(Decimal::from_f64(32.0001).unwrap())],
-                Some(Json::Double(32.0001)),
+                Some(Json::Double((32.0001).into())),
             ),
             (vec![Datum::Null], None),
         ];

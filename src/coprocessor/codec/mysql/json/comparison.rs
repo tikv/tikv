@@ -5,6 +5,7 @@ use std::f64;
 
 use super::super::Result;
 use super::{Json, JsonEncoder, ERR_CONVERT_FAILED};
+use ordered_float::NotNan;
 
 const PRECEDENCE_BLOB: i32 = -1;
 const PRECEDENCE_BIT: i32 = -2;
@@ -33,7 +34,7 @@ impl Json {
 
     fn as_f64(&self) -> Result<f64> {
         match *self {
-            Json::Double(d) => Ok(d),
+            Json::Double(d) => Ok(d.into_inner()),
             Json::I64(d) => Ok(d as f64),
             Json::U64(d) => Ok(d as f64),
             Json::Boolean(_) => {
@@ -63,17 +64,14 @@ impl PartialEq for Json {
 }
 
 impl PartialOrd for Json {
+    // FIXME: The following logic differs from MySQL.
     fn partial_cmp(&self, right: &Json) -> Option<Ordering> {
         let precedence_diff = self.get_precedence() - right.get_precedence();
         if precedence_diff == 0 {
             if self.get_precedence() == PRECEDENCE_NUMBER {
                 let left_data = self.as_f64().unwrap();
                 let right_data = right.as_f64().unwrap();
-                if (left_data - right_data).abs() < f64::EPSILON {
-                    return Some(Ordering::Equal);
-                } else {
-                    return left_data.partial_cmp(&right_data);
-                }
+                return left_data.partial_cmp(&right_data);
             }
 
             return match (self, right) {
@@ -97,20 +95,30 @@ impl PartialOrd for Json {
             };
         }
 
-        let left_data = self.as_f64();
-        let right_data = right.as_f64();
-        // tidb treats boolean as integer, but boolean is different from integer in JSON.
-        // so we need convert them to same type and then compare.
-        if left_data.is_ok() && right_data.is_ok() {
-            let left = left_data.unwrap();
-            let right = right_data.unwrap();
-            return left.partial_cmp(&right);
-        }
-
         if precedence_diff > 0 {
             Some(Ordering::Greater)
         } else {
             Some(Ordering::Less)
+        }
+    }
+}
+
+impl std::hash::Hash for Json {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let p = self.get_precedence();
+        if p == PRECEDENCE_NUMBER {
+            let f = NotNan::new(self.as_f64().unwrap()).unwrap();
+            f.hash(state);
+        } else {
+            p.hash(state);
+            match self {
+                Json::Boolean(v) => v.hash(state),
+                Json::String(v) => v.hash(state),
+                Json::Array(v) => v.hash(state),
+                Json::Object(v) => v.hash(state),
+                Json::None => {}
+                _ => unreachable!(),
+            }
         }
     }
 }
@@ -144,8 +152,6 @@ mod tests {
         let test_cases = vec![
             ("1.5", "2"),
             ("1.5", "false"),
-            ("true", "1.5"),
-            ("true", "2"),
             ("null", r#"{"a": "b"}"#),
             ("2", r#""hello, world""#),
             (r#""hello, world""#, r#"{"a": "b"}"#),
@@ -158,7 +164,5 @@ mod tests {
             let right: Json = right_str.parse().unwrap();
             assert!(left < right);
         }
-
-        assert_eq!(Json::I64(2), Json::Boolean(false));
     }
 }

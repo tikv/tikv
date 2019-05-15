@@ -11,7 +11,7 @@ impl Json {
             Json::Boolean(true) => 1,
             Json::I64(d) => d,
             Json::U64(d) => d as i64,
-            Json::Double(d) => d as i64,
+            Json::Double(d) => d.into_inner() as i64,
             Json::String(ref s) => s.parse::<i64>().unwrap_or(0),
         }
     }
@@ -23,7 +23,7 @@ impl Json {
             Json::Boolean(true) => 1f64,
             Json::I64(d) => d as f64,
             Json::U64(d) => d as f64,
-            Json::Double(d) => d,
+            Json::Double(d) => d.into_inner(),
             Json::String(ref s) => convert::bytes_to_f64(ctx, s.as_bytes())?,
         };
         Ok(d)

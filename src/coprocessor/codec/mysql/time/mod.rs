@@ -182,7 +182,7 @@ fn split_ymd_with_frac_as_hms(
     Ok((year, month, day, hour, minute, sec))
 }
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum TimeType {
     Date,
     DateTime,
@@ -768,6 +768,12 @@ impl PartialOrd for Time {
 impl PartialEq for Time {
     fn eq(&self, right: &Time) -> bool {
         self.time.eq(&right.time)
+    }
+}
+
+impl std::hash::Hash for Time {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.time.hash(state);
     }
 }
 

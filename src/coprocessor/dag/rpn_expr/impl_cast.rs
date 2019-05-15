@@ -130,7 +130,7 @@ impl RpnFnCastStringAsReal {
             Some(val) => {
                 let val = bytes_to_f64(ctx, val.as_slice())?;
                 // FIXME: There is an additional step `ProduceFloatWithSpecifiedTp` in TiDB.
-                Ok(Some(val))
+                Ok(Real::new(val).ok())
             }
         }
     }
@@ -152,7 +152,7 @@ impl RpnFnCastTimeAsReal {
             None => Ok(None),
             Some(val) => {
                 let val = val.to_decimal()?.as_f64()?;
-                Ok(Some(val))
+                Ok(Real::new(val).ok())
             }
         }
     }
@@ -174,7 +174,7 @@ impl RpnFnCastDurationAsReal {
             None => Ok(None),
             Some(val) => {
                 let val = val.to_decimal()?.as_f64()?;
-                Ok(Some(val))
+                Ok(Real::new(val).ok())
             }
         }
     }
@@ -196,7 +196,7 @@ impl RpnFnCastJsonAsReal {
             None => Ok(None),
             Some(val) => {
                 let val = val.cast_to_real(ctx)?;
-                Ok(Some(val))
+                Ok(Real::new(val).ok())
             }
         }
     }

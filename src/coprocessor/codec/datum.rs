@@ -16,6 +16,7 @@ use super::mysql::{
 };
 use super::{convert, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
+use ordered_float::NotNan;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::{number, BytesSlice};
 use tikv_util::escape;
@@ -256,10 +257,10 @@ impl Datum {
             Datum::Json(ref j) => j.cmp(json),
             Datum::I64(d) => Json::I64(d).cmp(json),
             Datum::U64(d) => Json::U64(d).cmp(json),
-            Datum::F64(d) => Json::Double(d).cmp(json),
+            Datum::F64(d) => Json::Double(box_try!(NotNan::<f64>::new(d))).cmp(json),
             Datum::Dec(ref d) => {
                 let ff = d.as_f64()?;
-                Json::Double(ff).cmp(json)
+                Json::Double(box_try!(NotNan::<f64>::new(ff))).cmp(json)
             }
             Datum::Bytes(ref d) => {
                 let data = str::from_utf8(d)?;
@@ -458,10 +459,10 @@ impl Datum {
             }
             Datum::I64(d) => Ok(Json::I64(d)),
             Datum::U64(d) => Ok(Json::U64(d)),
-            Datum::F64(d) => Ok(Json::Double(d)),
+            Datum::F64(d) => Ok(Json::Double(box_try!(NotNan::<f64>::new(d)))),
             Datum::Dec(d) => {
                 let ff = d.as_f64()?;
-                Ok(Json::Double(ff))
+                Ok(Json::Double(box_try!(NotNan::<f64>::new(ff))))
             }
             Datum::Json(d) => Ok(d),
             _ => {
@@ -1642,12 +1643,12 @@ mod tests {
             (Datum::U64(18), Datum::Json(Json::I64(20)), Ordering::Less),
             (
                 Datum::F64(1.2),
-                Datum::Json(Json::Double(1.0)),
+                Datum::Json(Json::Double((1.0).into())),
                 Ordering::Greater,
             ),
             (
                 Datum::Dec(i32::MIN.into()),
-                Datum::Json(Json::Double(f64::from(i32::MIN))),
+                Datum::Json(Json::Double(f64::from(i32::MIN).into())),
                 Ordering::Equal,
             ),
             (
@@ -1834,7 +1835,6 @@ mod tests {
             ),
             (Datum::Bytes(b"[1, 2, 3]".to_vec()), "[1, 2, 3]"),
             (Datum::Bytes(b"{}".to_vec()), "{}"),
-            (Datum::I64(1), "true"),
         ];
 
         for (d, json) in tests {

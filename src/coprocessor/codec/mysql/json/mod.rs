@@ -40,7 +40,7 @@ pub enum Json {
     Array(Vec<Json>),
     I64(i64),
     U64(u64),
-    Double(f64),
+    Double(ordered_float::NotNan<f64>),
     String(String),
     Boolean(bool),
     None,
