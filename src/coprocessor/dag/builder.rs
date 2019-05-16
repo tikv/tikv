@@ -187,9 +187,12 @@ impl DAGBuilder {
                     src,
                     exec.take_aggregation(),
                 )?),
-                ExecType::TypeTopN => {
-                    Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-                }
+                ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_topN(),
+                    Arc::clone(&ctx),
+                    src,
+                )?),
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(
                     C::new(summary_slot_index),
                     exec.take_limit(),
