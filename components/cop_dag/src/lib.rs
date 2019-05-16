@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
 #![feature(fnbox)]
+#![feature(specialization)]
 
 #[macro_use]
 extern crate quick_error;
@@ -32,6 +33,7 @@ extern crate test;
 mod redundant_files;
 pub use redundant_files::*;
 
+pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
 pub mod error;
