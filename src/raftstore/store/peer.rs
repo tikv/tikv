@@ -310,7 +310,7 @@ impl Peer {
             applied: applied_index,
             check_quorum: true,
             tag: tag.clone(),
-            skip_bcast_commit: true,
+            skip_bcast_commit: false,
             pre_vote: cfg.prevote,
             ..Default::default()
         };
@@ -1155,7 +1155,7 @@ impl Peer {
                 self.last_applying_idx = committed_entries.last().unwrap().get_index();
                 if self.last_applying_idx >= self.last_urgent_proposal_idx {
                     // Urgent requests are flushed, make it lazy again.
-                    self.raft_group.skip_bcast_commit(true);
+                    self.raft_group.skip_bcast_commit(false);
                     self.last_urgent_proposal_idx = u64::MAX;
                 }
                 let apply = Apply::new(self.region_id, self.term(), committed_entries);

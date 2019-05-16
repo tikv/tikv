@@ -482,7 +482,7 @@ impl Debugger {
                 applied: apply_state.get_applied_index(),
                 check_quorum: true,
                 tag,
-                skip_bcast_commit: true,
+                skip_bcast_commit: false,
                 ..Default::default()
             };
 
