@@ -42,11 +42,18 @@ fn aggregate_single_group(
             match_template_evaluable! {
                 TT, match output_type {
                     EvalType::TT => {
-                        let concrete_output_column = AsMut::<Vec<Option<TT>>>::as_mut(&mut aggr_output_columns[output_column_offset]);
+                        let concrete_output_column: &mut Vec<Option<TT>> = aggr_output_columns[output_column_offset].as_mut();
                         aggr_fn_state.push_result(ctx, concrete_output_column)?;
                     }
                 }
             }
+        } else {
+            // Multi output column, we use `[VectorValue]` as container.
+            aggr_fn_state.push_result(
+                ctx,
+                &mut aggr_output_columns
+                    [output_column_offset..output_column_offset + output_cardinality],
+            )?;
         }
 
         output_column_offset += output_cardinality;
@@ -66,6 +73,7 @@ enum SingleGroupLookup {
     Json(HashMap<Option<Json>, usize>),
 }
 
+#[derive(Debug)]
 struct MultiGroupInfo {
     /// The start index in `states`. It serves a same purpose as the hash table values in
     /// `SingleGroupLookup` fields.
@@ -134,6 +142,8 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
                 ))
             })?;
         }
+
+        // TODO: Verify group by only have columns
 
         let aggr_definitions = descriptor.get_agg_func();
         for def in aggr_definitions {
@@ -564,6 +574,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
             // then using `HashMap::drain()`.
             // TODO: Verify performance difference.
             let map = std::mem::replace(&mut self.multi_group_lookup, HashMap::default());
+
             for (group_key, group_info) in map {
                 // Output aggregate function columns first.
                 aggregate_single_group(
@@ -685,5 +696,86 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
         self.src.collect_statistics(destination);
         self.summary_collector
             .collect_into(&mut destination.summary_per_executor);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_codegen::AggrFunction;
+    use cop_datatype::FieldTypeTp;
+
+    use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+    use crate::coprocessor::dag::aggr_fn::ConcreteAggrFunctionState;
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+
+    #[test]
+    fn test_no_row() {
+        #[derive(Debug, AggrFunction)]
+        #[aggr_function(state = AggrFnFooState)]
+        struct AggrFnFoo;
+
+        #[derive(Debug)]
+        struct AggrFnFooState;
+
+        impl ConcreteAggrFunctionState for AggrFnFooState {
+            type ParameterType = Real;
+            type ResultTargetType = Vec<Option<Int>>;
+
+            fn update_concrete(
+                &mut self,
+                _ctx: &mut EvalContext,
+                _value: &Option<Self::ParameterType>,
+            ) -> Result<()> {
+                // Update should never be called since we are testing aggregate for no row.
+                unreachable!()
+            }
+
+            fn push_result_concrete(
+                &self,
+                _ctx: &mut EvalContext,
+                _target: &mut Self::ResultTargetType,
+            ) -> Result<()> {
+                // Push result should never be called since we have no group.
+                unreachable!()
+            }
+        }
+
+        let src_exec = MockExecutor::new(
+            vec![FieldTypeTp::LongLong.into()],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        );
+
+        let mut exec = BatchHashAggregationExecutor::new_for_test(
+            src_exec,
+            vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
+            vec![Expr::new()],
+            |_, _, _, _, out_schema, out_exp| {
+                out_schema.push(FieldTypeTp::LongLong.into());
+                out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
+                Ok(Box::new(AggrFnFoo))
+            },
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(r.is_drained.unwrap());
     }
 }

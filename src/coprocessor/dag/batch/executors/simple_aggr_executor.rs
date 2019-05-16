@@ -267,7 +267,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
                 match_template_evaluable! {
                     TT, match output_type {
                         EvalType::TT => {
-                            let concrete_output_column = AsMut::<Vec<Option<TT>>>::as_mut(&mut output_columns[output_offset]);
+                            let concrete_output_column: &mut Vec<Option<TT>> = output_columns[output_offset].as_mut();
                             aggr_fn_state.push_result(&mut self.context, concrete_output_column)?;
                         }
                     }
