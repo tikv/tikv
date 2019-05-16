@@ -600,6 +600,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if StateRole::Leader == ss.raft_state {
                 self.fsm.missing_ticks = 0;
                 self.register_split_region_check_tick();
+                self.fsm.peer.heartbeat_pd(&self.ctx);
                 self.register_pd_heartbeat_tick();
             }
         }
@@ -823,6 +824,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     res.merged,
                     &res.metrics,
                 );
+                // After applying, several metrics are updated, report it to pd to
+                // get fair schedule.
+                self.register_pd_heartbeat_tick();
             }
             ApplyTaskRes::Destroy { peer_id, .. } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
@@ -1423,6 +1427,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let peer_id = cp.peer.get_id();
+        let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
@@ -1431,13 +1436,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
 
                 // Add this peer to cache and heartbeats.
-                let now = Instant::now();
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_added_peer.update(id, now);
+                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1450,6 +1454,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
@@ -2106,14 +2111,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
-        if exec_results.is_empty() {
-            return None;
-        }
-
-        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
-        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
-        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -2152,6 +2149,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
+
+        // Update metrics only when all exec_results are finished in case the metrics is counted multiple times
+        // when waiting for commit merge
+        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+
         None
     }
 
@@ -2354,7 +2358,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
-        if !self.fsm.peer.get_store().is_cache_empty() {
+        if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
             self.register_raft_gc_log_tick();
         }
         debug_assert!(!self.fsm.stopped);
@@ -2471,6 +2475,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_split_region_check_tick(&mut self) {
+        if !self.ctx.cfg.hibernate_regions {
+            self.register_split_region_check_tick();
+        }
         if !self.fsm.peer.is_leader() {
             return;
         }
@@ -2663,6 +2670,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self) {
+        if !self.ctx.cfg.hibernate_regions {
+            self.register_pd_heartbeat_tick();
+        }
         self.fsm.peer.check_peers();
 
         if !self.fsm.peer.is_leader() {
@@ -2692,13 +2702,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
                 self.fsm.peer.ping();
-                self.register_pd_heartbeat_tick();
                 if !self.fsm.peer.is_leader() {
                     // If leader is able to receive messge but can't send out any,
                     // follower should be able to start an election.
                     self.fsm.group_state = GroupState::PreChaos;
                 } else {
                     self.fsm.has_ready = true;
+                    // Schedule a pd heartbeat to discover down and pending peer when
+                    // hibernate_regions is enabled.
+                    self.register_pd_heartbeat_tick();
                 }
             } else if self.fsm.group_state == GroupState::PreChaos {
                 self.fsm.group_state = GroupState::Chaos;

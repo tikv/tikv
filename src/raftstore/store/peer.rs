@@ -192,32 +192,6 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
-pub struct RecentAddedPeer {
-    pub reject_duration_as_secs: u64,
-    pub id: u64,
-    pub added_time: Instant,
-}
-
-impl RecentAddedPeer {
-    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
-        RecentAddedPeer {
-            reject_duration_as_secs,
-            id: Default::default(),
-            added_time: Instant::now(),
-        }
-    }
-
-    pub fn update(&mut self, id: u64, now: Instant) {
-        self.id = id;
-        self.added_time = now;
-    }
-
-    pub fn contains(&self, id: u64) -> bool {
-        self.id == id
-            && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
-    }
-}
-
 #[derive(Default, Debug, Clone, Copy)]
 pub struct CheckTickResult {
     leader: bool,
@@ -270,7 +244,9 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
-    pub recent_added_peer: RecentAddedPeer,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peer_ids: Vec<u64>,
+    pub recent_conf_change_time: Instant,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -358,9 +334,8 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            recent_added_peer: RecentAddedPeer::new(
-                cfg.raft_reject_transfer_leader_duration.as_secs(),
-            ),
+            down_peer_ids: vec![],
+            recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
@@ -746,6 +721,7 @@ impl Peer {
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
+            self.peers_start_pending_time.clear();
             return;
         }
 
@@ -763,8 +739,9 @@ impl Peer {
     }
 
     /// Collects all down peers.
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
@@ -775,9 +752,11 @@ impl Peer {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(instant.elapsed().as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        self.down_peer_ids = down_peer_ids;
         down_peers
     }
 
@@ -819,13 +798,16 @@ impl Peer {
         pending_peers
     }
 
-    /// Returns `true` if any new peer catches up with the leader in replicating logs.
-    /// And updates `peers_start_pending_time` if needed.
+    /// Returns `true` if any peer recover from connectivity problem.
+    ///
+    /// A peer can become pending or down if it has not responded for a
+    /// long time. If it becomes normal again, PD need to be notified.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() {
+        if self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty() {
             return false;
         }
         if !self.is_leader() {
+            self.down_peer_ids = vec![];
             self.peers_start_pending_time = vec![];
             return false;
         }
@@ -847,6 +829,9 @@ impl Peer {
                     return true;
                 }
             }
+        }
+        if self.down_peer_ids.contains(&peer_id) {
+            return true;
         }
         false
     }
@@ -913,7 +898,6 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
-                    self.heartbeat_pd(ctx)
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -1664,9 +1648,13 @@ impl Peer {
                 return false;
             }
         }
-        if self.recent_added_peer.contains(peer_id) {
+
+        // Checks if safe to transfer leader.
+        if duration_to_sec(self.recent_conf_change_time.elapsed())
+            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        {
             debug!(
-                "reject transfer leader due to the peer was added recently";
+                "reject transfer leader due to the region was config changed recently";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,
@@ -2208,7 +2196,7 @@ pub trait RequestInspector {
                 CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
                     has_write = true
                 }
-                CmdType::Prewrite | CmdType::Invalid => {
+                CmdType::Prewrite | CmdType::Invalid | CmdType::ReadIndex => {
                     return Err(box_err!(
                         "invalid cmd type {:?}, message maybe corrupted",
                         r.get_cmd_type()
@@ -2398,6 +2386,7 @@ impl ReadExecutor {
                 | CmdType::Delete
                 | CmdType::DeleteRange
                 | CmdType::IngestSST
+                | CmdType::ReadIndex
                 | CmdType::Invalid => unreachable!(),
             };
             resp.set_cmd_type(cmd_type);

@@ -326,12 +326,6 @@ mod tests {
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
 
-    fn field_type(ft: FieldTypeTp) -> FieldType {
-        let mut f = FieldType::new();
-        f.as_mut_accessor().set_tp(ft);
-        f
-    }
-
     /// Test Helper for normal test with fixed schema and data.
     /// Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
     /// Column id:    1,            2,         4
@@ -429,9 +423,9 @@ mod tests {
             ];
 
             let field_types = vec![
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::Double),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::Double.into(),
             ];
 
             let store = {
@@ -725,23 +719,10 @@ mod tests {
                 ci
             },
         ];
-
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         let mut kv = vec![];
@@ -843,19 +824,7 @@ mod tests {
                 ci
             },
         ];
-
-        let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let mut kv = vec![];
         {

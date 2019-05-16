@@ -142,7 +142,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine);
+            let engines = Engines::new(engine, raft_engine, cache.is_some());
             self.dbs.push(engines);
             self.paths.push(dir);
         }
@@ -405,8 +405,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_id(region_id);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         let peer = new_peer(peer_id, peer_id);
         region.mut_peers().push(peer.clone());
         self.pd_client.add_region(&region);
@@ -426,8 +426,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
