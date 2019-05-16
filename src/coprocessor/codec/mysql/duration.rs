@@ -200,6 +200,7 @@ named_args!(parse(fsp: u8)<
 /// `Duration` is the type for MySQL `time` type.
 ///
 /// It only occupies 24 bytes in memory.
+/// TODO: reduce size of `Duration` to 8 bytes
 #[derive(Debug, Clone, Copy)]
 pub struct Duration {
     dur: StdDuration,
