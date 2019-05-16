@@ -1647,7 +1647,8 @@ mod tests {
         let raft_path = path.path().join(Path::new("raft"));
         let raft_db =
             Arc::new(new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None).unwrap());
-        let engines = Engines::new(kv_db, raft_db);
+        let shared_block_cache = false;
+        let engines = Engines::new(kv_db, raft_db, shared_block_cache);
         bootstrap_store(&engines, 1, 1).unwrap();
 
         let region = initial_region(1, 1, 1);

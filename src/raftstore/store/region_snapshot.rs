@@ -365,6 +365,7 @@ mod tests {
 
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
+        let shared_block_cache = false;
         Engines::new(
             Arc::new(
                 rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
@@ -374,6 +375,7 @@ mod tests {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             ),
+            shared_block_cache,
         )
     }
 

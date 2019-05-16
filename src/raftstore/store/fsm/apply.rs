@@ -2891,7 +2891,8 @@ mod tests {
             rocks::util::new_engine(path.path().join("raft").to_str().unwrap(), None, &[], None)
                 .unwrap(),
         );
-        (path, Engines::new(db, raft_db))
+        let shared_block_cache = false;
+        (path, Engines::new(db, raft_db, shared_block_cache))
     }
 
     pub fn create_tmp_importer(path: &str) -> (TempDir, Arc<SSTImporter>) {
