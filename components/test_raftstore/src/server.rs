@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -21,27 +10,29 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb;
 use tempdir::TempDir;
 
+use engine::Engines;
 use tikv::config::TiKvConfig;
 use tikv::coprocessor;
 use tikv::import::{ImportSSTService, SSTImporter};
 use tikv::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
 use tikv::raftstore::store::fsm::{RaftBatchSystem, RaftRouter};
-use tikv::raftstore::store::{Callback, Engines, SnapManager};
+use tikv::raftstore::store::{Callback, SnapManager};
 use tikv::raftstore::Result;
 use tikv::server::load_statistics::ThreadLoad;
-use tikv::server::readpool::ReadPool;
+use tikv::server::readpool;
 use tikv::server::resolve::{self, Task as ResolveTask};
-use tikv::server::transport::RaftStoreRouter;
 use tikv::server::transport::ServerRaftStoreRouter;
+use tikv::server::transport::{RaftStoreBlackHole, RaftStoreRouter};
 use tikv::server::Result as ServerResult;
 use tikv::server::{
     create_raft_storage, Config, Error, Node, PdStoreAddrResolver, RaftClient, Server,
     ServerTransport,
 };
-use tikv::storage::{self, RaftKv};
-use tikv::util::collections::{HashMap, HashSet};
-use tikv::util::security::SecurityManager;
-use tikv::util::worker::{FutureWorker, Worker};
+
+use tikv::storage::RaftKv;
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::security::SecurityManager;
+use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
 
@@ -67,7 +58,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     snap_paths: HashMap<u64, TempDir>,
     pd_client: Arc<TestPdClient>,
-    raft_client: RaftClient,
+    raft_client: RaftClient<RaftStoreBlackHole>,
     _stats_pool: tokio_threadpool::ThreadPool,
 }
 
@@ -85,6 +76,7 @@ impl ServerCluster {
             env,
             Arc::new(Config::default()),
             security_mgr,
+            RaftStoreBlackHole,
             Arc::new(ThreadLoad::with_threshold(usize::MAX)),
             stats_pool.sender().clone(),
         );
@@ -136,11 +128,8 @@ impl Simulator for ServerCluster {
         let sim_router = SimulateTransport::new(raft_router);
 
         // Create storage.
-        let pd_worker = FutureWorker::new("test-future-worker");
-        let storage_read_pool =
-            ReadPool::new("store-read", &cfg.readpool.storage.build_config(), || {
-                storage::ReadPoolContext::new(pd_worker.scheduler())
-            });
+        let pd_worker = FutureWorker::new("test-pd-worker");
+        let storage_read_pool = readpool::Builder::build_for_test();
         let store = create_raft_storage(
             sim_router.clone(),
             &cfg.storage,
@@ -165,12 +154,9 @@ impl Simulator for ServerCluster {
         // Create pd client, snapshot manager, server.
         let (worker, resolver) = resolve::new_resolver(Arc::clone(&self.pd_client)).unwrap();
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
-        let pd_worker = FutureWorker::new("test-pd-worker");
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = ReadPool::new("cop", &cfg.readpool.coprocessor.build_config(), || {
-            coprocessor::ReadPoolContext::new(pd_worker.scheduler())
-        });
+        let cop_read_pool = readpool::Builder::build_for_test();
         let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
         let mut server = None;
         for _ in 0..100 {

@@ -1,18 +1,7 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::Result;
-use crate::util::escape;
+use tikv_util::escape;
 
 /// `UNSPECIFIED_FSP` is the unspecified fractional seconds part.
 pub const UNSPECIFIED_FSP: i8 = -1;
@@ -74,18 +63,26 @@ pub use self::time::{Time, TimeEncoder, TimeType, Tz};
 mod tests {
     #[test]
     fn test_parse_frac() {
-        let cases = vec![
-            ("1234567", 0, 0),
-            ("1234567", 1, 1),
-            ("0000567", 5, 6),
-            ("1234567", 5, 12346),
-            ("1234567", 6, 123457),
-            ("9999999", 6, 1000000),
+        let cases: Vec<(&'static [u8], u8, u32)> = vec![
+            (b"", 0, 0),
+            (b"", 10, 0),
+            (b"1234567", 0, 0),
+            (b"1234567", 1, 1),
+            (b"0000567", 5, 6),
+            (b"1234567", 5, 12346),
+            (b"1234567", 6, 123457),
+            (b"9999999", 6, 1000000),
+            (b"12", 5, 12000),
         ];
 
         for (s, fsp, exp) in cases {
-            let res = super::parse_frac(s.as_bytes(), fsp).unwrap();
+            let res = super::parse_frac(s, fsp).unwrap();
             assert_eq!(res, exp);
         }
+
+        assert!(
+            super::parse_frac(b"00x", 6).is_err(),
+            "00x should be invalid for `parse_frac`"
+        );
     }
 }

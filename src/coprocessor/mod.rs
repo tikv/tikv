@@ -1,19 +1,10 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
-//! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
-//! computing and the amount of data to transfer can be reduced (i.e. filtered at TiKV side).
+//! Handles simple SQL query executors locally.
+//!
+//! Most TiDB read queries are processed by Coprocessor instead of KV interface.
+//! By doing so, the CPU of TiKV nodes can be utilized for computing and the
+//! amount of data to transfer can be reduced (i.e. filtered at TiKV side).
 //!
 //! Notice that Coprocessor handles more than simple SQL query executors (DAG request). It also
 //! handles analyzing requests and checksum requests.
@@ -35,20 +26,17 @@ mod endpoint;
 mod error;
 pub mod local_metrics;
 mod metrics;
-mod readpool_context;
+pub mod readpool_impl;
 mod statistics;
 mod tracker;
 pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
-pub use self::readpool_context::Context as ReadPoolContext;
-
-use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
-use crate::util::time::{Duration, Instant};
+use tikv_util::time::{Duration, Instant};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -123,10 +111,8 @@ impl Deadline {
     }
 }
 
-/// Denotes for a function that builds a `RequestHandler`.
-/// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]

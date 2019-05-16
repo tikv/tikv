@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Unbounded};
@@ -29,9 +18,10 @@ use raft::eraftpb;
 use tikv::pd::{Error, Key, PdClient, PdFuture, RegionStat, Result};
 use tikv::raftstore::store::keys::{self, data_key, enc_end_key, enc_start_key};
 use tikv::raftstore::store::util::check_key_in_region;
-use tikv::util::collections::{HashMap, HashMapEntry, HashSet};
-use tikv::util::timer::GLOBAL_TIMER_HANDLE;
-use tikv::util::{escape, Either, HandyRwLock};
+use tikv::raftstore::store::{INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
+use tikv_util::collections::{HashMap, HashMapEntry, HashSet};
+use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{escape, Either, HandyRwLock};
 
 use super::*;
 
@@ -645,8 +635,8 @@ pub fn bootstrap_with_first_region(pd_client: Arc<TestPdClient>) -> Result<()> {
     region.set_id(1);
     region.set_start_key(keys::EMPTY_KEY.to_vec());
     region.set_end_key(keys::EMPTY_KEY.to_vec());
-    region.mut_region_epoch().set_version(1);
-    region.mut_region_epoch().set_conf_ver(1);
+    region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+    region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
     let peer = new_peer(1, 1);
     region.mut_peers().push(peer.clone());
     pd_client.add_region(&region);
@@ -1151,5 +1141,23 @@ impl PdClient for TestPdClient {
 
         let safe_point = self.cluster.rl().get_gc_safe_point();
         Box::new(ok(safe_point))
+    }
+
+    fn get_store_stats(&self, store_id: u64) -> Result<pdpb::StoreStats> {
+        let cluster = self.cluster.rl();
+        let stats = cluster.store_stats.get(&store_id);
+        match stats {
+            Some(s) => Ok(s.clone()),
+            None => Err(Error::StoreTombstone(format!("store_id:{}", store_id))),
+        }
+    }
+
+    fn get_operator(&self, region_id: u64) -> Result<pdpb::GetOperatorResponse> {
+        let mut header = pdpb::ResponseHeader::new();
+        header.set_cluster_id(self.cluster_id);
+        let mut resp = pdpb::GetOperatorResponse::new();
+        resp.set_header(header);
+        resp.set_region_id(region_id);
+        Ok(resp)
     }
 }

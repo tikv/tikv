@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! DAG request is the most frequently used Coprocessor request. It includes some (simple) query
 //! executors, e.g. table scan, index scan, selection, etc. Rows are fetched from the underlying KV
@@ -33,13 +22,18 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
-pub mod batch_executor;
+pub mod aggr_fn;
+pub mod batch;
 pub mod batch_handler;
-mod builder;
+pub mod builder;
+pub mod exec_summary;
 pub mod executor;
 pub mod expr;
 pub mod handler;
 pub mod rpn_expr;
+mod scanner;
 
-pub use self::executor::{ScanOn, Scanner};
+pub use self::batch_handler::BatchDAGHandler;
+pub use self::builder::DAGBuilder;
 pub use self::handler::DAGRequestHandler;
+pub use self::scanner::{ScanOn, Scanner};

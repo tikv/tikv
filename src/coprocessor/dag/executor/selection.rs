@@ -1,20 +1,10 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
 use tipb::executor::Selection;
 
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
@@ -89,6 +79,10 @@ impl Executor for SelectionExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
 }
 
 #[cfg(test)]
@@ -100,9 +94,9 @@ mod tests {
     use tipb::expression::{Expr, ExprType, ScalarFuncSig};
 
     use crate::coprocessor::codec::datum::Datum;
-    use crate::util::codec::number::NumberEncoder;
+    use tikv_util::codec::number::NumberEncoder;
 
-    use super::super::tests::{gen_table_scan_executor, new_col_info};
+    use super::super::tests::*;
     use super::*;
 
     fn new_const_expr() -> Expr {

@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::collections::Bound::{Excluded, Included, Unbounded};
@@ -19,6 +8,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
+use engine::Engines;
+use engine::CF_RAFT;
+use engine::{Peekable, Snapshot as EngineSnapshot};
 use futures::Future;
 use kvproto::errorpb;
 use kvproto::import_sstpb::SSTMeta;
@@ -37,15 +29,13 @@ use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
 
 use crate::pd::{PdClient, PdTask};
 use crate::raftstore::{Error, Result};
-use crate::storage::CF_RAFT;
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::time::duration_to_sec;
-use crate::util::worker::{Scheduler, Stopped};
-use crate::util::{escape, is_zero_duration};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::duration_to_sec;
+use tikv_util::worker::{Scheduler, Stopped};
+use tikv_util::{escape, is_zero_duration};
 
 use crate::raftstore::coprocessor::RegionChangeEvent;
 use crate::raftstore::store::cmd_resp::{bind_term, new_error};
-use crate::raftstore::store::engine::{Peekable, Snapshot as EngineSnapshot};
 use crate::raftstore::store::fsm::store::{PollContext, StoreMeta};
 use crate::raftstore::store::fsm::{
     apply, ApplyMetrics, ApplyTask, ApplyTaskRes, BasicMailbox, ChangePeer, ExecResult, Fsm,
@@ -61,9 +51,8 @@ use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
     CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
 };
-use crate::raftstore::store::Engines;
 use crate::raftstore::store::{
-    util, CasualMessage, Config, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapKey,
+    util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
     SnapshotDeleter, StoreMsg,
 };
 
@@ -76,6 +65,8 @@ pub struct DestroyPeerJob {
 
 pub struct PeerFsm {
     peer: Peer,
+    /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
+    tick_registry: PeerTicks,
     stopped: bool,
     has_ready: bool,
     mailbox: Option<BasicMailbox<PeerFsm>>,
@@ -134,6 +125,7 @@ impl PeerFsm {
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, region, meta_peer)?,
+                tick_registry: PeerTicks::empty(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -168,6 +160,7 @@ impl PeerFsm {
             tx,
             Box::new(PeerFsm {
                 peer: Peer::new(store_id, cfg, sched, engines, &region, peer)?,
+                tick_registry: PeerTicks::empty(),
                 stopped: false,
                 has_ready: false,
                 mailbox: None,
@@ -329,17 +322,25 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn on_tick(&mut self, tick: PeerTick) {
+    fn on_tick(&mut self, tick: PeerTicks) {
         if self.fsm.stopped {
             return;
         }
+        trace!(
+            "tick";
+            "tick" => ?tick,
+            "peer_id" => self.fsm.peer_id(),
+            "region_id" => self.region_id(),
+        );
+        self.fsm.tick_registry.remove(tick);
         match tick {
-            PeerTick::Raft => self.on_raft_base_tick(),
-            PeerTick::RaftLogGc => self.on_raft_gc_log_tick(),
-            PeerTick::PdHeartbeat => self.on_pd_heartbeat_tick(),
-            PeerTick::SplitRegionCheck => self.on_split_region_check_tick(),
-            PeerTick::CheckMerge => self.on_check_merge(),
-            PeerTick::CheckPeerStaleState => self.on_check_peer_stale_state_tick(),
+            PeerTicks::RAFT => self.on_raft_base_tick(),
+            PeerTicks::RAFT_LOG_GC => self.on_raft_gc_log_tick(),
+            PeerTicks::PD_HEARTBEAT => self.on_pd_heartbeat_tick(),
+            PeerTicks::SPLIT_REGION_CHECK => self.on_split_region_check_tick(),
+            PeerTicks::CHECK_MERGE => self.on_check_merge(),
+            PeerTicks::CHECK_PEER_STALE_STATE => self.on_check_peer_stale_state_tick(),
+            _ => unreachable!(),
         }
     }
 
@@ -515,7 +516,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.report_snapshot_status(to_peer_id, status);
             }
             SignificantMsg::Unreachable { to_peer_id, .. } => {
-                self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                if self.fsm.peer.is_leader() {
+                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                }
+            }
+            SignificantMsg::StoreUnreachable { store_id } => {
+                if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
+                {
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    }
+                }
             }
         }
     }
@@ -571,6 +582,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             self.on_ready_apply_snapshot(apply_res);
             has_snapshot = true;
         }
+        if self.fsm.peer.leader_unreachable {
+            // TODO: handle unreachable.
+            self.fsm.peer.leader_unreachable = false;
+        }
         if is_merging && has_snapshot {
             // After applying a snapshot, merge is rollbacked implicitly.
             self.on_ready_rollback_merge(0, None);
@@ -593,15 +608,27 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     #[inline]
-    fn schedule_tick(&self, tick: PeerTick, timeout: Duration) {
+    fn schedule_tick(&mut self, tick: PeerTicks, timeout: Duration) {
+        if self.fsm.tick_registry.contains(tick) {
+            return;
+        }
         if is_zero_duration(&timeout) {
             return;
         }
+        trace!(
+            "schedule tick";
+            "tick" => ?tick,
+            "timeout" => ?timeout,
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id(),
+        );
+        self.fsm.tick_registry.insert(tick);
 
         let region_id = self.region_id();
         let mb = match self.ctx.router.mailbox(region_id) {
             Some(mb) => mb,
             None => {
+                self.fsm.tick_registry.remove(tick);
                 error!(
                     "failed to get mailbox";
                     "region_id" => self.fsm.region_id(),
@@ -619,9 +646,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .map(move |_| {
                 fail_point!(
                     "on_raft_log_gc_tick_1",
-                    peer_id == 1 && tick == PeerTick::RaftLogGc,
+                    peer_id == 1 && tick == PeerTicks::RAFT_LOG_GC,
                     |_| unreachable!()
                 );
+                // This can happen only when the peer is about to be destroyed
+                // or the node is shutting down. So it's OK to not to clean up
+                // registry.
                 if let Err(e) = mb.force_send(PeerMsg::Tick(tick)) {
                     info!(
                         "failed to schedule peer tick";
@@ -641,10 +671,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.ctx.future_poller.spawn(f).unwrap();
     }
 
-    fn register_raft_base_tick(&self) {
+    fn register_raft_base_tick(&mut self) {
         // If we register raft base tick failed, the whole raft can't run correctly,
         // TODO: shutdown the store?
-        self.schedule_tick(PeerTick::Raft, self.ctx.cfg.raft_base_tick_interval.0)
+        self.schedule_tick(PeerTicks::RAFT, self.ctx.cfg.raft_base_tick_interval.0)
     }
 
     fn on_raft_base_tick(&mut self) {
@@ -1278,6 +1308,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let peer_id = cp.peer.get_id();
+        let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
@@ -1286,13 +1317,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
 
                 // Add this peer to cache and heartbeats.
-                let now = Instant::now();
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_added_peer.update(id, now);
+                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1305,6 +1335,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
@@ -1405,7 +1436,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             panic!("{} original region should exists", self.fsm.peer.tag);
         }
         // It's not correct anymore, so set it to None to let split checker update it.
-        self.fsm.peer.approximate_size.take();
+        self.fsm.peer.approximate_size = None;
         let last_region_id = regions.last().unwrap().get_id();
         for new_region in regions {
             let new_region_id = new_region.get_id();
@@ -1503,9 +1534,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn register_merge_check_tick(&self) {
+    fn register_merge_check_tick(&mut self) {
         self.schedule_tick(
-            PeerTick::CheckMerge,
+            PeerTicks::CHECK_MERGE,
             self.ctx.cfg.merge_check_tick_interval.0,
         )
     }
@@ -1959,14 +1990,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
-        if exec_results.is_empty() {
-            return None;
-        }
-
-        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
-        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
-        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -2005,6 +2028,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
+
+        // Update metrics only when all exec_results are finished in case the metrics is counted multiple times
+        // when waiting for commit merge
+        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+
         None
     }
 
@@ -2192,9 +2222,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             .map(|(_, region_id)| meta.regions[region_id].to_owned())
     }
 
-    fn register_raft_gc_log_tick(&self) {
+    fn register_raft_gc_log_tick(&mut self) {
         self.schedule_tick(
-            PeerTick::RaftLogGc,
+            PeerTicks::RAFT_LOG_GC,
             self.ctx.cfg.raft_log_gc_tick_interval.0,
         )
     }
@@ -2202,6 +2232,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we
@@ -2306,9 +2337,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
 
-    fn register_split_region_check_tick(&self) {
+    fn register_split_region_check_tick(&mut self) {
         self.schedule_tick(
-            PeerTick::SplitRegionCheck,
+            PeerTicks::SPLIT_REGION_CHECK,
             self.ctx.cfg.split_region_check_tick_interval.0,
         )
     }
@@ -2509,9 +2540,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.heartbeat_pd(self.ctx);
     }
 
-    fn register_pd_heartbeat_tick(&self) {
+    fn register_pd_heartbeat_tick(&mut self) {
         self.schedule_tick(
-            PeerTick::PdHeartbeat,
+            PeerTicks::PD_HEARTBEAT,
             self.ctx.cfg.pd_heartbeat_tick_interval.0,
         )
     }
@@ -2586,9 +2617,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    fn register_check_peer_stale_state_tick(&self) {
+    fn register_check_peer_stale_state_tick(&mut self) {
         self.schedule_tick(
-            PeerTick::CheckPeerStaleState,
+            PeerTicks::CHECK_PEER_STALE_STATE,
             self.ctx.cfg.peer_stale_state_check_interval.0,
         )
     }

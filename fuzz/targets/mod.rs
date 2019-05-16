@@ -1,21 +1,6 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 //! DO NOT MOVE THIS FILE. IT WILL BE PARSED BY `fuzz/cli.rs`. SEE `discover_fuzz_targets()`.
-
-extern crate byteorder;
-extern crate failure;
-extern crate tikv;
 
 mod util;
 
@@ -25,16 +10,16 @@ use std::io::Cursor;
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
-    let _ = tikv::util::codec::bytes::encode_bytes(data);
-    let _ = tikv::util::codec::bytes::encode_bytes_desc(data);
-    let _ = tikv::util::codec::bytes::encoded_bytes_len(data, true);
-    let _ = tikv::util::codec::bytes::encoded_bytes_len(data, false);
+    let _ = tikv_util::codec::bytes::encode_bytes(data);
+    let _ = tikv_util::codec::bytes::encode_bytes_desc(data);
+    let _ = tikv_util::codec::bytes::encoded_bytes_len(data, true);
+    let _ = tikv_util::codec::bytes::encoded_bytes_len(data, false);
     Ok(())
 }
 
 #[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
-    use tikv::util::codec::number::NumberEncoder;
+    use tikv_util::codec::number::NumberEncoder;
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u64()?;
@@ -83,20 +68,20 @@ pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
     }
     {
         let buf = data.to_owned();
-        let _ = tikv::util::codec::number::decode_u64(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u64_desc(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u64_le(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_i64(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_i64_desc(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_i64_le(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_f64(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_f64_desc(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_f64_le(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u32(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u32_le(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_i32_le(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u16(&mut buf.as_slice());
-        let _ = tikv::util::codec::number::decode_u16_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u64(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u64_desc(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u64_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_i64(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_i64_desc(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_i64_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_f64(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_f64_desc(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_f64_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u32(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u32_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_i32_le(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u16(&mut buf.as_slice());
+        let _ = tikv_util::codec::number::decode_u16_le(&mut buf.as_slice());
     }
     Ok(())
 }
@@ -211,4 +196,47 @@ pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
     let fsp = cursor.read_as_i8()?;
     let t = Time::from_packed_u64(u, time_type, fsp, &tz)?;
     fuzz_time(t, cursor)
+}
+
+// Duration
+fn fuzz_duration(
+    t: tikv::coprocessor::codec::mysql::Duration,
+    mut cursor: Cursor<&[u8]>,
+) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::DurationEncoder;
+    let _ = t.fsp();
+    let mut u = t;
+    u.set_fsp(cursor.read_as_u8()?);
+    let _ = t.hours();
+    let _ = t.minutes();
+    let _ = t.secs();
+    let _ = t.micro_secs();
+    let _ = t.nano_secs();
+    let _ = t.to_secs();
+    let _ = t.is_zero();
+    let _ = t.to_decimal();
+    let u = t;
+    u.round_frac(cursor.read_as_i8()?)?;
+    let mut v = Vec::new();
+    let _ = v.encode_duration(&t);
+    Ok(())
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let nanos = cursor.read_as_i64()?;
+    let fsp = cursor.read_as_i8()?;
+    fuzz_duration(Duration::from_nanos(nanos, fsp)?, cursor)
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Error> {
+    use std::io::Read;
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let fsp = cursor.read_as_i8()?;
+    let mut buf: [u8; 32] = [b' '; 32];
+    cursor.read_exact(&mut buf)?;
+    let d = Duration::parse(&buf, fsp)?;
+    fuzz_duration(d, cursor)
 }

@@ -1,15 +1,4 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 /// A trait to provide sequential read over a memory buffer.
 ///
@@ -33,10 +22,7 @@ impl<T: AsRef<[u8]>> BufferReader for std::io::Cursor<T> {
     fn bytes(&self) -> &[u8] {
         let pos = self.position() as usize;
         let slice = self.get_ref().as_ref();
-        if pos >= slice.len() {
-            return &[];
-        }
-        &slice[pos..]
+        slice.get(pos..).unwrap_or(&[])
     }
 
     fn advance(&mut self, count: usize) {
@@ -114,10 +100,7 @@ impl<T: AsMut<[u8]>> BufferWriter for std::io::Cursor<T> {
         // `size` is ignored since this buffer is not capable to grow.
         let pos = self.position() as usize;
         let slice = self.get_mut().as_mut();
-        if pos >= slice.len() {
-            return &mut [];
-        }
-        &mut slice[pos..]
+        slice.get_mut(pos..).unwrap_or(&mut [])
     }
 
     unsafe fn advance_mut(&mut self, count: usize) {

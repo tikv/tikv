@@ -1,21 +1,14 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::error::Error;
 
 use sys_info;
 
-use crate::util::config::{self, ReadableSize};
+use tikv_util::config::{self, ReadableSize, KB};
+
+use engine::rocks::{Cache, LRUCacheOptions};
+
+use libc::c_int;
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 pub const DEFAULT_ROCKSDB_SUB_DIR: &str = "db";
@@ -41,6 +34,7 @@ pub struct Config {
     pub scheduler_concurrency: usize,
     pub scheduler_worker_pool_size: usize,
     pub scheduler_pending_write_threshold: ReadableSize,
+    pub block_cache: BlockCacheConfig,
 }
 
 impl Default for Config {
@@ -54,6 +48,7 @@ impl Default for Config {
             scheduler_concurrency: DEFAULT_SCHED_CONCURRENCY,
             scheduler_worker_pool_size: if total_cpu >= 16 { 8 } else { 4 },
             scheduler_pending_write_threshold: ReadableSize::mb(DEFAULT_SCHED_PENDING_WRITE_MB),
+            block_cache: BlockCacheConfig::default(),
         }
     }
 }
@@ -64,5 +59,49 @@ impl Config {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct BlockCacheConfig {
+    pub shared: bool,
+    pub capacity: Option<ReadableSize>,
+    pub num_shard_bits: i32,
+    pub strict_capacity_limit: bool,
+    pub high_pri_pool_ratio: f64,
+}
+
+impl Default for BlockCacheConfig {
+    fn default() -> BlockCacheConfig {
+        BlockCacheConfig {
+            shared: true,
+            capacity: None,
+            num_shard_bits: 6,
+            strict_capacity_limit: false,
+            high_pri_pool_ratio: 0.0,
+        }
+    }
+}
+
+impl BlockCacheConfig {
+    pub fn build_shared_cache(&self) -> Option<Cache> {
+        if !self.shared {
+            return None;
+        }
+        let capacity = match self.capacity {
+            None => {
+                let total_mem = sys_info::mem_info().unwrap().total * KB;
+                ((total_mem as f64) * 0.45) as usize
+            }
+            Some(c) => c.0 as usize,
+        };
+        let mut cache_opts = LRUCacheOptions::new();
+        cache_opts.set_capacity(capacity);
+        cache_opts.set_num_shard_bits(self.num_shard_bits as c_int);
+        cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
+        cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
+        Some(Cache::new_lru_cache(cache_opts))
     }
 }

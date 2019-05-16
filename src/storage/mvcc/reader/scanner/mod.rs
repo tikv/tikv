@@ -1,27 +1,16 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod backward;
 mod forward;
 mod util;
 
+use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::mvcc::Result;
 use crate::storage::txn::Result as TxnResult;
 use crate::storage::{
-    CfName, Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics,
-    Value, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    Cursor, CursorBuilder, Key, ScanMode, Scanner as StoreScanner, Snapshot, Statistics, Value,
 };
 
 use self::backward::BackwardScanner;
@@ -32,13 +21,13 @@ pub struct ScannerBuilder<S: Snapshot>(ScannerConfig<S>);
 
 impl<S: Snapshot> std::ops::Deref for ScannerBuilder<S> {
     type Target = ScannerConfig<S>;
-    fn deref<'a>(&'a self) -> &'a ScannerConfig<S> {
+    fn deref(&self) -> &ScannerConfig<S> {
         &self.0
     }
 }
 
 impl<S: Snapshot> std::ops::DerefMut for ScannerBuilder<S> {
-    fn deref_mut<'a>(&'a mut self) -> &'a mut ScannerConfig<S> {
+    fn deref_mut(&mut self) -> &mut ScannerConfig<S> {
         &mut self.0
     }
 }

@@ -1,21 +1,9 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::Arc;
 
-use crate::grpc::{ChannelBuilder, Environment, Error, RpcStatusCode};
 use futures::{future, Future, Stream};
-use tikv::storage::engine::Writable;
+use grpcio::{ChannelBuilder, Environment, Error, RpcStatusCode};
 
 use kvproto::coprocessor::*;
 use kvproto::debugpb_grpc::DebugClient;
@@ -25,12 +13,15 @@ use kvproto::tikvpb_grpc::TikvClient;
 use kvproto::{debugpb, metapb, raft_serverpb};
 use raft::eraftpb;
 
+use engine::rocks::Writable;
+use engine::*;
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT};
 use test_raftstore::*;
 use tikv::coprocessor::REQ_TYPE_DAG;
-use tikv::raftstore::store::{keys, Mutable, Peekable};
+use tikv::raftstore::store::keys;
 use tikv::storage::mvcc::{Lock, LockType};
-use tikv::storage::{Key, CF_DEFAULT, CF_LOCK, CF_RAFT};
-use tikv::util::HandyRwLock;
+use tikv::storage::Key;
+use tikv_util::HandyRwLock;
 
 fn must_new_cluster() -> (Cluster<ServerCluster>, metapb::Peer, Context) {
     let count = 1;
@@ -661,8 +652,9 @@ fn test_debug_region_size() {
         .put_msg_cf(cf_raft, &region_state_key, &state)
         .unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT];
-    let (k, v) = (keys::data_key(b"k"), b"v");
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
+    // At lease 8 bytes for the WRITE cf.
+    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
         let cf_handle = engine.cf_handle(cf).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();

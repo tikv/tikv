@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -17,18 +6,19 @@ use std::fmt::{self, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 
+use engine::rocks::DBIterator;
+use engine::{CfName, CF_WRITE, LARGE_CFS};
+use engine::{IterOption, Iterable, DB};
 use kvproto::metapb::Region;
 use kvproto::metapb::RegionEpoch;
 use kvproto::pdpb::CheckPolicy;
 
 use crate::raftstore::coprocessor::CoprocessorHost;
 use crate::raftstore::coprocessor::SplitCheckerHost;
-use crate::raftstore::store::engine::{IterOption, Iterable};
 use crate::raftstore::store::{keys, Callback, CasualMessage, CasualRouter};
 use crate::raftstore::Result;
-use crate::storage::engine::{DBIterator, DB};
-use crate::storage::{CfName, CF_WRITE, LARGE_CFS};
-use crate::util::worker::Runnable;
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::worker::Runnable;
 
 use super::metrics::*;
 
@@ -92,8 +82,11 @@ impl<'a> MergedIterator<'a> {
         let mut iters = Vec::with_capacity(cfs.len());
         let mut heap = BinaryHeap::with_capacity(cfs.len());
         for (pos, cf) in cfs.iter().enumerate() {
-            let iter_opt =
-                IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+            let iter_opt = IterOption::new(
+                Some(KeyBuilder::from_slice(start_key, 0, 0)),
+                Some(KeyBuilder::from_slice(end_key, 0, 0)),
+                fill_cache,
+            );
             let mut iter = db.new_iterator_cf(cf, iter_opt)?;
             if iter.seek(start_key.into()) {
                 heap.push(KeyEntry::new(

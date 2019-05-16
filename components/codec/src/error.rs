@@ -1,29 +1,33 @@
-// Copyright 2018 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        BufferTooSmall {
-            description("The buffer is too small to read or write data")
-        }
-        UnexpectedEOF {
-            description("Expecting more data but got EOF")
-        }
-        BadPadding {
-            description("Data padding is wrong")
-        }
+use std::io;
+
+#[derive(Debug, Fail)]
+pub enum Error {
+    #[fail(display = "Io error: {}", _0)]
+    Io(#[fail(cause)] io::Error),
+
+    #[fail(display = "Data padding is incorrect")]
+    BadPadding,
+}
+
+impl Error {
+    pub(crate) fn eof() -> Box<Error> {
+        io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF").into()
+    }
+
+    pub(crate) fn bad_padding() -> Box<Error> {
+        Error::BadPadding.into()
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+impl From<io::Error> for Box<Error> {
+    fn from(e: io::Error) -> Self {
+        Error::Io(e).into()
+    }
+}
+
+// Box the error in case of large data structure when there is no error.
+pub type Result<T> = std::result::Result<T, Box<Error>>;
+
+const_assert!(8 == std::mem::size_of::<Result<()>>());

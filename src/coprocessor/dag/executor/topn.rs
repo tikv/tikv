@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -19,12 +8,12 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -158,6 +147,10 @@ impl Executor for TopNExecutor {
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
 }
 
 #[cfg(test)]
@@ -172,10 +165,10 @@ pub mod tests {
     use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
     use crate::coprocessor::dag::executor::OriginCols;
-    use crate::util::codec::number::NumberEncoder;
-    use crate::util::collections::HashMap;
+    use tikv_util::codec::number::NumberEncoder;
+    use tikv_util::collections::HashMap;
 
-    use super::super::tests::{gen_table_scan_executor, get_range, new_col_info};
+    use super::super::tests::*;
     use super::*;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {

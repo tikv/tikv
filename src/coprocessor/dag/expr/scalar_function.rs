@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::usize;
@@ -137,6 +126,8 @@ impl ScalarFunc {
             | ScalarFuncSig::SubDatetimeAndDuration
             | ScalarFuncSig::SubDatetimeAndString
             | ScalarFuncSig::SubDurationAndDuration
+            | ScalarFuncSig::PeriodAdd
+            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Strcmp
             | ScalarFuncSig::InstrBinary
             | ScalarFuncSig::Locate2Args
@@ -319,7 +310,15 @@ impl ScalarFunc {
             | ScalarFuncSig::LocateBinary3Args
             | ScalarFuncSig::Replace => (3, 3),
 
-            ScalarFuncSig::JsonArraySig | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
+            ScalarFuncSig::JsonArraySig
+            | ScalarFuncSig::IntAnyValue
+            | ScalarFuncSig::RealAnyValue
+            | ScalarFuncSig::StringAnyValue
+            | ScalarFuncSig::TimeAnyValue
+            | ScalarFuncSig::DecimalAnyValue
+            | ScalarFuncSig::JSONAnyValue
+            | ScalarFuncSig::DurationAnyValue
+            | ScalarFuncSig::JsonObjectSig => (0, usize::MAX),
 
             ScalarFuncSig::CoalesceDecimal
             | ScalarFuncSig::CoalesceDuration
@@ -374,7 +373,7 @@ impl ScalarFunc {
             | ScalarFuncSig::SubTimeDateTimeNull
             | ScalarFuncSig::PI => (0, 0),
 
-            // unimplement signature
+            // unimplemented signature
             ScalarFuncSig::AddDateAndDuration
             | ScalarFuncSig::AddDateAndString
             | ScalarFuncSig::AddDateDatetimeInt
@@ -399,8 +398,6 @@ impl ScalarFunc {
             | ScalarFuncSig::CurrentUser
             | ScalarFuncSig::Database
             | ScalarFuncSig::DateLiteral
-            | ScalarFuncSig::DecimalAnyValue
-            | ScalarFuncSig::DurationAnyValue
             | ScalarFuncSig::DurationDurationTimeDiff
             | ScalarFuncSig::DurationStringTimeDiff
             | ScalarFuncSig::ExportSet3Arg
@@ -420,8 +417,6 @@ impl ScalarFunc {
             | ScalarFuncSig::GetVar
             | ScalarFuncSig::Insert
             | ScalarFuncSig::InsertBinary
-            | ScalarFuncSig::IntAnyValue
-            | ScalarFuncSig::JSONAnyValue
             | ScalarFuncSig::LastInsertID
             | ScalarFuncSig::LastInsertIDWithID
             | ScalarFuncSig::Lock
@@ -435,12 +430,9 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
-            | ScalarFuncSig::PeriodAdd
-            | ScalarFuncSig::PeriodDiff
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
             | ScalarFuncSig::RandomBytes
-            | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
@@ -448,7 +440,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SecToTime
             | ScalarFuncSig::SetVar
             | ScalarFuncSig::Sleep
-            | ScalarFuncSig::StringAnyValue
             | ScalarFuncSig::StringDurationTimeDiff
             | ScalarFuncSig::StringStringTimeDiff
             | ScalarFuncSig::StringTimeTimeDiff
@@ -473,7 +464,6 @@ impl ScalarFunc {
             | ScalarFuncSig::SysDateWithoutFsp
             | ScalarFuncSig::TiDBVersion
             | ScalarFuncSig::Time
-            | ScalarFuncSig::TimeAnyValue
             | ScalarFuncSig::TimeFormat
             | ScalarFuncSig::TimeLiteral
             | ScalarFuncSig::Timestamp1Arg
@@ -739,6 +729,7 @@ dispatch_call! {
         InJson => in_json,
         IntervalInt => interval_int,
         IntervalReal => interval_real,
+        IntAnyValue => int_any_value,
 
         PlusInt => plus_int,
         MinusInt => minus_int,
@@ -765,6 +756,8 @@ dispatch_call! {
         Year => year,
         ToDays => to_days,
         DateDiff => date_diff,
+        PeriodAdd => period_add,
+        PeriodDiff => period_diff,
 
         LogicalAnd => logical_and,
         LogicalOr => logical_or,
@@ -870,6 +863,8 @@ dispatch_call! {
         Radians => radians,
         Exp => exp,
 
+        RealAnyValue => real_any_value,
+
         IfNullReal => if_null_real,
         IfReal => if_real,
 
@@ -916,6 +911,8 @@ dispatch_call! {
         FloorIntToDec => cast_int_as_decimal,
         RoundDec => round_dec,
         RoundWithFracDec => round_with_frac_dec,
+
+        DecimalAnyValue => decimal_any_value,
 
         TruncateDecimal => truncate_decimal,
 
@@ -994,6 +991,8 @@ dispatch_call! {
         LpadBinary => lpad_binary,
         Rpad => rpad,
         RpadBinary => rpad_binary,
+
+        StringAnyValue => string_any_value,
     }
     TIME_CALLS {
         CastIntAsTime => cast_int_as_time,
@@ -1003,6 +1002,8 @@ dispatch_call! {
         CastTimeAsTime => cast_time_as_time,
         CastDurationAsTime => cast_duration_as_time,
         CastJsonAsTime => cast_json_as_time,
+
+        TimeAnyValue => time_any_value,
 
         Date => date,
         LastDay => last_day,
@@ -1027,6 +1028,8 @@ dispatch_call! {
         CastTimeAsDuration => cast_time_as_duration,
         CastDurationAsDuration => cast_duration_as_duration,
         CastJsonAsDuration => cast_json_as_duration,
+
+        DurationAnyValue => duration_any_value,
 
         IfNullDuration => if_null_duration,
         IfDuration => if_duration,
@@ -1063,6 +1066,7 @@ dispatch_call! {
         JsonMergeSig => json_merge,
         JsonArraySig => json_array,
         JsonObjectSig => json_object,
+        JSONAnyValue => json_any_value,
     }
 }
 
@@ -1185,6 +1189,8 @@ mod tests {
                     ScalarFuncSig::SubDatetimeAndDuration,
                     ScalarFuncSig::SubDatetimeAndString,
                     ScalarFuncSig::SubDurationAndDuration,
+                    ScalarFuncSig::PeriodAdd,
+                    ScalarFuncSig::PeriodDiff,
                     ScalarFuncSig::Locate2Args,
                     ScalarFuncSig::LocateBinary2Args,
                 ],
@@ -1367,7 +1373,17 @@ mod tests {
                 3,
             ),
             (
-                vec![ScalarFuncSig::JsonArraySig, ScalarFuncSig::JsonObjectSig],
+                vec![
+                    ScalarFuncSig::JsonArraySig,
+                    ScalarFuncSig::JsonObjectSig,
+                    ScalarFuncSig::IntAnyValue,
+                    ScalarFuncSig::StringAnyValue,
+                    ScalarFuncSig::RealAnyValue,
+                    ScalarFuncSig::JSONAnyValue,
+                    ScalarFuncSig::DurationAnyValue,
+                    ScalarFuncSig::TimeAnyValue,
+                    ScalarFuncSig::DecimalAnyValue,
+                ],
                 0,
                 usize::MAX,
             ),
@@ -1488,8 +1504,6 @@ mod tests {
             ScalarFuncSig::CurrentUser,
             ScalarFuncSig::Database,
             ScalarFuncSig::DateLiteral,
-            ScalarFuncSig::DecimalAnyValue,
-            ScalarFuncSig::DurationAnyValue,
             ScalarFuncSig::DurationDurationTimeDiff,
             ScalarFuncSig::DurationStringTimeDiff,
             ScalarFuncSig::ExportSet3Arg,
@@ -1509,8 +1523,6 @@ mod tests {
             ScalarFuncSig::GetVar,
             ScalarFuncSig::Insert,
             ScalarFuncSig::InsertBinary,
-            ScalarFuncSig::IntAnyValue,
-            ScalarFuncSig::JSONAnyValue,
             ScalarFuncSig::LastInsertID,
             ScalarFuncSig::LastInsertIDWithID,
             ScalarFuncSig::Lock,
@@ -1524,12 +1536,9 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
-            ScalarFuncSig::PeriodAdd,
-            ScalarFuncSig::PeriodDiff,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
             ScalarFuncSig::RandomBytes,
-            ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,
@@ -1537,7 +1546,6 @@ mod tests {
             ScalarFuncSig::SecToTime,
             ScalarFuncSig::SetVar,
             ScalarFuncSig::Sleep,
-            ScalarFuncSig::StringAnyValue,
             ScalarFuncSig::StringDurationTimeDiff,
             ScalarFuncSig::StringStringTimeDiff,
             ScalarFuncSig::StringTimeTimeDiff,
@@ -1562,7 +1570,6 @@ mod tests {
             ScalarFuncSig::SysDateWithoutFsp,
             ScalarFuncSig::TiDBVersion,
             ScalarFuncSig::Time,
-            ScalarFuncSig::TimeAnyValue,
             ScalarFuncSig::TimeFormat,
             ScalarFuncSig::TimeLiteral,
             ScalarFuncSig::Timestamp1Arg,

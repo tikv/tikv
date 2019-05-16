@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::{SendError, TrySendError};
 use kvproto::raft_cmdpb::RaftCmdRequest;
@@ -27,10 +16,10 @@ use crate::raftstore::store::{
 use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
 use crate::server::Result;
-use crate::util::collections::HashSet;
-use crate::util::worker::Scheduler;
-use crate::util::HandyRwLock;
 use raft::SnapshotStatus;
+use tikv_util::collections::HashSet;
+use tikv_util::worker::Scheduler;
+use tikv_util::HandyRwLock;
 
 /// Routes messages to the raftstore.
 pub trait RaftStoreRouter: Send + Clone {
@@ -54,6 +43,8 @@ pub trait RaftStoreRouter: Send + Clone {
         )
     }
 
+    fn broadcast_unreachable(&self, store_id: u64);
+
     /// Reports the sending snapshot status to the peer of the Region.
     fn report_snapshot_status(
         &self,
@@ -72,6 +63,32 @@ pub trait RaftStoreRouter: Send + Clone {
     }
 
     fn casual_send(&self, region_id: u64, msg: CasualMessage) -> RaftStoreResult<()>;
+}
+
+#[derive(Clone)]
+pub struct RaftStoreBlackHole;
+
+impl RaftStoreRouter for RaftStoreBlackHole {
+    /// Sends RaftMessage to local store.
+    fn send_raft_msg(&self, _: RaftMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends RaftCmdRequest to local store.
+    fn send_command(&self, _: RaftCmdRequest, _: Callback) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    /// Sends a significant message. We should guarantee that the message can't be dropped.
+    fn significant_send(&self, _: u64, _: SignificantMsg) -> RaftStoreResult<()> {
+        Ok(())
+    }
+
+    fn broadcast_unreachable(&self, _: u64) {}
+
+    fn casual_send(&self, _: u64, _: CasualMessage) -> RaftStoreResult<()> {
+        Ok(())
+    }
 }
 
 /// A router that routes messages to the raftstore
@@ -148,6 +165,12 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
             .send(region_id, PeerMsg::CasualMessage(msg))
             .map_err(|e| handle_error(region_id, e))
     }
+
+    fn broadcast_unreachable(&self, store_id: u64) {
+        let _ = self
+            .router
+            .send_control(StoreMsg::StoreUnreachable { store_id });
+    }
 }
 
 pub struct ServerTransport<T, S>
@@ -155,7 +178,7 @@ where
     T: RaftStoreRouter + 'static,
     S: StoreAddrResolver + 'static,
 {
-    raft_client: Arc<RwLock<RaftClient>>,
+    raft_client: Arc<RwLock<RaftClient<T>>>,
     snap_scheduler: Scheduler<SnapTask>,
     pub raft_router: T,
     resolving: Arc<RwLock<HashSet<u64>>>,
@@ -180,7 +203,7 @@ where
 
 impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTransport<T, S> {
     pub fn new(
-        raft_client: Arc<RwLock<RaftClient>>,
+        raft_client: Arc<RwLock<RaftClient<T>>>,
         snap_scheduler: Scheduler<SnapTask>,
         raft_router: T,
         resolver: S,
@@ -313,7 +336,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }) {
             if let SnapTask::Send { cb, .. } = e.into_inner() {
                 error!(
-                    "channel is unavaliable, failed to schedule snapshot";
+                    "channel is unavailable, failed to schedule snapshot";
                     "to_addr" => addr
                 );
                 cb(Err(box_err!("failed to schedule snapshot")));

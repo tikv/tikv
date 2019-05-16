@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::Cow;
 use std::{f64, i64};
@@ -572,6 +561,7 @@ fn get_rand(arg: Option<u64>) -> XorShiftRng {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::f64::consts::{FRAC_1_SQRT_2, PI};
     use std::{f64, i64, u64};
 
@@ -889,6 +879,12 @@ mod tests {
     #[test]
     fn test_rand_with_seed() {
         let seed: i64 = 20160101;
+        let expect = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
+            .unwrap()
+            .as_real()
+            .unwrap()
+            .unwrap()
+            .to_bits();
         for _ in 1..3 {
             let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(seed)])
                 .unwrap()
@@ -896,8 +892,23 @@ mod tests {
                 .unwrap();
 
             assert!(got.is_some());
-            assert_eq!(got.unwrap().to_bits(), (0.4545469470152683f64).to_bits());
+            assert_eq!(got.unwrap().to_bits(), expect);
         }
+        let mut set: HashSet<u64> = HashSet::new();
+        let test_cnt = 1024;
+        for i in seed + 1..=seed + test_cnt {
+            let got = eval_func(ScalarFuncSig::RandWithSeed, &[Datum::I64(i)])
+                .unwrap()
+                .as_real()
+                .unwrap()
+                .unwrap()
+                .to_bits();
+            set.insert(got);
+        }
+        // If this assert failed, try to find another seed and retry.
+        // If `test_cnt-set.len()` is not very large,
+        // then this fail may be legal but not logical error of the code.
+        assert_eq!(set.len(), test_cnt as usize);
     }
 
     #[test]

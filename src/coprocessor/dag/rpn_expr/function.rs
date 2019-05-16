@@ -1,18 +1,4 @@
-// Copyright 2019 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// TODO
-#![allow(dead_code)]
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
@@ -20,6 +6,8 @@ use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
 /// A trait for all RPN functions.
+///
+/// This trait can be auto derived by using `cop_codegen::RpnFunction`.
 pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
     /// The display name of the function.
     fn name(&self) -> &'static str;
@@ -37,6 +25,16 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
         context: &mut EvalContext,
         payload: RpnFnCallPayload<'_>,
     ) -> Result<VectorValue>;
+
+    /// Clones current instance into a trait object.
+    fn box_clone(&self) -> Box<dyn RpnFunction>;
+}
+
+impl Clone for Box<dyn RpnFunction> {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
 }
 
 impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
@@ -59,6 +57,11 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
     ) -> Result<VectorValue> {
         (**self).eval(rows, context, payload)
     }
+
+    #[inline]
+    fn box_clone(&self) -> Box<dyn RpnFunction> {
+        (**self).box_clone()
+    }
 }
 
 pub struct Helper;
@@ -67,7 +70,7 @@ impl Helper {
     /// Evaluates a function without argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
         mut f: F,
@@ -76,7 +79,7 @@ impl Helper {
     ) -> Result<VectorValue>
     where
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 0);
 
@@ -90,7 +93,7 @@ impl Helper {
     /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
@@ -100,7 +103,7 @@ impl Helper {
     where
         Arg0: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0) -> Result<Ret>,
+        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Option<Arg0>) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 1);
 
@@ -123,7 +126,7 @@ impl Helper {
     /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline(always)]
+    #[inline]
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
@@ -134,7 +137,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 2);
 
@@ -181,7 +189,7 @@ impl Helper {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -194,7 +202,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         let mut result = Vec::with_capacity(rows);
         let lhs = Arg0::borrow_scalar_value(lhs);
@@ -205,7 +218,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -218,7 +231,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, rhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -230,7 +248,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -243,7 +261,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         let mut result = Vec::with_capacity(rows);
@@ -255,7 +278,7 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline(always)]
+    #[inline]
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -268,7 +291,12 @@ impl Helper {
         Arg0: Evaluable,
         Arg1: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(rows, lhs.len());
         assert_eq!(rows, rhs.len());
@@ -285,7 +313,7 @@ impl Helper {
     ///
     /// The function will be called multiple times to fill the vector. For each function call,
     /// there will be one indirection to support both scalar and vector arguments.
-    #[inline(always)]
+    #[inline]
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
         mut f: F,
@@ -297,7 +325,13 @@ impl Helper {
         Arg1: Evaluable,
         Arg2: Evaluable,
         Ret: Evaluable,
-        F: FnMut(&mut EvalContext, RpnFnCallPayload<'_>, &Arg0, &Arg1, &Arg2) -> Result<Ret>,
+        F: FnMut(
+            &mut EvalContext,
+            RpnFnCallPayload<'_>,
+            &Option<Arg0>,
+            &Option<Arg1>,
+            &Option<Arg2>,
+        ) -> Result<Option<Ret>>,
     {
         assert_eq!(payload.args_len(), 3);
 
@@ -310,53 +344,4 @@ impl Helper {
         }
         Ok(Ret::into_vector_value(result))
     }
-}
-
-/// Implements `RpnFunction` automatically for structure that accepts 0, 1, 2 or 3 arguments.
-///
-/// The structure must have a `call` member function accepting corresponding number of scalar
-/// arguments.
-#[macro_export]
-macro_rules! impl_template_fn {
-    (0 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 0, eval_0_arg }
-    };
-    (1 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 1, eval_1_arg }
-    };
-    (2 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 2, eval_2_args }
-    };
-    (3 arg @ $name:ident) => {
-        impl_template_fn! { @inner $name, 3, eval_3_args }
-    };
-    (@inner $name:ident, $args:expr, $eval_fn:ident) => {
-        impl $crate::coprocessor::dag::rpn_expr::RpnFunction for $name {
-            #[inline]
-            fn name(&self) -> &'static str {
-                stringify!($name)
-            }
-
-            #[inline]
-            fn args_len(&self) -> usize {
-                $args
-            }
-
-            #[inline]
-            fn eval(
-                &self,
-                rows: usize,
-                context: &mut $crate::coprocessor::dag::expr::EvalContext,
-                payload: $crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload<'_>,
-            ) -> $crate::coprocessor::Result<$crate::coprocessor::codec::data_type::VectorValue>
-            {
-                $crate::coprocessor::dag::rpn_expr::function::Helper::$eval_fn(
-                    rows,
-                    Self::call,
-                    context,
-                    payload,
-                )
-            }
-        }
-    };
 }

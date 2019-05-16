@@ -1,15 +1,4 @@
-// Copyright 2017 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cmp::Ordering;
 use std::collections::Bound::Excluded;
@@ -19,37 +8,40 @@ use std::sync::Arc;
 use std::thread::{Builder as ThreadBuilder, JoinHandle};
 use std::{error, result};
 
-use protobuf::{self, Message, RepeatedField};
-
+use engine::rocks::util::get_cf_handle;
+use engine::rocks::{
+    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, ReadOptions,
+    SeekKey, Writable, WriteBatch, WriteOptions, DB,
+};
+use engine::{self, Engines, IterOption, Iterable, Mutable, Peekable};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use kvproto::debugpb::{self, DB as DBType, *};
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
 use kvproto::metapb::{Peer, Region};
 use kvproto::raft_serverpb::*;
+use protobuf::{self, Message, RepeatedField};
 use raft::eraftpb::Entry;
+use raft::{self, RawNode};
 
-use crate::raftstore::store::engine::{IterOption, Mutable};
+use crate::raftstore::coprocessor::properties::{MvccProperties, RangeProperties};
+use crate::raftstore::coprocessor::{
+    get_region_approximate_keys_cf, get_region_approximate_middle,
+};
 use crate::raftstore::store::util as raftstore_util;
 use crate::raftstore::store::{
     init_apply_state, init_raft_state, write_initial_apply_state, write_initial_raft_state,
     write_peer_state,
 };
-use crate::raftstore::store::{keys, Engines, Iterable, Peekable, PeerStorage};
-use crate::storage::engine::{
-    CompactOptions, DBBottommostLevelCompaction, DBIterator as RocksIterator, Kv, Range,
-    ReadOptions, SeekKey, Writable, WriteBatch, WriteOptions, DB,
-};
+use crate::raftstore::store::{keys, PeerStorage};
 use crate::storage::mvcc::{Lock, LockType, Write, WriteType};
 use crate::storage::types::Key;
 use crate::storage::Iterator as EngineIterator;
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use crate::util::codec::bytes;
-use crate::util::collections::HashSet;
-use crate::util::config::ReadableSize;
-use crate::util::escape;
-use crate::util::rocksdb_util::get_cf_handle;
-use crate::util::rocksdb_util::properties::{MvccProperties, RangeProperties};
-use crate::util::worker::Worker;
-use raft::{self, RawNode};
+use tikv_util::codec::bytes;
+use tikv_util::collections::HashSet;
+use tikv_util::config::ReadableSize;
+use tikv_util::escape;
+use tikv_util::keybuilder::KeyBuilder;
+use tikv_util::worker::Worker;
 
 pub type Result<T> = result::Result<T, Error>;
 type DBIterator = RocksIterator<Arc<DB>>;
@@ -158,7 +150,7 @@ impl Debugger {
         let end_key = keys::REGION_META_MAX_KEY;
         let mut regions = Vec::with_capacity(128);
         box_try!(db.scan_cf(cf, start_key, end_key, false, |key, _| {
-            let (id, suffix) = keys::decode_region_meta_key(key)?;
+            let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
@@ -287,9 +279,9 @@ impl Debugger {
         let cf_handle = get_cf_handle(db, cf).unwrap();
         let mut read_opt = ReadOptions::new();
         read_opt.set_total_order_seek(true);
-        read_opt.set_iterate_lower_bound(start);
+        read_opt.set_iterate_lower_bound(start.to_vec());
         if !end.is_empty() {
-            read_opt.set_iterate_upper_bound(end);
+            read_opt.set_iterate_upper_bound(end.to_vec());
         }
         let mut iter = db.iter_cf_opt(cf_handle, read_opt);
         if !iter.seek_to_first() {
@@ -325,7 +317,7 @@ impl Debugger {
         opts.set_exclusive_manual_compaction(false);
         opts.set_bottommost_level_compaction(bottommost.0);
         db.compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishs manual compact"; "db" => ?db, "cf" => cf);
+        info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
         Ok(())
     }
 
@@ -377,10 +369,10 @@ impl Debugger {
     }
 
     pub fn recover_all(&self, threads: usize, read_only: bool) -> Result<()> {
-        let db = &self.engines.kv;
+        let db = self.engines.kv.clone();
 
         v1!("Calculating split keys...");
-        let split_keys = divide_db(db, threads).unwrap().into_iter().map(|k| {
+        let split_keys = divide_db(&db, threads).unwrap().into_iter().map(|k| {
             let k = Key::from_encoded(keys::origin_key(&k).to_vec())
                 .truncate_ts()
                 .unwrap();
@@ -394,7 +386,7 @@ impl Debugger {
         let mut handles = Vec::new();
 
         for thread_index in 0..range_borders.len() - 1 {
-            let db = Arc::clone(db);
+            let db = db.clone();
             let start_key = range_borders[thread_index].clone();
             let end_key = range_borders[thread_index + 1].clone();
 
@@ -437,7 +429,12 @@ impl Debugger {
 
         let from = keys::REGION_META_MIN_KEY.to_owned();
         let to = keys::REGION_META_MAX_KEY.to_owned();
-        let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+        let readopts = IterOption::new(
+            Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+            Some(KeyBuilder::from_vec(to, 0, 0)),
+            false,
+        )
+        .build_read_opts();
         let handle = box_try!(get_cf_handle(&self.engines.kv, CF_RAFT));
         let mut iter = DBIterator::new_cf(Arc::clone(&self.engines.kv), handle, readopts);
         iter.seek(SeekKey::from(from.as_ref()));
@@ -460,8 +457,8 @@ impl Debugger {
                     Error::Other("RegionLocalState doesn't contains peer itself".into())
                 })?;
 
-            let raft_state = box_try!(init_raft_state(&self.engines.raft, region));
-            let apply_state = box_try!(init_apply_state(&self.engines.kv, region));
+            let raft_state = box_try!(init_raft_state(&self.engines, region));
+            let apply_state = box_try!(init_apply_state(&self.engines, region));
             if raft_state.get_last_index() < apply_state.get_applied_index() {
                 return Err(Error::Other("last index < applied index".into()));
             }
@@ -668,6 +665,26 @@ impl Debugger {
             })
     }
 
+    fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
+        use super::CONFIG_ROCKSDB_GAUGE;
+        let rocksdb = self.get_db_from_type(db)?;
+        let handle = box_try!(get_cf_handle(rocksdb, cf_name));
+        let opt = rocksdb.get_options_cf(handle);
+        let capacity = ReadableSize::from_str(config_value);
+        if capacity.is_err() {
+            return Err(Error::InvalidArgument(format!(
+                "bad block cache size: {:?}",
+                capacity.unwrap_err()
+            )));
+        }
+        let cache_size = capacity.unwrap().0;
+        box_try!(opt.set_block_cache_capacity(cache_size));
+        CONFIG_ROCKSDB_GAUGE
+            .with_label_values(&[cf_name, "block_cache_size"])
+            .set(cache_size as f64);
+        Ok(())
+    }
+
     pub fn modify_tikv_config(
         &self,
         module: MODULE,
@@ -675,53 +692,71 @@ impl Debugger {
         config_value: &str,
     ) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
-        let db = match module {
-            MODULE::KVDB => DBType::KV,
-            MODULE::RAFTDB => DBType::RAFT,
-            _ => return Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        };
-        let rocksdb = self.get_db_from_type(db)?;
-        let vec: Vec<&str> = config_name.split('.').collect();
-        if vec.len() == 1 {
-            box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-        } else if vec.len() == 2 {
-            let cf = vec[0];
-            let config_name = vec[1];
-            validate_db_and_cf(db, cf)?;
-
-            let handle = box_try!(get_cf_handle(rocksdb, cf));
-            // currently we can't modify block_cache_size via set_options_cf
-            if config_name == "block_cache_size" {
-                let opt = rocksdb.get_options_cf(handle);
-                let capacity = ReadableSize::from_str(config_value);
-                if capacity.is_err() {
+        match module {
+            MODULE::STORAGE => {
+                if config_name != "block_cache.capacity" {
                     return Err(Error::InvalidArgument(format!(
-                        "bad block cache size: {:?}",
-                        capacity.unwrap_err()
+                        "bad argument: {}",
+                        config_name
                     )));
                 }
-                let cache_size = capacity.unwrap().0;
-                box_try!(opt.set_block_cache_capacity(cache_size));
-                CONFIG_ROCKSDB_GAUGE
-                    .with_label_values(&[cf, config_name])
-                    .set(cache_size as f64);
-            } else {
-                let mut opt = Vec::new();
-                opt.push((config_name, config_value));
-                box_try!(rocksdb.set_options_cf(handle, &opt));
-                if let Ok(v) = config_value.parse::<f64>() {
-                    CONFIG_ROCKSDB_GAUGE
-                        .with_label_values(&[cf, config_name])
-                        .set(v);
+                if !self.engines.shared_block_cache {
+                    return Err(Error::InvalidArgument(
+                        "shared block cache is disabled".to_string(),
+                    ));
                 }
+                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
+                // the size through any of them. Here we change it through default CF in kvdb.
+                // A better way to do it is to hold the cache reference somewhere, and use it to
+                // change cache size.
+                self.modify_block_cache_size(DBType::KV, CF_DEFAULT, config_value)
             }
-        } else {
-            return Err(Error::InvalidArgument(format!(
-                "bad argument: {}",
-                config_name
-            )));
+            MODULE::KVDB | MODULE::RAFTDB => {
+                let db = if module == MODULE::KVDB {
+                    DBType::KV
+                } else {
+                    DBType::RAFT
+                };
+                let rocksdb = self.get_db_from_type(db)?;
+                let vec: Vec<&str> = config_name.split('.').collect();
+                if vec.len() == 1 {
+                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
+                } else if vec.len() == 2 {
+                    let cf = vec[0];
+                    let config_name = vec[1];
+                    validate_db_and_cf(db, cf)?;
+
+                    // currently we can't modify block_cache_size via set_options_cf
+                    if config_name == "block_cache_size" {
+                        if self.engines.shared_block_cache {
+                            return Err(Error::InvalidArgument(
+                                "shared block cache is enabled, change cache size through \
+                                 block_cache.capacity in storage module instead"
+                                    .to_string(),
+                            ));
+                        }
+                        self.modify_block_cache_size(db, cf, config_value)?
+                    } else {
+                        let handle = box_try!(get_cf_handle(rocksdb, cf));
+                        let mut opt = Vec::new();
+                        opt.push((config_name, config_value));
+                        box_try!(rocksdb.set_options_cf(handle, &opt));
+                        if let Ok(v) = config_value.parse::<f64>() {
+                            CONFIG_ROCKSDB_GAUGE
+                                .with_label_values(&[cf, config_name])
+                                .set(v);
+                        }
+                    }
+                } else {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad argument: {}",
+                        config_name
+                    )));
+                }
+                Ok(())
+            }
+            _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
-        Ok(())
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -743,8 +778,10 @@ impl Debugger {
 
         let mut num_entries = 0;
         let mut mvcc_properties = MvccProperties::new();
-        let collection = box_try!(raftstore_util::get_region_properties_cf(
-            db, CF_WRITE, region
+        let start = keys::enc_start_key(&region);
+        let end = keys::enc_end_key(&region);
+        let collection = box_try!(engine::util::get_range_properties_cf(
+            db, CF_WRITE, &start, &end
         ));
         for (_, v) in &*collection {
             num_entries += v.num_entries();
@@ -752,8 +789,7 @@ impl Debugger {
             mvcc_properties.add(&mvcc);
         }
 
-        let middle_key = match box_try!(raftstore_util::get_region_approximate_middle(db, &region))
-        {
+        let middle_key = match box_try!(get_region_approximate_middle(db, &region)) {
             Some(data_key) => {
                 let mut key = keys::origin_key(&data_key);
                 box_try!(bytes::decode_bytes(&mut key, false))
@@ -843,7 +879,12 @@ impl MvccChecker {
         let gen_iter = |cf: &str| -> Result<_> {
             let from = start_key.clone();
             let to = end_key.clone();
-            let readopts = IterOption::new(Some(from.clone()), Some(to), false).build_read_opts();
+            let readopts = IterOption::new(
+                Some(KeyBuilder::from_vec(from.clone(), 0, 0)),
+                Some(KeyBuilder::from_vec(to, 0, 0)),
+                false,
+            )
+            .build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(&db), handle, readopts);
             iter.seek(SeekKey::Start);
@@ -1101,8 +1142,12 @@ impl MvccInfoIterator {
         }
 
         let gen_iter = |cf: &str| -> Result<_> {
-            let to = if to.is_empty() { None } else { Some(to) };
-            let readopts = IterOption::new(None, to.map(Vec::from), false).build_read_opts();
+            let to = if to.is_empty() {
+                None
+            } else {
+                Some(KeyBuilder::from_vec(to.to_vec(), 0, 0))
+            };
+            let readopts = IterOption::new(None, to, false).build_read_opts();
             let handle = box_try!(get_cf_handle(db.as_ref(), cf));
             let mut iter = DBIterator::new_cf(Arc::clone(db), handle, readopts);
             iter.seek(SeekKey::from(from));
@@ -1318,15 +1363,11 @@ fn set_region_tombstone(db: &DB, store_id: u64, region: Region, wb: &WriteBatch)
 }
 
 fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
-    let mut fake_region = Region::default();
-    fake_region.set_start_key(vec![]);
-    fake_region.set_end_key(vec![]);
-    fake_region.mut_peers().push(Peer::default());
-    let get_cf_size =
-        |cf: &str| raftstore_util::get_region_approximate_size_cf(db, cf, &fake_region);
-
-    let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
-    let write_cf_size = box_try!(get_cf_size(CF_WRITE));
+    // Empty start and end key cover all range.
+    let mut region = Region::new();
+    region.mut_peers().push(Peer::new());
+    let default_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_DEFAULT, &region));
+    let write_cf_size = box_try!(get_region_approximate_keys_cf(db, CF_WRITE, &region));
 
     let cf = if default_cf_size >= write_cf_size {
         CF_DEFAULT
@@ -1338,11 +1379,9 @@ fn divide_db(db: &DB, parts: usize) -> crate::raftstore::Result<Vec<Vec<u8>>> {
 }
 
 fn divide_db_cf(db: &DB, parts: usize, cf: &str) -> crate::raftstore::Result<Vec<Vec<u8>>> {
-    let cf = get_cf_handle(db, cf)?;
     let start = keys::data_key(b"");
     let end = keys::data_end_key(b"");
-    let range = Range::new(&start, &end);
-    let collection = db.get_properties_of_tables_in_range(cf, &[range])?;
+    let collection = engine::util::get_range_properties_cf(db, cf, &start, &end)?;
 
     let mut keys = Vec::new();
     let mut found_keys_count = 0;
@@ -1399,16 +1438,17 @@ mod tests {
     use std::iter::FromIterator;
     use std::sync::Arc;
 
-    use crate::storage::engine::{ColumnFamilyOptions, DBOptions, Writable};
+    use engine::rocks::{ColumnFamilyOptions, DBOptions, Writable};
     use kvproto::metapb::{Peer, Region};
     use raft::eraftpb::EntryType;
     use tempdir::TempDir;
 
     use super::*;
-    use crate::raftstore::store::engine::Mutable;
     use crate::storage::mvcc::{Lock, LockType};
-    use crate::storage::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-    use crate::util::rocksdb_util::{self as rocksdb_util, new_engine_opt, CFOptions};
+    use engine::rocks;
+    use engine::rocks::util::{new_engine_opt, CFOptions};
+    use engine::Mutable;
+    use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     fn init_region_state(engine: &DB, region_id: u64, stores: &[u64]) -> Region {
         let cf_raft = engine.cf_handle(CF_RAFT).unwrap();
@@ -1507,7 +1547,7 @@ mod tests {
         let tmp = TempDir::new("test_debug").unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = Arc::new(
-            rocksdb_util::new_engine_opt(
+            rocks::util::new_engine_opt(
                 path,
                 DBOptions::new(),
                 vec![
@@ -1520,7 +1560,8 @@ mod tests {
             .unwrap(),
         );
 
-        let engines = Engines::new(Arc::clone(&engine), engine);
+        let shared_block_cache = false;
+        let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
         Debugger::new(engines)
     }
 

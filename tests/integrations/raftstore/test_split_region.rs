@@ -1,15 +1,4 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -21,14 +10,14 @@ use kvproto::raft_cmdpb::*;
 use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 
+use engine::Iterable;
+use engine::CF_WRITE;
 use test_raftstore::*;
 use tikv::pd::PdClient;
-use tikv::raftstore::store::engine::Iterable;
 use tikv::raftstore::store::keys::data_key;
 use tikv::raftstore::store::{Callback, WriteResponse};
 use tikv::raftstore::Result;
-use tikv::storage::CF_WRITE;
-use tikv::util::config::*;
+use tikv_util::config::*;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
@@ -271,7 +260,19 @@ impl Filter for EraseHeartbeatCommit {
 
 fn check_cluster(cluster: &mut Cluster<impl Simulator>, k: &[u8], v: &[u8], all_committed: bool) {
     let region = cluster.pd_client.get_region(k).unwrap();
-    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let mut tried_cnt = 0;
+    let leader = loop {
+        match cluster.leader_of_region(region.get_id()) {
+            None => {
+                tried_cnt += 1;
+                if tried_cnt >= 3 {
+                    panic!("leader should be elected");
+                }
+                continue;
+            }
+            Some(l) => break l,
+        }
+    };
     for i in 1..=region.get_peers().len() as u64 {
         let engine = cluster.get_engine(i);
         if all_committed || i == leader.get_store_id() {
@@ -318,10 +319,9 @@ fn test_delay_split_region() {
     // the log.
     check_cluster(&mut cluster, b"k4", b"v4", false);
 
-    cluster.stop_node(1);
+    cluster.must_transfer_leader(region.get_id(), new_peer(3, 3));
     // New leader should flush old committed entries eagerly.
     check_cluster(&mut cluster, b"k4", b"v4", true);
-    cluster.run_node(1).unwrap();
     cluster.must_put(b"k5", b"v5");
     // New committed entries should be broadcast lazily.
     check_cluster(&mut cluster, b"k5", b"v5", false);

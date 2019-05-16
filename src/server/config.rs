@@ -1,24 +1,13 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::i32;
 
 use super::Result;
-use crate::grpc::CompressionAlgorithms;
+use grpcio::CompressionAlgorithms;
 
-use crate::util::collections::HashMap;
-use crate::util::config::{self, ReadableDuration, ReadableSize};
-use crate::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
+use engine::rocks::util::io_limiter::DEFAULT_SNAP_MAX_BYTES_PER_SEC;
+use tikv_util::collections::HashMap;
+use tikv_util::config::{self, ReadableDuration, ReadableSize};
 
 pub use crate::raftstore::store::Config as RaftStoreConfig;
 pub use crate::storage::Config as StorageConfig;
@@ -86,6 +75,7 @@ pub struct Config {
     pub end_point_stream_channel_size: usize,
     pub end_point_batch_row_limit: usize,
     pub end_point_stream_batch_row_limit: usize,
+    pub end_point_enable_batch_if_possible: bool,
     pub end_point_request_max_handle_duration: ReadableDuration,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -139,6 +129,7 @@ impl Default for Config {
             end_point_stream_channel_size: 8,
             end_point_batch_row_limit: DEFAULT_ENDPOINT_BATCH_ROW_LIMIT,
             end_point_stream_batch_row_limit: DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT,
+            end_point_enable_batch_if_possible: true,
             end_point_request_max_handle_duration: ReadableDuration::secs(
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
@@ -268,7 +259,7 @@ fn validate_label(s: &str, tp: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::config::ReadableDuration;
+    use tikv_util::config::ReadableDuration;
 
     #[test]
     fn test_config_validate() {

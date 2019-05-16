@@ -1,17 +1,10 @@
-// Copyright 2016 PingCAP, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use crossbeam::channel::{TryRecvError, TrySendError};
+use engine::rocks;
+use engine::rocks::CompactionJobInfo;
+use engine::{WriteBatch, WriteOptions, DB};
+use engine::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::Future;
 use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -28,31 +21,18 @@ use std::{mem, thread, u64};
 use time::{self, Timespec};
 use tokio_threadpool::{Sender as ThreadPoolSender, ThreadPool};
 
+use crate::import::SSTImporter;
 use crate::pd::{PdClient, PdRunner, PdTask};
 use crate::raftstore::coprocessor::split_observer::SplitObserver;
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
-use crate::raftstore::store::util::is_initial_msg;
-use crate::raftstore::Result;
-use crate::storage::engine::{CompactionJobInfo, WriteBatch, WriteOptions, DB};
-use crate::storage::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use crate::util::collections::{HashMap, HashSet};
-use crate::util::mpsc::{self, LooseBoundedSender, Receiver};
-use crate::util::rocksdb_util::{self, CompactedEvent, CompactionListener};
-use crate::util::time::{duration_to_sec, SlowTimer};
-use crate::util::timer::SteadyTimer;
-use crate::util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
-use crate::util::{is_zero_duration, sys as sys_util, Either, RingQueue};
-
-use crate::import::SSTImporter;
 use crate::raftstore::store::config::Config;
-use crate::raftstore::store::engine::{Iterable, Mutable, Peekable};
 use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    ApplyTaskRes, BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -60,21 +40,33 @@ use crate::raftstore::store::local_metrics::RaftMetrics;
 use crate::raftstore::store::metrics::*;
 use crate::raftstore::store::peer_storage::{self, HandleRaftReadyContext, InvokeContext};
 use crate::raftstore::store::transport::Transport;
+use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
     ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
     RegionTask, SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
-    util, Callback, CasualMessage, Engines, PeerMsg, RaftCommand, SnapManager, SnapshotDeleter,
-    StoreMsg, StoreTick,
+    util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
+    SnapshotDeleter, StoreMsg, StoreTick,
 };
+use crate::raftstore::Result;
+use crate::storage::kv::{CompactedEvent, CompactionListener};
+use engine::Engines;
+use engine::{Iterable, Mutable, Peekable};
+use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
+use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::timer::SteadyTimer;
+use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
+use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
 
 type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
 const PENDING_VOTES_CAP: usize = 20;
+const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
     pub engine: Arc<DB>,
@@ -177,6 +169,12 @@ impl RaftRouter {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn report_unreachable(&self, store_id: u64) {
+        self.broadcast_normal(|| {
+            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
+        });
     }
 }
 
@@ -338,6 +336,7 @@ struct Store {
     stopped: bool,
     start_time: Option<Timespec>,
     consistency_check_time: HashMap<u64, Instant>,
+    last_unreachable_report: HashMap<u64, Instant>,
 }
 
 pub struct StoreFsm {
@@ -355,6 +354,7 @@ impl StoreFsm {
                 stopped: false,
                 start_time: None,
                 consistency_check_time: HashMap::default(),
+                last_unreachable_report: HashMap::default(),
             },
             receiver: rx,
         });
@@ -414,6 +414,9 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
                 StoreMsg::SnapshotStats => self.store_heartbeat_pd(),
+                StoreMsg::StoreUnreachable { store_id } => {
+                    self.on_store_unreachable(store_id);
+                }
                 StoreMsg::Start { store } => self.start(store),
             }
         }
@@ -606,10 +609,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
                 // TODO: we may need a way to optimize the message copy.
                 Ok(msg) => {
                     fail_point!(
-                        "pause_on_apply_res_1",
+                        "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
                             && match msg {
-                                PeerMsg::ApplyRes { .. } => true,
+                                PeerMsg::ApplyRes {
+                                    res: ApplyTaskRes::Destroy { .. },
+                                } => true,
                                 _ => false,
                             },
                         |_| unreachable!()
@@ -703,7 +708,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
         kv_engine.scan_cf(CF_RAFT, start_key, end_key, false, |key, value| {
-            let (region_id, suffix) = keys::decode_region_meta_key(key)?;
+            let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
                 return Ok(true);
             }
@@ -721,19 +726,23 @@ impl<T, C> RaftPollerBuilder<T, C> {
             if local_state.get_state() == PeerState::Applying {
                 // in case of restart happen when we just write region state to Applying,
                 // but not write raft_local_state to raft rocksdb in time.
-                peer_storage::recover_from_applying_state(&self.engines, &raft_wb, region_id)?;
+                box_try!(peer_storage::recover_from_applying_state(
+                    &self.engines,
+                    &raft_wb,
+                    region_id
+                ));
                 applying_count += 1;
                 applying_regions.push(region.clone());
                 return Ok(true);
             }
 
-            let (tx, mut peer) = PeerFsm::create(
+            let (tx, mut peer) = box_try!(PeerFsm::create(
                 store_id,
                 &self.cfg,
                 self.region_scheduler.clone(),
                 self.engines.clone(),
                 region,
-            )?;
+            ));
             if local_state.get_state() == PeerState::Merging {
                 info!("region is merging"; "region" => ?region, "store_id" => store_id);
                 merging_count += 1;
@@ -810,7 +819,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         peer_storage::clear_meta(&self.engines, kv_wb, raft_wb, region.get_id(), &raft_state)
             .unwrap();
         let key = keys::region_state_key(region.get_id());
-        let handle = rocksdb_util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
+        let handle = rocks::util::get_cf_handle(&self.engines.kv, CF_RAFT).unwrap();
         kv_wb.put_msg_cf(handle, &key, origin_state).unwrap();
     }
 
@@ -828,7 +837,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
         }
         ranges.push((last_start_key, keys::DATA_MAX_KEY.to_vec()));
 
-        rocksdb_util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
+        rocks::util::roughly_cleanup_ranges(&self.engines.kv, &ranges)?;
 
         info!(
             "cleans up garbage data";
@@ -1457,7 +1466,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             return;
         }
 
-        if rocksdb_util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
+        if rocks::util::auto_compactions_is_disabled(&self.ctx.engines.kv) {
             debug!(
                 "skip compact check when disabled auto compactions";
                 "store_id" => self.fsm.store.id,
@@ -1901,6 +1910,30 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
             );
         }
     }
+
+    fn on_store_unreachable(&mut self, store_id: u64) {
+        let now = Instant::now();
+        if self
+            .fsm
+            .store
+            .last_unreachable_report
+            .get(&store_id)
+            .map_or(UNREACHABLE_BACKOFF, |t| now.duration_since(*t))
+            < UNREACHABLE_BACKOFF
+        {
+            return;
+        }
+        info!(
+            "broadcasting unreachable";
+            "store_id" => self.fsm.store.id,
+            "unreachable_store_id" => store_id,
+        );
+        self.fsm.store.last_unreachable_report.insert(store_id, now);
+        // It's possible to acquire the lock and only send notification to
+        // invovled regions. However loop over all the regions can take a
+        // lot of time, which may block other operations.
+        self.ctx.router.report_unreachable(store_id);
+    }
 }
 
 fn size_change_filter(info: &CompactionJobInfo) -> bool {
@@ -2000,8 +2033,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
 
-    use crate::util::rocksdb_util::properties::{IndexHandle, IndexHandles, SizeProperties};
-    use crate::util::rocksdb_util::CompactedEvent;
+    use crate::raftstore::coprocessor::properties::{IndexHandle, IndexHandles, SizeProperties};
+    use crate::storage::kv::CompactedEvent;
     use protobuf::RepeatedField;
 
     use super::*;
