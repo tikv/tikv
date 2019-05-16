@@ -512,7 +512,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)
