@@ -172,10 +172,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
     let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
-
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
     let raft_engine = RaftKv::new(raft_router.clone());
 

@@ -49,7 +49,12 @@ fn test_node_bootstrap_with_prepared_data() {
     let raft_engine = Arc::new(
         rocks::util::new_engine(tmp_path_raft.to_str().unwrap(), None, &[], None).unwrap(),
     );
-    let engines = Engines::new(Arc::clone(&engine), Arc::clone(&raft_engine));
+    let shared_block_cache = false;
+    let engines = Engines::new(
+        Arc::clone(&engine),
+        Arc::clone(&raft_engine),
+        shared_block_cache,
+    );
     let tmp_mgr = TempDir::new("test_cluster").unwrap();
 
     let mut node = Node::new(system, &cfg.server, &cfg.raft_store, Arc::clone(&pd_client));
