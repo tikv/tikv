@@ -7,9 +7,11 @@ use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use super::*;
-use crate::coprocessor::codec::datum;
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::{Error, Result};
+use crate::coprocessor::codec::{
+    datum,
+    mysql::{DecimalDecoder, JsonDecoder, Tz},
+    Error, Result,
+};
 
 /// A vector value container, a.k.a. column, for all concrete eval types.
 ///
@@ -283,7 +285,7 @@ impl VectorValue {
 
         #[inline]
         fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
-            Decimal::decode(v)
+            v.decode_decimal()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
         }
 
@@ -302,7 +304,7 @@ impl VectorValue {
 
         #[inline]
         fn decode_json(v: &mut &[u8]) -> Result<Json> {
-            Json::decode(v)
+            v.decode_json()
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
         }
 
@@ -528,15 +530,15 @@ impl VectorValue {
             VectorValue::Int(ref vec) => {
                 match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(val) => {
                         // Always encode to INT / UINT instead of VAR INT to be efficient.
                         if field_type.flag().contains(FieldTypeFlag::UNSIGNED) {
-                            output.push(datum::UINT_FLAG);
+                            output.write_u8(datum::UINT_FLAG)?;
                             output.write_u64(val as u64)?;
                         } else {
-                            output.push(datum::INT_FLAG);
+                            output.write_u8(datum::INT_FLAG)?;
                             output.write_i64(val)?;
                         }
                     }
@@ -546,10 +548,10 @@ impl VectorValue {
             VectorValue::Real(ref vec) => {
                 match vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(val) => {
-                        output.push(datum::FLOAT_FLAG);
+                        output.write_u8(datum::FLOAT_FLAG)?;
                         output.write_f64(val)?;
                     }
                 }
@@ -558,10 +560,10 @@ impl VectorValue {
             VectorValue::Decimal(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(val) => {
-                        output.push(datum::DECIMAL_FLAG);
+                        output.write_u8(datum::DECIMAL_FLAG)?;
                         let (prec, frac) = val.prec_and_frac();
                         output.encode_decimal(val, prec, frac)?;
                     }
@@ -571,10 +573,10 @@ impl VectorValue {
             VectorValue::Bytes(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(ref val) => {
-                        output.push(datum::COMPACT_BYTES_FLAG);
+                        output.write_u8(datum::COMPACT_BYTES_FLAG)?;
                         output.write_compact_bytes(val)?;
                     }
                 }
@@ -583,10 +585,10 @@ impl VectorValue {
             VectorValue::DateTime(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(ref val) => {
-                        output.push(datum::UINT_FLAG);
+                        output.write_u8(datum::UINT_FLAG)?;
                         output.write_u64(val.to_packed_u64())?;
                     }
                 }
@@ -595,10 +597,10 @@ impl VectorValue {
             VectorValue::Duration(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(ref val) => {
-                        output.push(datum::DURATION_FLAG);
+                        output.write_u8(datum::DURATION_FLAG)?;
                         output.write_i64(val.to_nanos())?;
                     }
                 }
@@ -607,10 +609,10 @@ impl VectorValue {
             VectorValue::Json(ref vec) => {
                 match &vec[row_index] {
                     None => {
-                        output.push(datum::NIL_FLAG);
+                        output.write_u8(datum::NIL_FLAG)?;
                     }
                     Some(ref val) => {
-                        output.push(datum::JSON_FLAG);
+                        output.write_u8(datum::JSON_FLAG)?;
                         output.encode_json(val)?;
                     }
                 }
@@ -977,7 +979,7 @@ mod benches {
     #[bench]
     fn bench_batch_decode(b: &mut test::Bencher) {
         use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
-        use crate::coprocessor::codec::table;
+        use crate::coprocessor::codec::table::TableDecoder;
         use crate::coprocessor::dag::expr::EvalContext;
         use cop_datatype::FieldTypeTp;
 
@@ -994,12 +996,9 @@ mod benches {
         b.iter(|| {
             for _ in 0..1000 {
                 let mut raw = test::black_box(&datum_raw).as_slice();
-                let datum = table::decode_col_value(
-                    &mut raw,
-                    test::black_box(&eval_ctx),
-                    test::black_box(&col_info),
-                )
-                .unwrap();
+                let datum = raw
+                    .decode_col_value(test::black_box(&eval_ctx), test::black_box(&col_info))
+                    .unwrap();
                 match datum {
                     Datum::I64(v) => {
                         test::black_box(v);

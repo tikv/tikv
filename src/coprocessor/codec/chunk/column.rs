@@ -6,11 +6,12 @@ use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use super::{Error, Result};
 use crate::coprocessor::codec::mysql::decimal::DECIMAL_STRUCT_SIZE;
 use crate::coprocessor::codec::mysql::{
-    Decimal, DecimalEncoder, Duration, DurationEncoder, Json, JsonEncoder, Time, TimeEncoder,
+    Decimal, DecimalDecoder, DecimalEncoder, Duration, DurationDecoder, DurationEncoder, Json,
+    JsonDecoder, JsonEncoder, Time, TimeDecoder, TimeEncoder,
 };
 use crate::coprocessor::codec::Datum;
 
-use codec::prelude::{NumberDecoder, NumberEncoder};
+use codec::prelude::{BufferWriter, NumberDecoder, NumberEncoder};
 #[cfg(test)]
 use tikv_util::codec::BytesSlice;
 
@@ -224,7 +225,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        data.read_u64_le().map_err(Error::from)
+        Ok(data.read_u64_le()?)
     }
 
     /// Append a f64 datum to the column.
@@ -274,7 +275,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Time::decode(&mut data)
+        data.decode_time()
     }
 
     /// Append a duration datum to the column.
@@ -288,7 +289,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Duration::decode(&mut data)
+        data.decode_duration()
     }
 
     /// Append a decimal datum to the column.
@@ -302,7 +303,7 @@ impl Column {
         let start = idx * self.fixed_len;
         let end = start + self.fixed_len;
         let mut data = &self.data[start..end];
-        Decimal::decode_from_chunk(&mut data)
+        data.decode_decimal_from_chunk()
     }
 
     /// Append a json datum to the column.
@@ -316,7 +317,7 @@ impl Column {
         let start = self.var_offsets[idx];
         let end = self.var_offsets[idx + 1];
         let mut data = &self.data[start..end];
-        Json::decode(&mut data)
+        data.decode_json()
     }
 
     /// Return the total rows in the column.
@@ -377,7 +378,7 @@ pub trait ColumnEncoder: NumberEncoder {
     }
 }
 
-impl<T: NumberEncoder> ColumnEncoder for T {}
+impl<T: BufferWriter> ColumnEncoder for T {}
 
 #[cfg(test)]
 mod tests {

@@ -10,7 +10,7 @@ use rand::XorShiftRng;
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::{
-    mysql::{charset, Decimal, Duration, Json, Time, MAX_FSP},
+    mysql::{charset, Decimal, DecimalDecoder, Duration, Json, JsonDecoder, Time, MAX_FSP},
     Datum,
 };
 
@@ -271,11 +271,15 @@ impl Expression {
                 .and_then(|n| Duration::from_nanos(n, MAX_FSP))
                 .map(Datum::Dur)
                 .map(|e| Expression::new_const(e, field_type)),
-            ExprType::MysqlDecimal => Decimal::decode(&mut expr.get_val())
+            ExprType::MysqlDecimal => expr
+                .get_val()
+                .decode_decimal()
                 .map(Datum::Dec)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),
-            ExprType::MysqlJson => Json::decode(&mut expr.get_val())
+            ExprType::MysqlJson => expr
+                .get_val()
+                .decode_json()
                 .map(Datum::Json)
                 .map(|e| Expression::new_const(e, field_type))
                 .map_err(Error::from),

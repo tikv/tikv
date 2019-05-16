@@ -13,7 +13,7 @@ use tipb::select::Chunk;
 
 use test_coprocessor::*;
 use test_storage::*;
-use tikv::coprocessor::codec::{datum, Datum};
+use tikv::coprocessor::codec::{datum, datum::DatumDecoder, Datum};
 use tikv::server::Config;
 use tikv::storage::TestEngineBuilder;
 use tikv_util::codec::number::*;
@@ -23,7 +23,7 @@ const FLAG_TRUNCATE_AS_WARNING: u64 = 1 << 1;
 
 fn check_chunk_datum_count(chunks: &[Chunk], datum_limit: usize) {
     let mut iter = chunks.iter();
-    let res = iter.any(|x| datum::decode(&mut x.get_rows_data()).unwrap().len() != datum_limit);
+    let res = iter.any(|x| x.get_rows_data().decode().unwrap().len() != datum_limit);
     if res {
         assert!(iter.next().is_none());
     }

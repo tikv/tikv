@@ -14,7 +14,7 @@ use tikv_util::collections::HashSet;
 use crate::coprocessor::{
     codec::{
         datum::{self, Datum, DatumEncoder},
-        table::{self, RowColsDict},
+        table::{RowColsDict, TableDecoder},
     },
     dag::{
         exec_summary::ExecSummary,
@@ -221,17 +221,13 @@ impl OriginCols {
                 let value = match self.data.get(col_id) {
                     None if col.has_default_val() => {
                         // TODO: optimize it to decode default value only once.
-                        box_try!(table::decode_col_value(
-                            &mut col.get_default_val(),
-                            ctx,
-                            col
-                        ))
+                        box_try!(col.get_default_val().decode_col_value(ctx, col))
                     }
                     None if col.flag().contains(FieldTypeFlag::NOT_NULL) => {
                         return Err(box_err!("column {} of {} is missing", col_id, self.handle));
                     }
                     None => Datum::Null,
-                    Some(mut bs) => box_try!(table::decode_col_value(&mut bs, ctx, col)),
+                    Some(mut bs) => box_try!(bs.decode_col_value(ctx, col)),
                 };
                 res[*offset] = value;
             }

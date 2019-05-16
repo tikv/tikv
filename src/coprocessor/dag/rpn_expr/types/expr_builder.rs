@@ -8,10 +8,13 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
-use crate::coprocessor::codec::data_type::ScalarValue;
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::{
+    codec::{
+        data_type::ScalarValue,
+        mysql::{DecimalDecoder, Duration, JsonDecoder, Time, Tz, MAX_FSP},
+    },
+    Error, Result,
+};
 
 /// Helper to build an `RpnExpression`.
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
@@ -396,14 +399,18 @@ fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
 
 #[inline]
 fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = Decimal::decode(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .decode_decimal()
         .map_err(|_| Error::Other(box_err!("Unable to decode decimal from the request")))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
 
 #[inline]
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
-    let value = Json::decode(&mut val.as_slice())
+    let value = val
+        .as_slice()
+        .decode_json()
         .map_err(|_| Error::Other(box_err!("Unable to decode json from the request")))?;
     Ok(ScalarValue::Json(Some(value)))
 }

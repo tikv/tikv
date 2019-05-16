@@ -245,7 +245,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 }
                 remaining = &remaining[1..];
                 let column_id = box_try!(remaining.read_var_i64());
-                let (val, new_remaining) = datum::split_datum(remaining, false)?;
+                let (val, new_remaining) = datum::split_datum(remaining)?;
                 // Note: The produced columns may be not in the same length if there is error due
                 // to corrupted data. It will be handled in `ScanExecutor`.
                 let some_index = self.column_id_index.get(&column_id);

@@ -14,8 +14,10 @@ use tipb::expression::{ByItem, Expr, ExprType};
 use tipb::schema::ColumnInfo;
 use tipb::select::{Chunk, DAGRequest};
 
-use tikv::coprocessor::codec::{datum, Datum};
-use tikv::coprocessor::REQ_TYPE_DAG;
+use tikv::coprocessor::{
+    codec::{datum::DatumDecoder, Datum},
+    REQ_TYPE_DAG,
+};
 use tikv_util::codec::number::NumberEncoder;
 
 pub struct DAGSelect {
@@ -261,7 +263,7 @@ impl Iterator for DAGChunkSpliter {
             } else if self.datums.is_empty() {
                 let chunk = self.chunks.remove(0);
                 let mut data = chunk.get_rows_data();
-                self.datums = datum::decode(&mut data).unwrap();
+                self.datums = data.decode().unwrap();
                 continue;
             }
             assert_eq!(self.datums.len() >= self.col_cnt, true);

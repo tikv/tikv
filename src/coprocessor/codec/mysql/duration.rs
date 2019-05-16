@@ -1,12 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use codec::prelude::{NumberDecoder, NumberEncoder};
+use codec::prelude::{BufferReader, BufferWriter, NumberDecoder, NumberEncoder};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::io::Write;
 use std::time::Duration as StdDuration;
 use std::{i64, str, u64};
-use tikv_util::codec::BytesSlice;
 use time::{self, Tm};
 
 use super::super::Result;
@@ -299,7 +298,7 @@ impl Ord for Duration {
     }
 }
 
-impl<T: NumberEncoder> DurationEncoder for T {}
+impl<T: BufferWriter> DurationEncoder for T {}
 pub trait DurationEncoder: NumberEncoder {
     fn encode_duration(&mut self, v: &Duration) -> Result<()> {
         self.write_i64(v.to_nanos())?;
@@ -307,14 +306,16 @@ pub trait DurationEncoder: NumberEncoder {
     }
 }
 
-impl Duration {
-    /// `decode` decodes duration encoded by `encode_duration`.
-    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Duration> {
-        let nanos = data.read_i64()?;
-        let fsp = data.read_i64()?;
+pub trait DurationDecoder: NumberDecoder {
+    /// `decode_duration` decodes duration encoded by `encode_duration`.
+    fn decode_duration(&mut self) -> Result<Duration> {
+        let nanos = self.read_i64()?;
+        let fsp = self.read_i64()?;
         Duration::from_nanos(nanos, fsp as i8)
     }
 }
+
+impl<T: BufferReader> DurationDecoder for T {}
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Duration {
     #[inline]
@@ -544,7 +545,7 @@ mod tests {
             let t = Duration::parse(input.as_bytes(), fsp).unwrap();
             let mut buf = vec![];
             buf.encode_duration(&t).unwrap();
-            let got = Duration::decode(&mut buf.as_slice()).unwrap();
+            let got = buf.as_slice().decode_duration().unwrap();
             assert_eq!(t, got);
         }
     }

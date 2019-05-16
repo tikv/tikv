@@ -16,7 +16,7 @@ mod json_remove;
 mod json_type;
 mod json_unquote;
 
-pub use self::binary::JsonEncoder;
+pub use self::binary::{JsonDecoder, JsonEncoder};
 pub use self::json_modify::ModifyType;
 pub use self::path_expr::{parse_json_path_expr, PathExpression};
 use std::collections::BTreeMap;

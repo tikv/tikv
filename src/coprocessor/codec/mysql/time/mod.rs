@@ -18,8 +18,7 @@ use crate::coprocessor::codec::mysql::duration::{
 };
 use crate::coprocessor::codec::mysql::{self, Decimal};
 use crate::coprocessor::codec::{Error, Result, TEN_POW};
-use codec::prelude::{NumberDecoder, NumberEncoder};
-use tikv_util::codec::BytesSlice;
+use codec::prelude::{BufferReader, BufferWriter, NumberDecoder, NumberEncoder};
 
 pub use self::extension::*;
 pub use self::weekmode::WeekMode;
@@ -809,7 +808,7 @@ impl Display for Time {
     }
 }
 
-impl<T: NumberEncoder> TimeEncoder for T {}
+impl<T: BufferWriter> TimeEncoder for T {}
 
 /// Time Encoder for Chunk format
 pub trait TimeEncoder: NumberEncoder {
@@ -836,34 +835,24 @@ pub trait TimeEncoder: NumberEncoder {
     }
 }
 
-impl Time {
-    /// `decode` decodes time encoded by `encode_time` for Chunk format.
-    pub fn decode(data: &mut BytesSlice<'_>) -> Result<Time> {
+pub trait TimeDecoder: NumberDecoder {
+    /// `decode_time` decodes time encoded by `encode_time` for Chunk format.
+    fn decode_time(&mut self) -> Result<Time> {
         use num_traits::FromPrimitive;
 
-        let year = i32::from(data.read_u16()?);
-        let (month, day, hour, minute, second) = if data.len() >= 5 {
-            (
-                u32::from(data[0]),
-                u32::from(data[1]),
-                u32::from(data[2]),
-                u32::from(data[3]),
-                u32::from(data[4]),
-            )
-        } else {
-            return Err(Error::unexpected_eof());
-        };
-        *data = &data[5..];
-        let nanoseconds = 1000 * data.read_u32()?;
-        let (tp, fsp) = if data.len() >= 2 {
-            (
-                FieldTypeTp::from_u8(data[0]).unwrap_or(FieldTypeTp::Unspecified),
-                data[1],
-            )
-        } else {
-            return Err(Error::unexpected_eof());
-        };
-        *data = &data[2..];
+        let year = i32::from(self.read_u16()?);
+        let (month, day, hour, minute, second) = (
+            u32::from(self.read_u8()?),
+            u32::from(self.read_u8()?),
+            u32::from(self.read_u8()?),
+            u32::from(self.read_u8()?),
+            u32::from(self.read_u8()?),
+        );
+        let nanoseconds = 1000 * self.read_u32()?;
+        let (tp, fsp) = (
+            FieldTypeTp::from_u8(self.read_u8()?).unwrap_or(FieldTypeTp::Unspecified),
+            self.read_u8()?,
+        );
         let tz = Tz::utc(); // TODO
         if year == 0
             && month == 0
@@ -893,6 +882,8 @@ impl Time {
         Time::new(t, tp.try_into()?, fsp as i8)
     }
 }
+
+impl<T: BufferReader> TimeDecoder for T {}
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Time {
     #[inline]
@@ -1535,7 +1526,7 @@ mod tests {
             let t = Time::parse_utc_datetime(s, fsp).unwrap();
             let mut buf = vec![];
             buf.encode_time(&t).unwrap();
-            let got = Time::decode(&mut buf.as_slice()).unwrap();
+            let got = buf.as_slice().decode_time().unwrap();
             assert_eq!(got, t);
         }
     }

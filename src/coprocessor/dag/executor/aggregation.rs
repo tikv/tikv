@@ -410,9 +410,11 @@ mod tests {
     use super::super::index_scan::IndexScanExecutor;
     use super::super::tests::*;
     use super::*;
-    use crate::coprocessor::codec::datum::{self, Datum};
-    use crate::coprocessor::codec::mysql::decimal::Decimal;
-    use crate::coprocessor::codec::table;
+    use crate::coprocessor::codec::{
+        datum::{self, Datum, DatumDecoder},
+        mysql::decimal::Decimal,
+        table,
+    };
     use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::scanner::tests::Data;
     use crate::storage::SnapshotStore;
@@ -577,7 +579,7 @@ mod tests {
         )];
         let expect_col_cnt = 6;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = datum::decode(&mut row.as_slice()).unwrap();
+            let ds = row.as_slice().decode().unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
         }
@@ -659,7 +661,7 @@ mod tests {
         ];
         let expect_col_cnt = 6;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = datum::decode(&mut row.as_slice()).unwrap();
+            let ds = row.as_slice().decode().unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
             assert_eq!(ds[1], Datum::from(expect_cols.1));
@@ -804,7 +806,7 @@ mod tests {
         ];
         let expect_col_cnt = 8;
         for (row, expect_cols) in row_data.into_iter().zip(expect_row_data) {
-            let ds = datum::decode(&mut row.as_slice()).unwrap();
+            let ds = row.as_slice().decode().unwrap();
             assert_eq!(ds.len(), expect_col_cnt);
             assert_eq!(ds[0], Datum::from(expect_cols.0));
             assert_eq!(ds[1], Datum::from(expect_cols.1));

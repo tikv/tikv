@@ -3,7 +3,7 @@
 use std::convert::TryInto;
 use std::{cmp, u8};
 
-use codec::prelude::{NumberDecoder, NumberEncoder};
+use codec::prelude::{BufferWriter, NumberDecoder, NumberEncoder};
 use cop_datatype::prelude::*;
 use cop_datatype::FieldTypeTp;
 use kvproto::coprocessor::KeyRange;
@@ -11,9 +11,9 @@ use tipb::schema::ColumnInfo;
 
 //use super::datum::DatumDecoder;
 use super::mysql::{Duration, Time};
-use super::{datum, Datum, Error, Result};
+use super::{datum, datum::DatumDecoder, Datum, Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
-use tikv_util::codec::BytesSlice;
+use codec::buffer::BufferReader;
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::escape;
 
@@ -43,7 +43,7 @@ trait TableEncoder: NumberEncoder {
     }
 }
 
-impl<T: NumberEncoder> TableEncoder for T {}
+impl<T: BufferWriter> TableEncoder for T {}
 
 /// Extracts table prefix from table record or index.
 #[inline]
@@ -188,7 +188,7 @@ pub fn decode_index_key(
         if encoded.is_empty() {
             return Err(box_err!("{} is too short.", escape(encoded)));
         }
-        let mut v = datum::decode_datum(&mut encoded)?;
+        let mut v = encoded.decode_datum()?;
         v = unflatten(ctx, v, info)?;
         res.push(v);
     }
@@ -243,45 +243,45 @@ fn unflatten(ctx: &EvalContext, datum: Datum, field_type: &dyn FieldTypeAccessor
     }
 }
 
-// `decode_col_value` decodes data to a Datum according to the column info.
-pub fn decode_col_value(
-    data: &mut BytesSlice<'_>,
-    ctx: &EvalContext,
-    col: &ColumnInfo,
-) -> Result<Datum> {
-    let d = datum::decode_datum(data)?;
-    unflatten(ctx, d, col)
-}
+pub trait TableDecoder: DatumDecoder {
+    // `decode_col_value` decodes data to a Datum according to the column info.
+    fn decode_col_value(&mut self, ctx: &EvalContext, col: &ColumnInfo) -> Result<Datum> {
+        let d = self.decode_datum()?;
+        unflatten(ctx, d, col)
+    }
 
-// `decode_row` decodes a byte slice into datums.
-// TODO: We should only decode columns in the cols map.
-// Row layout: colID1, value1, colID2, value2, .....
-pub fn decode_row(
-    data: &mut BytesSlice<'_>,
-    ctx: &mut EvalContext,
-    cols: &HashMap<i64, ColumnInfo>,
-) -> Result<HashMap<i64, Datum>> {
-    let mut values = datum::decode(data)?;
-    if values.get(0).map_or(true, |d| *d == Datum::Null) {
-        return Ok(HashMap::default());
-    }
-    if values.len() & 1 == 1 {
-        return Err(box_err!("decoded row values' length should be even!"));
-    }
-    let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
-    let mut drain = values.drain(..);
-    loop {
-        let id = match drain.next() {
-            None => return Ok(row),
-            Some(id) => id.i64(),
-        };
-        let v = drain.next().unwrap();
-        if let Some(ci) = cols.get(&id) {
-            let v = unflatten(ctx, v, ci)?;
-            row.insert(id, v);
+    // `decode_row` decodes a byte slice into datums.
+    // TODO: We should only decode columns in the cols map.
+    // Row layout: colID1, value1, colID2, value2, .....
+    fn decode_row(
+        &mut self,
+        ctx: &mut EvalContext,
+        cols: &HashMap<i64, ColumnInfo>,
+    ) -> Result<HashMap<i64, Datum>> {
+        let mut values = self.decode()?;
+        if values.get(0).map_or(true, |d| *d == Datum::Null) {
+            return Ok(HashMap::default());
+        }
+        if values.len() & 1 == 1 {
+            return Err(box_err!("decoded row values' length should be even!"));
+        }
+        let mut row = HashMap::with_capacity_and_hasher(cols.len(), Default::default());
+        let mut drain = values.drain(..);
+        loop {
+            let id = match drain.next() {
+                None => return Ok(row),
+                Some(id) => id.i64(),
+            };
+            let v = drain.next().unwrap();
+            if let Some(ci) = cols.get(&id) {
+                let v = unflatten(ctx, v, ci)?;
+                row.insert(id, v);
+            }
         }
     }
 }
+
+impl<T: BufferReader> TableDecoder for T {}
 
 /// `RowColMeta` saves the column meta of the row.
 #[derive(Debug)]
@@ -370,9 +370,9 @@ pub fn cut_row(data: Vec<u8>, cols: &HashSet<i64>) -> Result<RowColsDict> {
         let length = data.len();
         let mut tmp_data: &[u8] = data.as_ref();
         while !tmp_data.is_empty() && meta_map.len() < cols.len() {
-            let id = datum::decode_datum(&mut tmp_data)?.i64();
+            let id = tmp_data.decode_datum()?.i64();
             let offset = length - tmp_data.len();
-            let (val, rem) = datum::split_datum(tmp_data, false)?;
+            let (val, rem) = datum::split_datum(tmp_data)?;
             if cols.contains(&id) {
                 meta_map.insert(id, RowColMeta::new(offset, val.len()));
             }
@@ -393,7 +393,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         // parse cols from data
         for &id in col_ids {
             let offset = length - tmp_data.len();
-            let (val, rem) = datum::split_datum(tmp_data, false)?;
+            let (val, rem) = datum::split_datum(tmp_data)?;
             meta_map.insert(id, RowColMeta::new(offset, val.len()));
             tmp_data = rem;
         }
@@ -401,7 +401,7 @@ pub fn cut_idx_key(key: Vec<u8>, col_ids: &[i64]) -> Result<(RowColsDict, Option
         if tmp_data.is_empty() {
             None
         } else {
-            Some(datum::decode_datum(&mut tmp_data)?.i64())
+            Some(tmp_data.decode_datum()?.i64())
         }
     };
     Ok((RowColsDict::new(meta_map, key), handle))
@@ -501,7 +501,7 @@ mod tests {
         let bs = encode_row(col_values, &col_ids).unwrap();
         assert!(!bs.is_empty());
         let mut ctx = EvalContext::default();
-        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
+        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         let mut datums: HashMap<_, _>;
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(col_encoded, datums);
 
         cols.insert(4, new_col_info(FieldTypeTp::Float));
-        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
+        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
         assert_eq!(row, r);
 
         col_id_set.insert(4);
@@ -518,7 +518,7 @@ mod tests {
 
         cols.remove(&4);
         cols.remove(&3);
-        let r = decode_row(&mut bs.as_slice(), &mut ctx, &cols).unwrap();
+        let r = bs.as_slice().decode_row(&mut ctx, &cols).unwrap();
         row.remove(&3);
         assert_eq!(row, r);
 
@@ -530,7 +530,9 @@ mod tests {
 
         let bs = encode_row(vec![], &[]).unwrap();
         assert!(!bs.is_empty());
-        assert!(decode_row(&mut bs.as_slice(), &mut ctx, &cols)
+        assert!(bs
+            .as_slice()
+            .decode_row(&mut ctx, &cols)
             .unwrap()
             .is_empty());
         datums = cut_row_as_owned(&bs, &col_id_set);
@@ -578,7 +580,8 @@ mod tests {
             None
         } else {
             Some(
-                datum::decode_datum(&mut (handle_data.as_ref() as &[u8]))
+                (handle_data.as_ref() as &[u8])
+                    .decode_datum()
                     .unwrap()
                     .i64(),
             )
