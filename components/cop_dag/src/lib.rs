@@ -33,6 +33,7 @@ extern crate test;
 mod redundant_files;
 pub use redundant_files::*;
 
+pub mod codec;
 pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
