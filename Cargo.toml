@@ -204,7 +204,7 @@ rpath = false
 
 [profile.test]
 opt-level = 0
-debug = false
+debug = 1 # enable line numbers by default for easy test debugging
 codegen-units = 16
 lto = false
 incremental = true
