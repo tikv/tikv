@@ -445,6 +445,7 @@ fn test_split_brain<T: Simulator>(cluster: &mut Cluster<T>) {
     must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
     pd_client.must_add_peer(r1, new_peer(6, 6));
     must_get_equal(&cluster.get_engine(6), b"k1", b"v1");
+    cluster.must_transfer_leader(r1, new_peer(6, 6));
     pd_client.must_remove_peer(r1, new_peer(2, 2));
     pd_client.must_remove_peer(r1, new_peer(3, 3));
 
