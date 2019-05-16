@@ -114,11 +114,11 @@ impl<C: ExecSummaryCollector> TopNExecutor<C> {
 
 impl<C: ExecSummaryCollector> Executor for TopNExecutor<C> {
     fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
         if self.iter.is_none() {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        let timer = self.summary_collector.on_start_iterate();
         match iter.next() {
             Some(sort_row) => {
                 self.summary_collector.on_finish_iterate(timer, 1);
