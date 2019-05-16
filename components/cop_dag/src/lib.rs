@@ -33,19 +33,17 @@ extern crate test;
 mod redundant_files;
 pub use redundant_files::*;
 
-pub mod codec;
 pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
+pub mod codec;
 pub mod error;
 pub mod exec_summary;
 pub mod executor;
 pub mod expr;
-pub mod handler;
 pub mod rpn_expr;
 mod scanner;
 
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::error::{Error, Result};
-pub use self::handler::DAGRequestHandler;
 pub use self::scanner::{ScanOn, Scanner};
