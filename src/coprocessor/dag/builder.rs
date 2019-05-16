@@ -172,6 +172,7 @@ impl DAGBuilder {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_selection(),
                     Arc::clone(&ctx),
                     src,
