@@ -12,9 +12,9 @@ mod summable;
 
 pub use self::parser::AggrDefinitionParser;
 
-use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::Result;
+use crate::codec::data_type::*;
+use crate::expr::EvalContext;
+use crate::Result;
 
 /// A trait for all single parameter aggregate functions.
 ///

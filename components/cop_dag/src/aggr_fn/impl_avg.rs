@@ -4,11 +4,11 @@ use cop_datatype::{EvalType, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::summable::Summable;
-use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::{Error, Result};
+use crate::codec::data_type::*;
+use crate::codec::mysql::Tz;
+use crate::expr::EvalContext;
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::{Error, Result};
 
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;

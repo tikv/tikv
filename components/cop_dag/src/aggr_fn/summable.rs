@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::Result;
+use crate::codec::data_type::*;
+use crate::expr::EvalContext;
+use crate::Result;
 
 /// A trait for all summable types.
 ///
@@ -24,7 +24,7 @@ impl Summable for Decimal {
     #[inline]
     fn add_assign(&mut self, _ctx: &mut EvalContext, other: &Self) -> Result<()> {
         // TODO: If there is truncate error, should it be a warning instead?
-        let r: crate::coprocessor::codec::Result<Decimal> = (self as &Self + other).into();
+        let r: crate::codec::Result<Decimal> = (self as &Self + other).into();
         *self = r?;
         Ok(())
     }

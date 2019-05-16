@@ -22,11 +22,11 @@
 //!
 //!   Obviously, this kind of executor must not be the first executor in the pipeline.
 
-pub mod aggr_fn;
 pub mod batch_handler;
 pub mod builder;
 pub mod handler;
 
+pub use cop_dag::aggr_fn;
 pub use cop_dag::batch;
 pub use cop_dag::exec_summary;
 pub use cop_dag::executor;

@@ -2,10 +2,10 @@
 
 use tipb::expression::{Expr, ExprType, FieldType};
 
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::dag::aggr_fn::AggrFunction;
-use crate::coprocessor::dag::rpn_expr::RpnExpression;
-use crate::coprocessor::{Error, Result};
+use crate::aggr_fn::AggrFunction;
+use crate::codec::mysql::Tz;
+use crate::rpn_expr::RpnExpression;
+use crate::{Error, Result};
 
 /// Parse a specific aggregate function definition from protobuf.
 ///

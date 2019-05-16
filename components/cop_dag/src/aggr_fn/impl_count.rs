@@ -3,11 +3,11 @@
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
-use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::Result;
+use crate::codec::data_type::*;
+use crate::codec::mysql::Tz;
+use crate::expr::EvalContext;
+use crate::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::Result;
 
 /// The parser for COUNT aggregate function.
 pub struct AggrFnDefinitionParserCount;
