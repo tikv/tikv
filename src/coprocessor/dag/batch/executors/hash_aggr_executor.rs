@@ -601,9 +601,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
         }
 
         let ret = LazyBatchColumnVec::from(columns);
-        assert_eq!(ret.rows_len(), 1);
         ret.assert_columns_equal_length();
-
         Ok(ret)
     }
 
