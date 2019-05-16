@@ -985,6 +985,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
             p.set_region(cp.region);
 
             let peer_id = cp.peer.get_id();
+            let now = Instant::now();
             match change_type {
                 ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                     let peer = cp.peer.clone();
@@ -993,13 +994,12 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                     }
 
                     // Add this peer to cache and heartbeats.
-                    let now = Instant::now();
                     let id = peer.get_id();
                     p.peer_heartbeats.insert(id, now);
                     if p.is_leader() {
                         p.peers_start_pending_time.push((id, now));
                     }
-                    p.recent_added_peer.update(id, now);
+                    p.recent_conf_change_time = now;
                     p.insert_peer_cache(peer);
                 }
                 ConfChangeType::RemoveNode => {
@@ -1009,6 +1009,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                         p.peers_start_pending_time.retain(|&(p, _)| p != peer_id);
                     }
                     p.remove_peer_from_cache(peer_id);
+                    p.recent_conf_change_time = now;
                 }
             }
 
