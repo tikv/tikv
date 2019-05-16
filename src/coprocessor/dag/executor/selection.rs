@@ -40,11 +40,8 @@ impl<C: ExecSummaryCollector> SelectionExecutor<C> {
             first_collect: true,
         })
     }
-}
 
-impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
-    fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.summary_collector.on_start_iterate();
+    fn next_impl(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin();
             let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
@@ -54,11 +51,22 @@ impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
                     continue 'next;
                 }
             }
-            self.summary_collector.on_finish_iterate(timer, 1);
             return Ok(Some(Row::Origin(row)));
         }
-        self.summary_collector.on_finish_iterate(timer, 0);
         Ok(None)
+    }
+}
+
+impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
+            self.summary_collector.on_finish_iterate(timer, 1);
+        } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
+        }
+        ret
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
