@@ -132,7 +132,12 @@ mod tests {
             rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                 .unwrap(),
         );
-        let engines = Engines::new(Arc::clone(&kv_engine), Arc::clone(&raft_engine));
+        let shared_block_cache = false;
+        let engines = Engines::new(
+            Arc::clone(&kv_engine),
+            Arc::clone(&raft_engine),
+            shared_block_cache,
+        );
         let region = initial_region(1, 1, 1);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());

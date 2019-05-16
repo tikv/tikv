@@ -293,7 +293,8 @@ fn test_upgrade_from_v2_to_v3(fp: &str) {
     // Create a kv engine.
     let kv_engine =
         rocksdb_util::new_engine(tmp_path_kv.to_str().unwrap(), None, ALL_CFS, None).unwrap();
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+    let shared_block_cache = false;
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), shared_block_cache);
     cluster.dbs[0] = engines.clone();
     cluster.paths[0] = tmp_dir;
     cluster.engines.insert(STOER_ID, engines);
