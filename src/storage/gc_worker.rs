@@ -223,7 +223,7 @@ impl<E: Engine> GCRunner<E> {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC found plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.found_versions,
@@ -233,7 +233,7 @@ impl<E: Engine> GCRunner<E> {
             // TODO: we may delete only part of the versions in a batch, which may not beyond
             // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC deleted plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.deleted_versions,
