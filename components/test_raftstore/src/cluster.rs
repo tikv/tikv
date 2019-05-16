@@ -142,7 +142,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine);
+            let engines = Engines::new(engine, raft_engine, cache.is_some());
             self.dbs.push(engines);
             self.paths.push(dir);
         }

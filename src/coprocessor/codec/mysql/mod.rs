@@ -63,18 +63,26 @@ pub use self::time::{Time, TimeEncoder, TimeType, Tz};
 mod tests {
     #[test]
     fn test_parse_frac() {
-        let cases = vec![
-            ("1234567", 0, 0),
-            ("1234567", 1, 1),
-            ("0000567", 5, 6),
-            ("1234567", 5, 12346),
-            ("1234567", 6, 123457),
-            ("9999999", 6, 1000000),
+        let cases: Vec<(&'static [u8], u8, u32)> = vec![
+            (b"", 0, 0),
+            (b"", 10, 0),
+            (b"1234567", 0, 0),
+            (b"1234567", 1, 1),
+            (b"0000567", 5, 6),
+            (b"1234567", 5, 12346),
+            (b"1234567", 6, 123457),
+            (b"9999999", 6, 1000000),
+            (b"12", 5, 12000),
         ];
 
         for (s, fsp, exp) in cases {
-            let res = super::parse_frac(s.as_bytes(), fsp).unwrap();
+            let res = super::parse_frac(s, fsp).unwrap();
             assert_eq!(res, exp);
         }
+
+        assert!(
+            super::parse_frac(b"00x", 6).is_err(),
+            "00x should be invalid for `parse_frac`"
+        );
     }
 }
