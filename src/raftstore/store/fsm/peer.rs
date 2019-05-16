@@ -516,7 +516,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.report_snapshot_status(to_peer_id, status);
             }
             SignificantMsg::Unreachable { to_peer_id, .. } => {
-                self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                if self.fsm.peer.is_leader() {
+                    self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                }
+            }
+            SignificantMsg::StoreUnreachable { store_id } => {
+                if let Some(peer_id) = util::find_peer(self.region(), store_id).map(|p| p.get_id())
+                {
+                    if self.fsm.peer.is_leader() {
+                        self.fsm.peer.raft_group.report_unreachable(peer_id);
+                    }
+                }
             }
         }
     }
@@ -571,6 +581,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(apply_res) = res {
             self.on_ready_apply_snapshot(apply_res);
             has_snapshot = true;
+        }
+        if self.fsm.peer.leader_unreachable {
+            // TODO: handle unreachable.
+            self.fsm.peer.leader_unreachable = false;
         }
         if is_merging && has_snapshot {
             // After applying a snapshot, merge is rollbacked implicitly.
@@ -1294,6 +1308,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let peer_id = cp.peer.get_id();
+        let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
@@ -1302,13 +1317,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
 
                 // Add this peer to cache and heartbeats.
-                let now = Instant::now();
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_added_peer.update(id, now);
+                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1321,6 +1335,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
@@ -1975,14 +1990,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         exec_results: &mut VecDeque<ExecResult>,
         metrics: &ApplyMetrics,
     ) -> Option<Arc<AtomicBool>> {
-        if exec_results.is_empty() {
-            return None;
-        }
-
-        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
-        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
-        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
-
         // handle executing committed log results
         while let Some(result) = exec_results.pop_front() {
             match result {
@@ -2021,6 +2028,13 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 ExecResult::IngestSST { ssts } => self.on_ingest_sst_result(ssts),
             }
         }
+
+        // Update metrics only when all exec_results are finished in case the metrics is counted multiple times
+        // when waiting for commit merge
+        self.ctx.store_stat.lock_cf_bytes_written += metrics.lock_cf_written_bytes;
+        self.ctx.store_stat.engine_total_bytes_written += metrics.written_bytes;
+        self.ctx.store_stat.engine_total_keys_written += metrics.written_keys;
+
         None
     }
 
@@ -2218,6 +2232,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
         self.register_raft_gc_log_tick();
+        debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
         // last few seconds. That happens probably because another TiKV is down. In this case if we

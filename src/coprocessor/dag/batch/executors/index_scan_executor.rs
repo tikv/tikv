@@ -247,7 +247,6 @@ mod tests {
 
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
-    use tipb::expression::FieldType;
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::mysql::Tz;
@@ -293,21 +292,9 @@ mod tests {
 
         // The schema of these columns. Used to check executor output.
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         // Case 1. Normal index.

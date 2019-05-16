@@ -5,6 +5,9 @@ authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
 keywords = ["KV", "distributed-systems", "raft"]
+homepage = "https://tikv.org"
+repository = "https://github.com/tikv/tikv/"
+readme = "README.md"
 edition = "2018"
 publish = false
 
@@ -78,7 +81,7 @@ protobuf = "~2.0"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
-chrono-tz = "0.5"
+chrono-tz = "0.5.1"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2.32"
@@ -118,8 +121,11 @@ vlog = "0.1.4"
 twoway = "0.2.0"
 profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
+cop_codegen = { path = "components/cop_codegen" }
+tipb_helper = { path = "components/tipb_helper" }
 panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
+# TODO: use master branch after the next version is released.
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
@@ -167,6 +173,8 @@ members = [
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/cop_codegen",
+  "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
 ]

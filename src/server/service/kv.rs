@@ -831,13 +831,12 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
     fn read_index(
         &mut self,
         ctx: RpcContext<'_>,
-        _: ReadIndexRequest,
+        _req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
         let f = sink
             .fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
-            .map(|_| ())
-            .map_err(|_| {});
+            .map_err(|e| error!("read index error"; "err" => %e));
         ctx.spawn(f);
     }
 

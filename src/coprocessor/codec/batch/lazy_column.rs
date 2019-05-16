@@ -9,7 +9,7 @@ use tipb::expression::FieldType;
 
 use crate::coprocessor::codec::data_type::VectorValue;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::{Error, Result};
+use crate::coprocessor::codec::Result;
 
 /// A container stores an array of datums, which can be either raw (not decoded), or decoded into
 /// the `VectorValue` type.
@@ -73,7 +73,7 @@ impl LazyBatchColumn {
         LazyBatchColumn::Raw(Vec::with_capacity(capacity))
     }
 
-    /// Creates a new `LazyBatchColumnb::Decoded` with specified capacity and eval type.
+    /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and eval type.
     #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
@@ -191,8 +191,7 @@ impl LazyBatchColumn {
             return Ok(());
         }
 
-        let eval_type =
-            EvalType::try_from(field_type.tp()).map_err(|e| Error::Other(box_err!(e)))?;
+        let eval_type = box_try!(EvalType::try_from(field_type.tp()));
 
         let mut decoded_column = VectorValue::with_capacity(self.capacity(), eval_type);
         {
@@ -288,9 +287,6 @@ mod tests {
     fn test_lazy_batch_column_clone() {
         use cop_datatype::FieldTypeTp;
 
-        let mut ft = FieldType::new();
-        ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
-
         let mut col = LazyBatchColumn::raw_with_capacity(5);
         assert!(col.is_raw());
         assert_eq!(col.len(), 0);
@@ -307,7 +303,7 @@ mod tests {
         {
             // Empty raw to empty decoded.
             let mut col = col.clone();
-            col.decode(&Tz::utc(), &ft).unwrap();
+            col.decode(&Tz::utc(), &FieldTypeTp::Long.into()).unwrap();
             assert!(col.is_decoded());
             assert_eq!(col.len(), 0);
             assert_eq!(col.capacity(), 5);
@@ -347,7 +343,7 @@ mod tests {
             assert_eq!(col.raw()[1].as_slice(), datum_raw_2.as_slice());
         }
         // Non-empty raw to non-empty decoded.
-        col.decode(&Tz::utc(), &ft).unwrap();
+        col.decode(&Tz::utc(), &FieldTypeTp::Long.into()).unwrap();
         assert!(col.is_decoded());
         assert_eq!(col.len(), 2);
         assert_eq!(col.capacity(), 5);
@@ -472,11 +468,9 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let mut ft = tipb::expression::FieldType::new();
-        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-        let tz = Tz::utc();
-
-        column.decode(&tz, &ft).unwrap();
+        column
+            .decode(&Tz::utc(), &FieldTypeTp::LongLong.into())
+            .unwrap();
 
         b.iter(|| {
             test::black_box(test::black_box(&column).clone());
@@ -500,8 +494,7 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let mut ft = tipb::expression::FieldType::new();
-        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+        let ft = FieldTypeTp::LongLong.into();
         let tz = Tz::utc();
 
         b.iter(|| {
@@ -529,8 +522,7 @@ mod benches {
             column.push_raw(datum_raw.as_slice());
         }
 
-        let mut ft = tipb::expression::FieldType::new();
-        ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
+        let ft = FieldTypeTp::LongLong.into();
         let tz = Tz::utc();
 
         column.decode(&tz, &ft).unwrap();
