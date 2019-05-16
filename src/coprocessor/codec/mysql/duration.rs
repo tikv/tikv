@@ -8,7 +8,7 @@ use std::{i64, str, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use nom::character::complete::{digit1, multispace0, multispace1};
+use nom::character::complete::{digit0, digit1, multispace0, multispace1};
 use nom::{
     alt_complete, call, char, complete, cond_with_error, do_parse, eof, map, map_res, named,
     named_args, opt, peek, preceded, tag,
@@ -122,7 +122,18 @@ named_args!(read_int_with_fsp(fsp: u8)<u32>, map_res!(
 // Parse the sign of `Duration`, return true if it's negative otherwise false
 named!(
     neg<bool>,
-    map!(opt!(complete!(char!('-'))), |neg| neg.is_some())
+    do_parse!(
+        neg: map!(opt!(complete!(char!('-'))), |flag| flag.is_some())
+            >> cond_with_error!(
+                neg,
+                alt_complete!(
+                    preceded!(multispace1, preceded!(digit0, tag!(".")))
+                        | peek!(digit1)
+                        | peek!(tag!("."))
+                )
+            )
+            >> (neg)
+    )
 );
 
 // Functionality:
@@ -179,10 +190,8 @@ named_args!(parse(fsp: u8)<
             do_parse!(
                 multispace0
                 >> neg: neg
-                >> multispace0
                 >> day: day
                 >> hhmmss: hhmmss
-                >> multispace0
                 >> fraction: call!(fraction, fsp)
                 >> multispace0
                 >> eof!()
@@ -284,6 +293,9 @@ impl Duration {
     /// returns the duration type `Time` value.
     /// See: http://dev.mysql.com/doc/refman/5.7/en/fractional-seconds.html
     pub fn parse(input: &[u8], fsp: i8) -> Result<Duration> {
+        if input.is_empty() {
+            return Err(invalid_type!("invalid time format"));
+        }
         let fsp = check_fsp(fsp)?;
 
         if input.is_empty() {
@@ -583,15 +595,18 @@ mod tests {
             (b"00:00:00.777777", 2, Some("00:00:00.78")),
             (b"00:00:00.777777", 6, Some("00:00:00.777777")),
             (b"00:00:00.001", 3, Some("00:00:00.001")),
-            // NOTE:
+            // NOTE: The following case is easy to fail.
             (b"1:2:3", 0, Some("01:02:03")),
             (b"1 1:2:3", 0, Some("25:02:03")),
+            (b"-1 1:2:3.123", 3, Some("-25:02:03.123")),
             (b"-.123", 3, Some("-00:00:00.123")),
-            (b"-", 0, Some("00:00:00")),
-            (b"", 0, Some("00:00:00")),
-            (b" - 1:2:3 .123 ", 3, Some("-01:02:03.123")),
-            (b" - 1 .123 ", 3, Some("-00:00:01.123")),
             (b"12345", 0, Some("01:23:45")),
+            (b"-123", 0, Some("-00:01:23")),
+            (b"-23", 0, Some("-00:00:23")),
+            (b"-", 0, None),
+            (b"", 0, None),
+            (b" - 1:2:3 .123 ", 3, None),
+            (b" - 1 .123 ", 3, None),
             (b"1::2:3", 0, None),
             (b"18446744073709551615:59:59", 0, None),
             (b"1.23 3", 0, None),
