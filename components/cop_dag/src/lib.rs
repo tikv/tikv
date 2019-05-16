@@ -43,6 +43,7 @@ pub mod executor;
 pub mod expr;
 pub mod rpn_expr;
 mod scanner;
+pub mod storage;
 
 pub use self::batch_handler::BatchDAGHandler;
 pub use self::error::{Error, Result};
