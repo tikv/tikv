@@ -1647,7 +1647,9 @@ impl Peer {
         match self.inspect_lease() {
             // Here combine the new read request with the previous one even if the lease expired is
             // ok because in this case, the previous read index must be sent out with a valid
-            // lease instead of a suspect lease.
+            // lease instead of a suspect lease. So there must no pending transfer-leader proposals
+            // before or after the previous read index, and the lease can be renewed when get
+            // heartbeat responses.
             LeaseState::Valid | LeaseState::Expired => {
                 if let Some(read) = self.pending_reads.reads.back_mut() {
                     let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
