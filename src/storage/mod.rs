@@ -260,6 +260,13 @@ impl Command {
         self.get_context().get_priority()
     }
 
+    pub fn is_sys_cmd(&self) -> bool {
+        match *self {
+            Command::ScanLock { .. } | Command::ResolveLock { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn priority_tag(&self) -> &'static str {
         match self.get_context().get_priority() {
             CommandPri::Low => "low",
