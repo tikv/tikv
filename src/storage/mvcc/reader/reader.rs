@@ -550,7 +550,7 @@ mod tests {
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             let mut options = Options::default();
             options.prewrite_pessimistic_lock = true;
-            txn.prewrite(m, pk, &options).unwrap();
+            txn.pessimistic_prewrite(m, pk, &options).unwrap();
             self.write(txn.into_modifies());
         }
 

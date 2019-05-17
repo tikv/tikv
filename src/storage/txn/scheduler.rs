@@ -528,9 +528,13 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
-        Command::AcquirePessimisticLock { ref keys, .. }
-        | Command::Commit { ref keys, .. }
-        | Command::Rollback { ref keys, .. } => latches.gen_lock(keys),
+        Command::AcquirePessimisticLock { ref keys, .. } => {
+            let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
+            latches.gen_lock(&keys)
+        }
+        Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            latches.gen_lock(keys)
+        }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
         _ => Lock::new(vec![]),
@@ -582,7 +586,7 @@ mod tests {
             },
             Command::AcquirePessimisticLock {
                 ctx: Context::new(),
-                keys: vec![Key::from_raw(b"k")],
+                keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
                 for_update_ts: 10,

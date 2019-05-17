@@ -514,17 +514,25 @@ fn process_write_impl<S: Snapshot>(
             let mut locks = vec![];
             let rows = mutations.len();
             for (i, m) in mutations.into_iter().enumerate() {
-                options.prewrite_pessimistic_lock = if options.is_pessimistic_lock.is_empty() {
-                    false
-                } else {
-                    options.is_pessimistic_lock[i]
-                };
-                match txn.prewrite(m, &primary, &options) {
-                    Ok(_) => {}
-                    e @ Err(MvccError::KeyIsLocked { .. }) => {
-                        locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
+                // or else pessimistic.
+                if options.is_pessimistic_lock.is_empty() {
+                    match txn.prewrite(m, &primary, &options) {
+                        Ok(_) => {}
+                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                        }
+                        Err(e) => return Err(Error::from(e)),
                     }
-                    Err(e) => return Err(Error::from(e)),
+                } else {
+                    options.prewrite_pessimistic_lock = options.is_pessimistic_lock[i];
+                    match txn.pessimistic_prewrite(m, &primary, &options) {
+                        Ok(_) => {}
+                        e @ Err(MvccError::KeyIsLocked { .. }) => {
+                            locks.push(e.map_err(Error::from).map_err(StorageError::from));
+                        }
+                        Err(e) => return Err(Error::from(e)),
+                    }
                 }
             }
 
@@ -545,13 +553,14 @@ fn process_write_impl<S: Snapshot>(
             primary,
             start_ts,
             for_update_ts,
-            options,
+            mut options,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = keys.len();
-            for k in keys {
+            for (k, should_not_exist) in keys {
+                options.should_not_exist = should_not_exist;
                 match txn.acquire_pessimistic_lock(k, &primary, for_update_ts, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {

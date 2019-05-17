@@ -1282,7 +1282,10 @@ fn future_acquire_pessimistic_lock<E: Engine>(
         .take_mutations()
         .into_iter()
         .map(|x| match x.get_op() {
-            Op::PessimisticLock => Key::from_raw(x.get_key()),
+            Op::PessimisticLock => (
+                Key::from_raw(x.get_key()),
+                x.get_assertion() == Assertion::NotExist,
+            ),
             _ => panic!("mismatch Op in pessimistic lock mutations"),
         })
         .collect();

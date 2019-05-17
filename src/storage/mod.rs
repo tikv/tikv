@@ -97,7 +97,7 @@ pub enum Command {
     },
     AcquirePessimisticLock {
         ctx: Context,
-        keys: Vec<Key>,
+        keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -377,8 +377,12 @@ impl Command {
                     }
                 }
             }
-            Command::AcquirePessimisticLock { ref keys, .. }
-            | Command::Commit { ref keys, .. }
+            Command::AcquirePessimisticLock { ref keys, .. } => {
+                for (key, _) in keys {
+                    bytes += key.as_encoded().len();
+                }
+            }
+            Command::Commit { ref keys, .. }
             | Command::Rollback { ref keys, .. }
             | Command::Pause { ref keys, .. } => {
                 for key in keys {
@@ -406,6 +410,7 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
+    pub should_not_exist: bool,
     pub is_pessimistic_lock: Vec<bool>,
     pub prewrite_pessimistic_lock: bool,
 }
@@ -418,6 +423,7 @@ impl Options {
             key_only,
             reverse_scan: false,
             is_first_lock: false,
+            should_not_exist: false,
             is_pessimistic_lock: vec![],
             prewrite_pessimistic_lock: false,
         }
@@ -927,7 +933,7 @@ impl<E: Engine> Storage<E> {
     pub fn async_acquire_pessimistic_lock(
         &self,
         ctx: Context,
-        keys: Vec<Key>,
+        keys: Vec<(Key, bool)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -940,7 +946,7 @@ impl<E: Engine> Storage<E> {
         }
 
         for k in &keys {
-            let size = k.as_encoded().len();
+            let size = k.0.as_encoded().len();
             if size > self.max_key_size {
                 callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
                 return Ok(());
