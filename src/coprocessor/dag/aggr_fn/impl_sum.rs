@@ -14,7 +14,7 @@ use crate::coprocessor::Result;
 /// The parser for SUM aggregate function.
 pub struct AggrFnDefinitionParserSum;
 
-impl super::parser::Parser for AggrFnDefinitionParserSum {
+impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::Sum);
         super::util::check_aggr_exp_supported_one_child(aggr_def)

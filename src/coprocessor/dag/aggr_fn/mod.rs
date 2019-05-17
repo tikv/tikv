@@ -9,7 +9,7 @@ mod parser;
 mod summable;
 mod util;
 
-pub use self::parser::AggrDefinitionParser;
+pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;

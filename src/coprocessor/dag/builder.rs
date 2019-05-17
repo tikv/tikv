@@ -14,6 +14,7 @@ use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
+use crate::coprocessor::dag::aggr_fn::AllAggrDefinitionParser;
 use crate::coprocessor::dag::exec_summary::*;
 use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
@@ -147,6 +148,7 @@ impl DAGBuilder {
                         config.clone(),
                         executor,
                         ed.mut_aggregation().take_agg_func().into_vec(),
+                        AllAggrDefinitionParser,
                     )?)
                 }
                 ExecType::TypeAggregation => {

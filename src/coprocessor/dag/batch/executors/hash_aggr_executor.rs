@@ -12,7 +12,6 @@ use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
@@ -147,7 +146,7 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
 
         let aggr_definitions = descriptor.get_agg_func();
         for def in aggr_definitions {
-            AggrDefinitionParser::check_supported(def).map_err(|e| {
+            AllAggrDefinitionParser.check_supported(def).map_err(|e| {
                 Error::Other(box_err!(
                     "Unable to use BatchHashAggregationExecutor: {}",
                     e
@@ -160,29 +159,19 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
 
 impl<Src: BatchExecutor> BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
     #[cfg(test)]
-    pub fn new_for_test<F>(
+    pub fn new_for_test(
         src: Src,
         group_bys: Vec<RpnExpression>,
         aggr_definitions: Vec<Expr>,
-        parse_aggr_definition: F,
-    ) -> Self
-    where
-        F: Fn(
-            Expr,
-            &Tz,
-            usize,
-            &[FieldType],
-            &mut Vec<FieldType>,
-            &mut Vec<RpnExpression>,
-        ) -> Result<Box<dyn AggrFunction>>,
-    {
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
         Self::new_impl(
             ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_bys,
             aggr_definitions,
-            parse_aggr_definition,
+            aggr_def_parser,
         )
         .unwrap()
     }
@@ -211,28 +200,18 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
             src,
             group_bys,
             aggr_definitions,
-            AggrDefinitionParser::parse,
+            AllAggrDefinitionParser,
         )
     }
 
-    fn new_impl<F>(
+    fn new_impl(
         summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_bys: Vec<RpnExpression>,
         aggr_definitions: Vec<Expr>,
-        parse_aggr_definition: F,
-    ) -> Result<Self>
-    where
-        F: Fn(
-            Expr,
-            &Tz,
-            usize,
-            &[FieldType],
-            &mut Vec<FieldType>,
-            &mut Vec<RpnExpression>,
-        ) -> Result<Box<dyn AggrFunction>>,
-    {
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Result<Self> {
         assert!(!group_bys.is_empty());
 
         let aggr_len = aggr_definitions.len();
@@ -268,7 +247,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
             let aggr_output_len = ordered_schema.len();
             let aggr_input_len = ordered_aggr_fn_input_exprs.len();
 
-            let aggr_fn = parse_aggr_definition(
+            let aggr_fn = aggr_def_parser.parse(
                 def,
                 &config.tz,
                 schema_len,
@@ -707,6 +686,7 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+    use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::dag::aggr_fn::ConcreteAggrFunctionState;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
@@ -759,15 +739,33 @@ mod tests {
             ],
         );
 
+        struct MyParser;
+
+        impl AggrDefinitionParser for MyParser {
+            fn check_supported(&self, _aggr_def: &Expr) -> Result<()> {
+                unreachable!()
+            }
+
+            fn parse(
+                &self,
+                _aggr_def: Expr,
+                _time_zone: &Tz,
+                _max_columns: usize,
+                _schema: &[FieldType],
+                out_schema: &mut Vec<FieldType>,
+                out_exp: &mut Vec<RpnExpression>,
+            ) -> Result<Box<dyn AggrFunction>> {
+                out_schema.push(FieldTypeTp::LongLong.into());
+                out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
+                Ok(Box::new(AggrFnFoo))
+            }
+        }
+
         let mut exec = BatchHashAggregationExecutor::new_for_test(
             src_exec,
             vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
             vec![Expr::new()],
-            |_, _, _, _, out_schema, out_exp| {
-                out_schema.push(FieldTypeTp::LongLong.into());
-                out_exp.push(RpnExpressionBuilder::new().push_constant(5f64).build());
-                Ok(Box::new(AggrFnFoo))
-            },
+            MyParser,
         );
 
         let r = exec.next_batch(1);

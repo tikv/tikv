@@ -14,7 +14,7 @@ use crate::coprocessor::Result;
 /// The parser for COUNT aggregate function.
 pub struct AggrFnDefinitionParserCount;
 
-impl super::parser::Parser for AggrFnDefinitionParserCount {
+impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserCount {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::Count);
         super::util::check_aggr_exp_supported_one_child(aggr_def)
