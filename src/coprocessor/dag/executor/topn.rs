@@ -110,25 +110,29 @@ impl<C: ExecSummaryCollector> TopNExecutor<C> {
         self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
-}
 
-impl<C: ExecSummaryCollector> Executor for TopNExecutor<C> {
-    fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.summary_collector.on_start_iterate();
+    fn next_impl(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
         match iter.next() {
-            Some(sort_row) => {
-                self.summary_collector.on_finish_iterate(timer, 1);
-                Ok(Some(sort_row))
-            }
-            None => {
-                self.summary_collector.on_finish_iterate(timer, 0);
-                Ok(None)
-            }
+            Some(sort_row) => Ok(Some(sort_row)),
+            None => Ok(None),
         }
+    }
+}
+
+impl<C: ExecSummaryCollector> Executor for TopNExecutor<C> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
+            self.summary_collector.on_finish_iterate(timer, 1);
+        } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
+        }
+        ret
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
