@@ -215,13 +215,15 @@ impl<E: Engine> SchedulerInner<E> {
 
     /// Tries to acquire all the required latches for a command.
     ///
-    /// Returns `Some(TaskContext)` if successful; returns `None` otherwise.
+    /// Returns `true` if successful; returns `false` otherwise.
     fn acquire_lock(&self, cid: u64) -> bool {
         let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
         let tctx = task_contexts.get_mut(&cid).unwrap();
-        let acquired = self.latches.acquire(&mut tctx.lock, cid);
-        tctx.on_schedule();
-        acquired
+        if self.latches.acquire(&mut tctx.lock, cid) {
+            tctx.on_schedule();
+            return true;
+        }
+        false
     }
 }
 
@@ -312,8 +314,7 @@ impl<E: Engine> InnerWrapper<E> {
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for furthur processing.
     fn try_to_wake_up(&self, cid: u64) {
-        let wake = self.inner.acquire_lock(cid);
-        if wake {
+        if self.inner.acquire_lock(cid) {
             self.get_snapshot(cid);
         }
     }
