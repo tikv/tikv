@@ -492,7 +492,7 @@ fn process_write_impl<S: Snapshot>(
             mutations,
             primary,
             start_ts,
-            mut options,
+            options,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
@@ -510,8 +510,12 @@ fn process_write_impl<S: Snapshot>(
                         Err(e) => return Err(Error::from(e)),
                     }
                 } else {
-                    options.prewrite_pessimistic_lock = options.is_pessimistic_lock[i];
-                    match txn.pessimistic_prewrite(m, &primary, &options) {
+                    match txn.pessimistic_prewrite(
+                        m,
+                        &primary,
+                        options.is_pessimistic_lock[i],
+                        &options,
+                    ) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
                             locks.push(e.map_err(Error::from).map_err(StorageError::from));
@@ -538,15 +542,20 @@ fn process_write_impl<S: Snapshot>(
             primary,
             start_ts,
             for_update_ts,
-            mut options,
+            options,
             ..
         } => {
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = keys.len();
             for (k, should_not_exist) in keys {
-                options.should_not_exist = should_not_exist;
-                match txn.acquire_pessimistic_lock(k, &primary, for_update_ts, &options) {
+                match txn.acquire_pessimistic_lock(
+                    k,
+                    &primary,
+                    for_update_ts,
+                    should_not_exist,
+                    &options,
+                ) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));

@@ -548,9 +548,8 @@ mod tests {
         fn prewrite_pessimistic_lock(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            let mut options = Options::default();
-            options.prewrite_pessimistic_lock = true;
-            txn.pessimistic_prewrite(m, pk, &options).unwrap();
+            let options = Options::default();
+            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
             self.write(txn.into_modifies());
         }
 
@@ -563,7 +562,7 @@ mod tests {
         ) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
-            txn.acquire_pessimistic_lock(k, pk, for_update_ts, &Options::default())
+            txn.acquire_pessimistic_lock(k, pk, for_update_ts, false, &Options::default())
                 .unwrap();
             self.write(txn.into_modifies());
         }

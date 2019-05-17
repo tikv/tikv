@@ -137,6 +137,7 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         primary: &[u8],
         for_update_ts: u64,
+        should_not_exist: bool,
         options: &Options,
     ) -> Result<()> {
         if let Some(lock) = self.reader.load_lock(&key)? {
@@ -188,8 +189,10 @@ impl<S: Snapshot> MvccTxn<S> {
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
                 if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
-                    if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                        assert!(write.write_type == WriteType::Rollback);
+                    if write.start_ts == self.start_ts {
+                        assert!(
+                            commit_ts == self.start_ts && write.write_type == WriteType::Rollback
+                        );
                         return Err(Error::PessimisticLockRollbacked {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
@@ -199,7 +202,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Check data constraint when acquiring pessimistic lock.
-            if options.should_not_exist {
+            if should_not_exist {
                 if write.write_type == WriteType::Put
                     || (write.write_type != WriteType::Delete
                         && self.key_exist(&key, write.start_ts - 1)?)
@@ -226,6 +229,7 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         mutation: Mutation,
         primary: &[u8],
+        is_pessimistic_lock: bool,
         options: &Options,
     ) -> Result<()> {
         let lock_type = LockType::from_mutation(&mutation);
@@ -249,7 +253,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                 return Ok(());
             }
-        } else if options.prewrite_pessimistic_lock {
+        } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
             warn!("prewrite failed (pessimistic lock not found)";
                     "start_ts" => self.start_ts,
@@ -288,8 +292,38 @@ impl<S: Snapshot> MvccTxn<S> {
             Mutation::Insert((key, value)) => (key, Some(value), true),
         };
 
+        {
+            if !options.skip_constraint_check {
+                if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
+                    // Abort on writes after our start timestamp ...
+                    // If exists a commit version whose commit timestamp is larger than or equal to
+                    // current start timestamp, we should abort current prewrite, even if the commit
+                    // type is Rollback.
+                    if commit_ts >= self.start_ts {
+                        MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
+                        return Err(Error::WriteConflict {
+                            start_ts: self.start_ts,
+                            conflict_start_ts: write.start_ts,
+                            conflict_commit_ts: commit_ts,
+                            key: key.into_raw()?,
+                            primary: primary.to_vec(),
+                        });
+                    }
+                    if should_not_exist {
+                        if write.write_type == WriteType::Put
+                            || (write.write_type != WriteType::Delete
+                                && self.key_exist(&key, write.start_ts - 1)?)
+                        {
+                            return Err(Error::AlreadyExist {
+                                key: key.into_raw()?,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // ... or locks at any timestamp.
         if let Some(lock) = self.reader.load_lock(&key)? {
-            // Abort on lock belonging to other transaction.
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
                     key: key.into_raw()?,
@@ -308,35 +342,6 @@ impl<S: Snapshot> MvccTxn<S> {
             // Duplicated command. No need to overwrite the lock and data.
             MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
             return Ok(());
-        }
-
-        if !options.skip_constraint_check {
-            if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
-                // Abort on writes after our start timestamp ...
-                // If exists a commit version whose commit timestamp is larger than or equal to
-                // current start timestamp, we should abort current prewrite, even if the commit
-                // type is Rollback.
-                if commit_ts >= self.start_ts {
-                    MVCC_CONFLICT_COUNTER.prewrite_write_conflict.inc();
-                    return Err(Error::WriteConflict {
-                        start_ts: self.start_ts,
-                        conflict_start_ts: write.start_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: key.into_raw()?,
-                        primary: primary.to_vec(),
-                    });
-                }
-                if should_not_exist {
-                    if write.write_type == WriteType::Put
-                        || (write.write_type != WriteType::Delete
-                            && self.key_exist(&key, write.start_ts - 1)?)
-                    {
-                        return Err(Error::AlreadyExist {
-                            key: key.into_raw()?,
-                        });
-                    }
-                }
-            }
         }
 
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {

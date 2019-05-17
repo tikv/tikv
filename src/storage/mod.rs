@@ -417,9 +417,7 @@ pub struct Options {
     pub key_only: bool,
     pub reverse_scan: bool,
     pub is_first_lock: bool,
-    pub should_not_exist: bool,
     pub is_pessimistic_lock: Vec<bool>,
-    pub prewrite_pessimistic_lock: bool,
 }
 
 impl Options {
@@ -430,9 +428,7 @@ impl Options {
             key_only,
             reverse_scan: false,
             is_first_lock: false,
-            should_not_exist: false,
             is_pessimistic_lock: vec![],
-            prewrite_pessimistic_lock: false,
         }
     }
 
@@ -1929,7 +1925,8 @@ mod tests {
                 1,
                 Options::default(),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
-                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Other(..)))) => {}
+                    Error::Txn(txn::Error::Mvcc(mvcc::Error::Engine(EngineError::Request(..)))) => {
+                    }
                     e => panic!("unexpected error chain: {:?}", e),
                 }),
             )
