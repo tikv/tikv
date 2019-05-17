@@ -135,7 +135,7 @@ impl TaskContext {
 }
 
 struct SchedulerInner<E: Engine> {
-    // slot_id -> `TaskContext`s in the slot
+    // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
     // cmd id generator
