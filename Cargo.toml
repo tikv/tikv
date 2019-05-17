@@ -123,7 +123,6 @@ profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
 tipb_helper = { path = "components/tipb_helper" }
-panic_hook = { path = "components/panic_hook" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
@@ -144,6 +143,7 @@ version = "0.1.4"
 default-features = false
 
 [dev-dependencies]
+panic_hook = { path = "components/panic_hook" }
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
@@ -185,7 +185,7 @@ debug = false
 codegen-units = 4
 lto = false
 incremental = true
-panic = 'unwind'
+panic = 'abort'
 debug-assertions = false
 overflow-checks = false
 rpath = false
@@ -197,7 +197,7 @@ debug = true
 codegen-units = 1 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
 lto = true
 incremental = false
-panic = 'unwind'
+panic = 'abort'
 debug-assertions = false
 overflow-checks = false
 rpath = false
