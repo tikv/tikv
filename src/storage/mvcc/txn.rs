@@ -179,20 +179,21 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Handle rollback.
-            // If the commit timestamp is equal to transaction's start timestamp, the
-            // lock is already rollbacked.
-            if commit_ts == self.start_ts {
-                return Err(Error::Rollbacked {
+            // If the start timestamp of write is equal to transaction's start timestamp
+            // as well as commit timestamp, the lock is already rollbacked.
+            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
+                assert!(write.write_type == WriteType::Rollback);
+                return Err(Error::PessimisticLockRollbacked {
                     start_ts: self.start_ts,
                     key: key.into_raw()?,
                 });
             }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
-                if let Some((commit_ts, _)) = self.reader.seek_write(&key, self.start_ts)? {
-                    // Rollback's commit_ts is equal to start_ts
-                    if commit_ts == self.start_ts {
-                        return Err(Error::Rollbacked {
+                if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
+                    if write.start_ts == self.start_ts && commit_ts == self.start_ts {
+                        assert!(write.write_type == WriteType::Rollback);
+                        return Err(Error::PessimisticLockRollbacked {
                             start_ts: self.start_ts,
                             key: key.into_raw()?,
                         });
@@ -253,7 +254,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         } else if options.prewrite_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
-            info!("prewrite failed (pessimistic lock not found)";
+            warn!("prewrite failed (pessimistic lock not found)";
                     "start_ts" => self.start_ts,
                     "key" => %key);
 

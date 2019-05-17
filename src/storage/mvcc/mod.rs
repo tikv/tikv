@@ -50,7 +50,7 @@ quick_error! {
             description("txn already committed")
             display("txn already committed @{}", commit_ts)
         }
-        Rollbacked { start_ts: u64, key: Vec<u8> } {
+        PessimisticLockRollbacked { start_ts: u64, key: Vec<u8> } {
             description("pessimistic lock already rollbacked")
             display("pessimistic lock already rollbacked, start_ts:{}, key:{:?}", start_ts, escape(key))
         }
@@ -161,10 +161,12 @@ impl Error {
             }),
             Error::KeyVersion => Some(Error::KeyVersion),
             Error::Committed { commit_ts } => Some(Error::Committed { commit_ts }),
-            Error::Rollbacked { start_ts, ref key } => Some(Error::Rollbacked {
-                start_ts,
-                key: key.to_owned(),
-            }),
+            Error::PessimisticLockRollbacked { start_ts, ref key } => {
+                Some(Error::PessimisticLockRollbacked {
+                    start_ts,
+                    key: key.to_owned(),
+                })
+            }
             Error::PessimisticLockNotFound { start_ts, ref key } => {
                 Some(Error::PessimisticLockNotFound {
                     start_ts,

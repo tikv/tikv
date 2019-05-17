@@ -124,8 +124,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
             if let Some(service) = import_service {
                 sb = sb.register_service(create_import_sst(service));
             }
-            if let Some(deadlock) = deadlock_service {
-                sb = sb.register_service(create_deadlock(deadlock));
+            if let Some(service) = deadlock_service {
+                sb = sb.register_service(create_deadlock(service));
             }
             // When port is 0, it has to be binded now to get a valid address, which
             // is then reported to PD before the server is up. 0 is usually used in tests.

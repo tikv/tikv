@@ -618,7 +618,8 @@ impl<E: Engine> Storage<E> {
         waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
         detector_scheduler: Option<DetectorScheduler>,
     ) -> Result<Self> {
-        let pessimistic_txn_enabled = waiter_mgr_scheduler.is_some();
+        let pessimistic_txn_enabled =
+            waiter_mgr_scheduler.is_some() && detector_scheduler.is_some();
 
         let worker = Arc::new(Mutex::new(
             Builder::new("storage-scheduler")
@@ -912,9 +913,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().as_encoded().len();
-            if size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+            let key_size = m.key().as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
                 return Ok(());
             }
         }
@@ -946,9 +947,9 @@ impl<E: Engine> Storage<E> {
         }
 
         for k in &keys {
-            let size = k.0.as_encoded().len();
-            if size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+            let key_size = k.0.as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
                 return Ok(());
             }
         }

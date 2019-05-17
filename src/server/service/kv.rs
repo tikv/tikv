@@ -1789,7 +1789,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             exist.set_key(key.clone());
             key_error.set_already_exist(exist);
         }
-        // failed in commit or prewrite pessimistic-lock
+        // failed in commit
         storage::Error::Txn(TxnError::Mvcc(MvccError::TxnLockNotFound { .. })) => {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
