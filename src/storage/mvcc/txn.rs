@@ -93,8 +93,17 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: Vec<u8>,
         ttl: u64,
         short_value: Option<Value>,
+        is_pessimistic_txn: bool,
     ) {
-        let lock = Lock::new(lock_type, primary, self.start_ts, ttl, short_value).to_bytes();
+        let lock = Lock::new(
+            lock_type,
+            primary,
+            self.start_ts,
+            ttl,
+            short_value,
+            is_pessimistic_txn,
+        )
+        .to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
         self.writes.push(Modify::Put(CF_LOCK, key, lock));
     }
@@ -220,6 +229,7 @@ impl<S: Snapshot> MvccTxn<S> {
             primary.to_vec(),
             options.lock_ttl,
             None,
+            true,
         );
 
         Ok(())
@@ -268,13 +278,27 @@ impl<S: Snapshot> MvccTxn<S> {
         }
         // No need to check data constraint, it's resolved by pessimistic locks.
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
+            self.lock_key(
+                key,
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                value,
+                true,
+            );
         } else {
             // value is long
             let ts = self.start_ts;
             self.put_value(key.clone(), ts, value.unwrap());
 
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, None);
+            self.lock_key(
+                key,
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                None,
+                true,
+            );
         }
 
         Ok(())
@@ -347,20 +371,34 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, value);
+            self.lock_key(
+                key,
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                value,
+                false,
+            );
         } else {
             // value is long
             let ts = self.start_ts;
             self.put_value(key.clone(), ts, value.unwrap());
 
-            self.lock_key(key, lock_type, primary.to_vec(), options.lock_ttl, None);
+            self.lock_key(
+                key,
+                lock_type,
+                primary.to_vec(),
+                options.lock_ttl,
+                None,
+                false,
+            );
         }
 
         Ok(())
     }
 
-    pub fn commit(&mut self, key: Key, commit_ts: u64) -> Result<()> {
-        let (lock_type, short_value) = match self.reader.load_lock(&key)? {
+    pub fn commit(&mut self, key: Key, commit_ts: u64) -> Result<bool> {
+        let (lock_type, short_value, is_pessimistic_txn) = match self.reader.load_lock(&key)? {
             Some(ref mut lock) if lock.ts == self.start_ts => {
                 // A pessimistic lock cannot be committed.
                 if lock.lock_type == LockType::Pessimistic {
@@ -376,7 +414,11 @@ impl<S: Snapshot> MvccTxn<S> {
                         pessimistic: true,
                     });
                 }
-                (lock.lock_type, lock.short_value.take())
+                (
+                    lock.lock_type,
+                    lock.short_value.take(),
+                    lock.is_pessimistic_txn,
+                )
             }
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
@@ -401,7 +443,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     | Some((_, WriteType::Delete))
                     | Some((_, WriteType::Lock)) => {
                         MVCC_DUPLICATE_CMD_COUNTER_VEC.commit.inc();
-                        Ok(())
+                        Ok(false)
                     }
                 };
             }
@@ -413,16 +455,17 @@ impl<S: Snapshot> MvccTxn<S> {
         );
         self.put_write(key.clone(), commit_ts, write.to_bytes());
         self.unlock_key(key);
-        Ok(())
+        Ok(is_pessimistic_txn)
     }
 
-    pub fn rollback(&mut self, key: Key) -> Result<()> {
-        match self.reader.load_lock(&key)? {
+    pub fn rollback(&mut self, key: Key) -> Result<bool> {
+        let is_pessimistic_txn = match self.reader.load_lock(&key)? {
             Some(ref lock) if lock.ts == self.start_ts => {
                 // If prewrite type is DEL or LOCK or PESSIMISTIC, it is no need to delete value.
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
                 }
+                lock.is_pessimistic_txn
             }
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {
@@ -430,7 +473,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         if write_type == WriteType::Rollback {
                             // return Ok on Rollback already exist
                             MVCC_DUPLICATE_CMD_COUNTER_VEC.rollback.inc();
-                            Ok(())
+                            Ok(false)
                         } else {
                             MVCC_CONFLICT_COUNTER.rollback_committed.inc();
                             info!(
@@ -453,11 +496,11 @@ impl<S: Snapshot> MvccTxn<S> {
                         // insert a Rollback to WriteCF when receives Rollback before Prewrite
                         let write = Write::new(WriteType::Rollback, ts, None);
                         self.put_write(key, ts, write.to_bytes());
-                        Ok(())
+                        Ok(false)
                     }
                 };
             }
-        }
+        };
         let write = Write::new(WriteType::Rollback, self.start_ts, None);
         let ts = self.start_ts;
         self.put_write(key.clone(), ts, write.to_bytes());
@@ -465,7 +508,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if self.collapse_rollback {
             self.collapse_prev_rollback(key)?;
         }
-        Ok(())
+        Ok(is_pessimistic_txn)
     }
 
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
