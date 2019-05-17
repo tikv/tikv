@@ -292,7 +292,7 @@ impl<E: Engine> InnerWrapper<E> {
 
     fn schedule_command(&self, cmd: Command, callback: StorageCb) {
         let cid = self.inner.gen_id();
-        debug!("received new command, cid={}, cmd={}", cid, cmd);
+        debug!("received new command"; "cid" => cid, "cmd" => ?cmd);
 
         let tag = cmd.tag();
         let priority_tag = cmd.priority_tag();
@@ -376,7 +376,7 @@ impl<E: Engine> InnerWrapper<E> {
 
     /// Calls the callback with an error.
     fn finish_with_err(&self, cid: u64, err: Error) {
-        debug!("command cid={}, finished with error", cid);
+        debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
         SCHED_STAGE_COUNTER_VEC
@@ -400,7 +400,7 @@ impl<E: Engine> InnerWrapper<E> {
             .with_label_values(&[tag, "read_finish"])
             .inc();
 
-        debug!("read command(cid={}) finished", cid);
+        debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC
@@ -420,7 +420,7 @@ impl<E: Engine> InnerWrapper<E> {
             .with_label_values(&[tag, "write_finish"])
             .inc();
 
-        debug!("write finished for command, cid={}", cid);
+        debug!("write command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         let pr = match result {
             Ok(()) => pr,
