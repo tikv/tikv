@@ -255,9 +255,11 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
-            warn!("prewrite failed (pessimistic lock not found)";
-                    "start_ts" => self.start_ts,
-                    "key" => %key);
+            warn!(
+                "prewrite failed (pessimistic lock not found)";
+                "start_ts" => self.start_ts,
+                "key" => %key
+            );
 
             return Err(Error::PessimisticLockNotFound {
                 start_ts: self.start_ts,

@@ -516,7 +516,7 @@ mod tests {
             100,
         );
         assert_eq!(
-            rx.recv_timeout(Duration::from_millis(150))
+            rx.recv_timeout(Duration::from_millis(200))
                 .unwrap()
                 .unwrap(),
             ()
@@ -536,6 +536,6 @@ mod tests {
             100,
         );
         waiter_mgr_scheduler.wake_up(1, vec![3, 1, 2], 1);
-        assert!(rx.recv_timeout(Duration::from_millis(50)).unwrap().is_err());
+        assert!(rx.recv_timeout(Duration::from_millis(80)).unwrap().is_err());
     }
 }
