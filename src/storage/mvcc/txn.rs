@@ -168,10 +168,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
                 return Err(Error::WriteConflict {
                     start_ts: self.start_ts,
-                    // TiDB will try to extract the latest `commit_ts` from WriteConflict
-                    // error to avoid getting a timestamp from tso. So we set
-                    // `conflict_start_ts` to `commit_ts` here.
-                    conflict_start_ts: commit_ts,
+                    conflict_start_ts: write.start_ts,
                     conflict_commit_ts: commit_ts,
                     key: key.into_raw()?,
                     primary: primary.to_vec(),

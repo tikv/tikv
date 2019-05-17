@@ -161,6 +161,18 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn kv_pessimistic_rollback(
+        &mut self,
+        ctx: RpcContext<'_>,
+        _req: PessimisticRollbackRequest,
+        sink: UnarySink<PessimisticRollbackResponse>,
+    ) {
+        let f = sink
+            .fail(RpcStatus::new(RpcStatusCode::Unimplemented, None))
+            .map_err(|e| error!("kv_pessimistic_rollback error"; "err" => %e));
+        ctx.spawn(f);
+    }
+
     fn kv_commit(
         &mut self,
         ctx: RpcContext<'_>,
@@ -1171,6 +1183,7 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
+        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(_)) => unimplemented!(),
     }
 }
 
@@ -1771,6 +1784,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
         storage::Error::Txn(TxnError::Mvcc(MvccError::WriteConflict {
             start_ts,
             conflict_start_ts,
+            conflict_commit_ts,
             ref key,
             ref primary,
             ..
@@ -1778,6 +1792,7 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             let mut write_conflict = WriteConflict::new();
             write_conflict.set_start_ts(start_ts);
             write_conflict.set_conflict_ts(conflict_start_ts);
+            write_conflict.set_conflict_commit_ts(conflict_commit_ts);
             write_conflict.set_key(key.to_owned());
             write_conflict.set_primary(primary.to_owned());
             key_error.set_conflict(write_conflict);
@@ -1923,6 +1938,7 @@ mod tests {
         let mut write_conflict = WriteConflict::new();
         write_conflict.set_start_ts(start_ts);
         write_conflict.set_conflict_ts(conflict_start_ts);
+        write_conflict.set_conflict_commit_ts(conflict_commit_ts);
         write_conflict.set_key(key);
         write_conflict.set_primary(primary);
         expect.set_conflict(write_conflict);

@@ -279,10 +279,7 @@ impl WaiterManager {
                     // directly, there is no need to get a ts from PD.
                     let mvcc_err = MvccError::WriteConflict {
                         start_ts: waiter.start_ts,
-                        // TiDB will try to extract the latest `commit_ts` from WriteConflict
-                        // error to avoid getting a timestamp from tso. So we set
-                        // `conflict_start_ts` to `commit_ts` here.
-                        conflict_start_ts: commit_ts,
+                        conflict_start_ts: lock_ts,
                         conflict_commit_ts: commit_ts,
                         key: vec![],
                         primary: vec![],
