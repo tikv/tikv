@@ -178,7 +178,7 @@ impl<E: Engine> Scheduler<E> {
             worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
             high_priority_pool: SchedPool::new(
                 engine.clone(),
-                worker_pool_size / 2,
+                std::cmp::max(1, worker_pool_size / 2),
                 "sched-high-pri-pool",
             ),
             running_write_bytes: 0,
