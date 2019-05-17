@@ -116,10 +116,7 @@ impl<C: ExecSummaryCollector> TopNExecutor<C> {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        match iter.next() {
-            Some(sort_row) => Ok(Some(sort_row)),
-            None => Ok(None),
-        }
+        Ok(iter.next())
     }
 }
 
