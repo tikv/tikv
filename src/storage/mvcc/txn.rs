@@ -321,27 +321,27 @@ impl<S: Snapshot> MvccTxn<S> {
                     }
                 }
             }
-        }
-        // ... or locks at any timestamp.
-        if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts != self.start_ts {
-                return Err(Error::KeyIsLocked {
-                    key: key.into_raw()?,
-                    primary: lock.primary,
-                    ts: lock.ts,
-                    ttl: lock.ttl,
-                });
+            // ... or locks at any timestamp.
+            if let Some(lock) = self.reader.load_lock(&key)? {
+                if lock.ts != self.start_ts {
+                    return Err(Error::KeyIsLocked {
+                        key: key.into_raw()?,
+                        primary: lock.primary,
+                        ts: lock.ts,
+                        ttl: lock.ttl,
+                    });
+                }
+                if lock.lock_type == LockType::Pessimistic {
+                    return Err(Error::LockTypeNotMatch {
+                        start_ts: self.start_ts,
+                        key: key.into_raw()?,
+                        pessimistic: true,
+                    });
+                }
+                // Duplicated command. No need to overwrite the lock and data.
+                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                return Ok(());
             }
-            if lock.lock_type == LockType::Pessimistic {
-                return Err(Error::LockTypeNotMatch {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                    pessimistic: true,
-                });
-            }
-            // Duplicated command. No need to overwrite the lock and data.
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-            return Ok(());
         }
 
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
