@@ -35,6 +35,7 @@ impl MetricsFlusher {
         let raft_db = Arc::clone(&self.engines.raft);
         let (tx, rx) = mpsc::channel();
         let interval = self.interval;
+        let shared_block_cache = self.engines.shared_block_cache;
         self.sender = Some(tx);
         let h = Builder::new()
             .name("rocksdb-metrics".to_owned())
@@ -42,8 +43,8 @@ impl MetricsFlusher {
                 let mut last_reset = Instant::now();
                 let reset_interval = Duration::from_millis(DEFAULT_FLUSHER_RESET_INTERVAL);
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(interval) {
-                    flush_metrics(&db, "kv");
-                    flush_metrics(&raft_db, "raft");
+                    flush_metrics(&db, "kv", shared_block_cache);
+                    flush_metrics(&raft_db, "raft", shared_block_cache);
                     if last_reset.elapsed() >= reset_interval {
                         db.reset_statistics();
                         raft_db.reset_statistics();
@@ -69,7 +70,7 @@ impl MetricsFlusher {
     }
 }
 
-fn flush_metrics(db: &DB, name: &str) {
+fn flush_metrics(db: &DB, name: &str, shared_block_cache: bool) {
     for t in ENGINE_TICKER_TYPES {
         let v = db.get_and_reset_statistics_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v, name);
@@ -79,7 +80,7 @@ fn flush_metrics(db: &DB, name: &str) {
             flush_engine_histogram_metrics(*t, v, name);
         }
     }
-    flush_engine_properties(db, name);
+    flush_engine_properties(db, name, shared_block_cache);
 }
 
 #[cfg(test)]
@@ -115,7 +116,8 @@ mod tests {
             rocks::util::new_engine_opt(raft_path.to_str().unwrap(), DBOptions::new(), cfs_opts)
                 .unwrap(),
         );
-        let engines = Engines::new(engine, raft_engine);
+        let shared_block_cache = false;
+        let engines = Engines::new(engine, raft_engine, shared_block_cache);
         let mut metrics_flusher = MetricsFlusher::new(engines, Duration::from_millis(100));
 
         if let Err(e) = metrics_flusher.start() {

@@ -1,14 +1,16 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::intrinsics::{likely, unlikely};
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use super::{BufferReader, BufferWriter};
-use super::{Error, Result};
+use crate::buffer::{BufferReader, BufferWriter};
+use crate::{Error, Result};
 
 pub const MAX_VARINT64_LENGTH: usize = 10;
-pub const U64_SIZE: usize = 8;
-pub const I64_SIZE: usize = 8;
-pub const F64_SIZE: usize = 8;
+pub const U64_SIZE: usize = std::mem::size_of::<u64>();
+pub const I64_SIZE: usize = std::mem::size_of::<i64>();
+pub const F64_SIZE: usize = std::mem::size_of::<f64>();
 
 /// Byte encoding and decoding utility for primitive number types.
 pub struct NumberCodec;
@@ -409,7 +411,7 @@ impl NumberCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
@@ -417,7 +419,7 @@ impl NumberCodec {
             let mut ptr = buf.as_ptr();
             let len = buf.len();
             let mut val = 0u64;
-            if std::intrinsics::likely(len >= MAX_VARINT64_LENGTH) {
+            if likely(len >= MAX_VARINT64_LENGTH) {
                 // Fast path
                 let mut b: u64;
                 let mut shift = 0;
@@ -443,8 +445,8 @@ impl NumberCodec {
                     shift += 7;
                     ptr = ptr.add(1);
                 }
-                if std::intrinsics::unlikely(ptr == ptr_end) {
-                    return Err(Error::BufferTooSmall);
+                if unlikely(ptr == ptr_end) {
+                    return Err(Error::eof());
                 }
                 val |= (*ptr as u64) << shift;
                 Ok((val, ptr.offset_from(buf.as_ptr()) as usize + 1))
@@ -463,7 +465,7 @@ impl NumberCodec {
     #[inline]
     pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
         let mut uv = (v as u64) << 1;
-        if v < 0 {
+        if unsafe { unlikely(v < 0) } {
             uv = !uv;
         }
         Self::encode_var_u64(buf, uv)
@@ -476,15 +478,54 @@ impl NumberCodec {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
     #[inline]
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
         let v = uv >> 1;
         if uv & 1 == 0 {
+            // no need for likely/unlikely here
             Ok((v as i64, decoded_bytes))
         } else {
             Ok((!v as i64, decoded_bytes))
+        }
+    }
+
+    /// Gets the length of the first encoded VarInt in the given buffer. If the buffer is not
+    /// complete, the length of buffer will be returned.
+    ///
+    /// This function is more efficient when `buf.len() >= 10`.
+    #[inline]
+    pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
+        unsafe {
+            let mut ptr = buf.as_ptr();
+            let len = buf.len();
+            if likely(len >= MAX_VARINT64_LENGTH) {
+                // Fast path
+                // Compiler will do loop unrolling for us.
+                for i in 1..=9 {
+                    if *ptr < 0x80 {
+                        return i;
+                    }
+                    ptr = ptr.add(1);
+                }
+                10
+            } else {
+                let ptr_end = buf.as_ptr().add(len);
+                // Slow path
+                while ptr != ptr_end && *ptr >= 0x80 {
+                    ptr = ptr.add(1);
+                }
+                // When we got here, we are either `ptr == ptr_end`, or `*ptr < 0x80`.
+                // For `ptr == ptr_end` case, it means we are expecting a value < 0x80
+                //      but meet EOF, so only `len` is returned.
+                // For `*ptr < 0x80` case, it means currently it is pointing to the last byte
+                //      of the VarInt, so we return `delta + 1` as length.
+                if unlikely(ptr == ptr_end) {
+                    return len;
+                }
+                ptr.offset_from(buf.as_ptr()) as usize + 1
+            }
         }
     }
 }
@@ -493,8 +534,8 @@ macro_rules! read {
     ($s:expr, $size:expr, $f:ident) => {{
         let ret = {
             let buf = $s.bytes();
-            if buf.len() < $size {
-                return Err(Error::BufferTooSmall);
+            if unsafe { unlikely(buf.len() < $size) } {
+                return Err(Error::eof());
             }
             NumberCodec::$f(buf)
         };
@@ -509,7 +550,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 1.
+    /// Returns `Error::Io` if buffer remaining size < 1.
     #[inline]
     fn read_u8(&mut self) -> Result<u8> {
         read!(self, 1, decode_u8)
@@ -520,7 +561,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn read_u16(&mut self) -> Result<u16> {
         read!(self, 2, decode_u16)
@@ -531,7 +572,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn read_u32(&mut self) -> Result<u32> {
         read!(self, 4, decode_u32)
@@ -542,7 +583,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_u64(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64)
@@ -553,7 +594,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_u64_desc(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64_desc)
@@ -564,7 +605,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_i64(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64)
@@ -575,7 +616,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_i64_desc(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64_desc)
@@ -586,7 +627,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_f64(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64)
@@ -597,7 +638,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_f64_desc(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64_desc)
@@ -608,7 +649,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn read_u16_le(&mut self) -> Result<u16> {
         read!(self, 2, decode_u16_le)
@@ -619,7 +660,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn read_i16_le(&mut self) -> Result<i16> {
         read!(self, 2, decode_i16_le)
@@ -630,7 +671,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn read_u32_le(&mut self) -> Result<u32> {
         read!(self, 4, decode_u32_le)
@@ -641,7 +682,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn read_i32_le(&mut self) -> Result<i32> {
         read!(self, 4, decode_i32_le)
@@ -652,7 +693,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_u64_le(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64_le)
@@ -663,7 +704,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_i64_le(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64_le)
@@ -674,7 +715,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn read_f64_le(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64_le)
@@ -687,7 +728,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
     #[inline]
     fn read_var_u64(&mut self) -> Result<u64> {
         let (v, decoded_bytes) = {
@@ -705,7 +746,7 @@ pub trait NumberDecoder: BufferReader {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if there is not enough space to decode the whole VarInt.
+    /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
     #[inline]
     fn read_var_i64(&mut self) -> Result<i64> {
         let (v, decoded_bytes) = {
@@ -724,8 +765,8 @@ macro_rules! write {
     ($s:expr, $v:expr, $size:expr, $f:ident) => {{
         {
             let buf = unsafe { $s.bytes_mut($size) };
-            if buf.len() < $size {
-                return Err(Error::BufferTooSmall);
+            if unsafe { unlikely(buf.len() < $size) } {
+                return Err(Error::eof());
             }
             NumberCodec::$f(buf, $v);
         }
@@ -740,7 +781,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 1.
+    /// Returns `Error::Io` if buffer remaining size < 1.
     #[inline]
     fn write_u8(&mut self, v: u8) -> Result<()> {
         write!(self, v, 1, encode_u8)
@@ -751,7 +792,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn write_u16(&mut self, v: u16) -> Result<()> {
         write!(self, v, 2, encode_u16)
@@ -762,7 +803,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn write_u32(&mut self, v: u32) -> Result<()> {
         write!(self, v, 4, encode_u32)
@@ -773,7 +814,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_u64(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64)
@@ -784,7 +825,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_u64_desc(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64_desc)
@@ -795,7 +836,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_i64(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64)
@@ -806,7 +847,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_i64_desc(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64_desc)
@@ -817,7 +858,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_f64(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64)
@@ -828,7 +869,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_f64_desc(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64_desc)
@@ -839,7 +880,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn write_u16_le(&mut self, v: u16) -> Result<()> {
         write!(self, v, 2, encode_u16_le)
@@ -850,7 +891,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 2.
+    /// Returns `Error::Io` if buffer remaining size < 2.
     #[inline]
     fn write_i16_le(&mut self, v: i16) -> Result<()> {
         write!(self, v, 2, encode_i16_le)
@@ -861,7 +902,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn write_u32_le(&mut self, v: u32) -> Result<()> {
         write!(self, v, 4, encode_u32_le)
@@ -872,7 +913,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 4.
+    /// Returns `Error::Io` if buffer remaining size < 4.
     #[inline]
     fn write_i32_le(&mut self, v: i32) -> Result<()> {
         write!(self, v, 4, encode_i32_le)
@@ -883,7 +924,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_u64_le(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64_le)
@@ -894,7 +935,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_i64_le(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64_le)
@@ -905,7 +946,7 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 8.
+    /// Returns `Error::Io` if buffer remaining size < 8.
     #[inline]
     fn write_f64_le(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64_le)
@@ -921,13 +962,13 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 10.
+    /// Returns `Error::Io` if buffer remaining size < 10.
     #[inline]
     fn write_var_u64(&mut self, v: u64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if buf.len() < MAX_VARINT64_LENGTH {
-                return Err(Error::BufferTooSmall);
+            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
+                return Err(Error::eof());
             }
             NumberCodec::encode_var_u64(buf, v)
         };
@@ -945,13 +986,13 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < 10.
+    /// Returns `Error::Io` if buffer remaining size < 10.
     #[inline]
     fn write_var_i64(&mut self, v: i64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
-            if buf.len() < MAX_VARINT64_LENGTH {
-                return Err(Error::BufferTooSmall);
+            if unsafe { unlikely(buf.len() < MAX_VARINT64_LENGTH) } {
+                return Err(Error::eof());
             }
             NumberCodec::encode_var_i64(buf, v)
         };
@@ -963,12 +1004,12 @@ pub trait NumberEncoder: BufferWriter {
     ///
     /// # Errors
     ///
-    /// Returns `Error::BufferTooSmall` if buffer remaining size < values.len().
+    /// Returns `Error::Io` if buffer remaining size < values.len().
     #[inline]
     fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
         let buf = unsafe { self.bytes_mut(values.len()) };
-        if buf.len() < values.len() {
-            return Err(Error::BufferTooSmall);
+        if unsafe { unlikely(buf.len() < values.len()) } {
+            return Err(Error::eof());
         }
         buf[..values.len()].copy_from_slice(values);
         unsafe {
@@ -985,6 +1026,7 @@ impl<T: BufferWriter> NumberEncoder for T {}
 mod tests {
     use protobuf::CodedOutputStream;
     use rand;
+
     fn get_u8_samples() -> Vec<u8> {
         vec![
             (::std::i8::MIN as u8),
@@ -1564,15 +1606,26 @@ mod tests {
                 assert_eq!(result.0, sample);
                 assert_eq!(result.1, len);
 
+                // NumberCodec fast path decode length
+                let result = super::NumberCodec::get_first_encoded_var_int_len(base_buf.as_slice());
+                assert_eq!(result, len);
+
                 // NumberCodec slow path decode
                 let result = super::NumberCodec::$dec(&base_buf[0..len]).unwrap();
                 assert_eq!(result.0, sample);
                 assert_eq!(result.1, len);
 
-                // Incomplete buffer, we should got errors
+                // NumberCodec slow path decode length
+                let result = super::NumberCodec::get_first_encoded_var_int_len(&base_buf[0..len]);
+                assert_eq!(result, len);
+
+                // Incomplete buffer, we should got errors in decoding, but get `len` as length
                 for l in 0..len {
                     let result = super::NumberCodec::$dec(&base_buf[0..l]);
                     assert!(result.is_err());
+
+                    let result = super::NumberCodec::get_first_encoded_var_int_len(&base_buf[0..l]);
+                    assert_eq!(result, l);
                 }
 
                 // Buffer encode with insufficient space
@@ -1722,7 +1775,7 @@ mod tests {
 
 #[cfg(test)]
 mod benches {
-    use crate::test;
+    use crate::Error;
 
     use byteorder;
     use protobuf::CodedOutputStream;
@@ -1840,7 +1893,7 @@ mod benches {
             *data = &data[size..];
             return Ok(f(buf));
         }
-        Err(super::Error::BufferTooSmall)
+        Err(Error::eof())
     }
 
     /// The original implementation in TiKV
@@ -1915,12 +1968,10 @@ mod benches {
     trait OldVarIntEncoder: byteorder::WriteBytesExt {
         fn encode_var_u64(&mut self, mut v: u64) -> super::Result<()> {
             while v >= 0x80 {
-                self.write_u8(v as u8 | 0x80)
-                    .map_err(|_| super::Error::BufferTooSmall)?;
+                self.write_u8(v as u8 | 0x80)?;
                 v >>= 7;
             }
-            self.write_u8(v as u8)
-                .map_err(|_| super::Error::BufferTooSmall)
+            Ok(self.write_u8(v as u8)?)
         }
     }
 
@@ -1989,6 +2040,15 @@ mod benches {
         });
     }
 
+    #[bench]
+    fn bench_varint_len_small_number_large_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = vec![60, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
+            test::black_box(bytes);
+        });
+    }
+
     /// Decode u64 < 128 in VarInt using `NumberCodec`.
     /// The buffer size < 10.
     #[bench]
@@ -1997,6 +2057,15 @@ mod benches {
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
+            test::black_box(bytes);
+        });
+    }
+
+    #[bench]
+    fn bench_varint_len_small_number_small_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = vec![60, 0, 0];
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
             test::black_box(bytes);
         });
     }
@@ -2028,7 +2097,7 @@ mod benches {
                     *data = unsafe { data.get_unchecked(10..) };
                     return Ok(res);
                 }
-                return Err(super::Error::BufferTooSmall);
+                return Err(Error::eof());
             }
         }
 
@@ -2042,7 +2111,7 @@ mod benches {
                 return Ok(res);
             }
         }
-        Err(super::Error::BufferTooSmall)
+        Err(Error::eof())
     }
 
     /// Decode u64 < 128 in VarInt using original TiKV implementation.
@@ -2070,6 +2139,16 @@ mod benches {
         });
     }
 
+    #[bench]
+    fn bench_varint_len_normal_number_large_buffer(b: &mut test::Bencher) {
+        let mut buf: Vec<u8> = vec![0; 10];
+        buf[0..VARINT_ENCODED.len()].clone_from_slice(&VARINT_ENCODED);
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
+            test::black_box(bytes);
+        });
+    }
+
     /// Decode normal u64 in VarInt using `NumberCodec`.
     /// The buffer size < 10.
     #[bench]
@@ -2078,6 +2157,15 @@ mod benches {
         b.iter(|| {
             let (v, bytes) = super::NumberCodec::try_decode_var_u64(test::black_box(&buf)).unwrap();
             test::black_box(v);
+            test::black_box(bytes);
+        });
+    }
+
+    #[bench]
+    fn bench_varint_len_normal_number_small_buffer(b: &mut test::Bencher) {
+        let buf: Vec<u8> = VARINT_ENCODED.to_vec();
+        b.iter(|| {
+            let bytes = super::NumberCodec::get_first_encoded_var_int_len(test::black_box(&buf));
             test::black_box(bytes);
         });
     }

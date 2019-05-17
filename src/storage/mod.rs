@@ -9,7 +9,6 @@ pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::boxed::FnBox;
 use std::cmp;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -45,7 +44,7 @@ use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
-pub type Callback<T> = Box<dyn FnBox(Result<T>) + Send>;
+pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
@@ -511,7 +510,7 @@ impl<E: Engine> Clone for Storage<E> {
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage referenced"; "original_ref" => refs
         );
 
@@ -531,7 +530,7 @@ impl<E: Engine> Drop for Storage<E> {
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
-        debug!(
+        trace!(
             "Storage de-referenced"; "original_ref" => refs
         );
 

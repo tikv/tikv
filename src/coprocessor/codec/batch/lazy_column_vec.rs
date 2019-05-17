@@ -13,7 +13,7 @@ pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
     ///
     /// For decoded columns, they may be in different types. If the column is in
-    /// type `LazyBatchColumn::Encoded`, it means that it is not decoded.
+    /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
     columns: Vec<LazyBatchColumn>,
 }
 
@@ -215,7 +215,7 @@ impl std::ops::DerefMut for LazyBatchColumnVec {
 mod tests {
     use super::*;
 
-    use cop_datatype::{EvalType, FieldTypeAccessor};
+    use cop_datatype::EvalType;
 
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
@@ -268,26 +268,10 @@ mod tests {
 
         for comparable in &[true, false] {
             let schema = [
-                {
-                    // Column 1: Long
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                    ft
-                },
-                {
-                    // Column 2: Double
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-                {
-                    // Column 3: VarChar
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-                    ft
-                },
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Double.into(),
+                FieldTypeTp::VarChar.into(),
             ];
-
             let values = vec![
                 vec![Datum::U64(1), Datum::F64(1.0), Datum::Null],
                 vec![Datum::Null, Datum::Null, Datum::Bytes(vec![0u8, 2u8])],
@@ -355,21 +339,7 @@ mod tests {
     fn test_retain_rows_by_index() {
         use cop_datatype::FieldTypeTp;
 
-        let schema = [
-            {
-                // Column 1: Long
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                ft
-            },
-            {
-                // Column 2: Double
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
-
+        let schema = [FieldTypeTp::Long.into(), FieldTypeTp::Double.into()];
         let mut columns = LazyBatchColumnVec::with_raw_columns(2);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);

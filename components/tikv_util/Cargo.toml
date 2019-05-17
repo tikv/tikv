@@ -39,7 +39,6 @@ serde_json = "1.0"
 serde_derive = "1.0"
 grpcio = { version = "0.4", features = [ "secure" ] }
 crossbeam = "0.5"
-panic_hook = { path = "../panic_hook" }
 
 [dependencies.prometheus]
 version = "0.4.2"
@@ -53,6 +52,7 @@ version = "0.1.4"
 procinfo = { git = "https://github.com/tikv/procinfo-rs" }
 
 [dev-dependencies]
+panic_hook = { path = "../panic_hook" }
 raft = "0.4"
 
 [[bench]]

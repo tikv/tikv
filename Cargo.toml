@@ -5,6 +5,9 @@ authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
 keywords = ["KV", "distributed-systems", "raft"]
+homepage = "https://tikv.org"
+repository = "https://github.com/tikv/tikv/"
+readme = "README.md"
 edition = "2018"
 publish = false
 
@@ -119,9 +122,10 @@ twoway = "0.2.0"
 profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
-panic_hook = { path = "components/panic_hook" }
+tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# TODO: use master branch after the next version is released.
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
@@ -139,6 +143,7 @@ version = "0.1.4"
 default-features = false
 
 [dev-dependencies]
+panic_hook = { path = "components/panic_hook" }
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
@@ -169,6 +174,7 @@ members = [
   "components/panic_hook",
   "components/cop_datatype",
   "components/cop_codegen",
+  "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
 ]
@@ -177,6 +183,7 @@ members = [
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
 codegen-units = 4
+panic = 'abort'
 
 # The release profile, used for `cargo build --release`
 [profile.release]
@@ -185,6 +192,7 @@ opt-level = 3
 debug = true
 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
 codegen-units = 1
+panic = 'abort'
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]
