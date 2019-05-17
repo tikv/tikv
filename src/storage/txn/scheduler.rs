@@ -381,7 +381,7 @@ impl<E: Engine> InnerWrapper<E> {
                     Msg::FinishedWithErr {
                         cid,
                         err: e.into(),
-                        tag: tag,
+                        tag,
                     },
                 );
             } else {
