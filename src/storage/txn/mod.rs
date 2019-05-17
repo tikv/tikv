@@ -3,6 +3,7 @@
 mod latch;
 mod process;
 pub mod scheduler;
+pub mod sched_pool;
 mod store;
 
 use std::error;

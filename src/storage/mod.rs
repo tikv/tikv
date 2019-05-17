@@ -259,6 +259,13 @@ impl Command {
         self.get_context().get_priority()
     }
 
+    pub fn is_sys_cmd(&self) -> bool {
+        match *self {
+            Command::ScanLock { .. } | Command::ResolveLock { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn priority_tag(&self) -> &'static str {
         match self.get_context().get_priority() {
             CommandPri::Low => "low",
@@ -536,11 +543,6 @@ impl<E: Engine> Drop for Storage<E> {
 
         if refs != 1 {
             return;
-        }
-
-        self.sched.shutdown();
-        if let Err(e) = self.gc_worker.stop() {
-            error!("Failed to stop gc_worker: {:?}", e);
         }
 
         info!("Storage stopped.");

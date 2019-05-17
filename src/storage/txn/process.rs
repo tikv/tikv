@@ -1,27 +1,21 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-use std::thread;
-use std::time::Duration;
-use std::u64;
+use std::{thread, u64, mem};
+use std::time::{ Duration};
 
+use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
-use prometheus::local::LocalHistogramVec;
 
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{scheduler::Msg, Error, Result};
+use crate::storage::txn::{scheduler::Msg, Error, Result, sched_pool::*};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
-    ScanMode, Snapshot, Statistics, StatisticsSummary, StorageCb, Value,
+    ScanMode, Snapshot, Statistics, StorageCb, Value,
 };
-use tikv_util::collections::HashMap;
-use tikv_util::threadpool::{
-    self, Context as ThreadContext, ContextFactory as ThreadContextFactory,
-};
-use tikv_util::time::SlowTimer;
+use tikv_util::time::{Instant,SlowTimer};
 use tikv_util::worker::ScheduleError;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
@@ -111,16 +105,16 @@ pub trait MsgScheduler: Clone + Send + 'static {
 
 pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
-    pool: Option<threadpool::Scheduler<SchedContext<E>>>,
+    sched_pool: Option<SchedPool<E>>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
 }
 
 impl<E: Engine, S: MsgScheduler> Executor<E, S> {
-    pub fn new(scheduler: S, pool: threadpool::Scheduler<SchedContext<E>>) -> Self {
+    pub fn new(scheduler: S, pool: SchedPool<E>) -> Self {
         Executor {
             scheduler: Some(scheduler),
-            pool: Some(pool),
+            sched_pool: Some(pool),
         }
     }
 
@@ -128,13 +122,13 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.scheduler.take().unwrap()
     }
 
-    fn take_pool(&mut self) -> threadpool::Scheduler<SchedContext<E>> {
-        self.pool.take().unwrap()
+    fn take_pool(&mut self) -> SchedPool<E> {
+        self.sched_pool.take().unwrap()
     }
 
     #[inline]
-    pub fn clone_pool(&self) -> threadpool::Scheduler<SchedContext<E>> {
-        self.pool.clone().unwrap()
+    pub fn clone_pool(&self) -> SchedPool<E> {
+        self.sched_pool.clone().unwrap()
     }
 
     /// Start the execution of the task.
@@ -183,26 +177,24 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         if let Some(term) = cb_ctx.term {
             task.cmd.mut_context().set_term(term);
         }
-        let pool = self.take_pool();
+        let sched_pool = self.take_pool();
+        let engine = sched_pool.engine;
         let readonly = task.cmd.readonly();
-        pool.schedule(move |ctx: &mut SchedContext<E>| {
+        sched_pool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
 
-            let _processing_read_timer = ctx
-                .processing_read_duration
-                .with_label_values(&[tag])
-                .start_coarse_timer();
+            let read_duration = Instant::now_coarse();
 
             let region_id = task.region_id;
             let ts = task.ts;
             let timer = SlowTimer::new();
 
             let statistics = if readonly {
-                self.process_read(ctx, snapshot, task)
+                self.process_read(snapshot, task)
             } else {
-                self.process_write(ctx, snapshot, task)
+                self.process_write(engine, snapshot, task)
             };
-            ctx.add_statistics(tag, &statistics);
+            tls_add_statistics(tag, &statistics);
             slow_log!(
                 timer,
                 "[region {}] scheduler handle command: {}, ts: {}",
@@ -210,23 +202,21 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 tag,
                 ts
             );
+
+            tls_collect_read_duration(tag, read_duration.elapsed());
+            future::ok::<_, ()>(())
         });
     }
 
     /// Processes a read command within a worker thread, then posts `ReadFinished` message back to the
     /// `Scheduler`.
-    fn process_read(
-        mut self,
-        sched_ctx: &mut SchedContext<E>,
-        snapshot: E::Snap,
-        task: Task,
-    ) -> Statistics {
+    fn process_read(mut self, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_read");
         debug!("process read cmd in worker pool"; "cid" => task.cid);
         let tag = task.tag;
         let cid = task.cid;
         let mut statistics = Statistics::default();
-        let pr = match process_read_impl(sched_ctx, task.cmd, snapshot, &mut statistics) {
+        let pr = match process_read_impl::<E>(task.cmd, snapshot, &mut statistics) {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
@@ -236,12 +226,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(
-        mut self,
-        sched_ctx: &SchedContext<E>,
-        snapshot: E::Snap,
-        task: Task,
-    ) -> Statistics {
+    fn process_write(mut self, engine: E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
         let cid = task.cid;
@@ -280,7 +265,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                         }
                     });
 
-                    if let Err(e) = sched_ctx.engine.async_write(&ctx, to_be_write, engine_cb) {
+                    if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
                         SCHED_STAGE_COUNTER_VEC
                             .with_label_values(&[tag, "async_write_err"])
                             .inc();
@@ -310,7 +295,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 }
 
 fn process_read_impl<E: Engine>(
-    sched_ctx: &mut SchedContext<E>,
     mut cmd: Command,
     snapshot: E::Snap,
     statistics: &mut Statistics,
@@ -392,10 +376,9 @@ fn process_read_impl<E: Engine>(
                 lock_info.set_key(key.into_raw()?);
                 locks.push(lock_info);
             }
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(locks.len() as f64);
+
+            tls_collect_keyread_histogram_vec(tag, locks.len() as f64);
+
             Ok(ProcessResult::Locks { locks })
         }
         Command::ResolveLock {
@@ -419,10 +402,8 @@ fn process_read_impl<E: Engine>(
             );
             statistics.add(reader.get_statistics());
             let (kv_pairs, has_remain) = result?;
-            sched_ctx
-                .command_keyread_duration
-                .with_label_values(&[tag])
-                .observe(kv_pairs.len() as f64);
+            tls_collect_keyread_histogram_vec(tag, kv_pairs.len() as f64);
+
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
             } else {
@@ -604,61 +585,6 @@ pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) -> bool {
         Err(e) => {
             panic!("schedule msg failed, err:{:?}", e);
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct SchedContextFactory<E: Clone> {
-    engine: E,
-}
-
-impl<E: Clone> SchedContextFactory<E> {
-    pub fn new(engine: E) -> SchedContextFactory<E> {
-        SchedContextFactory { engine }
-    }
-}
-
-impl<E: Engine + Clone> ThreadContextFactory<SchedContext<E>> for SchedContextFactory<E> {
-    fn create(&self) -> SchedContext<E> {
-        SchedContext {
-            stats: HashMap::default(),
-            processing_read_duration: SCHED_PROCESSING_READ_HISTOGRAM_VEC.local(),
-            processing_write_duration: SCHED_PROCESSING_WRITE_HISTOGRAM_VEC.local(),
-            command_keyread_duration: KV_COMMAND_KEYREAD_HISTOGRAM_VEC.local(),
-            engine: self.engine.clone(),
-        }
-    }
-}
-
-pub struct SchedContext<E: Engine> {
-    stats: HashMap<&'static str, StatisticsSummary>,
-    processing_read_duration: LocalHistogramVec,
-    processing_write_duration: LocalHistogramVec,
-    command_keyread_duration: LocalHistogramVec,
-    pub engine: E,
-}
-
-impl<E: Engine> SchedContext<E> {
-    fn add_statistics(&mut self, cmd_tag: &'static str, stat: &Statistics) {
-        let entry = self.stats.entry(cmd_tag).or_insert_with(Default::default);
-        entry.add_statistics(stat);
-    }
-}
-
-impl<E: Engine> ThreadContext for SchedContext<E> {
-    fn on_tick(&mut self) {
-        for (cmd, stat) in self.stats.drain() {
-            for (cf, details) in stat.stat.details() {
-                for (tag, count) in details {
-                    KV_COMMAND_SCAN_DETAILS
-                        .with_label_values(&[cmd, cf, tag])
-                        .inc_by(count as i64);
-                }
-            }
-        }
-        self.processing_read_duration.flush();
-        self.processing_write_duration.flush();
-        self.command_keyread_duration.flush();
     }
 }
 

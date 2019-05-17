@@ -28,14 +28,14 @@ use std::u64;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
-use tikv_util::threadpool::{self, ThreadPool, ThreadPoolBuilder};
 use tikv_util::worker::ScheduleError;
+use futures::future;
 
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::txn::latch::{Latches, Lock};
+use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::process::{
-    execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, SchedContext,
-    SchedContextFactory, Task,
+    execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, Task,
 };
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -147,10 +147,10 @@ struct SchedulerInner<E: Engine> {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_scheduler: threadpool::Scheduler<SchedContext<E>>,
+    worker_pool: SchedPool<E>,
 
-    // high priority commands will be delivered to this pool
-    high_priority_scheduler: threadpool::Scheduler<SchedContext<E>>,
+    // high priority commands and system commands will be delivered to this pool
+    high_priority_pool: SchedPool<E>,
 
     // used to control write flow
     running_write_bytes: AtomicUsize,
@@ -231,16 +231,11 @@ struct InnerWrapper<E: Engine> {
     inner: Arc<SchedulerInner<E>>,
 }
 
+unsafe impl<E: Engine> Send for InnerWrapper<E> {}
+
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-pub struct Scheduler<E: Engine> {
-    inner: InnerWrapper<E>,
-    // worker pool
-    worker_pool: Arc<Mutex<ThreadPool<SchedContext<E>>>>,
-
-    // high priority commands will be delivered to this pool
-    high_priority_pool: Arc<Mutex<ThreadPool<SchedContext<E>>>>,
-}
+pub struct Scheduler<E: Engine>(InnerWrapper<E>);
 
 impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
@@ -250,16 +245,10 @@ impl<E: Engine> Scheduler<E> {
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
     ) -> Self {
-        let factory = SchedContextFactory::new(engine.clone());
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
         }
-        let worker_pool = ThreadPoolBuilder::new(thd_name!("sched-worker-pool"), factory.clone())
-            .thread_count(worker_pool_size)
-            .build();
-        let high_priority_pool =
-            ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory).build();
 
         let inner = Arc::new(SchedulerInner {
             task_contexts,
@@ -267,39 +256,30 @@ impl<E: Engine> Scheduler<E> {
             latches: Latches::new(concurrency),
             running_write_bytes: AtomicUsize::new(0),
             sched_pending_write_threshold,
-            worker_scheduler: worker_pool.scheduler(),
-            high_priority_scheduler: high_priority_pool.scheduler(),
+            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
+            high_priority_pool: SchedPool::new(
+                engine.clone(),
+                std::cmp::max(1, worker_pool_size / 2),
+                "sched-high-pri-pool",
+            ),
         });
 
-        Scheduler {
-            inner: InnerWrapper { engine, inner },
-            worker_pool: Arc::new(Mutex::new(worker_pool)),
-            high_priority_pool: Arc::new(Mutex::new(high_priority_pool)),
-        }
+        Scheduler(InnerWrapper { engine, inner })
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
-        self.inner.on_receive_new_cmd(cmd, callback);
-    }
-
-    pub fn shutdown(&mut self) {
-        if let Err(e) = self.worker_pool.lock().unwrap().stop() {
-            error!("scheduler run err when worker pool stop:{:?}", e);
-        }
-        if let Err(e) = self.high_priority_pool.lock().unwrap().stop() {
-            error!("scheduler run err when high priority pool stop:{:?}", e);
-        }
-        info!("scheduler stopped");
+        self.0.on_receive_new_cmd(cmd, callback);
     }
 }
 
 impl<E: Engine> InnerWrapper<E> {
-    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E, Self> {
-        let scheduler = match priority {
-            CommandPri::Low | CommandPri::Normal => self.inner.worker_scheduler.clone(),
-            CommandPri::High => self.inner.high_priority_scheduler.clone(),
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self> {
+        let pool = if priority == CommandPri::High || is_sys_cmd {
+            self.inner.high_priority_pool.clone()
+        } else {
+            self.inner.worker_pool.clone()
         };
-        Executor::new(self.clone(), scheduler)
+        Executor::new(self.clone(), pool)
     }
 
     /// Releases all the latches held by a command.
@@ -362,15 +342,16 @@ impl<E: Engine> InnerWrapper<E> {
         let tag = task.tag;
         let ctx = task.context().clone();
 
-        let executor = self.fetch_executor(task.priority());
-        let pool = executor.clone_pool();
+        let engine = self.engine.clone();
+        let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
+        let sched_pool = executor.clone_pool();
         let inner = self.clone();
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
         });
 
-        pool.schedule(move |sched_ctx: &mut SchedContext<E>| {
-            if let Err(e) = sched_ctx.engine.async_snapshot(&ctx, cb) {
+        sched_pool.pool.spawn(move || {
+            if let Err(e) = engine.async_snapshot(&ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "async_snapshot_err"])
                     .inc();
@@ -389,6 +370,7 @@ impl<E: Engine> InnerWrapper<E> {
                     .with_label_values(&[tag, "snapshot"])
                     .inc();
             }
+            future::ok::<_, ()>(())
         });
     }
 
