@@ -1021,6 +1021,7 @@ impl RaftBatchSystem {
         );
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
+
         {
             let mut meta = builder.store_meta.lock().unwrap();
             for (_, peer_fsm) in &region_peers {
@@ -1029,6 +1030,14 @@ impl RaftBatchSystem {
                     .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
             }
         }
+
+        let router = Mutex::new(self.router.clone());
+        pd_client.handle_reconnect(move || {
+            router
+                .lock()
+                .unwrap()
+                .broadcast_normal(|| PeerMsg::HeartbeatPd);
+        });
 
         let tag = format!("raftstore-{}", store.get_id());
         self.system.spawn(tag, builder);
@@ -1081,6 +1090,7 @@ impl RaftBatchSystem {
             self.router.clone(),
             Arc::clone(&engines.kv),
             workers.pd_worker.scheduler(),
+            cfg.pd_heartbeat_tick_interval.as_secs(),
         );
         box_try!(workers.pd_worker.start(pd_runner));
 
