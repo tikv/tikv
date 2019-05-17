@@ -172,6 +172,7 @@ impl DAGBuilder {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_selection(),
                     Arc::clone(&ctx),
                     src,
@@ -186,9 +187,12 @@ impl DAGBuilder {
                     src,
                     exec.take_aggregation(),
                 )?),
-                ExecType::TypeTopN => {
-                    Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-                }
+                ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_topN(),
+                    Arc::clone(&ctx),
+                    src,
+                )?),
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(
                     C::new(summary_slot_index),
                     exec.take_limit(),
