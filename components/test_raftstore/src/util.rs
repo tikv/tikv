@@ -380,7 +380,9 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
                 is_write = true
             }
-            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+            CmdType::Invalid | CmdType::Prewrite | CmdType::ReadIndex => {
+                panic!("Invalid RaftCmdRequest: {:?}", cmd)
+            }
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
@@ -510,7 +512,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)

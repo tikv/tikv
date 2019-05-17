@@ -52,13 +52,15 @@ pub const DATA_KEY_PREFIX_LEN: usize = 1;
 pub struct Engines {
     pub kv: Arc<DB>,
     pub raft: Arc<DB>,
+    pub shared_block_cache: bool,
 }
 
 impl Engines {
-    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>) -> Engines {
+    pub fn new(kv_engine: Arc<DB>, raft_engine: Arc<DB>, shared_block_cache: bool) -> Engines {
         Engines {
             kv: kv_engine,
             raft: raft_engine,
+            shared_block_cache,
         }
     }
 
