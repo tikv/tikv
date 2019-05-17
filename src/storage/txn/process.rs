@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{thread, u64, mem};
-use std::time::{ Duration};
+use std::time::Duration;
+use std::{mem, thread, u64};
 
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
@@ -10,12 +10,12 @@ use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
-use crate::storage::txn::{scheduler::Msg, Error, Result, sched_pool::*};
+use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
     metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
     ScanMode, Snapshot, Statistics, StorageCb, Value,
 };
-use tikv_util::time::{Instant,SlowTimer};
+use tikv_util::time::{Instant, SlowTimer};
 use tikv_util::worker::ScheduleError;
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
@@ -126,7 +126,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.sched_pool.take().unwrap()
     }
 
-    #[inline]
     pub fn clone_pool(&self) -> SchedPool<E> {
         self.sched_pool.clone().unwrap()
     }

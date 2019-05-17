@@ -25,18 +25,18 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::u64;
 
+use futures::future;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 use tikv_util::worker::ScheduleError;
-use futures::future;
 
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::process::{
     execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, Task,
 };
+use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
