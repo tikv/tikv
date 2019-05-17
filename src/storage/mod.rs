@@ -545,6 +545,11 @@ impl<E: Engine> Drop for Storage<E> {
             return;
         }
 
+        let r = self.gc_worker.stop();
+        if let Err(e) = r {
+            error!("Failed to stop gc_worker:"; "err" => ?e);
+        }
+
         info!("Storage stopped.");
     }
 }
