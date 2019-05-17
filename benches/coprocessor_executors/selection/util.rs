@@ -43,6 +43,7 @@ impl SelectionBencher for NormalBencher {
             meta.set_conditions(exprs.to_vec().into());
             let src = crate::util::fixture_executor::EncodedFixtureNormalExecutor::new(src_rows);
             SelectionExecutor::new(
+                ExecSummaryCollectorDisabled,
                 black_box(meta),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),

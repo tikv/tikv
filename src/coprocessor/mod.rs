@@ -1,8 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
-//! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
-//! computing and the amount of data to transfer can be reduced (i.e. filtered at TiKV side).
+//! Handles simple SQL query executors locally.
+//!
+//! Most TiDB read queries are processed by Coprocessor instead of KV interface.
+//! By doing so, the CPU of TiKV nodes can be utilized for computing and the
+//! amount of data to transfer can be reduced (i.e. filtered at TiKV side).
 //!
 //! Notice that Coprocessor handles more than simple SQL query executors (DAG request). It also
 //! handles analyzing requests and checksum requests.
@@ -34,8 +36,6 @@ pub mod util;
 
 pub use self::endpoint::Endpoint;
 pub use self::error::{Error, Result};
-
-use std::boxed::FnBox;
 
 use kvproto::{coprocessor as coppb, kvrpcpb};
 
@@ -114,10 +114,8 @@ impl Deadline {
     }
 }
 
-/// Denotes for a function that builds a `RequestHandler`.
-/// Due to rust-lang#23856, we have to make it a type alias of `Box<..>`.
 type RequestHandlerBuilder<Snap> =
-    Box<dyn for<'a> FnBox(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
+    Box<dyn for<'a> FnOnce(Snap, &'a ReqContext) -> Result<Box<dyn RequestHandler>> + Send>;
 
 /// Encapsulate the `kvrpcpb::Context` to provide some extra properties.
 #[derive(Debug, Clone)]

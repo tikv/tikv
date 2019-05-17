@@ -257,7 +257,7 @@ mod tests {
             BatchSelectionExecutor::new_for_test(src_exec, vec![predicate])
         };
 
-        let executor_builders: Vec<Box<dyn std::boxed::FnBox(MockExecutor) -> _>> =
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
             vec![Box::new(exec_no_predicate), Box::new(exec_predicate_true)];
 
         for exec_builder in executor_builders {

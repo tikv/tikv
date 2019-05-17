@@ -3,9 +3,12 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
+#![feature(underscore_const_names)]
 
 #[macro_use]
-extern crate quick_error;
+extern crate static_assertions;
+#[macro_use]
+extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
