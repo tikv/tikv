@@ -38,7 +38,7 @@ macro_rules! match_each_eval_type_and_call {
 }
 
 #[inline]
-// The `Box<>` wrapper cannot be remove actually. Thus disable the clippy rule. Additionally this
+// The `Box<>` wrapper cannot be removed actually. Thus disable the clippy rule. Additionally this
 // function will be inlined so that performance will not be affected.
 #[allow(clippy::borrowed_box)]
 fn update_from_scalar_eval_output<T>(
@@ -95,23 +95,31 @@ pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExe
 
     is_ended: bool,
 
-    /// Aggregate function states.
+    /// The states of each aggregate function.
     aggr_fn_states: Vec<Box<dyn AggrFunctionState>>,
 
-    aggr_fn_output_cardinality: Vec<usize>, // One slot each aggregate function
+    /// The output cardinality of each aggregate function.
+    aggr_fn_output_cardinality: Vec<usize>,
 
-    /// The schema of aggregation output is not given directly, so we need to compute one.
-    ordered_schema: Vec<FieldType>, // maybe multiple slot each aggregate function
+    /// The schema of all aggregate function output columns.
+    ///
+    /// Elements are ordered in the same way as the passed in aggregate functions.
+    ordered_schema: Vec<FieldType>,
 
-    // Maybe multiple slot each aggregate function
+    /// The type of all aggregate function output columns.
+    ///
+    /// Elements are ordered in the same way as the passed in aggregate functions.
     ordered_aggr_fn_output_types: Vec<EvalType>,
 
-    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
-    // aggregate function so it accidentally becomes one slot each aggregate function.
+    /// The type of all aggregate function input columns, i.e. the type of all aggregate function
+    /// expressions.
+    ///
+    /// Elements are ordered in the same way as the passed in aggregate functions.
     ordered_aggr_fn_input_types: Vec<EvalType>,
 
-    // Maybe multiple slot each aggregate function. However currently we only support 1 parameter
-    // aggregate function so it accidentally becomes one slot each aggregate function.
+    /// All aggregate function expressions.
+    ///
+    /// Elements are ordered in the same way as the passed in aggregate functions.
     ordered_aggr_fn_input_exprs: Vec<RpnExpression>,
 }
 
@@ -147,7 +155,7 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
         for def in aggr_definitions {
             AggrDefinitionParser::check_supported(def).map_err(|e| {
                 Error::Other(box_err!(
-                    "Unable to use BatchSimpleAggregateExecutor: {}",
+                    "Unable to use BatchSimpleAggregationExecutor: {}",
                     e
                 ))
             })?;
