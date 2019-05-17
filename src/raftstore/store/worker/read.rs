@@ -208,11 +208,12 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
-        // Check store id.
-        let store_id = self.store_id.unwrap_or_else(|| {
-            let meta = self.store_meta.lock().unwrap();
-            meta.store_id.unwrap()
-        });
+        if self.store_id.is_none() {
+            let store_id = self.store_meta.lock().unwrap().store_id;
+            self.store_id = Some(store_id);
+        }
+        let store_id = self.store_id.unwrap();
+
         if let Err(e) = util::check_store_id(req, store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
             debug!("rejected by store id not match"; "err" => %e);
