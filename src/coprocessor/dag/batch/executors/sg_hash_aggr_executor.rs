@@ -127,10 +127,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregatio
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        let group_by_type =
-            EvalType::try_from(group_by_exp.ret_field_type(src.schema()).tp()).unwrap();
+        let group_by_field_type = group_by_exp.ret_field_type(src.schema()).clone();
+        let group_by_eval_type = EvalType::try_from(group_by_field_type.tp()).unwrap();
         let groups = match_template_evaluable! {
-            TT, match group_by_type {
+            TT, match group_by_eval_type {
                 EvalType::TT => Groups::TT(HashMap::default()),
             }
         };
@@ -139,6 +139,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregatio
             states: Vec::with_capacity(1024),
             groups,
             group_by_exp,
+            group_by_field_type: Some(group_by_field_type),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -192,11 +193,15 @@ pub struct SingleGroupHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: Groups,
     group_by_exp: RpnExpression,
+    group_by_field_type: Option<FieldType>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggregationImpl {
-    fn prepare_entities(&mut self, _entities: &mut Entities<Src>) {
-        // Do nothing.
+    #[inline]
+    fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
+        entities
+            .schema
+            .push(self.group_by_field_type.take().unwrap());
     }
 
     #[inline]
