@@ -30,21 +30,18 @@ use crate::storage::kv::Result as EngineResult;
 use crate::storage::Key;
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 use tikv_util::collections::HashMap;
-use tikv_util::threadpool::{ThreadPool, ThreadPoolBuilder};
 use tikv_util::worker::{self, Runnable};
 
 use super::super::metrics::*;
 use super::latch::{Latches, Lock};
-use super::process::{
-    execute_callback, Executor, ProcessResult, SchedContext, SchedContextFactory, Task,
-};
+use super::process::{execute_callback, Executor, ProcessResult, Task};
+use super::sched_pool::*;
 use super::Error;
 
 pub const CMD_BATCH_SIZE: usize = 256;
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
-    Quit,
     RawCmd {
         cmd: Command,
         cb: StorageCb,
@@ -78,7 +75,6 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
@@ -152,10 +148,10 @@ pub struct Scheduler<E: Engine> {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: ThreadPool<SchedContext<E>>,
+    worker_pool: SchedPool<E>,
 
-    // high priority commands will be delivered to this pool
-    high_priority_pool: ThreadPool<SchedContext<E>>,
+    // high priority commands and system commands will be delivered to this pool
+    high_priority_pool: SchedPool<E>,
 
     // used to control write flow
     running_write_bytes: usize,
@@ -170,9 +166,8 @@ impl<E: Engine> Scheduler<E> {
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
     ) -> Self {
-        let factory = SchedContextFactory::new(engine.clone());
         Scheduler {
-            engine,
+            engine: engine.clone(),
             // TODO: GC these two maps.
             pending_tasks: Default::default(),
             task_contexts: Default::default(),
@@ -180,11 +175,12 @@ impl<E: Engine> Scheduler<E> {
             id_alloc: 0,
             latches: Latches::new(concurrency),
             sched_pending_write_threshold,
-            worker_pool: ThreadPoolBuilder::new(thd_name!("sched-worker-pool"), factory.clone())
-                .thread_count(worker_pool_size)
-                .build(),
-            high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
-                .build(),
+            worker_pool: SchedPool::new(engine.clone(), worker_pool_size, "sched-worker-pool"),
+            high_priority_pool: SchedPool::new(
+                engine.clone(),
+                std::cmp::max(1, worker_pool_size / 2),
+                "sched-high-pri-pool",
+            ),
             running_write_bytes: 0,
         }
     }
@@ -232,14 +228,14 @@ impl<E: Engine> Scheduler<E> {
         tctx
     }
 
-    pub fn fetch_executor(&self, priority: CommandPri) -> Executor<E> {
-        let pool = match priority {
-            CommandPri::Low | CommandPri::Normal => &self.worker_pool,
-            CommandPri::High => &self.high_priority_pool,
+    fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E> {
+        let pool = if priority == CommandPri::High || is_sys_cmd {
+            self.high_priority_pool.clone()
+        } else {
+            self.worker_pool.clone()
         };
-        let pool_scheduler = pool.scheduler();
         let scheduler = self.scheduler.clone();
-        Executor::new(scheduler, pool_scheduler)
+        Executor::new(scheduler, pool)
     }
 
     /// Event handler for new command.
@@ -313,7 +309,7 @@ impl<E: Engine> Scheduler<E> {
         let task = self.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-        let executor = self.fetch_executor(task.priority());
+        let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
@@ -437,10 +433,6 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
     fn run_batch(&mut self, msgs: &mut Vec<Msg>) {
         for msg in msgs.drain(..) {
             match msg {
-                Msg::Quit => {
-                    self.shutdown();
-                    return;
-                }
                 Msg::RawCmd { cmd, cb } => self.on_receive_new_cmd(cmd, cb),
                 Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
                 Msg::WriteFinished {
@@ -452,16 +444,6 @@ impl<E: Engine> Runnable<Msg> for Scheduler<E> {
                 Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
             }
         }
-    }
-
-    fn shutdown(&mut self) {
-        if let Err(e) = self.worker_pool.stop() {
-            error!("scheduler run err when worker pool stop"; "err" => ?e);
-        }
-        if let Err(e) = self.high_priority_pool.stop() {
-            error!("scheduler run err when high priority pool stop"; "err" => ?e);
-        }
-        info!("scheduler stopped");
     }
 }
 

@@ -27,23 +27,30 @@ impl<C: ExecSummaryCollector> LimitExecutor<C> {
             first_collect: true,
         }
     }
+
+    fn next_impl(&mut self) -> Result<Option<Row>> {
+        if self.cursor >= self.limit {
+            return Ok(None);
+        }
+        if let Some(row) = self.src.next()? {
+            self.cursor += 1;
+            Ok(Some(row))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl<C: ExecSummaryCollector> Executor for LimitExecutor<C> {
     fn next(&mut self) -> Result<Option<Row>> {
         let timer = self.summary_collector.on_start_iterate();
-        if self.cursor >= self.limit {
-            self.summary_collector.on_finish_iterate(timer, 0);
-            return Ok(None);
-        }
-        if let Some(row) = self.src.next()? {
-            self.cursor += 1;
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
             self.summary_collector.on_finish_iterate(timer, 1);
-            Ok(Some(row))
         } else {
             self.summary_collector.on_finish_iterate(timer, 0);
-            Ok(None)
         }
+        ret
     }
 
     fn collect_output_counts(&mut self, _: &mut Vec<i64>) {
@@ -58,17 +65,17 @@ impl<C: ExecSummaryCollector> Executor for LimitExecutor<C> {
         }
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.src.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.src.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
-        self.summary_collector.collect_into(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.src.take_eval_warnings()
     }
 }
 

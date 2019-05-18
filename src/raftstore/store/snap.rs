@@ -1512,8 +1512,8 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use crate::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::raftstore::Result;
 
     const TEST_STORE_ID: u64 = 1;
@@ -1597,7 +1597,12 @@ pub mod tests {
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(Engines { kv, raft })
+        let shared_block_cache = false;
+        Ok(Engines {
+            kv,
+            raft,
+            shared_block_cache,
+        })
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
@@ -1626,8 +1631,8 @@ pub mod tests {
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"z".to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(peer.clone());
         region
     }
