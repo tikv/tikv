@@ -1,4 +1,4 @@
-// FIXME: https://github.com/tikv/tikv/pull/4524#discussion_r282754034 
+// FIXME: https://github.com/tikv/tikv/pull/4524#discussion_r282754034
 #![allow(dead_code)]
 
 use crate::AllocStats;
