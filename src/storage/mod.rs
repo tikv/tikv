@@ -260,6 +260,13 @@ impl Command {
         self.get_context().get_priority()
     }
 
+    pub fn is_sys_cmd(&self) -> bool {
+        match *self {
+            Command::ScanLock { .. } | Command::ResolveLock { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn priority_tag(&self) -> &'static str {
         match self.get_context().get_priority() {
             CommandPri::Low => "low",
@@ -546,9 +553,6 @@ impl<E: Engine> Drop for Storage<E> {
         // This is the last reference of the storage. Now all its references are dropped. Stop and
         // destroy the storage now.
         let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit"; "err" => ?e);
-        }
 
         let h = worker.stop().unwrap();
         if let Err(e) = h.join() {
