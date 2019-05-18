@@ -111,7 +111,6 @@ where
     VectorValue: VectorValueExt<T>,
 {
     type ParameterType = T;
-    type ResultTargetType = Vec<Option<T>>;
 
     #[inline]
     fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
@@ -126,15 +125,11 @@ where
     }
 
     #[inline]
-    fn push_result_concrete(
-        &self,
-        _ctx: &mut EvalContext,
-        target: &mut Vec<Option<T>>,
-    ) -> Result<()> {
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         if !self.has_value {
-            target.push(None);
+            target[0].push(None);
         } else {
-            target.push(Some(self.sum.clone()));
+            target[0].push(Some(self.sum.clone()));
         }
         Ok(())
     }

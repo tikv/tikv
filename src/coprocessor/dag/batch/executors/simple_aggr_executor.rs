@@ -50,7 +50,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
-        Self::new(
+        Self::new_impl(
             ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
@@ -85,8 +85,26 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         config: Arc<EvalConfig>,
         src: Src,
         aggr_defs: Vec<Expr>,
+    ) -> Result<Self> {
+        Self::new_impl(
+            summary_collector,
+            config,
+            src,
+            aggr_defs,
+            AllAggrDefinitionParser,
+        )
+    }
+
+    #[inline]
+    fn new_impl(
+        summary_collector: C,
+        config: Arc<EvalConfig>,
+        src: Src,
+        aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
+        // Empty states is fine because it will be re-initialized later according to the content
+        // in entities.
         let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
         Ok(Self(AggregationExecutor::new(
@@ -271,7 +289,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Bytes;
-            type ResultTargetType = Vec<Option<Int>>;
 
             fn update_concrete(
                 &mut self,
@@ -284,12 +301,12 @@ mod tests {
                 Ok(())
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
-                target.push(Some(self.len as i64));
+                target[0].push_int(Some(self.len as i64));
                 Ok(())
             }
         }
@@ -325,7 +342,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnBarState {
             type ParameterType = Real;
-            type ResultTargetType = [VectorValue];
 
             fn update_concrete(
                 &mut self,
@@ -340,10 +356,10 @@ mod tests {
                 Ok(())
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
                 target[0].push_int(Some(self.rows_with_null as i64));
                 target[1].push_int(Some(self.rows_without_null as i64));
@@ -583,7 +599,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Real;
-            type ResultTargetType = Vec<Option<Int>>;
 
             fn update_concrete(
                 &mut self,
@@ -594,12 +609,12 @@ mod tests {
                 unreachable!()
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
-                target.push(Some(42));
+                target[0].push_int(Some(42));
                 Ok(())
             }
         }

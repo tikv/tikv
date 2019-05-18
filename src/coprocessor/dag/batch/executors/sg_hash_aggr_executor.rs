@@ -3,6 +3,340 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use cop_datatype::{EvalType, FieldTypeAccessor};
+use tikv_util::collections::HashMap;
+use tipb::executor::Aggregation;
+use tipb::expression::{Expr, FieldType};
+
+use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::dag::aggr_fn::*;
+use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
+use crate::coprocessor::dag::batch::interface::*;
+use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
+use crate::coprocessor::dag::expr::EvalConfig;
+use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
+use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+use crate::coprocessor::{Error, Result};
+
+/// Single Group Hash Aggregation Executor uses hash when comparing group key, which is faster
+/// than multi-group's implementation.
+pub struct BatchSingleGroupHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
+    AggregationExecutor<C, Src, SingleGroupHashAggregationImpl>,
+);
+
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
+    for BatchSingleGroupHashAggregationExecutor<C, Src>
+{
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.0.schema()
+    }
+
+    #[inline]
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
+    }
+
+    #[inline]
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.0.collect_statistics(destination)
+    }
+}
+
+impl<Src: BatchExecutor>
+    BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Src>
+{
+    #[cfg(test)]
+    pub fn new_for_test(
+        src: Src,
+        group_by_exp: RpnExpression,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Self {
+        Self::new_impl(
+            ExecSummaryCollectorDisabled,
+            Arc::new(EvalConfig::default()),
+            src,
+            group_by_exp,
+            aggr_defs,
+            aggr_def_parser,
+        )
+        .unwrap()
+    }
+}
+
+impl BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
+        let group_by_definitions = descriptor.get_group_by();
+        assert_eq!(group_by_definitions.len(), 1);
+        let def = &group_by_definitions[0];
+        RpnExpressionBuilder::check_expr_tree_supported(def).map_err(|e| {
+            Error::Other(box_err!(
+                "Unable to use BatchSingleGroupHashAggregationExecutor: {}",
+                e
+            ))
+        })?;
+
+        // TODO: Verify group by only have columns
+
+        let aggr_definitions = descriptor.get_agg_func();
+        for def in aggr_definitions {
+            AllAggrDefinitionParser.check_supported(def).map_err(|e| {
+                Error::Other(box_err!(
+                    "Unable to use BatchSingleGroupHashAggregationExecutor: {}",
+                    e
+                ))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregationExecutor<C, Src> {
+    pub fn new(
+        summary_collector: C,
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exp_def: Expr,
+        aggr_defs: Vec<Expr>,
+    ) -> Result<Self> {
+        let group_by_exp = RpnExpressionBuilder::build_from_expr_tree(
+            group_by_exp_def,
+            &config.tz,
+            src.schema().len(),
+        )?;
+        Self::new_impl(
+            summary_collector,
+            config,
+            src,
+            group_by_exp,
+            aggr_defs,
+            AllAggrDefinitionParser,
+        )
+    }
+
+    #[inline]
+    fn new_impl(
+        summary_collector: C,
+        config: Arc<EvalConfig>,
+        src: Src,
+        group_by_exp: RpnExpression,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Result<Self> {
+        let group_by_type =
+            EvalType::try_from(group_by_exp.ret_field_type(src.schema()).tp()).unwrap();
+        let groups = match_template_evaluable! {
+            TT, match group_by_type {
+                EvalType::TT => Groups::TT(HashMap::default()),
+            }
+        };
+
+        let aggr_impl = SingleGroupHashAggregationImpl {
+            states: Vec::with_capacity(1024),
+            groups,
+            group_by_exp,
+        };
+
+        Ok(Self(AggregationExecutor::new(
+            summary_collector,
+            aggr_impl,
+            src,
+            config,
+            aggr_defs,
+            aggr_def_parser,
+        )?))
+    }
+}
+
+/// All groups.
+enum Groups {
+    // The value of each hash table is the start index in `SingleGroupHashAggregationImpl::states`
+    // field. When there are new groups (i.e. new entry in the hash table), the states of the groups
+    // will be appended to `states`.
+    Int(HashMap<Option<Int>, usize>),
+    Real(HashMap<Option<Real>, usize>),
+    Decimal(HashMap<Option<Decimal>, usize>),
+    Bytes(HashMap<Option<Bytes>, usize>),
+    DateTime(HashMap<Option<DateTime>, usize>),
+    Duration(HashMap<Option<Duration>, usize>),
+    Json(HashMap<Option<Json>, usize>),
+}
+
+impl Groups {
+    fn eval_type(&self) -> EvalType {
+        match_template_evaluable! {
+            TT, match self {
+                Groups::TT(_) => {
+                    EvalType::TT
+                },
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match_template_evaluable! {
+            TT, match self {
+                Groups::TT(groups) => {
+                    groups.len()
+                },
+            }
+        }
+    }
+}
+
+pub struct SingleGroupHashAggregationImpl {
+    states: Vec<Box<dyn AggrFunctionState>>,
+    groups: Groups,
+    group_by_exp: RpnExpression,
+}
+
+impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggregationImpl {
+    fn prepare_entities(&mut self, _entities: &mut Entities<Src>) {
+        // Do nothing.
+    }
+
+    #[inline]
+    fn process_batch_input(
+        &mut self,
+        entities: &mut Entities<Src>,
+        mut input: LazyBatchColumnVec,
+    ) -> Result<()> {
+        let rows_len = input.rows_len();
+
+        // 1. Calculate which group each src row belongs to.
+        // TODO: Reuse this vector each iterate.
+        let mut states_offset_each_row = Vec::with_capacity(rows_len);
+        let group_by_result = self.group_by_exp.eval(
+            &mut entities.context,
+            input.rows_len(),
+            entities.src.schema(),
+            &mut input,
+        )?;
+        // Unwrap is fine because we have verified the group by expression before.
+        let group_by_vector = group_by_result.vector_value().unwrap();
+        match_template_evaluable! {
+            TT, match group_by_vector {
+                VectorValue::TT(v) => {
+                    if let Groups::TT(group) = &mut self.groups {
+                        calc_groups_each_row(
+                            v,
+                            &entities.each_aggr_fn,
+                            group,
+                            &mut self.states,
+                            &mut states_offset_each_row
+                        );
+                    } else {
+                        panic!();
+                    }
+                },
+            }
+        }
+
+        // 2. Update states according to the group.
+        for idx in 0..entities.each_aggr_fn.len() {
+            let aggr_expr = &entities.each_aggr_exprs[idx];
+            let aggr_expr_result = aggr_expr.eval(
+                &mut entities.context,
+                rows_len,
+                entities.src.schema(),
+                &mut input,
+            )?;
+            match aggr_expr_result {
+                RpnStackNode::Scalar { value, .. } => {
+                    match_template_evaluable! {
+                        TT, match value {
+                            ScalarValue::TT(scalar_value) => {
+                                for offset in &states_offset_each_row {
+                                    let aggr_fn_state = &mut self.states[*offset + idx];
+                                    aggr_fn_state.update(&mut entities.context, scalar_value)?;
+                                }
+                            },
+                        }
+                    }
+                }
+                RpnStackNode::Vector { value, .. } => {
+                    match_template_evaluable! {
+                        TT, match &*value {
+                            VectorValue::TT(vector_value) => {
+                                for (row_index, offset) in states_offset_each_row.iter().enumerate() {
+                                    let aggr_fn_state = &mut self.states[*offset + idx];
+                                    aggr_fn_state.update(&mut entities.context, &vector_value[row_index])?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn iterate_each_group_for_aggregation(
+        &mut self,
+        entities: &mut Entities<Src>,
+        mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
+    ) -> Result<Vec<LazyBatchColumn>> {
+        let aggr_fns_len = entities.each_aggr_fn.len();
+        let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
+            self.groups.len(),
+            self.groups.eval_type(),
+        );
+
+        match_template_evaluable! {
+            TT, match &mut self.groups {
+                Groups::TT(groups) => {
+                    // Single group column
+                    let map = std::mem::replace(groups, HashMap::default());
+                    for (group_key, states_offset) in map {
+                        iteratee(entities, &self.states[states_offset..states_offset + aggr_fns_len])?;
+                        group_by_column.mut_decoded().push(group_key);
+                    }
+                }
+            }
+        }
+
+        Ok(vec![group_by_column])
+    }
+}
+
+fn calc_groups_each_row<T: Evaluable>(
+    rows: &[Option<T>],
+    aggr_fns: &[Box<dyn AggrFunction>],
+    group: &mut HashMap<Option<T>, usize>,
+    states: &mut Vec<Box<dyn AggrFunctionState>>,
+    output_states_offset_each_row: &mut Vec<usize>,
+) {
+    for val in rows {
+        // Not using the entry API so that when entry exists there is no clone.
+        match group.get(val) {
+            Some(offset) => {
+                // Group exists, use the offset of existing group.
+                output_states_offset_each_row.push(*offset);
+            }
+            None => {
+                // Group does not exist, prepare groups.
+                let offset = states.len();
+                output_states_offset_each_row.push(offset);
+                group.insert(val.clone(), offset);
+                for aggr_fn in aggr_fns {
+                    states.push(aggr_fn.create_state());
+                }
+            }
+        }
+    }
+}
+
+/*
+
+use std::convert::TryFrom;
+use std::sync::Arc;
+
 use hashbrown::hash_map::Entry;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
@@ -13,12 +347,14 @@ use tipb::expression::{Expr, FieldType};
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
+use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::{Error, Result};
+
 
 fn aggregate_single_group(
     aggr_fn_len: usize,
@@ -35,25 +371,11 @@ fn aggregate_single_group(
         let output_cardinality = aggr_fn_output_cardinality[index];
         assert!(output_cardinality > 0);
 
-        if output_cardinality == 1 {
-            // Single output column, we use `Vec<Option<T>>` as container.
-            let output_type = ordered_aggr_fn_output_types[output_column_offset];
-            match_template_evaluable! {
-                TT, match output_type {
-                    EvalType::TT => {
-                        let concrete_output_column: &mut Vec<Option<TT>> = aggr_output_columns[output_column_offset].as_mut();
-                        aggr_fn_state.push_result(ctx, concrete_output_column)?;
-                    }
-                }
-            }
-        } else {
-            // Multi output column, we use `[VectorValue]` as container.
-            aggr_fn_state.push_result(
-                ctx,
-                &mut aggr_output_columns
-                    [output_column_offset..output_column_offset + output_cardinality],
-            )?;
-        }
+        aggr_fn_state.push_result(
+            ctx,
+            &mut aggr_output_columns
+                [output_column_offset..output_column_offset + output_cardinality],
+        )?;
 
         output_column_offset += output_cardinality;
     }
@@ -90,7 +412,7 @@ struct MultiGroupInfo {
     group_key_segments: Vec<usize>,
 }
 
-pub struct BatchHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
+pub struct BatchSingleGroupHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     summary_collector: C,
     context: EvalContext,
     src: Src,
@@ -127,7 +449,7 @@ pub struct BatchHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecu
     single_group_lookup: SingleGroupLookup,
 }
 
-impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -136,7 +458,7 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def).map_err(|e| {
                 Error::Other(box_err!(
-                    "Unable to use BatchHashAggregationExecutor: {}",
+                    "Unable to use BatchSingleGroupHashAggregationExecutor: {}",
                     e
                 ))
             })?;
@@ -148,7 +470,7 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def).map_err(|e| {
                 Error::Other(box_err!(
-                    "Unable to use BatchHashAggregationExecutor: {}",
+                    "Unable to use BatchSingleGroupHashAggregationExecutor: {}",
                     e
                 ))
             })?;
@@ -157,7 +479,7 @@ impl BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExe
     }
 }
 
-impl<Src: BatchExecutor> BatchHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -177,7 +499,7 @@ impl<Src: BatchExecutor> BatchHashAggregationExecutor<ExecSummaryCollectorDisabl
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C, Src> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregationExecutor<C, Src> {
     pub fn new(
         summary_collector: C,
         config: Arc<EvalConfig>,
@@ -622,7 +944,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchHashAggregationExecutor<C
 }
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchHashAggregationExecutor<C, Src>
+    for BatchSingleGroupHashAggregationExecutor<C, Src>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -702,7 +1024,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Real;
-            type ResultTargetType = Vec<Option<Int>>;
 
             fn update_concrete(
                 &mut self,
@@ -713,10 +1034,10 @@ mod tests {
                 unreachable!()
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                _target: &mut Self::ResultTargetType,
+                _target: &mut [VectorValue],
             ) -> Result<()> {
                 // Push result should never be called since we have no group.
                 unreachable!()
@@ -761,7 +1082,7 @@ mod tests {
             }
         }
 
-        let mut exec = BatchHashAggregationExecutor::new_for_test(
+        let mut exec = BatchSingleGroupHashAggregationExecutor::new_for_test(
             src_exec,
             vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
             vec![Expr::new()],
@@ -777,3 +1098,4 @@ mod tests {
         assert!(r.is_drained.unwrap());
     }
 }
+*/

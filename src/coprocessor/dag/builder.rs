@@ -14,7 +14,6 @@ use super::executor::{
     Executor, HashAggExecutor, LimitExecutor, ScanExecutor, SelectionExecutor, StreamAggExecutor,
     TopNExecutor,
 };
-use crate::coprocessor::dag::aggr_fn::AllAggrDefinitionParser;
 use crate::coprocessor::dag::exec_summary::*;
 use crate::coprocessor::dag::expr::{EvalConfig, Flag, SqlMode};
 use crate::coprocessor::metrics::*;
@@ -53,9 +52,9 @@ impl DAGBuilder {
                     let descriptor = ed.get_aggregation();
                     BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
                 }
-                ExecType::TypeAggregation => {
+                ExecType::TypeAggregation if ed.get_aggregation().get_group_by().len() == 1 => {
                     let descriptor = ed.get_aggregation();
-                    BatchHashAggregationExecutor::check_supported(&descriptor)?;
+                    BatchSingleGroupHashAggregationExecutor::check_supported(&descriptor)?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {
@@ -148,19 +147,22 @@ impl DAGBuilder {
                         config.clone(),
                         executor,
                         ed.mut_aggregation().take_agg_func().into_vec(),
-                        AllAggrDefinitionParser,
                     )?)
                 }
-                ExecType::TypeAggregation => {
+                ExecType::TypeAggregation if ed.get_aggregation().get_group_by().len() == 1 => {
                     COPR_EXECUTOR_COUNT
-                        .with_label_values(&["hash_aggregation"])
+                        .with_label_values(&["single_group_hash_aggregation"])
                         .inc();
 
-                    Box::new(BatchHashAggregationExecutor::new(
+                    Box::new(BatchSingleGroupHashAggregationExecutor::new(
                         C::new(summary_slot_index),
                         config.clone(),
                         executor,
-                        ed.mut_aggregation().take_group_by().into_vec(),
+                        ed.mut_aggregation()
+                            .take_group_by()
+                            .into_iter()
+                            .next()
+                            .unwrap(),
                         ed.mut_aggregation().take_agg_func().into_vec(),
                     )?)
                 }

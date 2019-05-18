@@ -198,8 +198,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     /// Generates aggregation results.
     ///
     /// This function is ensured to be called at most once.
-    // Don't inline this function to reduce hot code size.
-    #[inline(never)]
     fn aggregate(&mut self) -> Result<LazyBatchColumnVec> {
         let mut all_result_columns: Vec<_> = self
             .entities
@@ -221,27 +219,11 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
                 {
                     assert!(*result_cardinality > 0);
 
-                    if *result_cardinality == 1 {
-                        // Single result column, which uses `Vec<Option<T>>`
-                        // as the result container.
-                        let result_type = entities.all_result_column_types[offset];
-                        match_template_evaluable! {
-                            TT, match result_type {
-                                EvalType::TT => {
-                                    let result_column: &mut Vec<Option<TT>> =
-                                        all_result_columns[offset].as_mut();
-                                    state.push_result(&mut entities.context, result_column)?;
-                                }
-                            }
-                        }
-                    } else {
-                        // Multiple result columns, which uses `[VectorValue]`
-                        // as the result container.
-                        state.push_result(
-                            &mut entities.context,
-                            &mut all_result_columns[offset..offset + *result_cardinality],
-                        )?;
-                    }
+                    state.push_result(
+                        &mut entities.context,
+                        &mut all_result_columns[offset..offset + *result_cardinality],
+                    )?;
+
                     offset += *result_cardinality;
                 }
 
