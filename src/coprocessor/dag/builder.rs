@@ -36,25 +36,54 @@ impl DAGBuilder {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)?;
+                    BatchTableScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchTableScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)?;
+                    BatchIndexScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)?;
+                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeAggregation | ExecType::TypeStreamAgg
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
-                    BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!(
+                            "Unable to use BatchSimpleAggregationExecutor: {}",
+                            e
+                        ))
+                    })?;
                 }
                 ExecType::TypeAggregation if ed.get_aggregation().get_group_by().len() == 1 => {
                     let descriptor = ed.get_aggregation();
-                    BatchSingleGroupHashAggregationExecutor::check_supported(&descriptor)?;
+                    BatchSingleGroupHashAggregationExecutor::check_supported(&descriptor).map_err(
+                        |e| {
+                            Error::Other(box_err!(
+                                "Unable to use BatchSingleGroupHashAggregationExecutor: {}",
+                                e
+                            ))
+                        },
+                    )?;
+                }
+                ExecType::TypeAggregation if ed.get_aggregation().get_group_by().len() > 1 => {
+                    let descriptor = ed.get_aggregation();
+                    BatchMultiGroupHashAggregationExecutor::check_supported(&descriptor).map_err(
+                        |e| {
+                            Error::Other(box_err!(
+                                "Unable to use BatchMultiGroupHashAggregationExecutor: {}",
+                                e
+                            ))
+                        },
+                    )?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {
@@ -163,6 +192,19 @@ impl DAGBuilder {
                             .into_iter()
                             .next()
                             .unwrap(),
+                        ed.mut_aggregation().take_agg_func().into_vec(),
+                    )?)
+                }
+                ExecType::TypeAggregation if ed.get_aggregation().get_group_by().len() > 1 => {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["multi_group_hash_aggregation"])
+                        .inc();
+
+                    Box::new(BatchMultiGroupHashAggregationExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.mut_aggregation().take_group_by().into_vec(),
                         ed.mut_aggregation().take_agg_func().into_vec(),
                     )?)
                 }

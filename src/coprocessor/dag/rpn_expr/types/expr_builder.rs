@@ -45,6 +45,27 @@ impl RpnExpressionBuilder {
         Ok(())
     }
 
+    /// Gets the result type when expression tree is converted to RPN expression and evaluated.
+    /// The result type will be either scalar or vector.
+    pub fn is_expr_eval_to_scalar(c: &Expr) -> Result<bool> {
+        match c.get_tp() {
+            ExprType::Null
+            | ExprType::Int64
+            | ExprType::Uint64
+            | ExprType::String
+            | ExprType::Bytes
+            | ExprType::Float32
+            | ExprType::Float64
+            | ExprType::MysqlTime
+            | ExprType::MysqlDuration
+            | ExprType::MysqlDecimal
+            | ExprType::MysqlJson => Ok(true),
+            ExprType::ScalarFunc => Ok(false),
+            ExprType::ColumnRef => Ok(false),
+            _ => Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
+    }
+
     /// Builds the RPN expression node list from an expression definition tree.
     pub fn build_from_expr_tree(
         tree_node: Expr,

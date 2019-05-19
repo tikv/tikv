@@ -10,7 +10,7 @@ use super::super::interface::*;
 use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     summary_collector: C,
@@ -26,9 +26,7 @@ impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
         let conditions = descriptor.get_conditions();
         for c in conditions {
-            RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
-                Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-            })?;
+            RpnExpressionBuilder::check_expr_tree_supported(c)?;
         }
         Ok(())
     }
@@ -530,6 +528,8 @@ mod tests {
 
     #[test]
     fn test_predicate_error() {
+        use crate::coprocessor::Error;
+
         /// This function returns error when value is None.
         #[derive(Debug, Clone, Copy, RpnFunction)]
         #[rpn_function(args = 1)]
