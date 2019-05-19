@@ -13,11 +13,12 @@ use tikv::coprocessor::dag::executor::SelectionExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
+use crate::util::FixtureBuilder;
 
 pub trait SelectionBencher {
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher, exprs: &[Expr], src_rows: usize);
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]);
 
     fn box_clone(&self) -> Box<dyn SelectionBencher>;
 }
@@ -37,11 +38,11 @@ impl SelectionBencher for NormalBencher {
         "normal"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, exprs: &[Expr], src_rows: usize) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let mut meta = Selection::new();
             meta.set_conditions(exprs.to_vec().into());
-            let src = crate::util::fixture_executor::EncodedFixtureNormalExecutor::new(src_rows);
+            let src = fb.clone().build_normal_fixture_executor();
             SelectionExecutor::new(
                 ExecSummaryCollectorDisabled,
                 black_box(meta),
@@ -66,9 +67,9 @@ impl SelectionBencher for BatchBencher {
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, exprs: &[Expr], src_rows: usize) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
-            let src = crate::util::fixture_executor::EncodedFixtureBatchExecutor::new(src_rows);
+            let src = fb.clone().build_batch_fixture_executor();
             BatchSelectionExecutor::new(
                 ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),

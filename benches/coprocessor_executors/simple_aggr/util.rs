@@ -13,11 +13,12 @@ use tikv::coprocessor::dag::executor::StreamAggExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
+use crate::util::FixtureBuilder;
 
 pub trait SimpleAggrBencher {
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher, aggr_expr: &Expr, src_rows: usize);
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr);
 
     fn box_clone(&self) -> Box<dyn SimpleAggrBencher>;
 }
@@ -38,11 +39,11 @@ impl SimpleAggrBencher for NormalBencher {
         "normal"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, aggr_expr: &Expr, src_rows: usize) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let mut meta = Aggregation::new();
             meta.mut_agg_func().push(aggr_expr.clone());
-            let src = crate::util::fixture_executor::EncodedFixtureNormalExecutor::new(src_rows);
+            let src = fb.clone().build_normal_fixture_executor();
             StreamAggExecutor::new(
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
@@ -67,9 +68,9 @@ impl SimpleAggrBencher for BatchBencher {
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, aggr_expr: &Expr, src_rows: usize) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
-            let src = crate::util::fixture_executor::EncodedFixtureBatchExecutor::new(src_rows);
+            let src = fb.clone().build_batch_fixture_executor();
             BatchSimpleAggregationExecutor::new(
                 ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),

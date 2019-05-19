@@ -2,9 +2,11 @@
 
 pub mod bencher;
 pub mod executor_descriptor;
-pub mod fixture_executor;
+pub mod fixture;
 pub mod scan_bencher;
 pub mod store;
+
+pub use self::fixture::FixtureBuilder;
 
 use criterion::black_box;
 

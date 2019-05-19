@@ -1,41 +1,47 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-pub mod util;
+mod util;
 
 use cop_datatype::FieldTypeTp;
 use tipb::expression::ExprType;
 use tipb_helper::ExprDefBuilder;
 
+use crate::util::FixtureBuilder;
+
 /// COUNT(1)
 fn bench_simple_aggr_count_1(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::constant_int(1))
         .build();
-    input.bencher.bench(b, &expr, input.src_rows);
+    input.bencher.bench(b, &fb, &expr);
 }
 
 /// COUNT(COL) where COL is a int column
 fn bench_simple_aggr_count_int_column(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
         .build();
-    input.bencher.bench(b, &expr, input.src_rows);
+    input.bencher.bench(b, &fb, &expr);
 }
 
 /// COUNT(COL) where COL is a real column
 fn bench_simple_aggr_count_real_column(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
         .build();
-    input.bencher.bench(b, &expr, input.src_rows);
+    input.bencher.bench(b, &fb, &expr);
 }
 
 /// COUNT(COL) where COL is a bytes column (note: the column is very short)
 fn bench_simple_aggr_count_bytes_column(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_bytes_random_fixed_len(10);
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::VarChar))
         .build();
-    input.bencher.bench(b, &expr, input.src_rows);
+    input.bencher.bench(b, &fb, &expr);
 }
 
 #[derive(Clone)]

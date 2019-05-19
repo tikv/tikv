@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use test_coprocessor::*;
-use tikv::coprocessor::codec::Datum;
 use tikv::storage::RocksEngine;
 
 /// Builds a fixture table, which contains two columns: id, foo and there is an index over
@@ -21,16 +20,10 @@ pub fn table_with_two_columns_and_one_index(rows: usize) -> (i64, Table, Store<R
         .add_col("foo", foo)
         .build();
 
-    let mut store = Store::new();
-    for i in 0..rows {
-        store.begin();
-        store
-            .insert_into(&table)
-            .set(&table["id"], Datum::I64(i as i64))
-            .set(&table["foo"], Datum::I64(0xDEADBEEF))
-            .execute();
-        store.commit();
-    }
+    let store = crate::util::FixtureBuilder::new(rows)
+        .push_column_i64_0_n()
+        .push_column_i64_random()
+        .build_store(&table, &["id", "foo"]);
 
     (index_id, table, store)
 }

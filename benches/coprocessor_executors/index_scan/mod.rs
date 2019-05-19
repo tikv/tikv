@@ -1,10 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+pub mod fixture;
+mod util;
+
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
-
-pub mod fixture;
-pub mod util;
 
 const ROWS: usize = 5000;
 

@@ -1,46 +1,58 @@
+// Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
+
+mod util;
+
 use cop_datatype::FieldTypeTp;
 use tipb::expression::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
 
-mod util;
+use crate::util::FixtureBuilder;
 
 /// For SQLs like `WHERE column`.
 fn bench_selection_column(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build();
-    input.bencher.bench(b, &[expr], input.src_rows);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// For SQLs like `WHERE a > b`.
 fn bench_selection_binary_func_column_column(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows)
+        .push_column_f64_random()
+        .push_column_f64_random();
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
-        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
         .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
         .build();
-    input.bencher.bench(b, &[expr], input.src_rows);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// For SQLS like `WHERE a > 1`.
 fn bench_selection_binary_func_column_constant(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
-        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
-        .push_child(ExprDefBuilder::constant_real(55.4))
+        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+        .push_child(ExprDefBuilder::constant_real(0.42))
         .build();
-    input.bencher.bench(b, &[expr], input.src_rows);
+    input.bencher.bench(b, &fb, &[expr]);
 }
 
 /// For SQLs like `WHERE a > 1 AND b > 2`.
 fn bench_selection_multiple_predicate(b: &mut criterion::Bencher, input: &Input) {
+    let fb = FixtureBuilder::new(input.src_rows)
+        .push_column_i64_random()
+        .push_column_f64_random();
     let exprs = [
         ExprDefBuilder::scalar_func(ScalarFuncSig::GTReal, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
-            .push_child(ExprDefBuilder::constant_real(55.4))
+            .push_child(ExprDefBuilder::constant_real(0.63))
             .build(),
         ExprDefBuilder::scalar_func(ScalarFuncSig::LEInt, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
-            .push_child(ExprDefBuilder::constant_int(42))
+            .push_child(ExprDefBuilder::constant_int(0x10FF10))
             .build(),
     ];
-    input.bencher.bench(b, &exprs, input.src_rows);
+    input.bencher.bench(b, &fb, &exprs);
 }
 
 #[derive(Clone)]

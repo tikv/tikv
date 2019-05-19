@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use test_coprocessor::*;
-use tikv::coprocessor::codec::Datum;
 use tikv::storage::RocksEngine;
 
 /// Builds a fixture table, which contains two columns: id, foo.
@@ -16,16 +15,10 @@ pub fn table_with_two_columns(rows: usize) -> (Table, Store<RocksEngine>) {
         .add_col("foo", foo)
         .build();
 
-    let mut store = Store::new();
-    for i in 0..rows {
-        store.begin();
-        store
-            .insert_into(&table)
-            .set(&table["id"], Datum::I64(i as i64))
-            .set(&table["foo"], Datum::I64(0xDEADBEEF))
-            .execute();
-        store.commit();
-    }
+    let store = crate::util::FixtureBuilder::new(rows)
+        .push_column_i64_0_n()
+        .push_column_i64_0_n()
+        .build_store(&table, &["id", "foo"]);
 
     (table, store)
 }
@@ -39,18 +32,14 @@ pub fn table_with_multi_columns(rows: usize, columns: usize) -> (Table, Store<Ro
     }
     let table = table.build();
 
-    let mut store = Store::new();
-    for i in 0..rows {
-        store.begin();
-        {
-            let mut insert = store.insert_into(&table);
-            for idx in 0..columns {
-                insert = insert.set(&table[format!("col{}", idx)], Datum::I64((i ^ idx) as i64));
-            }
-            insert.execute();
-        }
-        store.commit();
+    let mut fb = crate::util::FixtureBuilder::new(rows);
+    let mut col_names = vec![];
+    for idx in 0..columns {
+        fb = fb.push_column_i64_random();
+        col_names.push(format!("col{}", idx));
     }
+    let col_names: Vec<_> = col_names.iter().map(|s| s.as_str()).collect();
+    let store = fb.build_store(&table, col_names.as_slice());
 
     (table, store)
 }
@@ -65,19 +54,15 @@ pub fn table_with_missing_column(rows: usize, columns: usize) -> (Table, Store<R
     }
     let table = table.build();
 
-    let mut store = Store::new();
-    for i in 0..rows {
-        store.begin();
-        {
-            let mut insert = store.insert_into(&table);
-            // Starting from col1, so that col0 is missing in the row.
-            for idx in 1..columns {
-                insert = insert.set(&table[format!("col{}", idx)], Datum::I64((i ^ idx) as i64));
-            }
-            insert.execute();
-        }
-        store.commit();
+    // Starting from col1, so that col0 is missing in the row.
+    let mut fb = crate::util::FixtureBuilder::new(rows);
+    let mut col_names = vec![];
+    for idx in 1..columns {
+        fb = fb.push_column_i64_random();
+        col_names.push(format!("col{}", idx));
     }
+    let col_names: Vec<_> = col_names.iter().map(|s| s.as_str()).collect();
+    let store = fb.build_store(&table, col_names.as_slice());
 
     (table, store)
 }
@@ -96,17 +81,11 @@ pub fn table_with_long_column(rows: usize) -> (Table, Store<RocksEngine>) {
         .add_col("bar", bar)
         .build();
 
-    let mut store = Store::new();
-    for i in 0..rows {
-        store.begin();
-        store
-            .insert_into(&table)
-            .set(&table["id"], Datum::I64(i as i64))
-            .set(&table["foo"], Datum::I64(0xDEADBEEF))
-            .set(&table["bar"], Datum::Bytes([0xCC].repeat(200)))
-            .execute();
-        store.commit();
-    }
+    let store = crate::util::FixtureBuilder::new(rows)
+        .push_column_i64_0_n()
+        .push_column_i64_random()
+        .push_column_bytes_random_fixed_len(200)
+        .build_store(&table, &["id", "foo", "bar"]);
 
     (table, store)
 }
