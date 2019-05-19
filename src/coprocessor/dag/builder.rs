@@ -198,11 +198,13 @@ impl DAGBuilder {
                     src,
                 )?),
                 ExecType::TypeAggregation => Box::new(HashAggExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_aggregation(),
                     Arc::clone(&ctx),
                     src,
                 )?),
                 ExecType::TypeStreamAgg => Box::new(StreamAggExecutor::new(
+                    C::new(summary_slot_index),
                     Arc::clone(&ctx),
                     src,
                     exec.take_aggregation(),
