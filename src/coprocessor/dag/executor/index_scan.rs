@@ -82,7 +82,9 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, IndexInnerExecutor> {
+pub type IndexScanExecutor<C, S> = ScanExecutor<C, S, IndexInnerExecutor>;
+
+impl<C: ExecSummaryCollector, S: Store> IndexScanExecutor<C, S> {
     pub fn index_scan(
         summary_collector: C,
         mut meta: IndexScan,
@@ -127,8 +129,6 @@ impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, IndexInnerExecutor> {
         )
     }
 }
-
-pub type IndexScanExecutor<C, S> = ScanExecutor<C, S, IndexInnerExecutor>;
 
 #[cfg(test)]
 pub mod tests {
