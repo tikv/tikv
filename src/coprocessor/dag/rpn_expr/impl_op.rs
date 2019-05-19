@@ -3,9 +3,9 @@
 use cop_codegen::RpnFunction;
 
 use super::types::RpnFnCallPayload;
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
-use crate::coprocessor::codec::data_type::Evaluable;
 
 #[derive(Debug, Clone, Copy, RpnFunction)]
 #[rpn_function(args = 2)]
@@ -80,13 +80,103 @@ impl<T: Evaluable> RpnFnIsNull<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnIntIsTrue;
+
+impl RpnFnIntIsTrue {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Int>,
+    ) -> Result<Option<i64>> {
+        Ok(*arg)
+    }
+}
+
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnRealIsTrue;
+
+impl RpnFnRealIsTrue {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Real>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.map(|v| (v != 0f64) as i64))
+    }
+}
+
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnDecimalIsTrue;
+
+impl RpnFnDecimalIsTrue {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Decimal>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.as_ref().map(|v| !v.is_zero() as i64))
+    }
+}
+
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnIntIsFalse;
+
+impl RpnFnIntIsFalse {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Int>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.map(|v| (v == 0) as i64))
+    }
+}
+
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnRealIsFalse;
+
+impl RpnFnRealIsFalse {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Real>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.map(|v| (v == 0f64) as i64))
+    }
+}
+
+#[derive(Clone, Copy, Debug, RpnFunction)]
+#[rpn_function(args = 1)]
+pub struct RpnFnDecimalIsFalse;
+
+impl RpnFnDecimalIsFalse {
+    #[inline]
+    fn call(
+        _ctx: &mut EvalContext,
+        _payload: RpnFnCallPayload<'_>,
+        arg: &Option<Decimal>,
+    ) -> Result<Option<i64>> {
+        Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use tipb::expression::ScalarFuncSig;
 
     use crate::coprocessor::codec::mysql::{time, Tz};
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
-    use crate::coprocessor::codec::data_type::*;
 
     #[test]
     fn test_logical_and() {
@@ -167,7 +257,7 @@ mod tests {
                 Some(1),
             ),
             (
-                Duration::from_nanos(1,0).unwrap().into(),
+                Duration::from_nanos(1, 0).unwrap().into(),
                 ScalarFuncSig::DurationIsNull,
                 Some(0),
             ),
@@ -175,6 +265,74 @@ mod tests {
             (
                 Json::Array(vec![]).into(),
                 ScalarFuncSig::JsonIsNull,
+                Some(0),
+            ),
+        ];
+        for (arg, sig, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
+        }
+    }
+
+    #[test]
+    fn test_is_true() {
+        let test_cases = vec![
+            (ScalarValue::Int(None), ScalarFuncSig::IntIsTrue, None),
+            (0.into(), ScalarFuncSig::IntIsTrue, Some(0)),
+            (1.into(), ScalarFuncSig::IntIsTrue, Some(1)),
+            (ScalarValue::Real(None), ScalarFuncSig::RealIsTrue, None),
+            (0.0.into(), ScalarFuncSig::RealIsTrue, Some(0)),
+            (1.0.into(), ScalarFuncSig::RealIsTrue, Some(1)),
+            (
+                ScalarValue::Decimal(None),
+                ScalarFuncSig::DecimalIsTrue,
+                None,
+            ),
+            (
+                Decimal::zero().into(),
+                ScalarFuncSig::DecimalIsTrue,
+                Some(0),
+            ),
+            (
+                Decimal::from(1).into(),
+                ScalarFuncSig::DecimalIsTrue,
+                Some(1),
+            ),
+        ];
+        for (arg, sig, expect_output) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg.clone())
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}, {:?}", arg, sig);
+        }
+    }
+
+    #[test]
+    fn test_is_false() {
+        let test_cases = vec![
+            (ScalarValue::Int(None), ScalarFuncSig::IntIsFalse, None),
+            (0.into(), ScalarFuncSig::IntIsFalse, Some(1)),
+            (1.into(), ScalarFuncSig::IntIsFalse, Some(0)),
+            (ScalarValue::Real(None), ScalarFuncSig::RealIsFalse, None),
+            (0.0.into(), ScalarFuncSig::RealIsFalse, Some(1)),
+            (1.0.into(), ScalarFuncSig::RealIsFalse, Some(0)),
+            (
+                ScalarValue::Decimal(None),
+                ScalarFuncSig::DecimalIsFalse,
+                None,
+            ),
+            (
+                Decimal::zero().into(),
+                ScalarFuncSig::DecimalIsFalse,
+                Some(1),
+            ),
+            (
+                Decimal::from(1).into(),
+                ScalarFuncSig::DecimalIsFalse,
                 Some(0),
             ),
         ];
