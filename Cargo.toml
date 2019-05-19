@@ -123,7 +123,8 @@ profiler = { path = "components/profiler" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
 tipb_helper = { path = "components/tipb_helper" }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+# TODO: update the revision after we have upgraded every component beyond protobuf 2.0
+tipb = { version = "0.0.1", git = "https://github.com/pingcap/tipb.git", rev = "af5d98495e746cc38f83b23be2ea4b3e4b2c437f" }
 # TODO: use master branch after the next version is released.
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }

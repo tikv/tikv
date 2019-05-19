@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { version = "0.0.1", git = "https://github.com/pingcap/tipb.git", rev = "af5d98495e746cc38f83b23be2ea4b3e4b2c437f" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 protobuf = "~2.0"
 test_storage = { path = "../test_storage" }

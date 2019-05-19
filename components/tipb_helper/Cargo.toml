@@ -5,6 +5,6 @@ edition = "2018"
 publish = false
 
 [dependencies]
-tipb = { git = "https://github.com/pingcap/tipb.git" }
+tipb = { version = "0.0.1", git = "https://github.com/pingcap/tipb.git", rev = "af5d98495e746cc38f83b23be2ea4b3e4b2c437f" }
 codec = { path = "../codec" }
 cop_datatype = { path = "../cop_datatype" }
