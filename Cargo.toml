@@ -123,7 +123,6 @@ twoway = "0.2.0"
 ordered-float = "1.0"
 profiler = { path = "components/profiler" }
 match_template = { path = "components/match_template" }
-codec = { path = "components/codec" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
 tipb_helper = { path = "components/tipb_helper" }

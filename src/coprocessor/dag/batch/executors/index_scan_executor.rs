@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::intrinsics::{likely, unlikely};
 use std::sync::Arc;
 
 use cop_datatype::EvalType;
@@ -193,10 +192,10 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
             key_payload = remaining;
         }
 
-        if unsafe { likely(self.decode_handle) } {
+        if self.decode_handle {
             // For normal index, it is placed at the end and any columns prior to it are
             // ensured to be interested. For unique index, it is placed in the value.
-            let handle_val = if unsafe { unlikely(key_payload.is_empty()) } {
+            let handle_val = if key_payload.is_empty() {
                 // This is a unique index, and we should look up PK handle in value.
 
                 // NOTE: it is not `number::decode_i64`.

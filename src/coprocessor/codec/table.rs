@@ -1,7 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! This is the legacy implementation. See `table2` for a newer one.
-
 use std::convert::TryInto;
 use std::io::Write;
 use std::{cmp, u8};
