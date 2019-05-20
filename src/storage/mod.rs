@@ -3,6 +3,7 @@
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
+pub mod lock_manager;
 mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
@@ -36,6 +37,7 @@ pub use self::kv::{
     Engine, Error as EngineError, FlowStatistics, Iterator, Modify, RegionInfoProvider,
     RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
+use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
 use self::txn::scheduler::Scheduler as TxnScheduler;
@@ -47,6 +49,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub const PESSIMISTIC_TXN: u8 = b'p';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -88,6 +91,14 @@ pub enum Command {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
+        options: Options,
+    },
+    AcquirePessimisticLock {
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
         options: Options,
     },
     Commit {
@@ -152,6 +163,20 @@ impl Display for Command {
                 "kv::command::prewrite mutations({}) @ {} | {:?}",
                 mutations.len(),
                 start_ts,
+                ctx
+            ),
+            Command::AcquirePessimisticLock {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -279,6 +304,7 @@ impl Command {
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Prewrite { .. } => "prewrite",
+            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
@@ -294,6 +320,7 @@ impl Command {
     pub fn ts(&self) -> u64 {
         match *self {
             Command::Prewrite { start_ts, .. }
+            | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
@@ -309,6 +336,7 @@ impl Command {
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
+            | Command::AcquirePessimisticLock { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
@@ -324,6 +352,7 @@ impl Command {
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Prewrite { ref mut ctx, .. }
+            | Command::AcquirePessimisticLock { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
@@ -353,7 +382,14 @@ impl Command {
                     }
                 }
             }
-            Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            Command::AcquirePessimisticLock { ref keys, .. } => {
+                for (key, _) in keys {
+                    bytes += key.as_encoded().len();
+                }
+            }
+            Command::Commit { ref keys, .. }
+            | Command::Rollback { ref keys, .. }
+            | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
@@ -365,11 +401,6 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
-            }
-            Command::Pause { ref keys, .. } => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
             }
             _ => {}
         }
@@ -383,6 +414,8 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub is_first_lock: bool,
+    pub is_pessimistic_lock: Vec<bool>,
 }
 
 impl Options {
@@ -392,6 +425,8 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            is_first_lock: false,
+            is_pessimistic_lock: vec![],
         }
     }
 
@@ -471,6 +506,8 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
+            None,
+            None,
         )
     }
 }
@@ -512,6 +549,8 @@ pub struct Storage<E: Engine> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    pessimistic_txn_enabled: bool,
 }
 
 impl<E: Engine> Clone for Storage<E> {
@@ -530,6 +569,7 @@ impl<E: Engine> Clone for Storage<E> {
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            pessimistic_txn_enabled: self.pessimistic_txn_enabled,
         }
     }
 }
@@ -564,9 +604,15 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
     ) -> Result<Self> {
+        let pessimistic_txn_enabled =
+            waiter_mgr_scheduler.is_some() && detector_scheduler.is_some();
         let sched = TxnScheduler::new(
             engine.clone(),
+            waiter_mgr_scheduler,
+            detector_scheduler,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -589,6 +635,7 @@ impl<E: Engine> Storage<E> {
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            pessimistic_txn_enabled,
         })
     }
 
@@ -843,9 +890,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().as_encoded().len();
-            if size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+            let key_size = m.key().as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
                 return Ok(());
             }
         }
@@ -858,6 +905,41 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
+    pub fn async_acquire_pessimistic_lock(
+        &self,
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        options: Options,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        for k in &keys {
+            let key_size = k.0.as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let cmd = Command::AcquirePessimisticLock {
+            ctx,
+            keys,
+            primary,
+            start_ts,
+            for_update_ts,
+            options,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
         Ok(())
     }
 
@@ -1626,6 +1708,9 @@ quick_error! {
         InvalidCf (cf_name: String) {
             description("invalid cf name")
             display("invalid cf name: {}", cf_name)
+        }
+        PessimisticTxnNotEnabled {
+            description("pessimistic transaction is not enabled")
         }
     }
 }
