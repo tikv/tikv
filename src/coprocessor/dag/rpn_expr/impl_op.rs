@@ -91,6 +91,8 @@ impl RpnFnIntIsTrue {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Int>,
     ) -> Result<Option<i64>> {
+        // We can simply return the arg because IS TRUE for int shares the same
+        // semantic with `as_mysql_bool`.
         Ok(*arg)
     }
 }
