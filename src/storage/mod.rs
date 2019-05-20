@@ -9,10 +9,10 @@ pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::{u64, error, cmp};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
+use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};

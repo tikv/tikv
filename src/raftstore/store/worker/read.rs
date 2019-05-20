@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::{Cell,RefCell};
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
