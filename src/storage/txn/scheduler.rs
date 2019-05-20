@@ -41,11 +41,10 @@ use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
-const TASKS_SLOTS_NUM: usize = 1 << 20;
+const TASKS_SLOTS_NUM: usize = 1 << 10; // 1024 slots.
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
-    Quit,
     RawCmd {
         cmd: Command,
         cb: StorageCb,
@@ -79,7 +78,6 @@ impl Debug for Msg {
 impl Display for Msg {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Msg::Quit => write!(f, "Quit"),
             Msg::RawCmd { ref cmd, .. } => write!(f, "RawCmd {:?}", cmd),
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
@@ -227,17 +225,14 @@ impl<E: Engine> SchedulerInner<E> {
     }
 }
 
+/// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
-struct InnerWrapper<E: Engine> {
+pub struct Scheduler<E: Engine> {
     engine: E,
     inner: Arc<SchedulerInner<E>>,
 }
 
-unsafe impl<E: Engine> Send for InnerWrapper<E> {}
-
-/// Scheduler which schedules the execution of `storage::Command`s.
-#[derive(Clone)]
-pub struct Scheduler<E: Engine>(InnerWrapper<E>);
+unsafe impl<E: Engine> Send for Scheduler<E> {}
 
 impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
@@ -266,15 +261,15 @@ impl<E: Engine> Scheduler<E> {
             ),
         });
 
-        Scheduler(InnerWrapper { engine, inner })
+        Scheduler { engine, inner }
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
-        self.0.on_receive_new_cmd(cmd, callback);
+        self.on_receive_new_cmd(cmd, callback);
     }
 }
 
-impl<E: Engine> InnerWrapper<E> {
+impl<E: Engine> Scheduler<E> {
     fn fetch_executor(&self, priority: CommandPri, is_sys_cmd: bool) -> Executor<E, Self> {
         let pool = if priority == CommandPri::High || is_sys_cmd {
             self.inner.high_priority_pool.clone()
@@ -442,7 +437,7 @@ impl<E: Engine> InnerWrapper<E> {
     }
 }
 
-impl<E: Engine> MsgScheduler for InnerWrapper<E> {
+impl<E: Engine> MsgScheduler for Scheduler<E> {
     fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>> {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
