@@ -592,14 +592,14 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans)?;
+            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -635,7 +635,6 @@ impl Peer {
                 | MessageType::MsgReadIndexResp => {}
             }
         }
-        Ok(())
     }
 
     /// Steps the raft message.
@@ -922,15 +921,7 @@ impl Peer {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to clear snapshot pending messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
 
         if let Some(snap) = self.get_pending_snapshot() {
@@ -1021,16 +1012,7 @@ impl Peer {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    // We don't care that the message is sent failed, so here just log this error.
-                    warn!(
-                       "leader failed to send messages";
-                       "region_id" => self.region_id,
-                       "peer_id" => self.peer.get_id(),
-                       "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
@@ -1087,15 +1069,7 @@ impl Peer {
                     &mut ctx.trans,
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
-                )
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "follower failed to send messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+                );
                 ctx.need_flush_trans = true;
             }
         }
@@ -1996,6 +1970,7 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        fail_point!("stale_peer_cache_2", peer_id == 2, |_| None);
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
         }
@@ -2032,11 +2007,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(
-        &mut self,
-        msg: eraftpb::Message,
-        trans: &mut T,
-    ) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -2046,11 +2017,13 @@ impl Peer {
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
-                return Err(box_err!(
-                    "failed to look up recipient peer {} in region {}",
-                    msg.get_to(),
-                    self.region_id
-                ));
+                warn!(
+                    "failed to look up recipient peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "to_peer" => msg.get_to(),
+                );
+                return;
             }
         };
 
@@ -2104,8 +2077,6 @@ impl Peer {
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
-
-        Ok(())
     }
 }
 
