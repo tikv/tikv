@@ -46,7 +46,6 @@ pub const SNAPSHOT_RAFT_STATE_SUFFIX: u8 = 0x04;
 // For region meta
 pub const REGION_STATE_SUFFIX: u8 = 0x01;
 
-#[inline]
 fn make_region_prefix(region_id: u64, suffix: u8) -> [u8; 11] {
     let mut key = [0; 11];
     key[..2].copy_from_slice(REGION_RAFT_PREFIX_KEY);
@@ -55,7 +54,6 @@ fn make_region_prefix(region_id: u64, suffix: u8) -> [u8; 11] {
     key
 }
 
-#[inline]
 fn make_region_key(region_id: u64, suffix: u8, sub_id: u64) -> [u8; 19] {
     let mut key = [0; 19];
     key[..2].copy_from_slice(REGION_RAFT_PREFIX_KEY);
@@ -131,7 +129,6 @@ pub fn decode_region_raft_key(key: &[u8]) -> Result<(u64, u8)> {
     decode_region_key(REGION_RAFT_PREFIX_KEY, key, "raft")
 }
 
-#[inline]
 fn make_region_meta_key(region_id: u64, suffix: u8) -> [u8; 11] {
     let mut key = [0; 11];
     key[0..2].copy_from_slice(REGION_META_PREFIX_KEY);
@@ -211,7 +208,6 @@ pub fn enc_end_key(region: &Region) -> Vec<u8> {
     data_end_key(region.get_end_key())
 }
 
-#[inline]
 pub fn data_end_key(region_end_key: &[u8]) -> Vec<u8> {
     if region_end_key.is_empty() {
         DATA_MAX_KEY.to_vec()

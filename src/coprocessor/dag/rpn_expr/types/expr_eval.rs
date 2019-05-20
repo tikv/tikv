@@ -29,7 +29,6 @@ pub enum RpnStackNodeVectorValue<'a> {
 }
 
 impl<'a> AsRef<VectorValue> for RpnStackNodeVectorValue<'a> {
-    #[inline]
     fn as_ref(&self) -> &VectorValue {
         match self {
             RpnStackNodeVectorValue::Owned(ref value) => &value,
@@ -57,7 +56,6 @@ pub enum RpnStackNode<'a> {
 
 impl<'a> RpnStackNode<'a> {
     /// Gets the field type.
-    #[inline]
     pub fn field_type(&self) -> &FieldType {
         match self {
             RpnStackNode::Scalar { ref field_type, .. } => field_type,
@@ -66,7 +64,6 @@ impl<'a> RpnStackNode<'a> {
     }
 
     /// Borrows the inner scalar value for `Scalar` variant.
-    #[inline]
     pub fn scalar_value(&self) -> Option<&ScalarValue> {
         match self {
             RpnStackNode::Scalar { ref value, .. } => Some(*value),
@@ -75,7 +72,6 @@ impl<'a> RpnStackNode<'a> {
     }
 
     /// Borrows the inner vector value for `Vector` variant.
-    #[inline]
     pub fn vector_value(&self) -> Option<&VectorValue> {
         match self {
             RpnStackNode::Scalar { .. } => None,
@@ -84,7 +80,6 @@ impl<'a> RpnStackNode<'a> {
     }
 
     /// Borrows the inner scalar or vector value as a vector like value.
-    #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         match self {
             RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
@@ -93,7 +88,6 @@ impl<'a> RpnStackNode<'a> {
     }
 
     /// Whether this is a `Scalar` variant.
-    #[inline]
     pub fn is_scalar(&self) -> bool {
         match self {
             RpnStackNode::Scalar { .. } => true,
@@ -102,7 +96,6 @@ impl<'a> RpnStackNode<'a> {
     }
 
     /// Whether this is a `Vector` variant.
-    #[inline]
     pub fn is_vector(&self) -> bool {
         match self {
             RpnStackNode::Vector { .. } => true,

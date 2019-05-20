@@ -32,7 +32,6 @@ impl tikv_util::AssertSend for ReadPool {}
 impl tikv_util::AssertSync for ReadPool {}
 
 impl ReadPool {
-    #[inline]
     fn get_pool_by_priority(&self, priority: Priority) -> &FuturePool {
         match priority {
             Priority::High => &self.pool_high,
@@ -41,7 +40,6 @@ impl ReadPool {
         }
     }
 
-    #[inline]
     fn get_max_tasks_by_priority(&self, priority: Priority) -> usize {
         match priority {
             Priority::High => self.max_tasks_high,
@@ -50,7 +48,6 @@ impl ReadPool {
         }
     }
 
-    #[inline]
     fn gate_spawn<F, R>(&self, priority: Priority, f: F) -> Result<R>
     where
         F: FnOnce(&FuturePool) -> R,

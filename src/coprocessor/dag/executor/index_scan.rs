@@ -64,19 +64,16 @@ impl InnerExecutor for IndexInnerExecutor {
         Ok(Some(Row::origin(handle, values, columns)))
     }
 
-    #[inline]
     fn is_point(&self, range: &KeyRange) -> bool {
         self.unique && util::is_point(range)
     }
 
-    #[inline]
     fn scan_on(&self) -> super::super::scanner::ScanOn {
         super::super::scanner::ScanOn::Index
     }
 
     // Since the unique index wouldn't always come with
     // self.unique = true. so the key-only would always be false.
-    #[inline]
     fn key_only(&self) -> bool {
         false
     }

@@ -34,28 +34,23 @@ impl IterOption {
         }
     }
 
-    #[inline]
     pub fn use_prefix_seek(mut self) -> IterOption {
         self.seek_mode = SeekMode::Prefix;
         self
     }
 
-    #[inline]
     pub fn total_order_seek_used(&self) -> bool {
         self.seek_mode == SeekMode::TotalOrder
     }
 
-    #[inline]
     pub fn fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
     }
 
-    #[inline]
     pub fn lower_bound(&self) -> Option<&[u8]> {
         self.lower_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
     pub fn set_lower_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.lower_bound = Some(builder);
@@ -71,12 +66,10 @@ impl IterOption {
         }
     }
 
-    #[inline]
     pub fn upper_bound(&self) -> Option<&[u8]> {
         self.upper_bound.as_ref().map(|v| v.as_slice())
     }
 
-    #[inline]
     pub fn set_upper_bound(&mut self, bound: &[u8], reserved_prefix_len: usize) {
         let builder = KeyBuilder::from_slice(bound, reserved_prefix_len, 0);
         self.upper_bound = Some(builder);
@@ -92,7 +85,6 @@ impl IterOption {
         }
     }
 
-    #[inline]
     pub fn set_prefix_same_as_start(mut self, enable: bool) -> IterOption {
         self.prefix_same_as_start = enable;
         self

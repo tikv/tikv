@@ -18,7 +18,6 @@ fn handle_incorrect_datetime_error(ctx: &mut EvalContext, t: Cow<'_, Time>) -> R
 }
 
 impl ScalarFunc {
-    #[inline]
     pub fn date_format<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -33,7 +32,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(t.into_bytes())))
     }
 
-    #[inline]
     pub fn date<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -48,31 +46,26 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn hour(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.hours() as i64))
     }
 
-    #[inline]
     pub fn minute(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.minutes() as i64))
     }
 
-    #[inline]
     pub fn second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(dur.secs() as i64))
     }
 
-    #[inline]
     pub fn micro_second(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let dur: Cow<'_, MyDuration> = try_opt!(self.children[0].eval_duration(ctx, row));
         Ok(Some(i64::from(dur.micro_secs())))
     }
 
-    #[inline]
     pub fn month<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -88,7 +81,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(t.get_time().month())))
     }
 
-    #[inline]
     pub fn month_name<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -107,7 +99,6 @@ impl ScalarFunc {
         )))
     }
 
-    #[inline]
     pub fn day_name<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -122,7 +113,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(weekday.name().to_string().into_bytes())))
     }
 
-    #[inline]
     pub fn day_of_month(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -135,7 +125,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(day)))
     }
 
-    #[inline]
     pub fn day_of_week(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -145,7 +134,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(day)))
     }
 
-    #[inline]
     pub fn day_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -155,7 +143,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(day)))
     }
 
-    #[inline]
     pub fn year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -167,7 +154,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(t.get_time().year())))
     }
 
-    #[inline]
     pub fn last_day<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -188,7 +174,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -199,7 +184,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(week)))
     }
 
-    #[inline]
     pub fn week_without_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -209,7 +193,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(week)))
     }
 
-    #[inline]
     pub fn week_day(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -219,7 +202,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(day)))
     }
 
-    #[inline]
     pub fn week_of_year(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -230,7 +212,6 @@ impl ScalarFunc {
         Ok(Some(i64::from(week)))
     }
 
-    #[inline]
     pub fn year_week_with_mode(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -251,7 +232,6 @@ impl ScalarFunc {
         Ok(Some(result))
     }
 
-    #[inline]
     pub fn year_week_without_mode(
         &self,
         ctx: &mut EvalContext,
@@ -269,7 +249,6 @@ impl ScalarFunc {
         Ok(Some(result))
     }
 
-    #[inline]
     pub fn add_datetime_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -286,7 +265,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn add_datetime_and_string<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -305,7 +283,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn add_time_datetime_null<'a>(
         &self,
         _ctx: &mut EvalContext,
@@ -332,7 +309,6 @@ impl ScalarFunc {
         ))
     }
 
-    #[inline]
     pub fn to_days(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if t.is_zero() {
@@ -359,7 +335,6 @@ impl ScalarFunc {
         Ok(Some(days_diff))
     }
 
-    #[inline]
     pub fn add_duration_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -375,7 +350,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn add_duration_and_string<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -393,7 +367,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn add_time_duration_null<'a>(
         &self,
         _ctx: &mut EvalContext,
@@ -402,7 +375,6 @@ impl ScalarFunc {
         Ok(None)
     }
 
-    #[inline]
     pub fn sub_datetime_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -419,7 +391,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn sub_datetime_and_string<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -438,7 +409,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(res)))
     }
 
-    #[inline]
     pub fn sub_time_datetime_null<'a>(
         &self,
         _ctx: &mut EvalContext,
@@ -447,7 +417,6 @@ impl ScalarFunc {
         Ok(None)
     }
 
-    #[inline]
     pub fn sub_duration_and_duration<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -464,7 +433,6 @@ impl ScalarFunc {
     }
 }
 
-#[inline]
 fn period_to_month(period: u64) -> u64 {
     if period == 0 {
         return 0;
@@ -479,7 +447,6 @@ fn period_to_month(period: u64) -> u64 {
     }
 }
 
-#[inline]
 fn month_to_period(month: u64) -> u64 {
     if month == 0 {
         return 0;

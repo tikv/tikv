@@ -58,18 +58,15 @@ const MONTH_NAMES_ABBR: &[&str] = &[
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-#[inline]
 fn zero_time(tz: &Tz) -> DateTime<Tz> {
     tz.timestamp(ZERO_TIMESTAMP, 0)
 }
 
-#[inline]
 pub fn zero_datetime(tz: &Tz) -> Time {
     Time::new(zero_time(tz), TimeType::DateTime, mysql::DEFAULT_FSP).unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 fn ymd_hms_nanos<T: TimeZone>(
     tz: &T,
     year: i32,
@@ -103,7 +100,6 @@ fn ymd_hms_nanos<T: TimeZone>(
         })
 }
 
-#[inline]
 fn from_bytes(bs: &[u8]) -> &str {
     unsafe { str::from_utf8_unchecked(bs) }
 }
@@ -897,7 +893,6 @@ impl Time {
 }
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Time {
-    #[inline]
     fn as_mysql_bool(
         &self,
         _context: &mut crate::coprocessor::dag::expr::EvalContext,

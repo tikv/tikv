@@ -46,7 +46,6 @@ pub struct BasicMailbox<Owner: Fsm> {
 }
 
 impl<Owner: Fsm> BasicMailbox<Owner> {
-    #[inline]
     pub fn new(
         sender: mpsc::LooseBoundedSender<Owner::Message>,
         fsm: Box<Owner>,
@@ -79,18 +78,15 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
         }
     }
 
-    #[inline]
     pub fn len(&self) -> usize {
         self.sender.len()
     }
 
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
     }
 
     /// Notify owner via a `FsmScheduler`.
-    #[inline]
     fn notify<S: FsmScheduler<Fsm = Owner>>(&self, scheduler: &S) {
         match self.take_fsm() {
             None => {}
@@ -106,7 +102,6 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// It's not required that all messages should be consumed before
     /// releasing a fsm. However, a fsm is guaranteed to be notified only
     /// when new messages arrives after it's released.
-    #[inline]
     pub(super) fn release(&self, fsm: Box<Owner>) {
         let previous = self.state.data.swap(Box::into_raw(fsm), Ordering::AcqRel);
         let mut previous_status = NOTIFYSTATE_NOTIFIED;
@@ -130,7 +125,6 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     }
 
     /// Force sending a message despite the capacity limit on channel.
-    #[inline]
     pub fn force_send<S: FsmScheduler<Fsm = Owner>>(
         &self,
         msg: Owner::Message,
@@ -144,7 +138,6 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     /// Try to send a message to the mailbox.
     ///
     /// If there are too many pending messages, function may fail.
-    #[inline]
     pub fn try_send<S: FsmScheduler<Fsm = Owner>>(
         &self,
         msg: Owner::Message,
@@ -156,7 +149,6 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
     }
 
     /// Close the mailbox explicitly.
-    #[inline]
     fn close(&self) {
         self.sender.close_sender();
         match self.state.status.swap(NOTIFYSTATE_DROP, Ordering::AcqRel) {
@@ -174,7 +166,6 @@ impl<Owner: Fsm> BasicMailbox<Owner> {
 }
 
 impl<Owner: Fsm> Clone for BasicMailbox<Owner> {
-    #[inline]
     fn clone(&self) -> BasicMailbox<Owner> {
         BasicMailbox {
             sender: self.sender.clone(),
@@ -191,13 +182,11 @@ pub struct Mailbox<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> {
 
 impl<Owner: Fsm, Scheduler: FsmScheduler<Fsm = Owner>> Mailbox<Owner, Scheduler> {
     /// Force sending a message despite channel capacity limit.
-    #[inline]
     pub fn force_send(&self, msg: Owner::Message) -> Result<(), SendError<Owner::Message>> {
         self.mailbox.force_send(msg, &self.scheduler)
     }
 
     /// Try to send a message.
-    #[inline]
     pub fn try_send(&self, msg: Owner::Message) -> Result<(), TrySendError<Owner::Message>> {
         self.mailbox.try_send(msg, &self.scheduler)
     }
@@ -262,7 +251,6 @@ where
     /// Some(None) means there is expected mailbox inside the normal registry
     /// but it returns None after apply the given function. Some(Some) means
     /// the given function returns Some and cache is updated if it's invalid.
-    #[inline]
     fn check_do<F, R>(&self, addr: u64, mut f: F) -> CheckDoResult<R>
     where
         F: FnMut(&BasicMailbox<N>) -> Option<R>,
@@ -355,7 +343,6 @@ where
     ///
     /// If Either::Left is returned, then the message is sent. Otherwise,
     /// it indicates mailbox is not found.
-    #[inline]
     pub fn try_send(
         &self,
         addr: u64,
@@ -384,7 +371,6 @@ where
     }
 
     /// Send the message to specified address.
-    #[inline]
     pub fn send(&self, addr: u64, msg: N::Message) -> Result<(), TrySendError<N::Message>> {
         match self.try_send(addr, msg) {
             Either::Left(res) => res,
@@ -394,7 +380,6 @@ where
 
     /// Force sending message to specified address despite the capacity
     /// limit of mailbox.
-    #[inline]
     pub fn force_send(&self, addr: u64, msg: N::Message) -> Result<(), SendError<N::Message>> {
         match self.send(addr, msg) {
             Ok(()) => Ok(()),
@@ -407,7 +392,6 @@ where
     }
 
     /// Force sending message to control fsm.
-    #[inline]
     pub fn send_control(&self, msg: C::Message) -> Result<(), TrySendError<C::Message>> {
         match self.control_box.try_send(msg, &self.control_scheduler) {
             Ok(()) => Ok(()),

@@ -5,7 +5,6 @@ use test::Bencher;
 use tikv::raftstore::store::keys;
 use tikv_util::keybuilder::KeyBuilder;
 
-#[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
     let mut rand_str = vec![0; len];
     thread_rng().fill_bytes(&mut rand_str);

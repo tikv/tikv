@@ -517,7 +517,6 @@ pub struct Storage<E: Engine> {
 }
 
 impl<E: Engine> Clone for Storage<E> {
-    #[inline]
     fn clone(&self) -> Self {
         let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
 
@@ -538,7 +537,6 @@ impl<E: Engine> Clone for Storage<E> {
 }
 
 impl<E: Engine> Drop for Storage<E> {
-    #[inline]
     fn drop(&mut self) {
         let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
 
@@ -629,7 +627,6 @@ impl<E: Engine> Storage<E> {
 
     /// Schedule a command to the transaction scheduler. `cb` will be invoked after finishing
     /// running the command.
-    #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
         match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {

@@ -76,14 +76,12 @@ impl Debug for Datum {
 }
 
 /// `cmp_f64` compares the f64 values and returns the Ordering.
-#[inline]
 pub fn cmp_f64(l: f64, r: f64) -> Result<Ordering> {
     l.partial_cmp(&r)
         .ok_or_else(|| invalid_type!("{} and {} can't be compared", l, r))
 }
 
 /// `checked_add_i64`  checks and adds `r` to the `l`. Return None if the sum is negative.
-#[inline]
 fn checked_add_i64(l: u64, r: i64) -> Option<u64> {
     if r >= 0 {
         Some(l + r as u64)
@@ -373,14 +371,12 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `GetFloat64` function.
-    #[inline]
     pub fn f64(&self) -> f64 {
         let i = self.i64();
         f64::from_bits(i as u64)
     }
 
     /// Keep compatible with TiDB's `GetInt64` function.
-    #[inline]
     pub fn i64(&self) -> i64 {
         match *self {
             Datum::I64(i) => i,
@@ -398,7 +394,6 @@ impl Datum {
     }
 
     /// Keep compatible with TiDB's `GetUint64` function.
-    #[inline]
     pub fn u64(&self) -> u64 {
         self.i64() as u64
     }

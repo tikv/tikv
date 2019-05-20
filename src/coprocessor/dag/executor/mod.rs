@@ -372,7 +372,6 @@ pub mod tests {
             self.write_modifies(txn_modifies);
         }
 
-        #[inline]
         fn write_modifies(&mut self, txn: Vec<Modify>) {
             self.engine.write(&self.ctx, txn).unwrap();
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
@@ -383,7 +382,6 @@ pub mod tests {
         }
     }
 
-    #[inline]
     pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
         let mut key_range = KeyRange::new();
         key_range.set_start(table::encode_row_key(table_id, start));

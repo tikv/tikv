@@ -109,7 +109,6 @@ impl StoreMeta {
         }
     }
 
-    #[inline]
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
@@ -155,7 +154,6 @@ impl RaftRouter {
         }
     }
 
-    #[inline]
     pub fn send_raft_command(
         &self,
         cmd: RaftCommand,
@@ -216,46 +214,38 @@ pub struct PollContext<T, C: 'static> {
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
-    #[inline]
     fn kv_wb(&self) -> &WriteBatch {
         &self.kv_wb
     }
 
-    #[inline]
     fn kv_wb_mut(&mut self) -> &mut WriteBatch {
         &mut self.kv_wb
     }
 
-    #[inline]
     fn raft_wb(&self) -> &WriteBatch {
         &self.raft_wb
     }
 
-    #[inline]
     fn raft_wb_mut(&mut self) -> &mut WriteBatch {
         &mut self.raft_wb
     }
 
-    #[inline]
     fn sync_log(&self) -> bool {
         self.sync_log
     }
 
-    #[inline]
     fn set_sync_log(&mut self, sync: bool) {
         self.sync_log = sync;
     }
 }
 
 impl<T, C> PollContext<T, C> {
-    #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
     }
 }
 
 impl<T: Transport, C> PollContext<T, C> {
-    #[inline]
     fn schedule_store_tick(&self, tick: StoreTick, timeout: Duration) {
         if !is_zero_duration(&timeout) {
             let mb = self.router.control_mailbox();
@@ -365,7 +355,6 @@ impl StoreFsm {
 impl Fsm for StoreFsm {
     type Message = StoreMsg;
 
-    #[inline]
     fn is_stopped(&self) -> bool {
         self.store.stopped
     }

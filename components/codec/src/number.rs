@@ -22,7 +22,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 1`.
-    #[inline]
     pub fn encode_u8(buf: &mut [u8], v: u8) {
         assert!(!buf.is_empty());
         buf[0] = v;
@@ -34,7 +33,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 1`.
-    #[inline]
     pub fn decode_u8(buf: &[u8]) -> u8 {
         assert!(!buf.is_empty());
         buf[0]
@@ -46,7 +44,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn encode_u16(buf: &mut [u8], v: u16) {
         BigEndian::write_u16(buf, v);
     }
@@ -57,7 +54,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn decode_u16(buf: &[u8]) -> u16 {
         BigEndian::read_u16(buf)
     }
@@ -68,7 +64,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn encode_u32(buf: &mut [u8], v: u32) {
         BigEndian::write_u32(buf, v);
     }
@@ -79,7 +74,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn decode_u32(buf: &[u8]) -> u32 {
         BigEndian::read_u32(buf)
     }
@@ -90,7 +84,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_u64(buf: &mut [u8], v: u64) {
         BigEndian::write_u64(buf, v);
     }
@@ -101,7 +94,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_u64(buf: &[u8]) -> u64 {
         BigEndian::read_u64(buf)
     }
@@ -112,7 +104,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_u64_desc(buf: &mut [u8], v: u64) {
         Self::encode_u64(buf, !v);
     }
@@ -123,7 +114,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_u64_desc(buf: &[u8]) -> u64 {
         !Self::decode_u64(buf)
     }
@@ -134,7 +124,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_i64(buf: &mut [u8], v: i64) {
         let u = super::convert::encode_i64_to_comparable_u64(v);
         Self::encode_u64(buf, u);
@@ -146,7 +135,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_i64(buf: &[u8]) -> i64 {
         let u = Self::decode_u64(buf);
         super::convert::decode_comparable_u64_to_i64(u)
@@ -158,7 +146,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_i64_desc(buf: &mut [u8], v: i64) {
         let u = super::convert::encode_i64_to_comparable_u64(v);
         Self::encode_u64_desc(buf, u);
@@ -170,7 +157,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_i64_desc(buf: &[u8]) -> i64 {
         let u = Self::decode_u64_desc(buf);
         super::convert::decode_comparable_u64_to_i64(u)
@@ -182,7 +168,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_f64(buf: &mut [u8], v: f64) {
         let u = super::convert::encode_f64_to_comparable_u64(v);
         Self::encode_u64(buf, u);
@@ -194,7 +179,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_f64(buf: &[u8]) -> f64 {
         let u = Self::decode_u64(buf);
         super::convert::decode_comparable_u64_to_f64(u)
@@ -206,7 +190,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_f64_desc(buf: &mut [u8], v: f64) {
         let u = super::convert::encode_f64_to_comparable_u64(v);
         Self::encode_u64_desc(buf, u);
@@ -218,7 +201,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_f64_desc(buf: &[u8]) -> f64 {
         let u = Self::decode_u64_desc(buf);
         super::convert::decode_comparable_u64_to_f64(u)
@@ -230,7 +212,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn encode_u16_le(buf: &mut [u8], v: u16) {
         LittleEndian::write_u16(buf, v)
     }
@@ -241,7 +222,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn decode_u16_le(buf: &[u8]) -> u16 {
         LittleEndian::read_u16(buf)
     }
@@ -252,7 +232,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn encode_i16_le(buf: &mut [u8], v: i16) {
         LittleEndian::write_i16(buf, v)
     }
@@ -263,7 +242,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 2`.
-    #[inline]
     pub fn decode_i16_le(buf: &[u8]) -> i16 {
         LittleEndian::read_i16(buf)
     }
@@ -274,7 +252,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn encode_u32_le(buf: &mut [u8], v: u32) {
         LittleEndian::write_u32(buf, v)
     }
@@ -285,7 +262,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn decode_u32_le(buf: &[u8]) -> u32 {
         LittleEndian::read_u32(buf)
     }
@@ -296,7 +272,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn encode_i32_le(buf: &mut [u8], v: i32) {
         LittleEndian::write_i32(buf, v)
     }
@@ -307,7 +282,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 4`.
-    #[inline]
     pub fn decode_i32_le(buf: &[u8]) -> i32 {
         LittleEndian::read_i32(buf)
     }
@@ -318,7 +292,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_u64_le(buf: &mut [u8], v: u64) {
         LittleEndian::write_u64(buf, v)
     }
@@ -329,7 +302,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_u64_le(buf: &[u8]) -> u64 {
         LittleEndian::read_u64(buf)
     }
@@ -340,7 +312,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_i64_le(buf: &mut [u8], v: i64) {
         LittleEndian::write_i64(buf, v)
     }
@@ -351,7 +322,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_i64_le(buf: &[u8]) -> i64 {
         LittleEndian::read_i64(buf)
     }
@@ -362,7 +332,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn encode_f64_le(buf: &mut [u8], v: f64) {
         LittleEndian::write_f64(buf, v)
     }
@@ -373,7 +342,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 8`.
-    #[inline]
     pub fn decode_f64_le(buf: &[u8]) -> f64 {
         LittleEndian::read_f64(buf)
     }
@@ -412,7 +380,6 @@ impl NumberCodec {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     pub fn try_decode_var_u64(buf: &[u8]) -> Result<(u64, usize)> {
         #[allow(clippy::cast_lossless)]
         unsafe {
@@ -462,7 +429,6 @@ impl NumberCodec {
     /// # Panics
     ///
     /// Panics when `buf.len() < 10`.
-    #[inline]
     pub fn encode_var_i64(buf: &mut [u8], v: i64) -> usize {
         let mut uv = (v as u64) << 1;
         if unsafe { unlikely(v < 0) } {
@@ -479,7 +445,6 @@ impl NumberCodec {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     pub fn try_decode_var_i64(buf: &[u8]) -> Result<(i64, usize)> {
         let (uv, decoded_bytes) = Self::try_decode_var_u64(buf)?;
         let v = uv >> 1;
@@ -495,7 +460,6 @@ impl NumberCodec {
     /// complete, the length of buffer will be returned.
     ///
     /// This function is more efficient when `buf.len() >= 10`.
-    #[inline]
     pub fn get_first_encoded_var_int_len(buf: &[u8]) -> usize {
         unsafe {
             let mut ptr = buf.as_ptr();
@@ -551,7 +515,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 1.
-    #[inline]
     fn read_u8(&mut self) -> Result<u8> {
         read!(self, 1, decode_u8)
     }
@@ -562,7 +525,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn read_u16(&mut self) -> Result<u16> {
         read!(self, 2, decode_u16)
     }
@@ -573,7 +535,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn read_u32(&mut self) -> Result<u32> {
         read!(self, 4, decode_u32)
     }
@@ -584,7 +545,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_u64(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64)
     }
@@ -595,7 +555,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_u64_desc(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64_desc)
     }
@@ -606,7 +565,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_i64(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64)
     }
@@ -617,7 +575,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_i64_desc(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64_desc)
     }
@@ -628,7 +585,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_f64(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64)
     }
@@ -639,7 +595,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_f64_desc(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64_desc)
     }
@@ -650,7 +605,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn read_u16_le(&mut self) -> Result<u16> {
         read!(self, 2, decode_u16_le)
     }
@@ -661,7 +615,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn read_i16_le(&mut self) -> Result<i16> {
         read!(self, 2, decode_i16_le)
     }
@@ -672,7 +625,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn read_u32_le(&mut self) -> Result<u32> {
         read!(self, 4, decode_u32_le)
     }
@@ -683,7 +635,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn read_i32_le(&mut self) -> Result<i32> {
         read!(self, 4, decode_i32_le)
     }
@@ -694,7 +645,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_u64_le(&mut self) -> Result<u64> {
         read!(self, 8, decode_u64_le)
     }
@@ -705,7 +655,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_i64_le(&mut self) -> Result<i64> {
         read!(self, 8, decode_i64_le)
     }
@@ -716,7 +665,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn read_f64_le(&mut self) -> Result<f64> {
         read!(self, 8, decode_f64_le)
     }
@@ -729,7 +677,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     fn read_var_u64(&mut self) -> Result<u64> {
         let (v, decoded_bytes) = {
             let buf = self.bytes();
@@ -747,7 +694,6 @@ pub trait NumberDecoder: BufferReader {
     /// # Errors
     ///
     /// Returns `Error::Io` if there is not enough space to decode the whole VarInt.
-    #[inline]
     fn read_var_i64(&mut self) -> Result<i64> {
         let (v, decoded_bytes) = {
             let buf = self.bytes();
@@ -782,7 +728,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 1.
-    #[inline]
     fn write_u8(&mut self, v: u8) -> Result<()> {
         write!(self, v, 1, encode_u8)
     }
@@ -793,7 +738,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn write_u16(&mut self, v: u16) -> Result<()> {
         write!(self, v, 2, encode_u16)
     }
@@ -804,7 +748,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn write_u32(&mut self, v: u32) -> Result<()> {
         write!(self, v, 4, encode_u32)
     }
@@ -815,7 +758,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_u64(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64)
     }
@@ -826,7 +768,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_u64_desc(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64_desc)
     }
@@ -837,7 +778,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_i64(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64)
     }
@@ -848,7 +788,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_i64_desc(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64_desc)
     }
@@ -859,7 +798,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_f64(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64)
     }
@@ -870,7 +808,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_f64_desc(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64_desc)
     }
@@ -881,7 +818,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn write_u16_le(&mut self, v: u16) -> Result<()> {
         write!(self, v, 2, encode_u16_le)
     }
@@ -892,7 +828,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 2.
-    #[inline]
     fn write_i16_le(&mut self, v: i16) -> Result<()> {
         write!(self, v, 2, encode_i16_le)
     }
@@ -903,7 +838,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn write_u32_le(&mut self, v: u32) -> Result<()> {
         write!(self, v, 4, encode_u32_le)
     }
@@ -914,7 +848,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 4.
-    #[inline]
     fn write_i32_le(&mut self, v: i32) -> Result<()> {
         write!(self, v, 4, encode_i32_le)
     }
@@ -925,7 +858,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_u64_le(&mut self, v: u64) -> Result<()> {
         write!(self, v, 8, encode_u64_le)
     }
@@ -936,7 +868,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_i64_le(&mut self, v: i64) -> Result<()> {
         write!(self, v, 8, encode_i64_le)
     }
@@ -947,7 +878,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 8.
-    #[inline]
     fn write_f64_le(&mut self, v: f64) -> Result<()> {
         write!(self, v, 8, encode_f64_le)
     }
@@ -963,7 +893,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 10.
-    #[inline]
     fn write_var_u64(&mut self, v: u64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
@@ -987,7 +916,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < 10.
-    #[inline]
     fn write_var_i64(&mut self, v: i64) -> Result<usize> {
         let encoded_bytes = {
             let buf = unsafe { self.bytes_mut(MAX_VARINT64_LENGTH) };
@@ -1005,7 +933,6 @@ pub trait NumberEncoder: BufferWriter {
     /// # Errors
     ///
     /// Returns `Error::Io` if buffer remaining size < values.len().
-    #[inline]
     fn write_all_bytes(&mut self, values: &[u8]) -> Result<()> {
         let buf = unsafe { self.bytes_mut(values.len()) };
         if unsafe { unlikely(buf.len() < values.len()) } {
@@ -1883,7 +1810,6 @@ mod benches {
         });
     }
 
-    #[inline]
     fn read_num_bytes<T, F>(size: usize, data: &mut &[u8], f: F) -> super::Result<T>
     where
         F: Fn(&[u8]) -> T,

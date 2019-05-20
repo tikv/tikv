@@ -335,7 +335,6 @@ pub enum Either<L, R> {
 }
 
 impl<L, R> Either<L, R> {
-    #[inline]
     pub fn as_ref(&self) -> Either<&L, &R> {
         match *self {
             Either::Left(ref l) => Either::Left(l),
@@ -343,7 +342,6 @@ impl<L, R> Either<L, R> {
         }
     }
 
-    #[inline]
     pub fn as_mut(&mut self) -> Either<&mut L, &mut R> {
         match *self {
             Either::Left(ref mut l) => Either::Left(l),
@@ -351,7 +349,6 @@ impl<L, R> Either<L, R> {
         }
     }
 
-    #[inline]
     pub fn left(self) -> Option<L> {
         match self {
             Either::Left(l) => Some(l),
@@ -359,7 +356,6 @@ impl<L, R> Either<L, R> {
         }
     }
 
-    #[inline]
     pub fn right(self) -> Option<R> {
         match self {
             Either::Right(r) => Some(r),
@@ -375,7 +371,6 @@ pub struct RingQueue<T> {
 }
 
 impl<T> RingQueue<T> {
-    #[inline]
     fn len(&self) -> usize {
         self.buf.len()
     }
@@ -410,7 +405,6 @@ impl<T> RingQueue<T> {
     }
 }
 
-#[inline]
 pub fn is_even(n: usize) -> bool {
     n & 1 == 0
 }
@@ -421,12 +415,10 @@ pub struct MustConsumeVec<T> {
 }
 
 impl<T> MustConsumeVec<T> {
-    #[inline]
     pub fn new(tag: &'static str) -> MustConsumeVec<T> {
         MustConsumeVec::with_capacity(tag, 0)
     }
 
-    #[inline]
     pub fn with_capacity(tag: &'static str, cap: usize) -> MustConsumeVec<T> {
         MustConsumeVec {
             tag,
@@ -530,7 +522,6 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     }))
 }
 
-#[inline]
 pub fn vec_clone_with_capacity<T: Clone>(vec: &Vec<T>) -> Vec<T> {
     // According to benchmarks over rustc 1.30.0-nightly (39e6ba821 2018-08-25), `copy_from_slice`
     // has same performance as `extend_from_slice` when T: Copy. So we only use `extend_from_slice`
@@ -563,7 +554,6 @@ pub fn check_environment_variables() {
     }
 }
 
-#[inline]
 pub fn is_zero_duration(d: &Duration) -> bool {
     d.as_secs() == 0 && d.subsec_nanos() == 0
 }

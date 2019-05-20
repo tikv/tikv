@@ -31,21 +31,18 @@ pub trait AsMySQLBool {
 }
 
 impl AsMySQLBool for Int {
-    #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(*self != 0)
     }
 }
 
 impl AsMySQLBool for Real {
-    #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> Result<bool> {
         Ok(self.round() != 0f64)
     }
 }
 
 impl AsMySQLBool for Bytes {
-    #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
         Ok(!self.is_empty()
             && crate::coprocessor::codec::convert::bytes_to_int(context, self)? != 0)
@@ -90,24 +87,20 @@ macro_rules! impl_evaluable_type {
         impl Evaluable for $ty {
             const EVAL_TYPE: EvalType = EvalType::$ty;
 
-            #[inline]
             fn borrow_scalar_value(v: &ScalarValue) -> &Option<Self> {
                 v.as_ref()
             }
 
-            #[inline]
             fn borrow_vector_value(v: &VectorValue) -> &[Option<Self>] {
                 v.as_ref()
             }
 
-            #[inline]
             fn borrow_vector_like_specialized(
                 v: VectorLikeValueRef<'_>,
             ) -> VectorLikeValueRefSpecialized<'_, Self> {
                 v.into()
             }
 
-            #[inline]
             fn into_vector_value(vec: Vec<Option<Self>>) -> VectorValue {
                 VectorValue::from(vec)
             }

@@ -86,7 +86,6 @@ impl ThreadLoadStatistics {
     }
 }
 
-#[inline]
 fn calc_cpu_load(elapsed_millis: usize, start_usage: f64, end_usage: f64) -> usize {
     // Multiply by 1000 for millis, and multiply 100 for percentage.
     let cpu_usage = (end_usage - start_usage) * 1000f64 * 100f64;

@@ -9,14 +9,12 @@ use test::Bencher;
 
 use tikv_util::collections::HashMap;
 
-#[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
     let mut rand_str = vec![0; len];
     thread_rng().fill_bytes(&mut rand_str);
     rand_str
 }
 
-#[inline]
 fn generate_requests(map: &HashMap<&[u8], &[u8]>) -> Vec<Request> {
     let mut reqs = vec![];
     for (key, value) in map {

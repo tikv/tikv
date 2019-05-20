@@ -47,7 +47,6 @@ impl crate::AssertSync for FuturePool {}
 
 impl FuturePool {
     /// Gets current running task count.
-    #[inline]
     pub fn get_running_task_count(&self) -> usize {
         // As long as different future pool has different name prefix, we can safely use the value
         // in metrics.
@@ -109,7 +108,6 @@ impl FuturePool {
 ///
 /// This function is effective only when it is called in thread pool worker
 /// thread.
-#[inline]
 fn try_tick_thread(env: &Env) {
     THREAD_LAST_TICK_TIME.with(|tls_last_tick| {
         let now = Instant::now_coarse();

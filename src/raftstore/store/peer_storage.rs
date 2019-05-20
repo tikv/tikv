@@ -79,12 +79,10 @@ impl PartialEq for SnapState {
     }
 }
 
-#[inline]
 pub fn first_index(state: &RaftApplyState) -> u64 {
     state.get_truncated_state().get_index() + 1
 }
 
-#[inline]
 pub fn last_index(state: &RaftLocalState) -> u64 {
     state.get_last_index()
 }
@@ -200,7 +198,6 @@ impl EntryCache {
         }
     }
 
-    #[inline]
     fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
@@ -279,18 +276,15 @@ impl InvokeContext {
         }
     }
 
-    #[inline]
     pub fn has_snapshot(&self) -> bool {
         self.snap_region.is_some()
     }
 
-    #[inline]
     pub fn save_raft_state_to(&self, raft_wb: &mut WriteBatch) -> Result<()> {
         raft_wb.put_msg(&keys::raft_state_key(self.region_id), &self.raft_state)?;
         Ok(())
     }
 
-    #[inline]
     pub fn save_snapshot_raft_state_to(
         &self,
         snapshot_index: u64,
@@ -312,7 +306,6 @@ impl InvokeContext {
         Ok(())
     }
 
-    #[inline]
     pub fn save_apply_state_to(&self, kv_engine: &DB, kv_wb: &mut WriteBatch) -> Result<()> {
         let handle = rocks::util::get_cf_handle(kv_engine, CF_RAFT)?;
         kv_wb.put_msg_cf(
@@ -621,52 +614,42 @@ impl PeerStorage {
         Ok(entries[0].get_term())
     }
 
-    #[inline]
     pub fn first_index(&self) -> u64 {
         first_index(&self.apply_state)
     }
 
-    #[inline]
     pub fn last_index(&self) -> u64 {
         last_index(&self.raft_state)
     }
 
-    #[inline]
     pub fn applied_index(&self) -> u64 {
         self.apply_state.get_applied_index()
     }
 
-    #[inline]
     pub fn set_applied_state(&mut self, apply_state: RaftApplyState) {
         self.apply_state = apply_state;
     }
 
-    #[inline]
     pub fn set_applied_term(&mut self, applied_index_term: u64) {
         self.applied_index_term = applied_index_term;
     }
 
-    #[inline]
     pub fn apply_state(&self) -> &RaftApplyState {
         &self.apply_state
     }
 
-    #[inline]
     pub fn applied_index_term(&self) -> u64 {
         self.applied_index_term
     }
 
-    #[inline]
     pub fn committed_index(&self) -> u64 {
         self.raft_state.get_hard_state().get_commit()
     }
 
-    #[inline]
     pub fn truncated_index(&self) -> u64 {
         self.apply_state.get_truncated_state().get_index()
     }
 
-    #[inline]
     pub fn truncated_term(&self) -> u64 {
         self.apply_state.get_truncated_state().get_term()
     }
@@ -862,7 +845,6 @@ impl PeerStorage {
         self.cache.compact_to(idx);
     }
 
-    #[inline]
     pub fn is_cache_empty(&self) -> bool {
         self.cache.is_empty()
     }
@@ -885,7 +867,6 @@ impl PeerStorage {
         }
     }
 
-    #[inline]
     pub fn flush_cache_metrics(&mut self) {
         self.stats.flush();
     }
@@ -997,7 +978,6 @@ impl PeerStorage {
     }
 
     /// Check whether the storage has finished applying snapshot.
-    #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(_) => true,
@@ -1006,7 +986,6 @@ impl PeerStorage {
     }
 
     /// Check if the storage is applying a snapshot.
-    #[inline]
     pub fn check_applying_snap(&mut self) -> bool {
         let new_state = match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
@@ -1028,7 +1007,6 @@ impl PeerStorage {
         false
     }
 
-    #[inline]
     pub fn is_canceling_snap(&self) -> bool {
         match *self.snap_state.borrow() {
             SnapState::Applying(ref status) => {
@@ -1071,12 +1049,10 @@ impl PeerStorage {
         !self.check_applying_snap()
     }
 
-    #[inline]
     pub fn set_snap_state(&mut self, state: SnapState) {
         *self.snap_state.borrow_mut() = state
     }
 
-    #[inline]
     pub fn is_snap_state(&self, state: SnapState) -> bool {
         *self.snap_state.borrow() == state
     }

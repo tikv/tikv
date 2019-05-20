@@ -168,7 +168,6 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts` in reverse order.
     /// This function requires that the write cursor is currently pointing to the earliest version
     /// of `user_key`.
-    #[inline]
     fn reverse_get(
         &mut self,
         user_key: &Key,
@@ -278,7 +277,6 @@ impl<S: Snapshot> BackwardScanner<S> {
 
     /// Handle last version. Last version may be PUT or DELETE. If it is a PUT, value should be
     /// load.
-    #[inline]
     fn handle_last_version(
         &mut self,
         some_write: Option<Write>,
@@ -298,7 +296,6 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// returned directly. Otherwise there will be a default CF look up.
     ///
     /// The implementation is similar to `PointGetter::load_data_by_write`.
-    #[inline]
     fn reverse_load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
         if self.cfg.omit_value {
             return Ok(vec![]);
@@ -329,7 +326,6 @@ impl<S: Snapshot> BackwardScanner<S> {
     /// If it is pointing to current user key, we need to step it until we meet a new
     /// key. We first try to `prev()` a few times. If still not reaching another user
     /// key, we `seek_for_prev()`.
-    #[inline]
     fn move_write_cursor_to_prev_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {
             if i > 0 {

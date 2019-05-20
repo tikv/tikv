@@ -84,7 +84,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(sha2)))
     }
 
-    #[inline]
     pub fn compress<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -115,7 +114,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn uncompress<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -151,7 +149,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn uncompressed_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         use byteorder::{ByteOrder, LittleEndian};
         let input = try_opt!(self.children[0].eval_string(ctx, row));

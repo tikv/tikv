@@ -10,7 +10,6 @@ use super::{Error, Result};
 use crate::coprocessor::dag::expr::EvalContext;
 
 /// `truncate_binary` truncates a buffer to the specified length.
-#[inline]
 pub fn truncate_binary(s: &mut Vec<u8>, flen: isize) {
     if flen != cop_datatype::UNSPECIFIED_LENGTH as isize && s.len() > flen as usize {
         s.truncate(flen as usize);
@@ -51,7 +50,6 @@ macro_rules! overflow {
 }
 
 /// `convert_uint_to_int` converts an uint value to an int value.
-#[inline]
 pub fn convert_uint_to_int(val: u64, upper_bound: i64, tp: FieldTypeTp) -> Result<i64> {
     if val > upper_bound as u64 {
         return overflow!(val, tp);

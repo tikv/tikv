@@ -87,7 +87,6 @@ impl Expression {
         Expression::Constant(Constant { val, field_type })
     }
 
-    #[inline]
     fn field_type(&self) -> &FieldType {
         match *self {
             Expression::Constant(ref c) => &c.field_type,
@@ -97,7 +96,6 @@ impl Expression {
     }
 
     #[cfg(test)]
-    #[inline]
     fn mut_field_type(&mut self) -> &mut FieldType {
         match *self {
             Expression::Constant(ref mut c) => &mut c.field_type,
@@ -199,7 +197,6 @@ impl Expression {
         }
     }
 
-    #[inline]
     pub fn is_unsigned(&self) -> bool {
         self.field_type().flag().contains(FieldTypeFlag::UNSIGNED)
     }
@@ -294,7 +291,6 @@ impl Expression {
     }
 }
 
-#[inline]
 pub fn eval_arith<F>(ctx: &mut EvalContext, left: Datum, right: Datum, f: F) -> Result<Datum>
 where
     F: FnOnce(Datum, &mut EvalContext, Datum) -> codec::Result<Datum>,
@@ -327,17 +323,14 @@ mod tests {
     use crate::coprocessor::codec::{mysql, Datum};
     use tikv_util::codec::number::{self, NumberEncoder};
 
-    #[inline]
     pub fn str2dec(s: &str) -> Datum {
         Datum::Dec(s.parse().unwrap())
     }
 
-    #[inline]
     pub fn make_null_datums(size: usize) -> Vec<Datum> {
         (0..size).map(|_| Datum::Null).collect()
     }
 
-    #[inline]
     pub fn check_overflow(e: Error) -> Result<(), ()> {
         if e.code() == ERR_DATA_OUT_OF_RANGE {
             Ok(())
@@ -346,7 +339,6 @@ mod tests {
         }
     }
 
-    #[inline]
     pub fn check_divide_by_zero(e: Error) -> Result<(), ()> {
         if e.code() == ERR_DIVISION_BY_ZERO {
             Ok(())

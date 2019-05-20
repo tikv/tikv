@@ -30,7 +30,6 @@ impl State {
         }
     }
 
-    #[inline]
     fn is_sender_connected(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
@@ -53,7 +52,6 @@ pub struct Sender<T> {
 }
 
 impl<T> Clone for Sender<T> {
-    #[inline]
     fn clone(&self) -> Sender<T> {
         self.state.sender_cnt.fetch_add(1, Ordering::AcqRel);
         Sender {
@@ -64,7 +62,6 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
-    #[inline]
     fn drop(&mut self) {
         let res = self.state.sender_cnt.fetch_add(-1, Ordering::AcqRel);
         if res == 1 {
@@ -81,7 +78,6 @@ pub struct Receiver<T> {
 
 impl<T> Sender<T> {
     /// Returns the number of messages in the channel.
-    #[inline]
     pub fn len(&self) -> usize {
         self.sender.len()
     }
@@ -89,13 +85,11 @@ impl<T> Sender<T> {
     /// Returns true if the channel is empty.
     ///
     /// Note: Zero-capacity channels are always empty.
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
     }
 
     /// Blocks the current thread until a message is sent or the channel is disconnected.
-    #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         if self.state.is_sender_connected() {
             self.sender.send(t)
@@ -105,7 +99,6 @@ impl<T> Sender<T> {
     }
 
     /// Attempts to send a message into the channel without blocking.
-    #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         if self.state.is_sender_connected() {
             self.sender.try_send(t)
@@ -115,13 +108,11 @@ impl<T> Sender<T> {
     }
 
     /// Stop the sender from sending any further messages.
-    #[inline]
     pub fn close_sender(&self) {
         self.state.connected.store(false, Ordering::Release);
     }
 
     /// Check if the sender is still connected.
-    #[inline]
     pub fn is_sender_connected(&self) -> bool {
         self.state.is_sender_connected()
     }
@@ -129,7 +120,6 @@ impl<T> Sender<T> {
 
 impl<T> Receiver<T> {
     /// Returns the number of messages in the channel.
-    #[inline]
     pub fn len(&self) -> usize {
         self.receiver.len()
     }
@@ -137,41 +127,35 @@ impl<T> Receiver<T> {
     /// Returns true if the channel is empty.
     ///
     /// Note: Zero-capacity channels are always empty.
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.receiver.is_empty()
     }
 
     /// Blocks the current thread until a message is received or
     /// the channel is empty and disconnected.
-    #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
         self.receiver.recv()
     }
 
     /// Attempts to receive a message from the channel without blocking.
-    #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         self.receiver.try_recv()
     }
 
     /// Waits for a message to be received from the channel,
     /// but only for a limited time.
-    #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         self.receiver.recv_timeout(timeout)
     }
 }
 
 impl<T> Drop for Receiver<T> {
-    #[inline]
     fn drop(&mut self) {
         self.state.connected.store(false, Ordering::Release);
     }
 }
 
 /// Create an unbounded channel.
-#[inline]
 pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
     let state = Arc::new(State::new());
     let (sender, receiver) = channel::unbounded();
@@ -185,7 +169,6 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
 }
 
 /// Create a bounded channel.
-#[inline]
 pub fn bounded<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     let state = Arc::new(State::new());
     let (sender, receiver) = channel::bounded(cap);
@@ -209,7 +192,6 @@ pub struct LooseBoundedSender<T> {
 
 impl<T> LooseBoundedSender<T> {
     /// Returns the number of messages in the channel.
-    #[inline]
     pub fn len(&self) -> usize {
         self.sender.len()
     }
@@ -217,13 +199,11 @@ impl<T> LooseBoundedSender<T> {
     /// Returns true if the channel is empty.
     ///
     /// Note: Zero-capacity channels are always empty.
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.sender.is_empty()
     }
 
     /// Send a message regardless its capacity limit.
-    #[inline]
     pub fn force_send(&self, t: T) -> Result<(), SendError<T>> {
         let cnt = self.tried_cnt.get();
         self.tried_cnt.set(cnt + 1);
@@ -231,7 +211,6 @@ impl<T> LooseBoundedSender<T> {
     }
 
     /// Attempts to send a message into the channel without blocking.
-    #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         let cnt = self.tried_cnt.get();
         if cnt < CHECK_INTERVAL {
@@ -249,20 +228,17 @@ impl<T> LooseBoundedSender<T> {
     }
 
     /// Stop the sender from sending any further messages.
-    #[inline]
     pub fn close_sender(&self) {
         self.sender.close_sender();
     }
 
     /// Check if the sender is still connected.
-    #[inline]
     pub fn is_sender_connected(&self) -> bool {
         self.sender.state.is_sender_connected()
     }
 }
 
 impl<T> Clone for LooseBoundedSender<T> {
-    #[inline]
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),

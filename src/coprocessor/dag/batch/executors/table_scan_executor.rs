@@ -33,7 +33,6 @@ impl
     >
 {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
             .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
@@ -99,17 +98,14 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
 }
 
 impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor<C, S> {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }
 
-    #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.0.collect_statistics(destination);
     }
@@ -146,17 +142,14 @@ struct TableScanExecutorImpl {
 }
 
 impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         &self.schema
     }
 
-    #[inline]
     fn mut_context(&mut self) -> &mut EvalContext {
         &mut self.context
     }
 
-    #[inline]
     fn build_scanner<S: Store>(
         &self,
         store: &S,

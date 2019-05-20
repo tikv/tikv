@@ -381,7 +381,6 @@ where
     }
 }
 
-#[inline]
 fn cmp_i64_with_unsigned_flag(
     lhs: i64,
     lhs_unsigned: bool,
@@ -447,7 +446,6 @@ where
     ret_when_not_matched
 }
 
-#[inline]
 fn do_get_extremum<'a, T, E, F>(
     expr: &'a ScalarFunc,
     mut evaluator: F,

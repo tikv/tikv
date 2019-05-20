@@ -98,14 +98,12 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     }
 
     /// Creates or resets the range of inner scanner.
-    #[inline]
     fn reset_range(&mut self, range: KeyRange) -> Result<()> {
         self.scanner = Some(self.imp.build_scanner(&self.store, self.desc, range)?);
         Ok(())
     }
 
     /// Scans next row from the scanner.
-    #[inline]
     fn scan_next(&mut self) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         // TODO: Key and value doesn't have to be owned
         if let Some(scanner) = self.scanner.as_mut() {
@@ -117,7 +115,6 @@ impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy
     }
 
     /// Get one row from the store.
-    #[inline]
     fn point_get(&mut self, mut range: KeyRange) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
         let mut statistics = crate::storage::Statistics::default();
         // TODO: Key and value doesn't have to be owned
@@ -209,12 +206,10 @@ pub fn check_columns_info_supported(columns_info: &[ColumnInfo]) -> Result<()> {
 impl<C: ExecSummaryCollector, S: Store, I: ScanExecutorImpl, P: PointRangePolicy> BatchExecutor
     for ScanExecutor<C, S, I, P>
 {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         self.imp.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
         assert!(scan_rows > 0);

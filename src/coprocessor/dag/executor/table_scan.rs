@@ -40,17 +40,14 @@ impl InnerExecutor for TableInnerExecutor {
         Ok(Some(Row::origin(h, row_data, columns)))
     }
 
-    #[inline]
     fn is_point(&self, range: &KeyRange) -> bool {
         util::is_point(&range)
     }
 
-    #[inline]
     fn scan_on(&self) -> super::super::scanner::ScanOn {
         super::super::scanner::ScanOn::Table
     }
 
-    #[inline]
     fn key_only(&self) -> bool {
         self.col_ids.is_empty()
     }

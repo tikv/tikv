@@ -7,7 +7,6 @@ use std::io::{self, ErrorKind};
 
 pub type BytesSlice<'a> = &'a [u8];
 
-#[inline]
 pub fn read_slice<'a>(data: &mut BytesSlice<'a>, size: usize) -> Result<BytesSlice<'a>> {
     if data.len() >= size {
         let buf = &data[0..size];

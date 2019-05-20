@@ -131,7 +131,6 @@ pub trait FieldTypeAccessor {
     /// specific context.
     ///
     /// Please refer to `Hybrid` in TiDB.
-    #[inline]
     fn is_hybrid(&self) -> bool {
         let tp = self.tp();
         tp == FieldTypeTp::Enum || tp == FieldTypeTp::Bit || tp == FieldTypeTp::Set
@@ -140,7 +139,6 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a blob type.
     ///
     /// Please refer to `IsTypeBlob` in TiDB.
-    #[inline]
     fn is_blob_like(&self) -> bool {
         let tp = self.tp();
         tp == FieldTypeTp::TinyBlob
@@ -152,7 +150,6 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a char-like type like a string type or a varchar type.
     ///
     /// Please refer to `IsTypeChar` in TiDB.
-    #[inline]
     fn is_char_like(&self) -> bool {
         let tp = self.tp();
         tp == FieldTypeTp::String || tp == FieldTypeTp::VarChar
@@ -161,7 +158,6 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a varchar-like type like a varstring type or a varchar type.
     ///
     /// Please refer to `IsTypeVarchar` in TiDB.
-    #[inline]
     fn is_varchar_like(&self) -> bool {
         let tp = self.tp();
         tp == FieldTypeTp::VarString || tp == FieldTypeTp::VarChar
@@ -170,7 +166,6 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a string-like type.
     ///
     /// Please refer to `IsString` in TiDB.
-    #[inline]
     fn is_string_like(&self) -> bool {
         self.is_blob_like()
             || self.is_char_like()
@@ -181,7 +176,6 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a binary-string-like type.
     ///
     /// Please refer to `IsBinaryStr` in TiDB.
-    #[inline]
     fn is_binary_string_like(&self) -> bool {
         self.collation() == Collation::Binary && self.is_string_like()
     }
@@ -189,63 +183,52 @@ pub trait FieldTypeAccessor {
     /// Whether this type is a non-binary-string-like type.
     ///
     /// Please refer to `IsNonBinaryStr` in TiDB.
-    #[inline]
     fn is_non_binary_string_like(&self) -> bool {
         self.collation() != Collation::Binary && self.is_string_like()
     }
 }
 
 impl FieldTypeAccessor for FieldType {
-    #[inline]
     fn tp(&self) -> FieldTypeTp {
         FieldTypeTp::from_i32(self.get_tp()).unwrap_or(FieldTypeTp::Unspecified)
     }
 
-    #[inline]
     fn set_tp(&mut self, tp: FieldTypeTp) -> &mut dyn FieldTypeAccessor {
         FieldType::set_tp(self, tp as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn flag(&self) -> FieldTypeFlag {
         FieldTypeFlag::from_bits_truncate(self.get_flag())
     }
 
-    #[inline]
     fn set_flag(&mut self, flag: FieldTypeFlag) -> &mut dyn FieldTypeAccessor {
         FieldType::set_flag(self, flag.bits());
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn flen(&self) -> isize {
         self.get_flen() as isize
     }
 
-    #[inline]
     fn set_flen(&mut self, flen: isize) -> &mut dyn FieldTypeAccessor {
         FieldType::set_flen(self, flen as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn decimal(&self) -> isize {
         self.get_decimal() as isize
     }
 
-    #[inline]
     fn set_decimal(&mut self, decimal: isize) -> &mut dyn FieldTypeAccessor {
         FieldType::set_decimal(self, decimal as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn collation(&self) -> Collation {
         Collation::from_i32(self.get_collate()).unwrap_or(Collation::UTF8Bin)
     }
 
-    #[inline]
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         FieldType::set_collate(self, collation as i32);
         self as &mut dyn FieldTypeAccessor
@@ -253,56 +236,46 @@ impl FieldTypeAccessor for FieldType {
 }
 
 impl FieldTypeAccessor for ColumnInfo {
-    #[inline]
     fn tp(&self) -> FieldTypeTp {
         FieldTypeTp::from_i32(self.get_tp()).unwrap_or(FieldTypeTp::Unspecified)
     }
 
-    #[inline]
     fn set_tp(&mut self, tp: FieldTypeTp) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_tp(self, tp as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn flag(&self) -> FieldTypeFlag {
         FieldTypeFlag::from_bits_truncate(self.get_flag() as u32)
     }
 
-    #[inline]
     fn set_flag(&mut self, flag: FieldTypeFlag) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_flag(self, flag.bits() as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn flen(&self) -> isize {
         self.get_columnLen() as isize
     }
 
-    #[inline]
     fn set_flen(&mut self, flen: isize) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_columnLen(self, flen as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn decimal(&self) -> isize {
         self.get_decimal() as isize
     }
 
-    #[inline]
     fn set_decimal(&mut self, decimal: isize) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_decimal(self, decimal as i32);
         self as &mut dyn FieldTypeAccessor
     }
 
-    #[inline]
     fn collation(&self) -> Collation {
         Collation::from_i32(self.get_collation()).unwrap_or(Collation::UTF8Bin)
     }
 
-    #[inline]
     fn set_collation(&mut self, collation: Collation) -> &mut dyn FieldTypeAccessor {
         ColumnInfo::set_collation(self, collation as i32);
         self as &mut dyn FieldTypeAccessor

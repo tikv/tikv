@@ -8,7 +8,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 impl ScalarFunc {
-    #[inline]
     pub fn json_type<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -18,7 +17,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Borrowed(j.json_type())))
     }
 
-    #[inline]
     pub fn json_unquote<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -71,7 +69,6 @@ impl ScalarFunc {
         Ok(j.extract(&path_exprs).map(Cow::Owned))
     }
 
-    #[inline]
     pub fn json_set<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -80,7 +77,6 @@ impl ScalarFunc {
         self.json_modify(ctx, row, ModifyType::Set)
     }
 
-    #[inline]
     pub fn json_insert<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -89,7 +85,6 @@ impl ScalarFunc {
         self.json_modify(ctx, row, ModifyType::Insert)
     }
 
-    #[inline]
     pub fn json_replace<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -150,7 +145,6 @@ struct JsonFuncArgsParser<'a> {
 }
 
 impl<'a> JsonFuncArgsParser<'a> {
-    #[inline]
     fn new(row: &'a [Datum]) -> Self {
         JsonFuncArgsParser { row }
     }

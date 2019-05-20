@@ -16,22 +16,18 @@ impl Column {
         row[self.offset].clone()
     }
 
-    #[inline]
     pub fn eval_int(&self, row: &[Datum]) -> Result<Option<i64>> {
         row[self.offset].as_int()
     }
 
-    #[inline]
     pub fn eval_real(&self, row: &[Datum]) -> Result<Option<f64>> {
         row[self.offset].as_real()
     }
 
-    #[inline]
     pub fn eval_decimal<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Decimal>>> {
         row[self.offset].as_decimal()
     }
 
-    #[inline]
     pub fn eval_string<'a>(
         &self,
         ctx: &mut EvalContext,
@@ -64,17 +60,14 @@ impl Column {
         Ok(Some(Cow::Owned(s)))
     }
 
-    #[inline]
     pub fn eval_time<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Time>>> {
         row[self.offset].as_time()
     }
 
-    #[inline]
     pub fn eval_duration<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Duration>>> {
         row[self.offset].as_duration()
     }
 
-    #[inline]
     pub fn eval_json<'a>(&self, row: &'a [Datum]) -> Result<Option<Cow<'a, Json>>> {
         row[self.offset].as_json()
     }

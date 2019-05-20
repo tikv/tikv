@@ -41,7 +41,6 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Set whether or not read operations should fill the cache.
     ///
     /// Defaults to `true`.
-    #[inline]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
@@ -53,7 +52,6 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Previously this option is called `key_only`.
     ///
     /// Defaults to `false`.
-    #[inline]
     pub fn omit_value(mut self, omit_value: bool) -> Self {
         self.omit_value = omit_value;
         self
@@ -62,7 +60,6 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Set the isolation level.
     ///
     /// Defaults to `IsolationLevel::SI`.
-    #[inline]
     pub fn isolation_level(mut self, isolation_level: IsolationLevel) -> Self {
         self.isolation_level = isolation_level;
         self
@@ -72,7 +69,6 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// `None` means unbounded.
     ///
     /// Default is `(None, None)`.
-    #[inline]
     pub fn range(mut self, lower_bound: Option<Key>, upper_bound: Option<Key>) -> Self {
         self.lower_bound = lower_bound;
         self.upper_bound = upper_bound;
@@ -150,7 +146,6 @@ impl<S: Snapshot> ScannerConfig<S> {
         }
     }
 
-    #[inline]
     fn scan_mode(&self) -> ScanMode {
         if self.desc {
             ScanMode::Backward
@@ -160,7 +155,6 @@ impl<S: Snapshot> ScannerConfig<S> {
     }
 
     /// Create the cursor.
-    #[inline]
     fn create_cf_cursor(&mut self, cf: CfName) -> Result<Cursor<S::Iter>> {
         let (lower, upper) = if cf == CF_DEFAULT {
             (self.lower_bound.take(), self.upper_bound.take())

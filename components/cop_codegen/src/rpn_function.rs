@@ -28,17 +28,14 @@ impl RpnFunctionOpts {
             impl #impl_generics tikv_util::AssertCopy for #ident #ty_generics #where_clause {}
 
             impl #impl_generics crate::coprocessor::dag::rpn_expr::RpnFunction for #ident #ty_generics #where_clause {
-                #[inline]
                 fn name(&self) -> &'static str {
                     #name
                 }
 
-                #[inline]
                 fn args_len(&self) -> usize {
                     #args
                 }
 
-                #[inline]
                 fn eval(
                     &self,
                     rows: usize,
@@ -54,7 +51,6 @@ impl RpnFunctionOpts {
                     )
                 }
 
-                #[inline]
                 fn box_clone(&self) -> Box<dyn crate::coprocessor::dag::rpn_expr::RpnFunction> {
                     Box::new(*self)
                 }

@@ -48,7 +48,6 @@ macro_rules! match_self {
 }
 
 impl Clone for VectorValue {
-    #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match self {
@@ -78,7 +77,6 @@ impl Clone for VectorValue {
 impl VectorValue {
     /// Creates an empty `VectorValue` according to `eval_tp` and reserves capacity according
     /// to `capacity`.
-    #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
         match eval_tp {
             EvalType::Int => VectorValue::Int(Vec::with_capacity(capacity)),
@@ -92,7 +90,6 @@ impl VectorValue {
     }
 
     /// Returns the `EvalType` used to construct current column.
-    #[inline]
     pub fn eval_type(&self) -> EvalType {
         match self {
             VectorValue::Int(_) => EvalType::Int,
@@ -106,7 +103,6 @@ impl VectorValue {
     }
 
     /// Returns the number of datums contained in this column.
-    #[inline]
     pub fn len(&self) -> usize {
         match_self!(ref self, v, v.len())
     }
@@ -114,7 +110,6 @@ impl VectorValue {
     /// Returns whether this column is empty.
     ///
     /// Equals to `len() == 0`.
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -122,19 +117,16 @@ impl VectorValue {
     /// Shortens the column, keeping the first `len` datums and dropping the rest.
     ///
     /// If `len` is greater than the column's current length, this has no effect.
-    #[inline]
     pub fn truncate(&mut self, len: usize) {
         match_self!(ref mut self, v, v.truncate(len));
     }
 
     /// Clears the column, removing all datums.
-    #[inline]
     pub fn clear(&mut self) {
         self.truncate(0);
     }
 
     /// Returns the number of elements this column can hold without reallocating.
-    #[inline]
     pub fn capacity(&self) -> usize {
         match_self!(ref self, v, v.capacity())
     }
@@ -142,7 +134,6 @@ impl VectorValue {
     /// Retains only the elements specified by the predicate, which accepts index only.
     ///
     /// In other words, remove all rows such that `f(element_index)` returns `false`.
-    #[inline]
     pub fn retain_by_index<F>(&mut self, mut f: F)
     where
         F: FnMut(usize) -> bool,
@@ -162,7 +153,6 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if `other` does not have the same `EvalType` as `Self`.
-    #[inline]
     pub fn append(&mut self, other: &mut VectorValue) {
         match self {
             VectorValue::Int(ref mut self_vec) => match other {
@@ -210,7 +200,6 @@ impl VectorValue {
         }
     }
 
-    #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Vector(self)
     }
@@ -243,7 +232,6 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if `field_type` doesn't match current column's type.
-    #[inline]
     #[allow(clippy::cast_lossless)]
     pub fn push_datum(
         &mut self,
@@ -251,68 +239,57 @@ impl VectorValue {
         time_zone: &Tz,
         field_type: &FieldType,
     ) -> Result<()> {
-        #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
             number::decode_i64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as i64".to_owned()))
         }
 
-        #[inline]
         fn decode_uint(v: &mut &[u8]) -> Result<u64> {
             number::decode_u64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as u64".to_owned()))
         }
 
-        #[inline]
         fn decode_var_int(v: &mut &[u8]) -> Result<i64> {
             number::decode_var_i64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_i64".to_owned()))
         }
 
-        #[inline]
         fn decode_var_uint(v: &mut &[u8]) -> Result<u64> {
             number::decode_var_u64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_u64".to_owned()))
         }
 
-        #[inline]
         fn decode_float(v: &mut &[u8]) -> Result<f64> {
             number::decode_f64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as f64".to_owned()))
         }
 
-        #[inline]
         fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
             Decimal::decode(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
         }
 
-        #[inline]
         fn decode_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
             bytes::decode_bytes(v, false)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as bytes".to_owned()))
         }
 
-        #[inline]
         fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
             bytes::decode_compact_bytes(v).map_err(|_| {
                 Error::InvalidDataType("Failed to decode data as compact bytes".to_owned())
             })
         }
 
-        #[inline]
         fn decode_json(v: &mut &[u8]) -> Result<Json> {
             Json::decode(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
         }
 
-        #[inline]
         fn decode_duration_from_i64(v: i64) -> Result<Duration> {
             Duration::from_nanos(v, 0)
                 .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
         }
 
-        #[inline]
         fn decode_date_time_from_uint(
             v: u64,
             time_zone: &Tz,
@@ -630,7 +607,6 @@ macro_rules! impl_as_slice {
             /// # Panics
             ///
             /// Panics if the current column does not match the type.
-            #[inline]
             pub fn $name(&self) -> &[Option<$ty>] {
                 match self {
                     VectorValue::$ty(ref vec) => vec.as_slice(),
@@ -644,7 +620,6 @@ macro_rules! impl_as_slice {
         }
 
         impl AsRef<[Option<$ty>]> for VectorValue {
-            #[inline]
             fn as_ref(&self) -> &[Option<$ty>] {
                 self.$name()
             }
@@ -652,7 +627,6 @@ macro_rules! impl_as_slice {
 
         // TODO: We should only expose interface for push value, not the entire Vec.
         impl AsMut<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
             fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec,
@@ -692,7 +666,6 @@ macro_rules! impl_ext {
             /// # Panics
             ///
             /// Panics if the current column does not match the type.
-            #[inline]
             pub fn $push_name(&mut self, v: Option<$ty>) {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec.push(v),
@@ -708,7 +681,6 @@ macro_rules! impl_ext {
         // Implicit version
 
         impl VectorValueExt<$ty> for VectorValue {
-            #[inline]
             fn push(&mut self, v: Option<$ty>) {
                 self.$push_name(v);
             }
@@ -727,7 +699,6 @@ impl_ext! { Json, push_json }
 macro_rules! impl_from {
     ($ty:tt) => {
         impl From<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
             fn from(s: Vec<Option<$ty>>) -> VectorValue {
                 VectorValue::$ty(s)
             }

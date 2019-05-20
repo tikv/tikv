@@ -102,7 +102,6 @@ impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> ScanExecutor<C, S, T> 
         Ok(None)
     }
 
-    #[inline]
     fn inc_last_count(&mut self) {
         if let Some(counts) = self.counts.as_mut() {
             counts.last_mut().map_or((), |val| *val += 1);

@@ -3,7 +3,6 @@
 use rand::{thread_rng, Rng};
 use test::Bencher;
 
-#[inline]
 fn gen_rand_str(len: usize) -> Vec<u8> {
     let mut rand_str = vec![0; len];
     thread_rng().fill_bytes(&mut rand_str);

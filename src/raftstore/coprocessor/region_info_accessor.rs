@@ -271,7 +271,6 @@ impl RegionCollector {
     }
 
     /// Determines whether `region_to_check`'s epoch is stale compared to `current`'s epoch
-    #[inline]
     fn is_region_epoch_stale(&self, region_to_check: &Region, current: &Region) -> bool {
         let epoch = region_to_check.get_region_epoch();
         let current_epoch = current.get_region_epoch();

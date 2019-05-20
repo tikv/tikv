@@ -31,7 +31,6 @@ impl State {
         }
     }
 
-    #[inline]
     fn try_notify_post_send(&self) {
         let old_pending = self.pending.fetch_add(1, Ordering::AcqRel);
         if old_pending >= self.notify_size - 1 {
@@ -39,7 +38,6 @@ impl State {
         }
     }
 
-    #[inline]
     fn notify(&self) {
         let t = self.recv_task.swap(null_mut(), Ordering::AcqRel);
         if !t.is_null() {
@@ -53,7 +51,6 @@ impl State {
     /// the `Receiver` calls this to yield from the current `poll` context,
     /// and puts the current task handle to `recv_task`, so that the `Sender`
     /// respectively can notify it after sending some messages into the channel.
-    #[inline]
     fn yield_poll(&self) -> bool {
         let t = Box::into_raw(Box::new(task::current()));
         let origin = self.recv_task.swap(t, Ordering::AcqRel);
@@ -68,14 +65,12 @@ impl State {
 /// `Notifier` is used to notify receiver whenever you want.
 pub struct Notifier(Arc<State>);
 impl Notifier {
-    #[inline]
     pub fn notify(self) {
         drop(self);
     }
 }
 
 impl Drop for Notifier {
-    #[inline]
     fn drop(&mut self) {
         let notifier_registered = &self.0.notifier_registered;
         if !notifier_registered.compare_and_swap(true, false, Ordering::AcqRel) {
@@ -91,7 +86,6 @@ pub struct Sender<T> {
 }
 
 impl<T> Clone for Sender<T> {
-    #[inline]
     fn clone(&self) -> Sender<T> {
         Sender {
             sender: self.sender.clone(),
@@ -101,7 +95,6 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
-    #[inline]
     fn drop(&mut self) {
         self.state.notify();
     }
@@ -113,28 +106,24 @@ pub struct Receiver<T> {
 }
 
 impl<T> Sender<T> {
-    #[inline]
     pub fn send(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
-    #[inline]
     pub fn send_and_notify(&self, t: T) -> Result<(), SendError<T>> {
         self.sender.send(t)?;
         self.state.notify();
         Ok(())
     }
 
-    #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(t)?;
         self.state.try_notify_post_send();
         Ok(())
     }
 
-    #[inline]
     pub fn get_notifier(&self) -> Option<Notifier> {
         let notifier_registered = &self.state.notifier_registered;
         if !notifier_registered.compare_and_swap(false, true, Ordering::AcqRel) {
@@ -145,17 +134,14 @@ impl<T> Sender<T> {
 }
 
 impl<T> Receiver<T> {
-    #[inline]
     pub fn recv(&self) -> Result<T, RecvError> {
         self.receiver.recv()
     }
 
-    #[inline]
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         self.receiver.try_recv()
     }
 
-    #[inline]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         self.receiver.recv_timeout(timeout)
     }
@@ -166,7 +152,6 @@ impl<T> Receiver<T> {
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
-#[inline]
 pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
     assert!(notify_size > 0);
     let state = Arc::new(State::new(notify_size));
@@ -185,7 +170,6 @@ pub fn unbounded<T>(notify_size: usize) -> (Sender<T>, Receiver<T>) {
 ///
 /// # Panics
 /// if `notify_size` equals to 0.
-#[inline]
 pub fn bounded<T>(cap: usize, notify_size: usize) -> (Sender<T>, Receiver<T>) {
     assert!(notify_size > 0);
     let state = Arc::new(State::new(notify_size));

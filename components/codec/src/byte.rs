@@ -15,7 +15,6 @@ pub struct MemComparableByteCodec;
 
 impl MemComparableByteCodec {
     /// Calculates the length of the value after encoding.
-    #[inline]
     pub fn encoded_len(src_len: usize) -> usize {
         (src_len / MEMCMP_GROUP_SIZE + 1) * (MEMCMP_GROUP_SIZE + 1)
     }
@@ -23,7 +22,6 @@ impl MemComparableByteCodec {
     /// Gets the length of the first encoded byte sequence in the given buffer, which is encoded in
     /// the memory-comparable format. If the buffer is not complete, the length of buffer will be
     /// returned.
-    #[inline]
     fn get_first_encoded_len_internal<T: MemComparableCodecHelper>(encoded: &[u8]) -> usize {
         let mut idx = MEMCMP_GROUP_SIZE;
         loop {
@@ -103,7 +101,6 @@ impl MemComparableByteCodec {
     /// # Panics
     ///
     /// Panics if `len` exceeds `src.len()`.
-    #[inline]
     fn flip_bytes_in_place(src: &mut [u8], len: usize) {
         // This is already super efficient after compiling.
         // It is even faster than a manually written "flip by 64bit".
@@ -271,7 +268,6 @@ impl MemComparableByteCodec {
     /// descending decoding, which performs better than inlining a flag.
     ///
     /// Please refer to `try_decode_first` for the meaning of return values, panics and errors.
-    #[inline]
     fn try_decode_first_internal<T: MemComparableCodecHelper>(
         mut src_ptr: *const u8,
         src_len: usize,
@@ -351,12 +347,10 @@ struct DescendingMemComparableCodecHelper;
 impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
     const PADDING: [u8; MEMCMP_GROUP_SIZE] = [MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
-    #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
         (!raw_marker) as usize
     }
 
-    #[inline]
     fn get_raw_padding_ptr() -> *const u8 {
         Self::PADDING.as_ptr()
     }
@@ -365,12 +359,10 @@ impl MemComparableCodecHelper for AscendingMemComparableCodecHelper {
 impl MemComparableCodecHelper for DescendingMemComparableCodecHelper {
     const PADDING: [u8; MEMCMP_GROUP_SIZE] = [!MEMCMP_PAD_BYTE; MEMCMP_GROUP_SIZE];
 
-    #[inline]
     fn parse_padding_size(raw_marker: u8) -> usize {
         raw_marker as usize
     }
 
-    #[inline]
     fn get_raw_padding_ptr() -> *const u8 {
         Self::PADDING.as_ptr()
     }
@@ -453,7 +445,6 @@ pub trait CompactByteEncoder {
 }
 
 impl<T: NumberEncoder> CompactByteEncoder for T {
-    #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         self.write_var_i64(data.len() as i64)?;
         self.write_all_bytes(data)
@@ -461,7 +452,6 @@ impl<T: NumberEncoder> CompactByteEncoder for T {
 }
 
 impl CompactByteEncoder for std::fs::File {
-    #[inline]
     fn write_compact_bytes(&mut self, data: &[u8]) -> Result<()> {
         use std::io::Write;
         let mut buf = [0; number::MAX_VARINT64_LENGTH];

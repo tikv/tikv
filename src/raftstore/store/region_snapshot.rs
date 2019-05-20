@@ -232,7 +232,6 @@ impl RegionIterator {
         self.update_valid(true)
     }
 
-    #[inline]
     fn update_valid(&mut self, forward: bool) -> bool {
         if self.valid {
             let key = self.iter.key();
@@ -297,24 +296,20 @@ impl RegionIterator {
         self.update_valid(true)
     }
 
-    #[inline]
     pub fn key(&self) -> &[u8] {
         assert!(self.valid);
         keys::origin_key(self.iter.key())
     }
 
-    #[inline]
     pub fn value(&self) -> &[u8] {
         assert!(self.valid);
         self.iter.value()
     }
 
-    #[inline]
     pub fn valid(&self) -> bool {
         self.valid
     }
 
-    #[inline]
     pub fn status(&self) -> Result<()> {
         self.iter
             .status()
@@ -322,7 +317,6 @@ impl RegionIterator {
             .map_err(From::from)
     }
 
-    #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
             CRITICAL_ERROR

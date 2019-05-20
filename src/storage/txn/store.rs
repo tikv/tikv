@@ -58,7 +58,6 @@ pub struct SnapshotStore<S: Snapshot> {
 impl<S: Snapshot> Store for SnapshotStore<S> {
     type Scanner = MvccScanner<S>;
 
-    #[inline]
     fn get(&self, key: &Key, statistics: &mut Statistics) -> Result<Option<Value>> {
         let mut reader = MvccReader::new(
             self.snapshot.clone(),
@@ -73,7 +72,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         Ok(v)
     }
 
-    #[inline]
     fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Value>>> {
         // TODO: sort the keys and use ScanMode::Forward
         let mut reader = MvccReader::new(
@@ -92,7 +90,6 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         results
     }
 
-    #[inline]
     fn scanner(
         &self,
         desc: bool,
@@ -192,7 +189,6 @@ impl FixtureStore {
 impl Store for FixtureStore {
     type Scanner = FixtureStoreScanner;
 
-    #[inline]
     fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
         let r = self.data.get(key);
         match r {
@@ -202,12 +198,10 @@ impl Store for FixtureStore {
         }
     }
 
-    #[inline]
     fn batch_get(&self, keys: &[Key], statistics: &mut Statistics) -> Vec<Result<Option<Vec<u8>>>> {
         keys.iter().map(|key| self.get(key, statistics)).collect()
     }
 
-    #[inline]
     fn scanner(
         &self,
         desc: bool,
@@ -269,7 +263,6 @@ pub struct FixtureStoreScanner {
 }
 
 impl Scanner for FixtureStoreScanner {
-    #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
         let value = self.data.next();
         match value {
@@ -279,7 +272,6 @@ impl Scanner for FixtureStoreScanner {
         }
     }
 
-    #[inline]
     fn take_statistics(&mut self) -> Statistics {
         Statistics::default()
     }
@@ -332,7 +324,6 @@ mod tests {
             store
         }
 
-        #[inline]
         fn init_data(&mut self) {
             let primary_key = format!("{}{}", KEY_PREFIX, START_ID);
             let pk = primary_key.as_bytes();
@@ -363,7 +354,6 @@ mod tests {
             self.refresh_snapshot();
         }
 
-        #[inline]
         fn refresh_snapshot(&mut self) {
             self.snapshot = self.engine.snapshot(&self.ctx).unwrap()
         }

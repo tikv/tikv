@@ -117,7 +117,6 @@ impl ServerRaftStoreRouter {
     }
 }
 
-#[inline]
 fn handle_error<T>(region_id: u64, e: TrySendError<T>) -> RaftStoreError {
     match e {
         TrySendError::Full(_) => RaftStoreError::Transport(DiscardReason::Full),

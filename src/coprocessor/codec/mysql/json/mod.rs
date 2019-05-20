@@ -85,7 +85,6 @@ pub fn json_object(kvs: Vec<Datum>) -> Result<Json> {
 }
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Json {
-    #[inline]
     fn as_mysql_bool(
         &self,
         _context: &mut crate::coprocessor::dag::expr::EvalContext,

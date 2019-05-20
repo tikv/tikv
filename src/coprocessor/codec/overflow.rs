@@ -5,7 +5,6 @@ use crate::coprocessor::codec::{Error, Result};
 /// `div_i64` divides i64 a with b and returns:
 /// - an Error indicating overflow occurred or the divisor is 0
 //. - i64 otherwise
-#[inline]
 pub fn div_i64(a: i64, b: i64) -> Result<i64> {
     if b == 0 {
         return Err(Error::division_by_zero());
@@ -22,7 +21,6 @@ pub fn div_i64(a: i64, b: i64) -> Result<i64> {
 /// `div_u64_with_i64` divides u64 a with i64 b and returns:
 /// - an Error indicating overflow occurred or the divisor is 0
 /// - u64 otherwise
-#[inline]
 pub fn div_u64_with_i64(a: u64, b: i64) -> Result<u64> {
     if b == 0 {
         return Err(Error::division_by_zero());
@@ -44,7 +42,6 @@ pub fn div_u64_with_i64(a: u64, b: i64) -> Result<u64> {
 /// `div_i64_with_u64` divides i64 a with u64 b and returns:
 /// - an Error indicating overflow occurred or the divisor is 0
 /// - u64 otherwise
-#[inline]
 pub fn div_i64_with_u64(a: i64, b: u64) -> Result<u64> {
     if b == 0 {
         return Err(Error::division_by_zero());

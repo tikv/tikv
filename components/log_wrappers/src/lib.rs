@@ -18,7 +18,6 @@ pub mod test_util;
 pub struct DisplayValue<T: std::fmt::Display>(pub T);
 
 impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
-    #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record<'_>,
@@ -38,7 +37,6 @@ impl<T: std::fmt::Display> slog::Value for DisplayValue<T> {
 pub struct DebugValue<T: std::fmt::Debug>(pub T);
 
 impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
-    #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record<'_>,
@@ -79,7 +77,6 @@ fn test_debug() {
 pub struct Key<'a>(pub &'a [u8]);
 
 impl<'a> slog::Value for Key<'a> {
-    #[inline]
     fn serialize(
         &self,
         _record: &::slog::Record<'_>,
@@ -106,7 +103,6 @@ pub mod kvproto {
         pub struct KeyRange<'a>(pub &'a lib_kvproto::kvrpcpb::KeyRange);
 
         impl<'a> slog::Value for KeyRange<'a> {
-            #[inline]
             fn serialize(
                 &self,
                 _record: &::slog::Record<'_>,
@@ -158,7 +154,6 @@ pub mod kvproto {
 
         // Similar to `kvrpcpb::KeyRange`. Tests are ignored.
         impl<'a> slog::Value for KeyRange<'a> {
-            #[inline]
             fn serialize(
                 &self,
                 _record: &::slog::Record<'_>,

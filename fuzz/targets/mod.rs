@@ -8,7 +8,6 @@ use self::util::ReadLiteralExt;
 use failure::Error;
 use std::io::Cursor;
 
-#[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
     let _ = tikv_util::codec::bytes::encode_bytes(data);
     let _ = tikv_util::codec::bytes::encode_bytes_desc(data);
@@ -17,7 +16,6 @@ pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-#[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
     use tikv_util::codec::number::NumberEncoder;
     {
@@ -100,7 +98,6 @@ trait ReadAsDecimalRoundMode: ReadLiteralExt {
 
 impl<T: ReadLiteralExt> ReadAsDecimalRoundMode for T {}
 
-#[inline(always)]
 pub fn fuzz_coprocessor_codec_decimal(data: &[u8]) -> Result<(), Error> {
     use tikv::coprocessor::codec::mysql::decimal::Decimal;
 

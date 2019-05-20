@@ -171,7 +171,6 @@ impl Task {
         Task::Destroy(region_id)
     }
 
-    #[inline]
     pub fn read(cmd: RaftCommand) -> Task {
         Task::Read(cmd)
     }
@@ -179,7 +178,6 @@ impl Task {
     /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
     /// Returns `true`, it can be saftly sent to localreader,
     /// Returns `false`, it must not be sent to localreader.
-    #[inline]
     pub fn acceptable(request: &RaftCmdRequest) -> bool {
         if request.has_admin_request() || request.has_status_request() {
             false

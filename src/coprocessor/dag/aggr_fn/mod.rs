@@ -158,12 +158,10 @@ where
     // All `ConcreteAggrFunctionState` implement `AggrFunctionStateUpdatePartial<T>`, which is
     // one of the trait bound that `AggrFunctionState` requires.
 
-    #[inline]
     default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T>) -> Result<()> {
         panic!("Unmatched parameter type")
     }
 
-    #[inline]
     default fn update_repeat(
         &mut self,
         _ctx: &mut EvalContext,
@@ -173,7 +171,6 @@ where
         panic!("Unmatched parameter type")
     }
 
-    #[inline]
     default fn update_vector(
         &mut self,
         _ctx: &mut EvalContext,
@@ -187,12 +184,10 @@ impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
 where
     State: ConcreteAggrFunctionState<ParameterType = T>,
 {
-    #[inline]
     fn update(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         self.update_concrete(ctx, value)
     }
 
-    #[inline]
     fn update_repeat(
         &mut self,
         ctx: &mut EvalContext,
@@ -205,7 +200,6 @@ where
         Ok(())
     }
 
-    #[inline]
     fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
         for value in values {
             self.update_concrete(ctx, value)?;
@@ -221,7 +215,6 @@ where
     // All `ConcreteAggrFunctionState` implement `AggrFunctionStateResultPartial<T>`, which is
     // one of the trait bound that `AggrFunctionState` requires.
 
-    #[inline]
     default fn push_result(&self, _ctx: &mut EvalContext, _target: &mut T) -> Result<()> {
         panic!("Unmatched result append target type")
     }
@@ -231,7 +224,6 @@ impl<T: AggrResultAppendable + ?Sized, State> AggrFunctionStateResultPartial<T> 
 where
     State: ConcreteAggrFunctionState<ResultTargetType = T>,
 {
-    #[inline]
     fn push_result(&self, ctx: &mut EvalContext, target: &mut T) -> Result<()> {
         self.push_result_concrete(ctx, target)
     }

@@ -406,14 +406,12 @@ impl<E: Engine> GCRunner<E> {
 }
 
 impl<E: Engine> Runnable<GCTask> for GCRunner<E> {
-    #[inline]
     fn run(&mut self, task: GCTask) {
         self.handle_gc_worker_task(task);
     }
 
     // The default implementation of `run_batch` prints a warning to log when it takes over 1 second
     // to handle a task. It's not proper here, so override it to remove the log.
-    #[inline]
     fn run_batch(&mut self, tasks: &mut Vec<GCTask>) {
         for task in tasks.drain(..) {
             self.run(task);
@@ -630,7 +628,6 @@ impl GCManagerState {
     }
 }
 
-#[inline]
 fn set_status_metrics(state: GCManagerState) {
     for s in &[
         GCManagerState::Init,

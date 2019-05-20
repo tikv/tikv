@@ -39,7 +39,6 @@ pub trait Parser {
 /// Parse all aggregate function definition from protobuf.
 pub struct AggrDefinitionParser;
 
-#[inline]
 fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn Parser>> {
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
@@ -53,7 +52,6 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn Parser>> {
 
 impl AggrDefinitionParser {
     /// Checks whether the aggregate function definition is supported.
-    #[inline]
     pub fn check_supported(aggr_def: &Expr) -> Result<()> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp())?;
         parser.check_supported(aggr_def).map_err(|e| {
@@ -71,7 +69,6 @@ impl AggrDefinitionParser {
     /// # Panic
     ///
     /// May panic if the aggregate function definition is not supported.
-    #[inline]
     pub fn parse(
         aggr_def: Expr,
         time_zone: &Tz,

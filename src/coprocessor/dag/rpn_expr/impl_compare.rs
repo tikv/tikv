@@ -16,14 +16,12 @@ pub struct RpnFnCompare<C: Comparer> {
 }
 
 impl<C: Comparer> RpnFnCompare<C> {
-    #[inline]
     pub fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
         }
     }
 
-    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -35,7 +33,6 @@ impl<C: Comparer> RpnFnCompare<C> {
 }
 
 impl<C: Comparer> std::fmt::Debug for RpnFnCompare<C> {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "RpnFnCompare")
     }
@@ -46,7 +43,6 @@ impl<C: Comparer> std::fmt::Debug for RpnFnCompare<C> {
 impl<C: Comparer> Copy for RpnFnCompare<C> {}
 
 impl<C: Comparer> Clone for RpnFnCompare<C> {
-    #[inline]
     fn clone(&self) -> Self {
         Self::new()
     }
@@ -68,7 +64,6 @@ pub struct BasicComparer<T: Evaluable + Ord, F: CmpOp> {
 impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
     type T = T;
 
-    #[inline]
     fn compare(lhs: &Option<T>, rhs: &Option<T>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
@@ -85,7 +80,6 @@ pub struct RealComparer<F: CmpOp> {
 impl<F: CmpOp> Comparer for RealComparer<F> {
     type T = Real;
 
-    #[inline]
     fn compare(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<i64>> {
         match (lhs, rhs) {
             (None, None) => Ok(F::compare_null()),
@@ -113,7 +107,6 @@ pub struct UintUintComparer<F: CmpOp> {
 impl<F: CmpOp> Comparer for UintUintComparer<F> {
     type T = Int;
 
-    #[inline]
     fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
@@ -134,7 +127,6 @@ pub struct UintIntComparer<F: CmpOp> {
 impl<F: CmpOp> Comparer for UintIntComparer<F> {
     type T = Int;
 
-    #[inline]
     fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
@@ -158,7 +150,6 @@ pub struct IntUintComparer<F: CmpOp> {
 impl<F: CmpOp> Comparer for IntUintComparer<F> {
     type T = Int;
 
-    #[inline]
     fn compare(lhs: &Option<Int>, rhs: &Option<Int>) -> Result<Option<i64>> {
         Ok(match (lhs, rhs) {
             (None, None) => F::compare_null(),
@@ -176,12 +167,10 @@ impl<F: CmpOp> Comparer for IntUintComparer<F> {
 }
 
 pub trait CmpOp: 'static + Send + Sync {
-    #[inline]
     fn compare_null() -> Option<i64> {
         None
     }
 
-    #[inline]
     fn compare_partial_null() -> Option<i64> {
         None
     }
@@ -192,7 +181,6 @@ pub trait CmpOp: 'static + Send + Sync {
 pub struct CmpOpLT;
 
 impl CmpOp for CmpOpLT {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Less
     }
@@ -201,7 +189,6 @@ impl CmpOp for CmpOpLT {
 pub struct CmpOpLE;
 
 impl CmpOp for CmpOpLE {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Greater
     }
@@ -210,7 +197,6 @@ impl CmpOp for CmpOpLE {
 pub struct CmpOpGT;
 
 impl CmpOp for CmpOpGT {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Greater
     }
@@ -219,7 +205,6 @@ impl CmpOp for CmpOpGT {
 pub struct CmpOpGE;
 
 impl CmpOp for CmpOpGE {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Less
     }
@@ -228,7 +213,6 @@ impl CmpOp for CmpOpGE {
 pub struct CmpOpNE;
 
 impl CmpOp for CmpOpNE {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering != Ordering::Equal
     }
@@ -237,7 +221,6 @@ impl CmpOp for CmpOpNE {
 pub struct CmpOpEQ;
 
 impl CmpOp for CmpOpEQ {
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Equal
     }
@@ -246,17 +229,14 @@ impl CmpOp for CmpOpEQ {
 pub struct CmpOpNullEQ;
 
 impl CmpOp for CmpOpNullEQ {
-    #[inline]
     fn compare_null() -> Option<i64> {
         Some(1)
     }
 
-    #[inline]
     fn compare_partial_null() -> Option<i64> {
         Some(0)
     }
 
-    #[inline]
     fn compare_order(ordering: Ordering) -> bool {
         ordering == Ordering::Equal
     }

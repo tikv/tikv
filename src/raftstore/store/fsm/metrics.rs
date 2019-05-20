@@ -27,7 +27,6 @@ pub struct GlobalStoreStat {
 }
 
 impl GlobalStoreStat {
-    #[inline]
     pub fn local(&self) -> LocalStoreStat {
         LocalStoreStat {
             lock_cf_bytes_written: 0,
@@ -50,7 +49,6 @@ pub struct LocalStoreStat {
 }
 
 impl Clone for LocalStoreStat {
-    #[inline]
     fn clone(&self) -> LocalStoreStat {
         self.global.local()
     }

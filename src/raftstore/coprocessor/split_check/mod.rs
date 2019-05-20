@@ -35,12 +35,10 @@ impl Host {
         }
     }
 
-    #[inline]
     pub fn auto_split(&self) -> bool {
         self.auto_split
     }
 
-    #[inline]
     pub fn skip(&self) -> bool {
         self.checkers.is_empty()
     }
@@ -87,7 +85,6 @@ impl Host {
         Ok(vec![])
     }
 
-    #[inline]
     pub fn add_checker(&mut self, checker: Box<dyn SplitChecker>) {
         self.checkers.push(checker);
     }

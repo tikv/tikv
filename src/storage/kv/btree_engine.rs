@@ -188,12 +188,10 @@ impl Iterator for BTreeEngineIterator {
         self.seek_to_range_endpoint(range, false)
     }
 
-    #[inline]
     fn valid(&self) -> bool {
         self.valid
     }
 
-    #[inline]
     fn status(&self) -> EngineResult<()> {
         Ok(())
     }
@@ -227,7 +225,6 @@ impl Snapshot for BTreeEngineSnapshot {
     fn iter(&self, iter_opt: IterOption, mode: ScanMode) -> EngineResult<Cursor<Self::Iter>> {
         self.iter_cf(CF_DEFAULT, iter_opt, mode)
     }
-    #[inline]
     fn iter_cf(
         &self,
         cf: CfName,

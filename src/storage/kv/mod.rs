@@ -121,12 +121,10 @@ pub trait Snapshot: Send + Clone {
         Err(box_err!("no user properties"))
     }
     // The minimum key this snapshot can retrieve.
-    #[inline]
     fn lower_bound(&self) -> Option<&[u8]> {
         None
     }
     // The maximum key can be fetched from the snapshot should less than the upper bound.
-    #[inline]
     fn upper_bound(&self) -> Option<&[u8]> {
         None
     }
@@ -205,7 +203,6 @@ impl FlowStatistics {
 }
 
 impl CFStatistics {
-    #[inline]
     pub fn total_op_count(&self) -> usize {
         self.get + self.next + self.prev + self.seek + self.seek_for_prev
     }
@@ -333,20 +330,17 @@ impl<I: Iterator> Cursor<I> {
     }
 
     /// Mark key and value as unread. It will be invoked once cursor is moved.
-    #[inline]
     fn mark_unread(&self) {
         self.cur_key_has_read.set(false);
         self.cur_value_has_read.set(false);
     }
 
     /// Mark key as read. Returns whether key was marked as read before this call.
-    #[inline]
     fn mark_key_read(&self) -> bool {
         self.cur_key_has_read.replace(true)
     }
 
     /// Mark value as read. Returns whether value was marked as read before this call.
-    #[inline]
     fn mark_value_read(&self) -> bool {
         self.cur_value_has_read.replace(true)
     }
@@ -551,7 +545,6 @@ impl<I: Iterator> Cursor<I> {
         Ok(true)
     }
 
-    #[inline]
     pub fn key(&self, statistics: &mut CFStatistics) -> &[u8] {
         let key = self.iter.key();
         if !self.mark_key_read() {
@@ -561,7 +554,6 @@ impl<I: Iterator> Cursor<I> {
         key
     }
 
-    #[inline]
     pub fn value(&self, statistics: &mut CFStatistics) -> &[u8] {
         let value = self.iter.value();
         if !self.mark_value_read() {
@@ -570,28 +562,24 @@ impl<I: Iterator> Cursor<I> {
         value
     }
 
-    #[inline]
     pub fn seek_to_first(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_first()
     }
 
-    #[inline]
     pub fn seek_to_last(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek_to_last()
     }
 
-    #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         statistics.seek += 1;
         self.mark_unread();
         self.iter.seek(key)
     }
 
-    #[inline]
     pub fn internal_seek_for_prev(
         &mut self,
         key: &Key,
@@ -602,21 +590,18 @@ impl<I: Iterator> Cursor<I> {
         self.iter.seek_for_prev(key)
     }
 
-    #[inline]
     pub fn next(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.next += 1;
         self.mark_unread();
         self.iter.next()
     }
 
-    #[inline]
     pub fn prev(&mut self, statistics: &mut CFStatistics) -> bool {
         statistics.prev += 1;
         self.mark_unread();
         self.iter.prev()
     }
 
-    #[inline]
     // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
     // (1) We reached the end of the data. In this case, status() is OK();
     // (2) there is an error. In this case status() is not OK().

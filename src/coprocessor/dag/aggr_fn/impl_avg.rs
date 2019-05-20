@@ -142,7 +142,6 @@ where
     type ParameterType = T;
     type ResultTargetType = [VectorValue];
 
-    #[inline]
     fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         match value {
             None => Ok(()),
@@ -154,7 +153,6 @@ where
         }
     }
 
-    #[inline]
     fn push_result_concrete(
         &self,
         _ctx: &mut EvalContext,

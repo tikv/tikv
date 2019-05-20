@@ -81,7 +81,6 @@ mod profiling {
 
         /// caller should ensure that the pointer should not be accessed after
         /// the guard is dropped.
-        #[inline]
         unsafe fn get_mut_ptr(&mut self) -> *mut c_char {
             self.0
                 .as_mut()

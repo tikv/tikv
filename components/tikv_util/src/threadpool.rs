@@ -236,7 +236,6 @@ where
         self.scheduler.schedule(job)
     }
 
-    #[inline]
     pub fn get_task_count(&self) -> usize {
         self.scheduler.task_count.load(AtomicOrdering::SeqCst)
     }

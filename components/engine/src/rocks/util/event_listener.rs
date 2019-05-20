@@ -17,7 +17,6 @@ impl EventListener {
     }
 }
 
-#[inline]
 fn tag_write_stall_condition(e: WriteStallCondition) -> &'static str {
     match e {
         WriteStallCondition::Normal => "normal",

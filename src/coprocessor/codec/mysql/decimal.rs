@@ -229,7 +229,6 @@ type SubTmp = (usize, usize, u8);
 ///     2. Some(0) if abs(lhs) > abs(rhs),
 ///     3. Some(1) if abs(lhs) < abs(rhs).
 /// l_frac_word_cnt and r_frac_word_cnt do not contain the suffix 0 when r_int_word_cnt == l_int_word_cnt.
-#[inline]
 fn calc_sub_carry(lhs: &Decimal, rhs: &Decimal) -> (Option<i32>, u8, SubTmp, SubTmp) {
     let (l_int_word_cnt, mut l_frac_word_cnt) = (word_cnt!(lhs.int_cnt), word_cnt!(lhs.frac_cnt));
     let (r_int_word_cnt, mut r_frac_word_cnt) = (word_cnt!(rhs.int_cnt), word_cnt!(rhs.frac_cnt));
@@ -875,7 +874,6 @@ pub enum RoundMode {
 
 impl Decimal {
     /// abs the Decimal into a new Decimal.
-    #[inline]
     pub fn abs(mut self) -> Res<Decimal> {
         self.negative = false;
         Res::Ok(self)
@@ -1787,7 +1785,6 @@ impl Display for Decimal {
 }
 
 impl crate::coprocessor::codec::data_type::AsMySQLBool for Decimal {
-    #[inline]
     fn as_mysql_bool(&self, _context: &mut EvalContext) -> crate::coprocessor::Result<bool> {
         // Note: as_f64() may be never fail?
         Ok(self.as_f64()?.round() != 0f64)

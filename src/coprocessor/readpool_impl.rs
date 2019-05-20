@@ -65,7 +65,6 @@ pub fn build_read_pool(config: &readpool::Config, pd_sender: FutureScheduler<PdT
         .build()
 }
 
-#[inline]
 fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     TLS_COP_METRICS.with(|m| {
         // Flush Prometheus metrics
@@ -121,7 +120,6 @@ pub fn tls_collect_executor_metrics(region_id: u64, type_str: &str, metrics: Exe
     });
 }
 
-#[inline]
 pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
     TLS_COP_METRICS.with(|m| {
         let map = &mut m.borrow_mut().local_cop_flow_stats;

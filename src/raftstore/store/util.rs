@@ -91,7 +91,6 @@ pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
 /// when the message is received but there is no such region in `Store::region_peers` and the
 /// region overlaps with others. In this case we should put `msg` into `pending_votes` instead of
 /// create the peer.
-#[inline]
 pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgRequestVote | MessageType::MsgRequestPreVote => {
@@ -101,7 +100,6 @@ pub fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
     }
 }
 
-#[inline]
 pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
     let msg_type = msg.get_msg_type();
     msg_type == MessageType::MsgRequestVote || msg_type == MessageType::MsgRequestPreVote
@@ -116,7 +114,6 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
 // Heartbeat message for the store of that peer to check whether to create a new peer
 // when receiving these messages, or just to wait for a pending region split to perform
 // later.
-#[inline]
 pub fn is_initial_msg(msg: &eraftpb::Message) -> bool {
     let msg_type = msg.get_msg_type();
     msg_type == MessageType::MsgRequestVote
@@ -220,7 +217,6 @@ pub fn check_region_epoch(
     Ok(())
 }
 
-#[inline]
 pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     let peer = req.get_header().get_peer();
     if peer.get_store_id() == store_id {
@@ -230,7 +226,6 @@ pub fn check_store_id(req: &RaftCmdRequest, store_id: u64) -> Result<()> {
     }
 }
 
-#[inline]
 pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     let header = req.get_header();
     if header.get_term() == 0 || term <= header.get_term() + 1 {
@@ -242,7 +237,6 @@ pub fn check_term(req: &RaftCmdRequest, term: u64) -> Result<()> {
     }
 }
 
-#[inline]
 pub fn check_peer_id(req: &RaftCmdRequest, peer_id: u64) -> Result<()> {
     let header = req.get_header();
     if header.get_peer().get_id() == peer_id {
@@ -506,7 +500,6 @@ const TIMESPEC_NSEC_MASK: u64 = (1 << TIMESPEC_SEC_SHIFT) - 1;
 /// # Panics
 ///
 /// If Timespecs have negative sec.
-#[inline]
 fn timespec_to_u64(ts: Timespec) -> u64 {
     // > Darwin's and Linux's struct timespec functions handle pre-
     // > epoch timestamps using a "two steps back, one step forward" representation,
@@ -531,7 +524,6 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
 /// # Panics
 ///
 /// If nsec is negative or GE than 1_000_000_000(nano seconds pre second).
-#[inline]
 fn u64_to_timespec(u: u64) -> Timespec {
     let sec = u >> TIMESPEC_SEC_SHIFT;
     let nsec = (u & TIMESPEC_NSEC_MASK) << TIMESPEC_NSEC_SHIFT;
@@ -544,7 +536,6 @@ fn u64_to_timespec(u: u64) -> Timespec {
 ///
 /// If `data` is corrupted, this function will panic.
 // TODO: make sure received entries are not corrupted
-#[inline]
 pub fn parse_data_at<T: Message>(data: &[u8], index: u64, tag: &str) -> T {
     protobuf::parse_from_bytes::<T>(data).unwrap_or_else(|e| {
         panic!("{} data is corrupted at {}: {:?}", tag, index, e);
@@ -614,7 +605,6 @@ mod tests {
 
     #[test]
     fn test_lease() {
-        #[inline]
         fn sleep_test(duration: TimeDuration, lease: &Lease, state: LeaseState) {
             // In linux, sleep uses CLOCK_MONOTONIC.
             let monotonic_start = monotonic_now();

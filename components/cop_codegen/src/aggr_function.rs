@@ -36,12 +36,10 @@ impl AggrFunctionOpts {
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
         quote! {
             impl #impl_generics crate::coprocessor::dag::aggr_fn::AggrFunction for #ident #ty_generics #where_clause {
-                #[inline]
                 fn name(&self) -> &'static str {
                     #name
                 }
 
-                #[inline]
                 fn create_state(&self) -> Box<dyn crate::coprocessor::dag::aggr_fn::AggrFunctionState> {
                     Box::new(#state_expr)
                 }

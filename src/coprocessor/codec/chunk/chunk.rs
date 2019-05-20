@@ -35,13 +35,11 @@ impl Chunk {
     }
 
     /// Get the number of rows in the chunk.
-    #[inline]
     pub fn num_cols(&self) -> usize {
         self.columns.len()
     }
 
     /// Get the number of rows in the chunk.
-    #[inline]
     pub fn num_rows(&self) -> usize {
         if self.columns.is_empty() {
             0
@@ -51,13 +49,11 @@ impl Chunk {
     }
 
     /// Append a datum to the column
-    #[inline]
     pub fn append_datum(&mut self, col_idx: usize, v: &Datum) -> Result<()> {
         self.columns[col_idx].append_datum(v)
     }
 
     /// Get the Row in the chunk with the row index.
-    #[inline]
     pub fn get_row(&self, idx: usize) -> Option<Row<'_>> {
         if idx < self.num_rows() {
             Some(Row::new(self, idx))
@@ -67,7 +63,6 @@ impl Chunk {
     }
 
     // Get the Iterator for Row in the Chunk.
-    #[inline]
     pub fn iter(&self) -> RowIterator<'_> {
         RowIterator::new(self)
     }
@@ -108,19 +103,16 @@ impl<'a> Row<'a> {
     }
 
     /// Get the row index of Chunk.
-    #[inline]
     pub fn idx(&self) -> usize {
         self.idx
     }
 
     /// Get the number of values in the row.
-    #[inline]
     pub fn len(&self) -> usize {
         self.c.num_cols()
     }
 
     /// Get the datum of the column with the specified type in the row.
-    #[inline]
     pub fn get_datum(&self, col_idx: usize, fp: &FieldType) -> Result<Datum> {
         self.c.columns[col_idx].get_datum(self.idx, fp)
     }

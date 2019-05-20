@@ -217,7 +217,6 @@ where
     }
 }
 
-#[inline]
 fn handle_node_column_ref(
     tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
@@ -239,7 +238,6 @@ fn handle_node_column_ref(
     Ok(())
 }
 
-#[inline]
 fn handle_node_fn_call<F>(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
@@ -271,7 +269,6 @@ where
     Ok(())
 }
 
-#[inline]
 fn handle_node_constant(
     mut tree_node: Expr,
     rpn_nodes: &mut Vec<RpnExpressionNode>,
@@ -322,7 +319,6 @@ fn handle_node_constant(
     Ok(())
 }
 
-#[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
     match eval_type {
         EvalType::Int => ScalarValue::Int(None),
@@ -335,33 +331,28 @@ fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
     }
 }
 
-#[inline]
 fn extract_scalar_value_int64(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_i64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode int64 from the request")))?;
     Ok(ScalarValue::Int(Some(value)))
 }
 
-#[inline]
 fn extract_scalar_value_uint64(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_u64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode uint64 from the request")))?;
     Ok(ScalarValue::Int(Some(value as i64)))
 }
 
-#[inline]
 fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
     Ok(ScalarValue::Bytes(Some(val)))
 }
 
-#[inline]
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_f64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
     Ok(ScalarValue::Real(Some(value)))
 }
 
-#[inline]
 fn extract_scalar_value_date_time(
     val: Vec<u8>,
     field_type: &FieldType,
@@ -375,7 +366,6 @@ fn extract_scalar_value_date_time(
     Ok(ScalarValue::DateTime(Some(value)))
 }
 
-#[inline]
 fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
     let n = number::decode_i64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode duration from the request")))?;
@@ -384,14 +374,12 @@ fn extract_scalar_value_duration(val: Vec<u8>) -> Result<ScalarValue> {
     Ok(ScalarValue::Duration(Some(value)))
 }
 
-#[inline]
 fn extract_scalar_value_decimal(val: Vec<u8>) -> Result<ScalarValue> {
     let value = Decimal::decode(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode decimal from the request")))?;
     Ok(ScalarValue::Decimal(Some(value)))
 }
 
-#[inline]
 fn extract_scalar_value_json(val: Vec<u8>) -> Result<ScalarValue> {
     let value = Json::decode(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode json from the request")))?;

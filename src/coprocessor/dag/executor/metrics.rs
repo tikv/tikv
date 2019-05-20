@@ -13,7 +13,6 @@ pub struct ExecutorMetrics {
 
 impl ExecutorMetrics {
     /// Merge records from `other` into `self`, and clear `other`.
-    #[inline]
     pub fn merge(&mut self, other: &mut ExecutorMetrics) {
         self.cf_stats.add(&other.cf_stats);
         other.cf_stats = Default::default();
@@ -30,18 +29,15 @@ pub struct ScanCounter {
 }
 
 impl ScanCounter {
-    #[inline]
     pub fn inc_range(&mut self) {
         self.range += 1;
     }
 
-    #[inline]
     pub fn inc_point(&mut self) {
         self.point += 1;
     }
 
     /// Merge records from `other` into `self`, and clear `other`.
-    #[inline]
     pub fn merge(&mut self, other: &mut ScanCounter) {
         self.range += other.range;
         self.point += other.point;

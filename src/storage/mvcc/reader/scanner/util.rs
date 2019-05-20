@@ -21,7 +21,6 @@ pub enum CheckLockResult {
 
 /// Checks whether the lock conflicts with the given `ts`. If `ts == MaxU64`, the latest
 /// committed version will be returned for primary key instead of leading to lock conflicts.
-#[inline]
 pub fn check_lock(key: &Key, ts: u64, lock: &Lock) -> Result<CheckLockResult> {
     if lock.ts > ts || lock.lock_type == LockType::Lock {
         // Ignore lock when lock.ts > ts or lock's type is Lock

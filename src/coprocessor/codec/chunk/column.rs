@@ -134,7 +134,6 @@ impl Column {
     }
 
     /// Return whether the column has a fixed length or not.
-    #[inline]
     fn is_fixed(&self) -> bool {
         self.fixed_len > 0
     }

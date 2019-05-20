@@ -13,13 +13,11 @@ use crate::coprocessor::codec::mysql::{Decimal, RoundMode, DEFAULT_FSP};
 use crate::coprocessor::codec::Datum;
 
 impl ScalarFunc {
-    #[inline]
     pub fn abs_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.abs()))
     }
 
-    #[inline]
     pub fn abs_decimal<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -30,7 +28,6 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn abs_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let n = try_opt!(self.children[0].eval_int(ctx, row));
         if n == i64::MIN {
@@ -39,25 +36,21 @@ impl ScalarFunc {
         Ok(Some(n.abs()))
     }
 
-    #[inline]
     pub fn abs_uint(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    #[inline]
     pub fn ceil_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.ceil()))
     }
 
-    #[inline]
     pub fn ceil_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.ceil().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
     }
 
-    #[inline]
     pub fn ceil_dec_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -68,25 +61,21 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn ceil_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    #[inline]
     pub fn floor_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.floor()))
     }
 
-    #[inline]
     pub fn floor_dec_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_decimal(ctx, row));
         let d: Result<Decimal> = d.floor().into();
         d.and_then(|dec| dec.as_i64_with_ctx(ctx)).map(Some)
     }
 
-    #[inline]
     pub fn floor_dec_to_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -97,12 +86,10 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn floor_int_to_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    #[inline]
     pub fn log2(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         let res = n.log2();
@@ -113,7 +100,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn log10(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         let res = n.log10();
@@ -124,7 +110,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn log_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         let res = n.ln();
@@ -135,7 +120,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn log_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let base = try_opt!(self.children[0].eval_real(ctx, row));
         let n = try_opt!(self.children[1].eval_real(ctx, row));
@@ -147,12 +131,10 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn pi(&self, _ctx: &mut EvalContext, _row: &[Datum]) -> Result<Option<f64>> {
         Ok(Some(f64::consts::PI))
     }
 
-    #[inline]
     pub fn rand(&self, _: &mut EvalContext, _: &[Datum]) -> Result<Option<f64>> {
         let mut cus_rng = self.cus_rng.rng.borrow_mut();
         if cus_rng.is_none() {
@@ -167,7 +149,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn rand_with_seed(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let seed = match self.children[0].eval_int(ctx, row)? {
             Some(v) => Some(v as u64),
@@ -187,7 +168,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn crc32(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let d = try_opt!(self.children[0].eval_string(ctx, row));
         let mut digest = crc32::Digest::new(crc32::IEEE);
@@ -195,12 +175,10 @@ impl ScalarFunc {
         Ok(Some(i64::from(digest.sum32())))
     }
 
-    #[inline]
     pub fn round_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         self.children[0].eval_int(ctx, row)
     }
 
-    #[inline]
     pub fn round_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -214,13 +192,11 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn round_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let number = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(number.round()))
     }
 
-    #[inline]
     pub fn round_with_frac_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let number = try_opt!(self.children[0].eval_int(ctx, row));
         let digits = try_opt!(self.children[1].eval_int(ctx, row));
@@ -234,7 +210,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn round_with_frac_real(
         &self,
         ctx: &mut EvalContext,
@@ -248,7 +223,6 @@ impl ScalarFunc {
         Ok(Some(frac.round() * power))
     }
 
-    #[inline]
     pub fn round_with_frac_dec<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -264,7 +238,6 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn sign(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let f = try_opt!(self.children[0].eval_real(ctx, row));
         if f > 0f64 {
@@ -276,7 +249,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn sqrt(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let f = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
         if f < 0f64 {
@@ -286,38 +258,32 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn cos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.cos()))
     }
 
-    #[inline]
     pub fn tan(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.tan()))
     }
 
-    #[inline]
     pub fn atan_1_arg(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let f = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(f.atan()))
     }
 
-    #[inline]
     pub fn atan_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let y = try_opt!(self.children[0].eval_real(ctx, row));
         let x = try_opt!(self.children[1].eval_real(ctx, row));
         Ok(Some(y.atan2(x)))
     }
 
-    #[inline]
     pub fn sin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.sin()))
     }
 
-    #[inline]
     pub fn pow(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let y = try_opt!(self.children[1].eval_real(ctx, row));
@@ -328,7 +294,6 @@ impl ScalarFunc {
         Ok(Some(pow))
     }
 
-    #[inline]
     pub fn asin(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
         if n >= -1f64 && n <= 1f64 {
@@ -338,7 +303,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn acos(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row)) as f64;
         if n >= -1f64 && n <= 1f64 {
@@ -348,7 +312,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn cot(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         let tan = n.tan();
@@ -361,13 +324,11 @@ impl ScalarFunc {
         Err(Error::overflow("DOUBLE", &format!("cot({})", n)))
     }
 
-    #[inline]
     pub fn degrees(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let n = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(n.to_degrees()))
     }
 
-    #[inline]
     pub fn truncate_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let x = try_opt!(self.children[0].eval_int(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
@@ -390,7 +351,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn truncate_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let d = try_opt!(self.children[1].eval_int(ctx, row));
@@ -413,7 +373,6 @@ impl ScalarFunc {
         Ok(Some(r))
     }
 
-    #[inline]
     pub fn truncate_decimal(
         &self,
         ctx: &mut EvalContext,
@@ -432,13 +391,11 @@ impl ScalarFunc {
         r.map(|t| Some(Cow::Owned(t)))
     }
 
-    #[inline]
     pub fn radians(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         Ok(Some(x * f64::consts::PI / 180_f64))
     }
 
-    #[inline]
     pub fn exp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<f64>> {
         let x = try_opt!(self.children[0].eval_real(ctx, row));
         let r = x.exp();
@@ -448,7 +405,6 @@ impl ScalarFunc {
         Ok(Some(r))
     }
 
-    #[inline]
     pub fn conv<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,

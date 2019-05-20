@@ -168,22 +168,18 @@ impl PeerFsm {
         ))
     }
 
-    #[inline]
     pub fn region_id(&self) -> u64 {
         self.peer.region().get_id()
     }
 
-    #[inline]
     pub fn get_peer(&self) -> &Peer {
         &self.peer
     }
 
-    #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.peer_id()
     }
 
-    #[inline]
     pub fn stop(&mut self) {
         self.stopped = true;
     }
@@ -204,13 +200,11 @@ impl PeerFsm {
 impl Fsm for PeerFsm {
     type Message = PeerMsg;
 
-    #[inline]
     fn is_stopped(&self) -> bool {
         self.stopped
     }
 
     /// Set a mailbox to Fsm, which should be used to send message to itself.
-    #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
@@ -220,7 +214,6 @@ impl Fsm for PeerFsm {
 
     /// Take the mailbox from Fsm. Implementation should ensure there will be
     /// no reference to mailbox after calling this method.
-    #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
         Self: Sized,
@@ -616,22 +609,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
     }
 
-    #[inline]
     fn region_id(&self) -> u64 {
         self.fsm.peer.region().get_id()
     }
 
-    #[inline]
     fn region(&self) -> &Region {
         self.fsm.peer.region()
     }
 
-    #[inline]
     fn store_id(&self) -> u64 {
         self.fsm.peer.peer.get_store_id()
     }
 
-    #[inline]
     fn schedule_tick(&mut self, tick: PeerTicks, timeout: Duration) {
         if self.fsm.tick_registry.contains(tick) {
             return;

@@ -95,7 +95,6 @@ bitflags! {
 }
 
 impl PeerTicks {
-    #[inline]
     pub fn tag(self) -> &'static str {
         match self {
             PeerTicks::RAFT => "raft",
@@ -120,7 +119,6 @@ pub enum StoreTick {
 }
 
 impl StoreTick {
-    #[inline]
     pub fn tag(self) -> &'static str {
         match self {
             StoreTick::CompactCheck => "compact_check",
@@ -252,7 +250,6 @@ pub struct RaftCommand {
 }
 
 impl RaftCommand {
-    #[inline]
     pub fn new(request: RaftCmdRequest, callback: Callback) -> RaftCommand {
         RaftCommand {
             request,

@@ -36,7 +36,6 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Set whether or not read operations should fill the cache.
     ///
     /// Defaults to `true`.
-    #[inline]
     pub fn fill_cache(mut self, fill_cache: bool) -> Self {
         self.fill_cache = fill_cache;
         self
@@ -45,7 +44,6 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Set whether or not to use prefix seek.
     ///
     /// Defaults to `false`, it means use total order seek.
-    #[inline]
     pub fn prefix_seek(mut self, prefix_seek: bool) -> Self {
         self.prefix_seek = prefix_seek;
         self
@@ -54,7 +52,6 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// Set iterator scanning mode.
     ///
     /// Defaults to `ScanMode::Forward`.
-    #[inline]
     pub fn scan_mode(mut self, scan_mode: ScanMode) -> Self {
         self.scan_mode = scan_mode;
         self
@@ -64,7 +61,6 @@ impl<'a, S: 'a + Snapshot> CursorBuilder<'a, S> {
     /// The range is left closed right open.
     ///
     /// Both defaults to `None`.
-    #[inline]
     pub fn range(mut self, lower: Option<Key>, upper: Option<Key>) -> Self {
         self.lower_bound = lower;
         self.upper_bound = upper;

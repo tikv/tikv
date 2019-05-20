@@ -37,7 +37,6 @@ macro_rules! match_each_eval_type_and_call {
     }};
 }
 
-#[inline]
 // The `Box<>` wrapper cannot be removed actually. Thus disable the clippy rule. Additionally this
 // function will be inlined so that performance will not be affected.
 #[allow(clippy::borrowed_box)]
@@ -56,7 +55,6 @@ where
     aggr_fn_state.update_repeat(ctx, concrete_value, rows)
 }
 
-#[inline]
 #[allow(clippy::borrowed_box)]
 fn update_from_vector_eval_output<T>(
     aggr_fn_state: &mut Box<dyn AggrFunctionState>,
@@ -72,7 +70,6 @@ where
     aggr_fn_state.update_vector(ctx, vector_value)
 }
 
-#[inline]
 #[allow(clippy::borrowed_box)]
 fn push_result_to_column<T>(
     aggr_fn_state: &mut Box<dyn AggrFunctionState>,
@@ -148,7 +145,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
 
 impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
@@ -268,7 +264,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         })
     }
 
-    #[inline]
     fn process_src_data(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
         let rows_len = data.rows_len();
         if rows_len == 0 {
@@ -361,7 +356,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         Ok(ret)
     }
 
-    #[inline]
     fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because aggregation executor always scans all data
         let src_result = self
@@ -390,12 +384,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     for BatchSimpleAggregationExecutor<C, Src>
 {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         self.ordered_schema.as_slice()
     }
 
-    #[inline]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
@@ -436,7 +428,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
         ret
     }
 
-    #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
         self.summary_collector

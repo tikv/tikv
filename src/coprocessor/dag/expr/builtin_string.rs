@@ -45,18 +45,15 @@ impl TrimDirection {
 }
 
 impl ScalarFunc {
-    #[inline]
     pub fn length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         Ok(Some(input.len() as i64))
     }
 
-    #[inline]
     fn find_str(text: &str, pattern: &str) -> Option<usize> {
         twoway::find_str(text, pattern).map(|i| text[..i].chars().count())
     }
 
-    #[inline]
     pub fn locate_2_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
@@ -65,7 +62,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     pub fn locate_3_args(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let substr = try_opt!(self.children[0].eval_string_and_decode(ctx, row));
         let s = try_opt!(self.children[1].eval_string_and_decode(ctx, row));
@@ -85,7 +81,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     pub fn locate_binary_2_args(
         &self,
         ctx: &mut EvalContext,
@@ -98,7 +93,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     pub fn locate_binary_3_args(
         &self,
         ctx: &mut EvalContext,
@@ -116,13 +110,11 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     pub fn bit_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         Ok(Some(input.len() as i64 * 8))
     }
 
-    #[inline]
     pub fn ascii(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let input = try_opt!(self.children[0].eval_string(ctx, row));
         if input.len() == 0 {
@@ -132,7 +124,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn char_length(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         if self.children[0].field_type().is_binary_string_like() {
             let input = try_opt!(self.children[0].eval_string(ctx, row));
@@ -142,7 +133,6 @@ impl ScalarFunc {
         Ok(Some(input.chars().count() as i64))
     }
 
-    #[inline]
     pub fn bin<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -152,7 +142,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(format!("{:b}", i).into_bytes())))
     }
 
-    #[inline]
     pub fn concat<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -166,7 +155,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(output)))
     }
 
-    #[inline]
     pub fn concat_ws<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -188,7 +176,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(output)))
     }
 
-    #[inline]
     pub fn ltrim<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -206,7 +193,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn rtrim<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -261,7 +247,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
 
-    #[inline]
     pub fn reverse<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -273,7 +258,6 @@ impl ScalarFunc {
         )))
     }
 
-    #[inline]
     pub fn reverse_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -307,7 +291,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(s.to_string().into_bytes())))
     }
 
-    #[inline]
     pub fn upper<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -321,7 +304,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(s.to_uppercase().into_bytes())))
     }
 
-    #[inline]
     pub fn lower<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -335,7 +317,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(s.to_lowercase().into_bytes())))
     }
 
-    #[inline]
     pub fn hex_int_arg<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -345,7 +326,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(format!("{:X}", i).into_bytes())))
     }
 
-    #[inline]
     pub fn hex_str_arg<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -355,7 +335,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(hex::encode_upper(s.to_vec()).into_bytes())))
     }
 
-    #[inline]
     pub fn un_hex<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -374,7 +353,6 @@ impl ScalarFunc {
         result.map(|t| Some(Cow::Owned(t))).or(Ok(None))
     }
 
-    #[inline]
     pub fn elt<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -387,7 +365,6 @@ impl ScalarFunc {
         self.children[i as usize].eval_string(ctx, row)
     }
 
-    #[inline]
     pub fn field_int(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         let val = try_opt_or!(self.children[0].eval_int(ctx, row), Some(0));
@@ -402,7 +379,6 @@ impl ScalarFunc {
         Ok(Some(0))
     }
 
-    #[inline]
     pub fn field_real(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt_or!(self.children[0].eval_real(ctx, row), Some(0));
 
@@ -420,7 +396,6 @@ impl ScalarFunc {
         Ok(Some(0))
     }
 
-    #[inline]
     pub fn field_string(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let val = try_opt_or!(self.children[0].eval_string(ctx, row), Some(0));
 
@@ -434,7 +409,6 @@ impl ScalarFunc {
         Ok(Some(0))
     }
 
-    #[inline]
     pub fn trim_1_arg<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -444,7 +418,6 @@ impl ScalarFunc {
         trim(&s, " ", TrimDirection::Both)
     }
 
-    #[inline]
     pub fn trim_2_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -455,7 +428,6 @@ impl ScalarFunc {
         trim(&s, &pat, TrimDirection::Both)
     }
 
-    #[inline]
     pub fn trim_3_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -470,7 +442,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn to_base64<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -496,7 +467,6 @@ impl ScalarFunc {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    #[inline]
     pub fn from_base64<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -521,7 +491,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn substring_index<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -544,7 +513,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(r.into_bytes())))
     }
 
-    #[inline]
     pub fn substring_2_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -580,7 +548,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn substring_3_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -637,7 +604,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn substring_binary_2_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -646,7 +612,6 @@ impl ScalarFunc {
         self.substring_binary(ctx, row, false)
     }
 
-    #[inline]
     pub fn substring_binary_3_args<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -655,7 +620,6 @@ impl ScalarFunc {
         self.substring_binary(ctx, row, true)
     }
 
-    #[inline]
     fn substring_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -687,7 +651,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(s[start..end].to_vec())))
     }
 
-    #[inline]
     pub fn space<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -710,7 +673,6 @@ impl ScalarFunc {
         Ok(Some(Cow::Owned(vec![SPACE; len])))
     }
 
-    #[inline]
     pub fn strcmp(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         use std::cmp::Ordering::*;
         let left = try_opt!(self.children[0].eval_string(ctx, row));
@@ -722,7 +684,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn rpad<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -753,7 +714,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn rpad_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -784,7 +744,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn lpad<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -819,7 +778,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn lpad_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -854,7 +812,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn left_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -871,7 +828,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn right_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -888,7 +844,6 @@ impl ScalarFunc {
         }
     }
 
-    #[inline]
     pub fn instr<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -901,7 +856,6 @@ impl ScalarFunc {
             .or(Some(0)))
     }
 
-    #[inline]
     pub fn instr_binary<'a, 'b: 'a>(
         &'b self,
         ctx: &mut EvalContext,
@@ -921,7 +875,6 @@ impl ScalarFunc {
 //   2. target_len of type in byte is larger then MAX_BLOB_WIDTH
 //   3. target_len is greater than length of input string, *and* pad string is empty
 // otherwise return Some(target_len)
-#[inline]
 fn validate_target_len_for_pad(
     len_unsigned: bool,
     target_len: i64,
@@ -952,7 +905,6 @@ fn validate_target_len_for_pad(
 // assert_eq!(i64_to_usize(u64::max_value() as i64, true), (u64::max_value() as usize, true));
 // assert_eq!(i64_to_usize(u64::max_value() as i64, false), (1_usize, false));
 // ```
-#[inline]
 fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
     if is_unsigned {
         (i as u64 as usize, true)
@@ -968,14 +920,12 @@ fn i64_to_usize(i: i64, is_unsigned: bool) -> (usize, bool) {
     }
 }
 
-#[inline]
 fn strip_whitespace(input: &[u8]) -> Vec<u8> {
     let mut input_copy = Vec::<u8>::with_capacity(input.len());
     input_copy.extend(input.iter().filter(|b| !b" \n\t\r\x0b\x0c".contains(b)));
     input_copy
 }
 
-#[inline]
 fn encoded_size(len: usize) -> Option<usize> {
     if len == 0 {
         return Some(0);
@@ -990,7 +940,6 @@ fn encoded_size(len: usize) -> Option<usize> {
 
 // similar logic to crate `line-wrap`, since we had call `encoded_size` before,
 // there is no need to use checked_xxx math operation like `line-wrap` does.
-#[inline]
 fn line_wrap(buf: &mut [u8], input_len: usize) {
     let line_len = BASE64_LINE_WRAP_LENGTH;
     if input_len <= line_len {
@@ -1014,7 +963,6 @@ fn line_wrap(buf: &mut [u8], input_len: usize) {
     }
 }
 
-#[inline]
 fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
     let mut cnt = 0;
@@ -1032,7 +980,6 @@ fn substring_index_positive(s: &str, delim: &str, count: usize) -> String {
     s[..last].to_string()
 }
 
-#[inline]
 fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
     let mut bg = 0;
     let mut positions = VecDeque::with_capacity(count.min(128));
@@ -1047,7 +994,6 @@ fn substring_index_negative(s: &str, delim: &str, count: usize) -> String {
     s[positions[0]..].to_string()
 }
 
-#[inline]
 fn trim<'a>(s: &str, pat: &str, direction: TrimDirection) -> Result<Option<Cow<'a, [u8]>>> {
     let r = match direction {
         TrimDirection::Leading => s.trim_start_matches(pat),

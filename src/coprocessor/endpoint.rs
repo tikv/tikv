@@ -183,7 +183,6 @@ impl<E: Engine> Endpoint<E> {
     }
 
     /// Get the batch row limit configuration.
-    #[inline]
     fn get_batch_row_limit(&self, is_streaming: bool) -> usize {
         if is_streaming {
             self.stream_batch_row_limit
@@ -192,7 +191,6 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    #[inline]
     fn async_snapshot(
         engine: E,
         ctx: &kvrpcpb::Context,
@@ -284,7 +282,6 @@ impl<E: Engine> Endpoint<E> {
     /// Parses and handles a unary request. Returns a future that will never fail. If there are
     /// errors during parsing or handling, they will be converted into a `Response` as the success
     /// result of the future.
-    #[inline]
     pub fn parse_and_handle_unary_request(
         &self,
         req: coppb::Request,
@@ -422,7 +419,6 @@ impl<E: Engine> Endpoint<E> {
     /// Parses and handles a stream request. Returns a stream that produce each result in a
     /// `Response` and will never fail. If there are errors during parsing or handling, they will
     /// be converted into a `Response` as the only stream item.
-    #[inline]
     pub fn parse_and_handle_stream_request(
         &self,
         req: coppb::Request,

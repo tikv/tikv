@@ -27,12 +27,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchLimitExecutor<C, Src> {
 }
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<C, Src> {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_iterate();
 
@@ -51,7 +49,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
         result
     }
 
-    #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
         self.summary_collector
@@ -103,12 +100,10 @@ mod tests {
     }
 
     impl BatchExecutor for MockExecutor {
-        #[inline]
         fn schema(&self) -> &[FieldType] {
             self.field_types.as_ref()
         }
 
-        #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
             let upper = if expect_rows + self.offset > self.data.len() {
                 self.data.len()
@@ -136,7 +131,6 @@ mod tests {
             }
         }
 
-        #[inline]
         fn collect_statistics(&mut self, _: &mut BatchExecuteStatistics) {}
     }
 
@@ -216,17 +210,14 @@ mod tests {
         }
     }
     impl BatchExecutor for MockErrExecutor {
-        #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
             let mut result = self.0.next_batch(expect_rows);
             result.is_drained = Err(box_err!("next batch mock error"));
             result
         }
 
-        #[inline]
         fn collect_statistics(&mut self, _: &mut BatchExecuteStatistics) {}
 
-        #[inline]
         fn schema(&self) -> &[FieldType] {
             self.0.schema()
         }

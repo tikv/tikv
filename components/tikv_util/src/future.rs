@@ -37,7 +37,6 @@ where
     F2: Future,
     F2::Item: IntoFuture,
 {
-    #[inline]
     pub fn new(f1: F1, f2: F2) -> AndThenWith<F1, F2> {
         AndThenWith {
             f1: Some(f1),
@@ -54,7 +53,6 @@ where
     type Item = Result<<F2::Item as IntoFuture>::Item, E>;
     type Error = F2::Error;
 
-    #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if self.f1.is_some() {
             match self.f1.take().unwrap() {

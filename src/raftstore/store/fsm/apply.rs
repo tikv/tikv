@@ -425,12 +425,10 @@ impl ApplyContext {
         self.wb().count() as u64 - self.wb_last_keys
     }
 
-    #[inline]
     pub fn wb(&self) -> &WriteBatch {
         self.wb.as_ref().unwrap()
     }
 
-    #[inline]
     pub fn wb_mut(&mut self) -> &mut WriteBatch {
         self.wb.as_mut().unwrap()
     }
@@ -2626,12 +2624,10 @@ impl ApplyFsm {
 impl Fsm for ApplyFsm {
     type Message = Msg;
 
-    #[inline]
     fn is_stopped(&self) -> bool {
         self.delegate.stopped
     }
 
-    #[inline]
     fn set_mailbox(&mut self, mailbox: Cow<'_, BasicMailbox<Self>>)
     where
         Self: Sized,
@@ -2639,7 +2635,6 @@ impl Fsm for ApplyFsm {
         self.mailbox = Some(mailbox.into_owned());
     }
 
-    #[inline]
     fn take_mailbox(&mut self) -> Option<BasicMailbox<Self>>
     where
         Self: Sized,
@@ -2661,7 +2656,6 @@ pub struct ControlFsm;
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
 
-    #[inline]
     fn is_stopped(&self) -> bool {
         true
     }

@@ -7,7 +7,6 @@ use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time};
 use crate::coprocessor::codec::Datum;
 
 impl Datum {
-    #[inline]
     pub fn as_int(&self) -> Result<Option<i64>> {
         match *self {
             Datum::Null => Ok(None),
@@ -17,7 +16,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_real(&self) -> Result<Option<f64>> {
         match *self {
             Datum::Null => Ok(None),
@@ -26,7 +24,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_decimal(&self) -> Result<Option<Cow<'_, Decimal>>> {
         match *self {
             Datum::Null => Ok(None),
@@ -35,7 +32,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_string(&self) -> Result<Option<Cow<'_, [u8]>>> {
         match *self {
             Datum::Null => Ok(None),
@@ -44,7 +40,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_time(&self) -> Result<Option<Cow<'_, Time>>> {
         match *self {
             Datum::Null => Ok(None),
@@ -53,7 +48,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
         match *self {
             Datum::Null => Ok(None),
@@ -62,7 +56,6 @@ impl Datum {
         }
     }
 
-    #[inline]
     pub fn as_json(&self) -> Result<Option<Cow<'_, Json>>> {
         match *self {
             Datum::Null => Ok(None),
@@ -77,37 +70,30 @@ impl Constant {
         self.val.clone()
     }
 
-    #[inline]
     pub fn eval_int(&self) -> Result<Option<i64>> {
         self.val.as_int()
     }
 
-    #[inline]
     pub fn eval_real(&self) -> Result<Option<f64>> {
         self.val.as_real()
     }
 
-    #[inline]
     pub fn eval_decimal(&self) -> Result<Option<Cow<'_, Decimal>>> {
         self.val.as_decimal()
     }
 
-    #[inline]
     pub fn eval_string(&self) -> Result<Option<Cow<'_, [u8]>>> {
         self.val.as_string()
     }
 
-    #[inline]
     pub fn eval_time(&self) -> Result<Option<Cow<'_, Time>>> {
         self.val.as_time()
     }
 
-    #[inline]
     pub fn eval_duration(&self) -> Result<Option<Cow<'_, Duration>>> {
         self.val.as_duration()
     }
 
-    #[inline]
     pub fn eval_json(&self) -> Result<Option<Cow<'_, Json>>> {
         self.val.as_json()
     }

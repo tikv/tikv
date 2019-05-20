@@ -11,7 +11,6 @@ use crate::coprocessor::Result;
 pub struct RpnFnLogicalAnd;
 
 impl RpnFnLogicalAnd {
-    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
@@ -36,7 +35,6 @@ impl RpnFnLogicalAnd {
 pub struct RpnFnLogicalOr;
 
 impl RpnFnLogicalOr {
-    #[inline]
     fn call(
         _ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,

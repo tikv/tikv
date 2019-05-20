@@ -85,7 +85,6 @@ impl AggrFnStateCount {
 // `AggrFunctionStateUpdatePartial` for the COUNT aggregate function.
 
 impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount {
-    #[inline]
     fn update(&mut self, _ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
         if value.is_some() {
             self.count += 1;
@@ -93,7 +92,6 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
         Ok(())
     }
 
-    #[inline]
     fn update_repeat(
         &mut self,
         _ctx: &mut EvalContext,
@@ -107,7 +105,6 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
         Ok(())
     }
 
-    #[inline]
     fn update_vector(&mut self, _ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()> {
         // Will be used for expressions like `COUNT(col)`.
         for value in values {
@@ -123,14 +120,12 @@ impl<T> super::AggrFunctionStateResultPartial<T> for AggrFnStateCount
 where
     T: super::AggrResultAppendable + ?Sized,
 {
-    #[inline]
     default fn push_result(&self, _ctx: &mut EvalContext, _target: &mut T) -> Result<()> {
         panic!("Unmatched result append target type")
     }
 }
 
 impl super::AggrFunctionStateResultPartial<Vec<Option<Int>>> for AggrFnStateCount {
-    #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut Vec<Option<Int>>) -> Result<()> {
         target.push(Some(self.count as Int));
         Ok(())

@@ -136,14 +136,12 @@ lazy_static! {
 }
 
 impl Default for SteadyClock {
-    #[inline]
     fn default() -> SteadyClock {
         STEADY_CLOCK.clone()
     }
 }
 
 impl Now for SteadyClock {
-    #[inline]
     fn now(&self) -> std::time::Instant {
         let n = monotonic_raw_now();
         let dur = Instant::elapsed_duration(n, self.zero.steady_time_point);
@@ -172,7 +170,6 @@ lazy_static! {
 }
 
 impl Default for SteadyTimer {
-    #[inline]
     fn default() -> SteadyTimer {
         GLOBAL_STEADY_TIMER.clone()
     }

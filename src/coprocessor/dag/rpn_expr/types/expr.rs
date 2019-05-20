@@ -26,7 +26,6 @@ pub enum RpnExpressionNode {
 
 impl RpnExpressionNode {
     /// Gets the field type.
-    #[inline]
     pub fn field_type(&self) -> Option<&FieldType> {
         match self {
             RpnExpressionNode::FnCall { ref field_type, .. } => Some(field_type),
@@ -36,7 +35,6 @@ impl RpnExpressionNode {
     }
 
     /// Borrows the function instance for `FnCall` variant.
-    #[inline]
     pub fn fn_call_func(&self) -> Option<&dyn RpnFunction> {
         match self {
             RpnExpressionNode::FnCall { ref func, .. } => Some(&*func),
@@ -45,7 +43,6 @@ impl RpnExpressionNode {
     }
 
     /// Borrows the constant value for `Constant` variant.
-    #[inline]
     pub fn constant_value(&self) -> Option<&ScalarValue> {
         match self {
             RpnExpressionNode::Constant { ref value, .. } => Some(value),
@@ -54,7 +51,6 @@ impl RpnExpressionNode {
     }
 
     /// Gets the column offset for `ColumnRef` variant.
-    #[inline]
     pub fn column_ref_offset(&self) -> Option<usize> {
         match self {
             RpnExpressionNode::ColumnRef { ref offset, .. } => Some(*offset),

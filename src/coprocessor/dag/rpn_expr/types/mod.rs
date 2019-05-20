@@ -27,25 +27,21 @@ pub struct RpnFnCallPayload<'a> {
 
 impl<'a> RpnFnCallPayload<'a> {
     /// The number of arguments.
-    #[inline]
     pub fn args_len(&'a self) -> usize {
         self.raw_args.len()
     }
 
     /// Gets the raw argument at specific position.
-    #[inline]
     pub fn raw_arg_at(&'a self, position: usize) -> &'a RpnStackNode<'a> {
         &self.raw_args[position]
     }
 
     /// Gets the field type of the argument at specific position.
-    #[inline]
     pub fn field_type_at(&'a self, position: usize) -> &'a FieldType {
         self.raw_args[position].field_type()
     }
 
     /// Gets the field type of the return value.
-    #[inline]
     pub fn return_field_type(&'a self) -> &'a FieldType {
         self.ret_field_type
     }

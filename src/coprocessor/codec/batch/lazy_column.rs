@@ -43,14 +43,12 @@ impl std::fmt::Debug for LazyBatchColumn {
 }
 
 impl From<VectorValue> for LazyBatchColumn {
-    #[inline]
     fn from(vec: VectorValue) -> Self {
         LazyBatchColumn::Decoded(vec)
     }
 }
 
 impl Clone for LazyBatchColumn {
-    #[inline]
     fn clone(&self) -> Self {
         match self {
             LazyBatchColumn::Raw(v) => {
@@ -68,18 +66,15 @@ impl Clone for LazyBatchColumn {
 
 impl LazyBatchColumn {
     /// Creates a new `LazyBatchColumn::Raw` with specified capacity.
-    #[inline]
     pub fn raw_with_capacity(capacity: usize) -> Self {
         LazyBatchColumn::Raw(Vec::with_capacity(capacity))
     }
 
     /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and eval type.
-    #[inline]
     pub fn decoded_with_capacity_and_tp(capacity: usize, eval_tp: EvalType) -> Self {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
     }
 
-    #[inline]
     pub fn is_raw(&self) -> bool {
         match self {
             LazyBatchColumn::Raw(_) => true,
@@ -87,7 +82,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn is_decoded(&self) -> bool {
         match self {
             LazyBatchColumn::Raw(_) => false,
@@ -95,7 +89,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn decoded(&self) -> &VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
@@ -103,7 +96,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn mut_decoded(&mut self) -> &mut VectorValue {
         match self {
             LazyBatchColumn::Raw(_) => panic!("LazyBatchColumn is not decoded"),
@@ -111,7 +103,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn raw(&self) -> &Vec<SmallVec<[u8; 10]>> {
         match self {
             LazyBatchColumn::Raw(ref v) => v,
@@ -119,7 +110,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn mut_raw(&mut self) -> &mut Vec<SmallVec<[u8; 10]>> {
         match self {
             LazyBatchColumn::Raw(ref mut v) => v,
@@ -127,7 +117,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn len(&self) -> usize {
         match self {
             LazyBatchColumn::Raw(ref v) => v.len(),
@@ -135,7 +124,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn truncate(&mut self, len: usize) {
         match self {
             LazyBatchColumn::Raw(ref mut v) => v.truncate(len),
@@ -143,17 +131,14 @@ impl LazyBatchColumn {
         };
     }
 
-    #[inline]
     pub fn clear(&mut self) {
         self.truncate(0)
     }
 
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[inline]
     pub fn capacity(&self) -> usize {
         match self {
             LazyBatchColumn::Raw(ref v) => v.capacity(),
@@ -161,7 +146,6 @@ impl LazyBatchColumn {
         }
     }
 
-    #[inline]
     pub fn retain_by_index<F>(&mut self, mut f: F)
     where
         F: FnMut(usize) -> bool,
@@ -215,7 +199,6 @@ impl LazyBatchColumn {
     /// Panics when current column is already decoded.
     // TODO: Deprecate this function. mut_raw should be preferred so that there won't be repeated
     // match for each iteration.
-    #[inline]
     pub fn push_raw(&mut self, raw_datum: impl AsRef<[u8]>) {
         match self {
             LazyBatchColumn::Raw(ref mut v) => {
@@ -540,17 +523,14 @@ mod benches {
     struct VectorLazyBatchColumn(Vec<Vec<u8>>);
 
     impl VectorLazyBatchColumn {
-        #[inline]
         pub fn raw_with_capacity(capacity: usize) -> Self {
             VectorLazyBatchColumn(Vec::with_capacity(capacity))
         }
 
-        #[inline]
         pub fn clear(&mut self) {
             self.0.clear();
         }
 
-        #[inline]
         pub fn push_raw(&mut self, raw_datum: &[u8]) {
             self.0.push(raw_datum.to_vec());
         }

@@ -63,7 +63,6 @@ impl SortRow {
         Ok(Ordering::Equal)
     }
 
-    #[inline]
     fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!(err_msg.to_owned()));
@@ -97,7 +96,6 @@ impl TopNHeap {
         })
     }
 
-    #[inline]
     pub fn check_err(&self) -> Result<()> {
         if let Some(ref err_msg) = *self.err.as_ref().borrow() {
             return Err(box_err!(err_msg.to_owned()));

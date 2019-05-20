@@ -69,7 +69,6 @@ impl RpcClient {
     }
 
     /// Creates a new call option with default request timeout.
-    #[inline]
     fn call_option() -> CallOption {
         CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT))
     }

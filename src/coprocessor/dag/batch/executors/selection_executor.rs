@@ -22,7 +22,6 @@ pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
 
 impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
         let conditions = descriptor.get_conditions();
         for c in conditions {
@@ -70,7 +69,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
         })
     }
 
-    #[inline]
     fn handle_next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 
@@ -118,13 +116,11 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
 }
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<C, Src> {
-    #[inline]
     fn schema(&self) -> &[FieldType] {
         // The selection executor's schema comes from its child.
         self.src.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch(scan_rows);
@@ -133,7 +129,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelecti
         result
     }
 
-    #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
         self.summary_collector

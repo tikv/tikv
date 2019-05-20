@@ -46,7 +46,6 @@ pub fn build_read_pool(config: &readpool::Config, pd_sender: FutureScheduler<PdT
         .build()
 }
 
-#[inline]
 fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut storage_metrics = m.borrow_mut();
@@ -78,7 +77,6 @@ fn tls_flush(pd_sender: &FutureScheduler<PdTask>) {
     });
 }
 
-#[inline]
 pub fn tls_collect_command_count(cmd: &str, priority: readpool::Priority) {
     TLS_STORAGE_METRICS.with(|m| {
         let mut storage_metrics = m.borrow_mut();
@@ -93,7 +91,6 @@ pub fn tls_collect_command_count(cmd: &str, priority: readpool::Priority) {
     });
 }
 
-#[inline]
 pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
@@ -103,7 +100,6 @@ pub fn tls_collect_command_duration(cmd: &str, duration: Duration) {
     });
 }
 
-#[inline]
 pub fn tls_collect_key_reads(cmd: &str, count: usize) {
     TLS_STORAGE_METRICS.with(|m| {
         m.borrow_mut()
@@ -113,7 +109,6 @@ pub fn tls_collect_key_reads(cmd: &str, count: usize) {
     });
 }
 
-#[inline]
 pub fn tls_processing_read_observe_duration<F, R>(cmd: &str, f: F) -> R
 where
     F: FnOnce() -> R,
@@ -129,7 +124,6 @@ where
     })
 }
 
-#[inline]
 pub fn tls_collect_scan_count(cmd: &str, statistics: &crate::storage::Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         let histogram = &mut m.borrow_mut().local_kv_command_scan_details;
@@ -143,7 +137,6 @@ pub fn tls_collect_scan_count(cmd: &str, statistics: &crate::storage::Statistics
     });
 }
 
-#[inline]
 pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statistics) {
     TLS_STORAGE_METRICS.with(|m| {
         let map = &mut m.borrow_mut().local_read_flow_stats;

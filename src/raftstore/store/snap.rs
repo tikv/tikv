@@ -88,12 +88,10 @@ quick_error! {
 pub type Result<T> = result::Result<T, Error>;
 
 // CF_LOCK is relatively small, so we use plain file for performance issue.
-#[inline]
 pub fn plain_file_used(cf: &str) -> bool {
     cf == CF_LOCK
 }
 
-#[inline]
 pub fn check_abort(status: &AtomicUsize) -> Result<()> {
     if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
         return Err(Error::Abort);
@@ -109,7 +107,6 @@ pub struct SnapKey {
 }
 
 impl SnapKey {
-    #[inline]
     pub fn new(region_id: u64, term: u64, idx: u64) -> SnapKey {
         SnapKey {
             region_id,
@@ -1229,7 +1226,6 @@ impl SnapManager {
         Ok(v)
     }
 
-    #[inline]
     pub fn has_registered(&self, key: &SnapKey) -> bool {
         self.core.rl().registry.contains_key(key)
     }

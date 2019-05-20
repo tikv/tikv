@@ -43,7 +43,6 @@ where
 ///
 /// [RFC: Unified Log Format]: (https://github.com/tikv/rfcs/blob/master/text/2018-12-19-unified-log-format.md)
 ///
-#[inline]
 fn need_json_encode(bytes: &[u8]) -> bool {
     for &byte in bytes {
         if byte <= 0x20 || byte == 0x22 || byte == 0x3D || byte == 0x5B || byte == 0x5D {

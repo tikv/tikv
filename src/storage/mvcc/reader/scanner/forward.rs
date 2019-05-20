@@ -200,7 +200,6 @@ impl<S: Snapshot> ForwardScanner<S> {
 
     /// Attempt to get the value of a key specified by `user_key` and `self.cfg.ts`. This function
     /// requires that the write cursor is currently pointing to the latest version of `user_key`.
-    #[inline]
     fn get(
         &mut self,
         user_key: &Key,
@@ -290,7 +289,6 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// directly. Otherwise there will be a default CF look up.
     ///
     /// The implementation is the same as `PointGetter::load_data_by_write`.
-    #[inline]
     fn load_data_by_write(&mut self, write: Write, user_key: &Key) -> Result<Value> {
         if self.cfg.omit_value {
             return Ok(vec![]);
@@ -321,7 +319,6 @@ impl<S: Snapshot> ForwardScanner<S> {
     /// If it is pointing to current user key, we need to step it until we meet a new
     /// key. We first try to `next()` a few times. If still not reaching another user
     /// key, we `seek()`.
-    #[inline]
     fn move_write_cursor_to_next_user_key(&mut self, current_user_key: &Key) -> Result<()> {
         for i in 0..SEEK_BOUND {
             if i > 0 {
@@ -353,7 +350,6 @@ impl<S: Snapshot> ForwardScanner<S> {
     }
 
     /// Create the default cursor if it doesn't exist.
-    #[inline]
     fn ensure_default_cursor(&mut self) -> Result<()> {
         if self.default_cursor.is_some() {
             return Ok(());

@@ -31,24 +31,20 @@ pub trait RpnFunction: std::fmt::Debug + Send + Sync + 'static {
 }
 
 impl Clone for Box<dyn RpnFunction> {
-    #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
     }
 }
 
 impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
-    #[inline]
     fn name(&self) -> &'static str {
         (**self).name()
     }
 
-    #[inline]
     fn args_len(&self) -> usize {
         (**self).args_len()
     }
 
-    #[inline]
     fn eval(
         &self,
         rows: usize,
@@ -58,7 +54,6 @@ impl<T: RpnFunction + ?Sized> RpnFunction for Box<T> {
         (**self).eval(rows, context, payload)
     }
 
-    #[inline]
     fn box_clone(&self) -> Box<dyn RpnFunction> {
         (**self).box_clone()
     }
@@ -70,7 +65,6 @@ impl Helper {
     /// Evaluates a function without argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline]
     pub fn eval_0_arg<Ret, F>(
         rows: usize,
         mut f: F,
@@ -93,7 +87,6 @@ impl Helper {
     /// Evaluates a function with 1 scalar or vector argument to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline]
     pub fn eval_1_arg<Arg0, Ret, F>(
         rows: usize,
         mut f: F,
@@ -126,7 +119,6 @@ impl Helper {
     /// Evaluates a function with 2 scalar or vector arguments to produce a vector value.
     ///
     /// The function will be called multiple times to fill the vector.
-    #[inline]
     pub fn eval_2_args<Arg0, Arg1, Ret, F>(
         rows: usize,
         f: F,
@@ -189,7 +181,6 @@ impl Helper {
         }
     }
 
-    #[inline]
     fn eval_2_args_scalar_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -218,7 +209,6 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline]
     fn eval_2_args_scalar_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -248,7 +238,6 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline]
     fn eval_2_args_vector_scalar<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -278,7 +267,6 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 
-    #[inline]
     fn eval_2_args_vector_vector<Arg0, Arg1, Ret, F>(
         rows: usize,
         mut f: F,
@@ -313,7 +301,6 @@ impl Helper {
     ///
     /// The function will be called multiple times to fill the vector. For each function call,
     /// there will be one indirection to support both scalar and vector arguments.
-    #[inline]
     pub fn eval_3_args<Arg0, Arg1, Arg2, Ret, F>(
         rows: usize,
         mut f: F,

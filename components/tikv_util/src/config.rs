@@ -257,7 +257,6 @@ impl ReadableDuration {
 }
 
 impl fmt::Display for ReadableDuration {
-    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut dur = crate::time::duration_to_ms(self.0);
         let mut written = false;

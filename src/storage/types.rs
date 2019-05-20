@@ -49,7 +49,6 @@ pub struct Key(Vec<u8>);
 /// Core functions for `Key`.
 impl Key {
     /// Creates a key from raw bytes.
-    #[inline]
     pub fn from_raw(key: &[u8]) -> Key {
         // adding extra length for appending timestamp
         let len = codec::bytes::max_encoded_bytes_size(key.len()) + codec::number::U64_SIZE;
@@ -59,7 +58,6 @@ impl Key {
     }
 
     /// Gets and moves the raw representation of this key.
-    #[inline]
     pub fn into_raw(self) -> Result<Vec<u8>, codec::Error> {
         let mut k = self.0;
         bytes::decode_bytes_in_place(&mut k, false)?;
@@ -67,19 +65,16 @@ impl Key {
     }
 
     /// Gets the raw representation of this key.
-    #[inline]
     pub fn to_raw(&self) -> Result<Vec<u8>, codec::Error> {
         bytes::decode_bytes(&mut self.0.as_slice(), false)
     }
 
     /// Creates a key from encoded bytes vector.
-    #[inline]
     pub fn from_encoded(encoded_key: Vec<u8>) -> Key {
         Key(encoded_key)
     }
 
     /// Creates a key with reserved capacity for timestamp from encoded bytes slice.
-    #[inline]
     pub fn from_encoded_slice(encoded_key: &[u8]) -> Key {
         let mut k = Vec::with_capacity(encoded_key.len() + number::U64_SIZE);
         k.extend_from_slice(encoded_key);
@@ -87,19 +82,16 @@ impl Key {
     }
 
     /// Gets the encoded representation of this key.
-    #[inline]
     pub fn as_encoded(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Gets and moves the encoded representation of this key.
-    #[inline]
     pub fn into_encoded(self) -> Vec<u8> {
         self.0
     }
 
     /// Creates a new key by appending a `u64` timestamp to this key.
-    #[inline]
     pub fn append_ts(self, ts: u64) -> Key {
         let mut encoded = self.0;
         encoded.encode_u64_desc(ts).unwrap();
@@ -110,7 +102,6 @@ impl Key {
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped
     /// key.
-    #[inline]
     pub fn decode_ts(&self) -> Result<u64, codec::Error> {
         Ok(Self::decode_ts_from(&self.0)?)
     }
@@ -118,7 +109,6 @@ impl Key {
     /// Creates a new key by truncating the timestamp from this key.
     ///
     /// Preconditions: the caller must ensure this is actually a timestamped key.
-    #[inline]
     pub fn truncate_ts(mut self) -> Result<Key, codec::Error> {
         let len = self.0.len();
         if len < number::U64_SIZE {
@@ -139,7 +129,6 @@ impl Key {
     }
 
     /// Split a ts encoded key, return the user key and timestamp.
-    #[inline]
     pub fn split_on_ts_for(key: &[u8]) -> Result<(&[u8], u64), codec::Error> {
         if key.len() < number::U64_SIZE {
             Err(codec::Error::KeyLength)
@@ -152,7 +141,6 @@ impl Key {
     }
 
     /// Extract the user key from a ts encoded key.
-    #[inline]
     pub fn truncate_ts_for(key: &[u8]) -> Result<&[u8], codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
@@ -162,7 +150,6 @@ impl Key {
     }
 
     /// Decode the timestamp from a ts encoded key.
-    #[inline]
     pub fn decode_ts_from(key: &[u8]) -> Result<u64, codec::Error> {
         let len = key.len();
         if len < number::U64_SIZE {
@@ -180,7 +167,6 @@ impl Key {
     /// byte row id and in many situations only this part is different when calling this function.
     //
     // TODO: If the last 8 byte is memory aligned, it would be better.
-    #[inline]
     pub fn is_user_key_eq(ts_encoded_key: &[u8], user_key: &[u8]) -> bool {
         let user_key_len = user_key.len();
         if ts_encoded_key.len() != user_key_len + number::U64_SIZE {

@@ -25,7 +25,6 @@ lazy_static::lazy_static! {
 /// (`CALLGRIND_START_INSTRUMENTATION`). Otherwise, the CPU Profiler will be started and profile
 /// will be generated to the file specified by `name`.
 // TODO: Better multi-thread support.
-#[inline]
 pub fn start(name: impl AsRef<str>) -> bool {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
 
@@ -53,7 +52,6 @@ pub fn start(name: impl AsRef<str>) -> bool {
 ///
 /// When `profiling` feature is not enabled, this function will do nothing and there is totally
 /// zero cost.
-#[inline]
 pub fn stop() -> bool {
     let mut profiler = ACTIVE_PROFILER.lock().unwrap();
     match *profiler {

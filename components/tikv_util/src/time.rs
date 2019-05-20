@@ -12,7 +12,6 @@ use time::{Duration as TimeDuration, Timespec};
 pub use std::time::Duration;
 
 /// Converts Duration to milliseconds.
-#[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
@@ -20,7 +19,6 @@ pub fn duration_to_ms(d: Duration) -> u64 {
 }
 
 /// Converts Duration to seconds.
-#[inline]
 pub fn duration_to_sec(d: Duration) -> f64 {
     let nanos = f64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
@@ -28,7 +26,6 @@ pub fn duration_to_sec(d: Duration) -> f64 {
 }
 
 /// Converts Duration to nanoseconds.
-#[inline]
 pub fn duration_to_nanos(d: Duration) -> u64 {
     let nanos = u64::from(d.subsec_nanos());
     // Most of case, we can't have so large Duration, so here just panic if overflow now.
@@ -36,7 +33,6 @@ pub fn duration_to_nanos(d: Duration) -> u64 {
 }
 
 /// Gets the current timestamp in seconds.
-#[inline]
 pub fn time_now_sec() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -193,22 +189,18 @@ mod inner {
     use std::io;
     use time::Timespec;
 
-    #[inline]
     pub fn monotonic_raw_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_RAW)
     }
 
-    #[inline]
     pub fn monotonic_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC)
     }
 
-    #[inline]
     pub fn monotonic_coarse_now() -> Timespec {
         get_time(libc::CLOCK_MONOTONIC_COARSE)
     }
 
-    #[inline]
     fn get_time(clock: libc::clockid_t) -> Timespec {
         let mut t = libc::timespec {
             tv_sec: 0,

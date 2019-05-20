@@ -214,7 +214,6 @@ impl Into<errorpb::Error> for Error {
 }
 
 impl<T> From<TrySendError<T>> for Error {
-    #[inline]
     fn from(e: TrySendError<T>) -> Error {
         match e {
             TrySendError::Full(_) => Error::Transport(DiscardReason::Full),

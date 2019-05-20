@@ -386,7 +386,6 @@ impl Peer {
         );
     }
 
-    #[inline]
     fn next_proposal_index(&self) -> u64 {
         self.raft_group.raft.raft_log.last_index() + 1
     }
@@ -491,12 +490,10 @@ impl Peer {
         Ok(())
     }
 
-    #[inline]
     pub fn is_initialized(&self) -> bool {
         self.get_store().is_initialized()
     }
 
-    #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.get_store().region()
     }
@@ -527,53 +524,43 @@ impl Peer {
         }
     }
 
-    #[inline]
     pub fn peer_id(&self) -> u64 {
         self.peer.get_id()
     }
 
-    #[inline]
     pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
         self.raft_group.status_ref()
     }
 
-    #[inline]
     pub fn leader_id(&self) -> u64 {
         self.raft_group.raft.leader_id
     }
 
-    #[inline]
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
     }
 
-    #[inline]
     pub fn get_role(&self) -> StateRole {
         self.raft_group.raft.state
     }
 
-    #[inline]
     pub fn get_store(&self) -> &PeerStorage {
         self.raft_group.get_store()
     }
 
-    #[inline]
     pub fn mut_store(&mut self) -> &mut PeerStorage {
         self.raft_group.mut_store()
     }
 
-    #[inline]
     pub fn is_applying_snapshot(&self) -> bool {
         self.get_store().is_applying_snapshot()
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not committed it yet.
-    #[inline]
     pub fn has_pending_snapshot(&self) -> bool {
         self.get_pending_snapshot().is_some()
     }
 
-    #[inline]
     pub fn get_pending_snapshot(&self) -> Option<&eraftpb::Snapshot> {
         self.raft_group.get_snap()
     }
@@ -591,7 +578,6 @@ impl Peer {
         }
     }
 
-    #[inline]
     fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
     where
         T: Transport,
@@ -849,7 +835,6 @@ impl Peer {
         }
     }
 
-    #[inline]
     pub fn ready_to_handle_pending_snap(&self) -> bool {
         // If apply worker is still working, written apply state may be overwritten
         // by apply worker. So we have to wait here.
@@ -860,7 +845,6 @@ impl Peer {
         self.last_applying_idx == self.get_store().applied_index()
     }
 
-    #[inline]
     fn ready_to_handle_read(&self) -> bool {
         // TODO: It may cause read index to wait a long time.
 
@@ -878,12 +862,10 @@ impl Peer {
             && !self.is_merging()
     }
 
-    #[inline]
     fn is_splitting(&self) -> bool {
         self.last_committed_split_idx > self.get_store().applied_index()
     }
 
-    #[inline]
     fn is_merging(&self) -> bool {
         self.last_committed_prepare_merge_idx > self.get_store().applied_index()
             || self.pending_merge_state.is_some()
@@ -2233,13 +2215,11 @@ impl ReadExecutor {
         }
     }
 
-    #[inline]
     pub fn snapshot_time(&mut self) -> Option<Timespec> {
         self.maybe_update_snapshot();
         self.snapshot_time
     }
 
-    #[inline]
     fn maybe_update_snapshot(&mut self) {
         if self.snapshot.is_some() {
             return;

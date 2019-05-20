@@ -47,7 +47,6 @@ trait TableEncoder: NumberEncoder {
 impl<T: Write> TableEncoder for T {}
 
 /// Extracts table prefix from table record or index.
-#[inline]
 pub fn extract_table_prefix(key: &[u8]) -> Result<&[u8]> {
     if !key.starts_with(TABLE_PREFIX) || key.len() < TABLE_PREFIX_KEY_LEN {
         Err(invalid_type!(
@@ -89,7 +88,6 @@ pub fn decode_table_id(key: &[u8]) -> Result<i64> {
 }
 
 /// `flatten` flattens the datum.
-#[inline]
 pub fn flatten(data: Datum) -> Result<Datum> {
     match data {
         Datum::Dur(d) => Ok(Datum::I64(d.to_nanos())),
@@ -313,13 +311,11 @@ impl RowColsDict {
     }
 
     /// Returns the total count of the columns.
-    #[inline]
     pub fn len(&self) -> usize {
         self.cols.len()
     }
 
     /// Returns whether it has columns or not.
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.cols.is_empty()
     }

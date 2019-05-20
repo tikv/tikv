@@ -61,7 +61,6 @@ macro_rules! impl_sched {
         }
 
         impl<N, C> Clone for $name<N, C> {
-            #[inline]
             fn clone(&self) -> $name<N, C> {
                 $name {
                     sender: self.sender.clone(),
@@ -77,7 +76,6 @@ impl_sched!(ControlScheduler);
 impl<N: Fsm, C> FsmScheduler for NormalScheduler<N, C> {
     type Fsm = N;
 
-    #[inline]
     fn schedule(&self, fsm: Box<N>) {
         match self.sender.send(FsmTypes::Normal(fsm)) {
             Ok(()) => return,
@@ -99,7 +97,6 @@ impl<N: Fsm, C> FsmScheduler for NormalScheduler<N, C> {
 impl<N, C: Fsm> FsmScheduler for ControlScheduler<N, C> {
     type Fsm = C;
 
-    #[inline]
     fn schedule(&self, fsm: Box<C>) {
         match self.sender.send(FsmTypes::Control(fsm)) {
             Ok(()) => return,
@@ -147,7 +144,6 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         true
     }
 
-    #[inline]
     fn len(&self) -> usize {
         self.normals.len() + self.control.is_some() as usize
     }
