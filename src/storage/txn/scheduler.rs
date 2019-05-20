@@ -31,6 +31,7 @@ use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 
 use crate::storage::kv::Result as EngineResult;
+use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::txn::latch::{Latches, Lock};
 use crate::storage::txn::process::{
     execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, Task,
@@ -64,6 +65,13 @@ pub enum Msg {
         err: Error,
         tag: &'static str,
     },
+    WaitForLock {
+        cid: u64,
+        start_ts: u64,
+        pr: ProcessResult,
+        lock: lock_manager::Lock,
+        is_first_lock: bool,
+    },
 }
 
 /// Debug for messages.
@@ -81,6 +89,7 @@ impl Display for Msg {
             Msg::ReadFinished { cid, .. } => write!(f, "ReadFinished [cid={}]", cid),
             Msg::WriteFinished { cid, .. } => write!(f, "WriteFinished [cid={}]", cid),
             Msg::FinishedWithErr { cid, .. } => write!(f, "FinishedWithErr [cid={}]", cid),
+            Msg::WaitForLock { cid, .. } => write!(f, "WaitForLock [cid={}]", cid),
         }
     }
 }
@@ -151,6 +160,10 @@ struct SchedulerInner<E: Engine> {
 
     // used to control write flow
     running_write_bytes: AtomicUsize,
+
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+
+    detector_scheduler: Option<DetectorScheduler>,
 }
 
 #[inline]
@@ -237,6 +250,8 @@ impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
         engine: E,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
         concurrency: usize,
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
@@ -261,6 +276,8 @@ impl<E: Engine> Scheduler<E> {
                 std::cmp::max(1, worker_pool_size / 2),
                 "sched-high-pri-pool",
             ),
+            waiter_mgr_scheduler,
+            detector_scheduler,
         });
 
         info!("Scheduler::new is finished, the transaction scheduler is initialized");
@@ -279,7 +296,12 @@ impl<E: Engine> Scheduler<E> {
         } else {
             self.inner.worker_pool.clone()
         };
-        Executor::new(self.clone(), pool)
+        Executor::new(
+            self.clone(),
+            pool,
+            self.inner.waiter_mgr_scheduler.clone(),
+            self.inner.detector_scheduler.clone(),
+        )
     }
 
     /// Releases all the latches held by a command.
@@ -438,6 +460,32 @@ impl<E: Engine> Scheduler<E> {
 
         self.release_lock(&tctx.lock, cid);
     }
+
+    /// Event handler for the request of waiting for lock
+    fn on_wait_for_lock(
+        &self,
+        cid: u64,
+        start_ts: u64,
+        pr: ProcessResult,
+        lock: lock_manager::Lock,
+        is_first_lock: bool,
+    ) {
+        debug!("command waits for lock released"; "cid" => cid);
+        let tctx = self.inner.dequeue_task_context(cid);
+        SCHED_STAGE_COUNTER_VEC
+            .with_label_values(&[tctx.tag, "lock_wait"])
+            .inc();
+        // TODO: timeout config
+        self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
+            start_ts,
+            tctx.cb,
+            pr,
+            lock.clone(),
+            is_first_lock,
+            1000,
+        );
+        self.release_lock(&tctx.lock, cid);
+    }
 }
 
 impl<E: Engine> MsgScheduler for Scheduler<E> {
@@ -451,6 +499,13 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
                 result,
             } => self.on_write_finished(cid, pr, result, tag),
             Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
+            Msg::WaitForLock {
+                cid,
+                start_ts,
+                pr,
+                lock,
+                is_first_lock,
+            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
             _ => unreachable!(),
         }
     }
@@ -464,6 +519,10 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         }
         Command::ResolveLock { ref key_locks, .. } => {
             let keys: Vec<&Key> = key_locks.iter().map(|x| &x.0).collect();
+            latches.gen_lock(&keys)
+        }
+        Command::AcquirePessimisticLock { ref keys, .. } => {
+            let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
         Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
@@ -518,6 +577,14 @@ mod tests {
                 start_ts: 10,
                 options: Options::default(),
             },
+            Command::AcquirePessimisticLock {
+                ctx: Context::new(),
+                keys: vec![(Key::from_raw(b"k"), false)],
+                primary: b"k".to_vec(),
+                start_ts: 10,
+                for_update_ts: 10,
+                options: Options::default(),
+            },
             Command::Commit {
                 ctx: Context::new(),
                 keys: vec![Key::from_raw(b"k")],
@@ -540,7 +607,7 @@ mod tests {
                 scan_key: None,
                 key_locks: vec![(
                     Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, false),
                 )],
             },
         ];
