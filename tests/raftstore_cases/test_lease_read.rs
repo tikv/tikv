@@ -351,8 +351,7 @@ fn test_read_index_when_transfer_leader() {
                 old_leader.get_id(),
                 read_request,
                 Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
-            )
-            .unwrap();
+            ).unwrap();
             rx
         }};
     }
