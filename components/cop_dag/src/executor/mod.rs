@@ -262,16 +262,31 @@ pub mod tests {
     use std::collections::btree_map::BTreeMap;
     use std::ops::Bound;
 
-    use crate::codec::{Datum, table};
+    use crate::codec::{table, Datum};
     use crate::executor::{Executor, TableScanExecutor};
+    use crate::storage::{Key, Scanner, Statistics, Store, Value};
     use crate::Error;
-    use crate::storage::{Store, Scanner, Statistics, Key, Value};
 
-    use tipb::schema::ColumnInfo;
-    use tipb::executor::TableScan;
-    use protobuf::RepeatedField;
+    use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
-    use cop_datatype::{FieldTypeTp, FieldTypeAccessor};
+    use protobuf::RepeatedField;
+    use tikv_util::codec::number::NumberEncoder;
+    use tipb::{
+        executor::TableScan,
+        expression::{Expr, ExprType},
+        schema::ColumnInfo,
+    };
+
+    pub fn build_expr(tp: ExprType, id: Option<i64>, child: Option<Expr>) -> Expr {
+        let mut expr = Expr::new();
+        expr.set_tp(tp);
+        if tp == ExprType::ColumnRef {
+            expr.mut_val().encode_i64(id.unwrap()).unwrap();
+        } else {
+            expr.mut_children().push(child.unwrap());
+        }
+        expr
+    }
 
     pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
         let mut col_info = ColumnInfo::new();
@@ -297,20 +312,27 @@ pub mod tests {
         kv_data
     }
 
-    struct TestStore {
+    pub struct TestStore {
         storage: BTreeMap<Key, Value>,
     }
 
-    struct TestScanner {
+    pub struct TestScanner {
         data: std::vec::IntoIter<(Key, Value)>,
     }
 
     impl TestStore {
         pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
             TestStore {
-                storage: kv_data.iter().map(|(key, val)| {
-                    (Key::from_raw(key), val.clone())
-                }).collect()
+                storage: kv_data
+                    .iter()
+                    .map(|(key, val)| (Key::from_raw(key), val.clone()))
+                    .collect(),
+            }
+        }
+
+        pub fn get_snapshot(&self) -> TestStore {
+            TestStore {
+                storage: self.storage.clone(),
             }
         }
     }
@@ -319,8 +341,12 @@ pub mod tests {
         type Error = Error;
         type Scanner = TestScanner;
 
-        fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>, Self::Error> {
-            Ok(self.storage.get(key).map(|val| val.clone()))
+        fn get(
+            &self,
+            key: &Key,
+            _statistics: &mut Statistics,
+        ) -> Result<Option<Vec<u8>>, Self::Error> {
+            Ok(self.storage.get(key).cloned())
         }
 
         fn batch_get(
@@ -328,9 +354,7 @@ pub mod tests {
             keys: &[Key],
             statistics: &mut Statistics,
         ) -> Vec<Result<Option<Vec<u8>>, Self::Error>> {
-            keys.iter()
-                .map(|key| self.get(key, statistics))
-                .collect()
+            keys.iter().map(|key| self.get(key, statistics)).collect()
         }
 
         fn scanner(
@@ -340,21 +364,14 @@ pub mod tests {
             lower_bound: Option<Key>,
             upper_bound: Option<Key>,
         ) -> Result<Self::Scanner, Self::Error> {
-            let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
-                if !desc {
-                    Bound::Included(v)
-                } else {
-                    Bound::Excluded(v)
-                }
-            });
-            let upper = upper_bound.as_ref().map_or(Bound::Unbounded, |v| {
-                if desc {
-                    Bound::Included(v)
-                } else {
-                    Bound::Excluded(v)
-                }
-            });
-            let vec: Vec<(Key, Value)> = self
+            let lower = lower_bound
+                .as_ref()
+                .map_or(Bound::Unbounded, |v| Bound::Included(v));
+            let upper = upper_bound
+                .as_ref()
+                .map_or(Bound::Unbounded, |v| Bound::Excluded(v));
+
+            let mut vec: Vec<(Key, Value)> = self
                 .storage
                 .range((lower, upper))
                 .map(|(k, v)| {
@@ -363,6 +380,10 @@ pub mod tests {
                     (owned_k, owned_v)
                 })
                 .collect();
+
+            if desc {
+                vec.reverse();
+            }
             Ok(Self::Scanner {
                 data: vec.into_iter(),
             })
@@ -417,7 +438,7 @@ pub mod tests {
         key_ranges: Option<Vec<KeyRange>>,
     ) -> Box<dyn Executor + Send> {
         let table_data = gen_table_data(tid, &cis, raw_data);
-        let mut test_store = TestStore::new(&table_data);
+        let test_store = TestStore::new(&table_data);
 
         let mut table_scan = TableScan::new();
         table_scan.set_table_id(tid);
