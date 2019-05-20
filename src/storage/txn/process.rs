@@ -1,9 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::mem;
-use std::thread;
 use std::time::Duration;
-use std::u64;
+use std::{mem, thread, u64};
 
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
@@ -12,19 +10,12 @@ use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::mvcc::{
     Error as MvccError, Lock as MvccLock, MvccReader, MvccTxn, Write, MAX_TXN_WRITE_SIZE,
 };
+use crate::storage::txn::{sched_pool::*, scheduler::Msg, Error, Result};
 use crate::storage::{
-    Command, Engine, Error as StorageError, Result as StorageResult, ScanMode, Snapshot,
-    Statistics, StorageCb,
+    metrics::*, Command, Engine, Error as StorageError, Key, MvccInfo, Result as StorageResult,
+    ScanMode, Snapshot, Statistics, StorageCb, Value,
 };
-use crate::storage::{Key, MvccInfo, Value};
-use tikv_util::time::Instant;
-use tikv_util::time::SlowTimer;
-use tikv_util::worker::{self, ScheduleError};
-
-use super::super::metrics::*;
-use super::sched_pool::*;
-use super::scheduler::Msg;
-use super::{Error, Result};
+use tikv_util::time::{Instant, SlowTimer};
 
 // To resolve a key, the write size is about 100~150 bytes, depending on key and value length.
 // The write batch will be around 32KB if we scan 256 keys each time.
@@ -107,27 +98,35 @@ impl Task {
     }
 }
 
-pub struct Executor<E: Engine> {
+pub trait MsgScheduler: Clone + Send + 'static {
+    fn on_msg(&self, task: Msg);
+}
+
+pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
     sched_pool: Option<SchedPool<E>>,
     // And the tasks completes we post a completion to the `Scheduler`.
-    scheduler: Option<worker::Scheduler<Msg>>,
+    scheduler: Option<S>,
 }
 
-impl<E: Engine> Executor<E> {
-    pub fn new(scheduler: worker::Scheduler<Msg>, pool: SchedPool<E>) -> Self {
+impl<E: Engine, S: MsgScheduler> Executor<E, S> {
+    pub fn new(scheduler: S, pool: SchedPool<E>) -> Self {
         Executor {
             scheduler: Some(scheduler),
             sched_pool: Some(pool),
         }
     }
 
-    fn take_scheduler(&mut self) -> worker::Scheduler<Msg> {
+    fn take_scheduler(&mut self) -> S {
         self.scheduler.take().unwrap()
     }
 
     fn take_pool(&mut self) -> SchedPool<E> {
         self.sched_pool.take().unwrap()
+    }
+
+    pub fn clone_pool(&self) -> SchedPool<E> {
+        self.sched_pool.clone().unwrap()
     }
 
     /// Start the execution of the task.
@@ -249,7 +248,7 @@ impl<E: Engine> Executor<E> {
                     let sched = scheduler.clone();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        if notify_scheduler(
+                        notify_scheduler(
                             sched,
                             Msg::WriteFinished {
                                 cid,
@@ -257,11 +256,10 @@ impl<E: Engine> Executor<E> {
                                 result,
                                 tag,
                             },
-                        ) {
-                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .with_label_values(&[tag])
-                                .observe(rows as f64);
-                        }
+                        );
+                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                            .with_label_values(&[tag])
+                            .observe(rows as f64);
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
@@ -574,17 +572,8 @@ fn process_write_impl<S: Snapshot>(
     Ok((ctx, pr, modifies, rows))
 }
 
-fn notify_scheduler(scheduler: worker::Scheduler<Msg>, msg: Msg) -> bool {
-    match scheduler.schedule(msg) {
-        Ok(_) => true,
-        e @ Err(ScheduleError::Stopped(_)) => {
-            info!("scheduler stopped"; "err" => ?e);
-            false
-        }
-        Err(e) => {
-            panic!("schedule msg failed, err:{:?}", e);
-        }
-    }
+pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
+    scheduler.on_msg(msg);
 }
 
 // Make clippy happy.

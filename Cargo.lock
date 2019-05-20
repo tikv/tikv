@@ -259,7 +259,6 @@ dependencies = [
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "panic_hook 0.0.1",
  "protobuf 2.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
- "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.6.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "static_assertions 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "tikv_alloc 0.1.0",
