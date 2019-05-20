@@ -777,20 +777,24 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
-        let res = match res {
-            None => {
-                self.register_raft_base_tick();
-                return;
-            }
-            Some(res) => res,
-        };
-        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+        if !self.ctx.cfg.hibernate_regions {
             self.register_raft_base_tick();
         } else {
-            debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-            self.fsm.group_state = GroupState::Idle;
-            if !self.fsm.peer.is_leader() {
+            let res = match res {
+                None => {
+                    self.register_raft_base_tick();
+                    return;
+                }
+                Some(res) => res,
+            };
+            if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
                 self.register_raft_base_tick();
+            } else {
+                debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+                self.fsm.group_state = GroupState::Idle;
+                if !self.fsm.peer.is_leader() {
+                    self.register_raft_base_tick();
+                }
             }
         }
     }
