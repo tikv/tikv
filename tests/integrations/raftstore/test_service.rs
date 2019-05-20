@@ -723,7 +723,7 @@ fn test_debug_scan_mvcc() {
         keys::data_key(b"meta_lock_2"),
     ];
     for k in &keys {
-        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, false).to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
     }
