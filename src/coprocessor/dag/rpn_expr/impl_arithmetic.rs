@@ -4,6 +4,7 @@ use cop_codegen::RpnFunction;
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::{Decimal, Res};
 use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -137,13 +138,114 @@ impl ArithmeticOp for DecimalPlus {
     }
 }
 
+#[derive(Debug)]
+pub struct IntIntMod;
+
+impl ArithmeticOp for IntIntMod {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0i64 {
+            return Ok(None);
+        }
+        Ok(Some(lhs % rhs))
+    }
+}
+
+#[derive(Debug)]
+pub struct IntUintMod;
+
+impl ArithmeticOp for IntUintMod {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0i64 {
+            return Ok(None);
+        }
+        Ok(Some(
+            ((lhs.overflowing_abs().0 as u64) % (*rhs as u64)) as i64,
+        ))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintIntMod;
+
+impl ArithmeticOp for UintIntMod {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0i64 {
+            return Ok(None);
+        }
+        Ok(Some(
+            ((*lhs as u64) % (rhs.overflowing_abs().0 as u64)) as i64,
+        ))
+    }
+}
+
+#[derive(Debug)]
+pub struct UintUintMod;
+impl ArithmeticOp for UintUintMod {
+    type T = Int;
+
+    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *rhs == 0i64 {
+            return Ok(None);
+        }
+        Ok(Some(((*lhs as u64) % (*rhs as u64)) as i64))
+    }
+}
+
+#[derive(Debug)]
+pub struct RealMod;
+
+impl ArithmeticOp for RealMod {
+    type T = Real;
+
+    fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        if *rhs == 0f64 {
+            return Ok(None);
+        }
+        Ok(Some(lhs % rhs))
+    }
+}
+
+#[derive(Debug)]
+pub struct DecimalMod;
+
+impl ArithmeticOp for DecimalMod {
+    type T = Decimal;
+
+    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        if rhs.is_zero() {
+            return Ok(None);
+        }
+        match lhs % rhs {
+            Some(v) => match v {
+                Res::Ok(v) => Ok(Some(v)),
+                Res::Truncated(_) => Err(Error::truncated().into()),
+                Res::Overflow(_) => {
+                    let overflow = Error::overflow("DECIMAL", &format!("({} % {})", lhs, rhs));
+                    Err(overflow.into())
+                }
+            },
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    use std::{i64, u64};
+
     use super::*;
+    use crate::coprocessor::codec::data_type::{Decimal, Int};
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
     use cop_datatype::builder::FieldTypeBuilder;
-    use cop_datatype::{FieldTypeFlag, FieldTypeTp};
-    use std::i64;
+    use cop_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+    use tipb::expression::FieldType;
     use tipb::expression::ScalarFuncSig::*;
 
     #[test]
@@ -218,6 +320,154 @@ mod tests {
                 .evaluate::<Decimal>(sig)
                 .unwrap();
             assert_eq!(output, expected, "{:?}, {:?}", output, expected);
+        }
+    }
+
+    #[test]
+    fn test_mod_int() {
+        let tests = vec![
+            (ModInt, Some(13), Some(11), Some(2)),
+            (ModInt, Some(-13), Some(11), Some(-2)),
+            (ModInt, Some(13), Some(-11), Some(2)),
+            (ModInt, Some(-13), Some(-11), Some(-2)),
+            (ModInt, Some(33), Some(11), Some(0)),
+            (ModInt, Some(33), Some(-11), Some(0)),
+            (ModInt, Some(-33), Some(-11), Some(0)),
+            (ModInt, Some(-11), None, None),
+            (ModInt, None, Some(-11), None),
+            (ModInt, Some(11), Some(0), None),
+            (ModInt, Some(-11), Some(0), None),
+            (ModInt, Some(i64::MAX), Some(i64::MIN), Some(i64::MAX)),
+            (ModInt, Some(i64::MIN), Some(i64::MAX), Some(-1)),
+        ];
+
+        for (sig, arg0, arg1, expect) in tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}, {:?}, {:?}", arg0, arg1, sig);
+        }
+    }
+    #[test]
+    fn test_mod_int_unsigned() {
+        let tests = vec![
+            (
+                ModInt,
+                Some(u64::MAX as i64),
+                true,
+                Some(i64::MIN),
+                false,
+                i64::MAX as u64,
+            ),
+            (
+                ModInt,
+                Some(i64::MIN),
+                false,
+                Some(u64::MAX as i64),
+                true,
+                i64::MIN as u64,
+            ),
+        ];
+
+        for (sig, arg0, arg0_unsigned, arg1, arg1_unsigned, expect) in tests {
+            let mut evaluator = RpnFnScalarEvaluator::new();
+            if arg0_unsigned {
+                let mut field_type: FieldType = FieldTypeTp::LongLong.into();
+                field_type
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
+                evaluator = evaluator.push_param_with_field_type(arg0, field_type);
+            } else {
+                evaluator = evaluator.push_param(arg0);
+            }
+            if arg1_unsigned {
+                let mut field_type: FieldType = FieldTypeTp::LongLong.into();
+                field_type
+                    .as_mut_accessor()
+                    .set_flag(FieldTypeFlag::UNSIGNED);
+                evaluator = evaluator.push_param_with_field_type(arg1, field_type);
+            } else {
+                evaluator = evaluator.push_param(arg1);
+            }
+
+            let output: Option<Int> = evaluator.evaluate(sig).unwrap();
+            assert_eq!(
+                output.unwrap() as u64,
+                expect,
+                "{:?}, {:?}, {:?}, {:?}, {:?}",
+                arg0,
+                arg0_unsigned,
+                arg1,
+                arg1_unsigned,
+                sig
+            );
+        }
+    }
+
+    #[test]
+    fn test_mod_real() {
+        let tests = vec![
+            (ModReal, Some(1.0), None, None),
+            (ModReal, None, Some(1.0), None),
+            (ModReal, Some(1.0), Some(1.1), Some(1.0)),
+            (ModReal, Some(-1.0), Some(1.1), Some(-1.0)),
+            (ModReal, Some(1.0), Some(-1.1), Some(1.0)),
+            (ModReal, Some(-1.0), Some(-1.1), Some(-1.0)),
+            (ModReal, Some(1.0), Some(0.0), None),
+        ];
+
+        for (sig, arg0, arg1, expect) in tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0)
+                .push_param(arg1)
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}, {:?}, {:?}", arg0, arg1, sig);
+        }
+    }
+
+    #[test]
+    fn test_mod_decimal() {
+        fn str2dec(str: &'static str) -> Option<Decimal> {
+            Some(str.parse().unwrap())
+        }
+
+        let tests = vec![
+            (ModDecimal, str2dec("13"), str2dec("11"), str2dec("2")),
+            (ModDecimal, str2dec("-13"), str2dec("11"), str2dec("-2")),
+            (ModDecimal, str2dec("13"), str2dec("-11"), str2dec("2")),
+            (ModDecimal, str2dec("-13"), str2dec("-11"), str2dec("-2")),
+            (ModDecimal, str2dec("33"), str2dec("11"), str2dec("0")),
+            (ModDecimal, str2dec("-33"), str2dec("11"), str2dec("0")),
+            (ModDecimal, str2dec("33"), str2dec("-11"), str2dec("0")),
+            (ModDecimal, str2dec("-33"), str2dec("-11"), str2dec("0")),
+            (
+                ModDecimal,
+                str2dec("0.0000000001"),
+                str2dec("1.0"),
+                str2dec("0.0000000001"),
+            ),
+            (ModDecimal, str2dec("1"), str2dec("1.1"), str2dec("1")),
+            (ModDecimal, str2dec("-1"), str2dec("1.1"), str2dec("-1")),
+            (ModDecimal, str2dec("1"), str2dec("-1.1"), str2dec("1")),
+            (ModDecimal, str2dec("-1"), str2dec("-1.1"), str2dec("-1")),
+            (ModDecimal, str2dec("3"), str2dec("0"), None),
+            (ModDecimal, str2dec("-3"), str2dec("0"), None),
+            (ModDecimal, str2dec("0"), str2dec("0"), None),
+            (ModDecimal, str2dec("-3"), None, None),
+            (ModDecimal, None, str2dec("-3"), None),
+            (ModDecimal, None, None, None),
+        ];
+
+        for (sig, arg0, arg1, expect) in tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(arg0.clone())
+                .push_param(arg1.clone())
+                .evaluate(sig)
+                .unwrap();
+            assert_eq!(output, expect, "{:?}, {:?}, {:?}", arg0, arg1, sig);
         }
     }
 }

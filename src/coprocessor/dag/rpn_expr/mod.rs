@@ -65,6 +65,15 @@ fn plus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunct
     }
 }
 
+fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => Box::new(RpnFnArithmetic::<IntIntMod>::new()),
+        (false, true) => Box::new(RpnFnArithmetic::<IntUintMod>::new()),
+        (true, false) => Box::new(RpnFnArithmetic::<UintIntMod>::new()),
+        (true, true) => Box::new(RpnFnArithmetic::<UintUintMod>::new()),
+    }
+}
+
 #[rustfmt::skip]
 fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
     Ok(match value {
@@ -135,6 +144,9 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => Box::new(RpnFnArithmetic::<RealPlus>::new()),
         ScalarFuncSig::PlusDecimal => Box::new(RpnFnArithmetic::<DecimalPlus>::new()),
+        ScalarFuncSig::ModReal => Box::new(RpnFnArithmetic::<RealMod>::new()),
+        ScalarFuncSig::ModDecimal => Box::new(RpnFnArithmetic::<DecimalMod>::new()),
+        ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
