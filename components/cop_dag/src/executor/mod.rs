@@ -264,8 +264,8 @@ pub mod tests {
 
     use crate::codec::{table, Datum};
     use crate::executor::{Executor, TableScanExecutor};
-    use crate::storage::{Key, Scanner, Statistics, Store, Value};
-    use crate::Error;
+    use crate::storage::{Key, KvPair, Scanner, Statistics, Store, Value};
+    use crate::{Error, Result};
 
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
@@ -341,11 +341,7 @@ pub mod tests {
         type Error = Error;
         type Scanner = TestScanner;
 
-        fn get(
-            &self,
-            key: &Key,
-            _statistics: &mut Statistics,
-        ) -> Result<Option<Vec<u8>>, Self::Error> {
+        fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>> {
             Ok(self.storage.get(key).cloned())
         }
 
@@ -353,7 +349,7 @@ pub mod tests {
             &self,
             keys: &[Key],
             statistics: &mut Statistics,
-        ) -> Vec<Result<Option<Vec<u8>>, Self::Error>> {
+        ) -> Vec<Result<Option<Vec<u8>>>> {
             keys.iter().map(|key| self.get(key, statistics)).collect()
         }
 
@@ -363,7 +359,7 @@ pub mod tests {
             key_only: bool,
             lower_bound: Option<Key>,
             upper_bound: Option<Key>,
-        ) -> Result<Self::Scanner, Self::Error> {
+        ) -> Result<Self::Scanner> {
             let lower = lower_bound
                 .as_ref()
                 .map_or(Bound::Unbounded, |v| Bound::Included(v));
@@ -393,7 +389,7 @@ pub mod tests {
     impl Scanner for TestScanner {
         type Error = Error;
 
-        fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>, Self::Error> {
+        fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
             let value = self.data.next();
             match value {
                 None => Ok(None),
@@ -401,10 +397,7 @@ pub mod tests {
             }
         }
 
-        fn scan(
-            &mut self,
-            limit: usize,
-        ) -> Result<Vec<Result<(Vec<u8>, Vec<u8>), Self::Error>>, Self::Error> {
+        fn scan(&mut self, limit: usize) -> Result<Vec<Result<KvPair>>> {
             let mut results = Vec::with_capacity(limit);
             while results.len() < limit {
                 match self.next() {
