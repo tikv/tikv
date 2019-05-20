@@ -13,7 +13,7 @@ use std::cmp;
 use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
-use std::sync::{atomic, Arc, Mutex};
+use std::sync::{atomic, Arc};
 use std::u64;
 
 use engine::rocks::DB;
@@ -25,12 +25,10 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
@@ -42,6 +40,7 @@ pub use self::kv::{
 };
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -497,10 +496,7 @@ pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    /// The worker to execute storage commands.
-    worker: Arc<Mutex<Worker<Msg>>>,
-    /// `worker_scheduler` is used to schedule tasks to run in `worker`.
-    worker_scheduler: worker::Scheduler<Msg>,
+    sched: TxnScheduler<E>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -527,8 +523,7 @@ impl<E: Engine> Clone for Storage<E> {
 
         Self {
             engine: self.engine.clone(),
-            worker: self.worker.clone(),
-            worker_scheduler: self.worker_scheduler.clone(),
+            sched: self.sched.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
@@ -550,15 +545,6 @@ impl<E: Engine> Drop for Storage<E> {
             return;
         }
 
-        // This is the last reference of the storage. Now all its references are dropped. Stop and
-        // destroy the storage now.
-        let mut worker = self.worker.lock().unwrap();
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            error!("Failed to join sched_handle"; "err" => ?e);
-        }
-
         let r = self.gc_worker.stop();
         if let Err(e) = r {
             error!("Failed to stop gc_worker:"; "err" => ?e);
@@ -577,16 +563,8 @@ impl<E: Engine> Storage<E> {
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
     ) -> Result<Self> {
-        let worker = Arc::new(Mutex::new(
-            Builder::new("storage-scheduler")
-                .batch_size(CMD_BATCH_SIZE)
-                .pending_capacity(config.scheduler_notify_capacity)
-                .create(),
-        ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
-        let runner = Scheduler::new(
+        let sched = TxnScheduler::new(
             engine.clone(),
-            worker_scheduler.clone(),
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -598,15 +576,13 @@ impl<E: Engine> Storage<E> {
             config.gc_ratio_threshold,
         );
 
-        worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
 
         Ok(Storage {
             engine,
-            worker,
-            worker_scheduler,
+            sched,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
@@ -632,11 +608,8 @@ impl<E: Engine> Storage<E> {
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
-            Ok(()) => Ok(()),
-            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
-            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
-        }
+        self.sched.run_cmd(cmd, cb);
+        Ok(())
     }
 
     /// Get a snapshot of `engine`.
