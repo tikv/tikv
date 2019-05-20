@@ -2570,7 +2570,7 @@ impl ApplyFsm {
         }
 
         // Persists any pending changes of this region.
-        let region_id = self.delegate.id();
+        let region_id = self.delegate.region_id();
         if apply_ctx
             .apply_res
             .iter()
@@ -3094,6 +3094,8 @@ mod tests {
             2,
             Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
         );
+        let (tx, _) = mpsc::sync_channel(0);
+        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -3101,10 +3103,6 @@ mod tests {
             },
             e => panic!("unexpected apply result: {:?}", e),
         };
-        assert_eq!(apply_res.region_id, 2);
-
-        let (tx, _) = mpsc::sync_channel(0);
-        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
         let apply_state = match snapshot_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Some(RegionTask::Gen { kv_snap, .. })) => kv_snap
                 .get_msg_cf(CF_RAFT, &apply_state_key)
@@ -3112,6 +3110,7 @@ mod tests {
                 .unwrap(),
             e => panic!("unexpected apply result: {:?}", e),
         };
+        assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state, apply_state);
         assert_eq!(apply_res.apply_state.get_applied_index(), 4);
         assert!(apply_res.exec_res.is_empty());
