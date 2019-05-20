@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
-use rand::Rng;
+use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -510,7 +510,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)
