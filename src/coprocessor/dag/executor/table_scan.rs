@@ -56,7 +56,9 @@ impl InnerExecutor for TableInnerExecutor {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, TableInnerExecutor> {
+pub type TableScanExecutor<C, S> = ScanExecutor<C, S, TableInnerExecutor>;
+
+impl<C: ExecSummaryCollector, S: Store> TableScanExecutor<C, S> {
     pub fn table_scan(
         summary_collector: C,
         mut meta: TableScan,
@@ -76,8 +78,6 @@ impl<C: ExecSummaryCollector, S: Store> ScanExecutor<C, S, TableInnerExecutor> {
         )
     }
 }
-
-pub type TableScanExecutor<C, S> = ScanExecutor<C, S, TableInnerExecutor>;
 
 #[cfg(test)]
 mod tests {

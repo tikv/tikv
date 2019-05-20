@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
-use rand::Rng;
+use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};

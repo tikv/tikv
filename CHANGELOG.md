@@ -4,6 +4,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 
 ## [Unreleased]
 - Leader responds to learner read index message. (https://github.com/pingcap/raft-rs/pull/220)
+- Snapshot may lose some applied results. (https://github.com/tikv/tikv/pull/4716)
 
 ## [3.0.0-beta.1]
 - Optimize the Coprocessor calculation execution framework and implement the TableScan section, with the Single TableScan performance improved by 5% ~ 30%
