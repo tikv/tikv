@@ -4,7 +4,8 @@ use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use rand::{thread_rng, Rng, ThreadRng};
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
