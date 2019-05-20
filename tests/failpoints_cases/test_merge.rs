@@ -278,6 +278,8 @@ fn test_node_merge_multiple_snapshots_not_together() {
 }
 
 fn test_node_merge_multiple_snapshots(together: bool) {
+    let _guard = ::setup();
+
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -374,4 +376,48 @@ fn test_node_merge_multiple_snapshots(together: bool) {
     // let follower can reach the new log, then commit merge
     cluster.clear_send_filters();
     must_get_equal(&cluster.get_engine(3), b"k9", b"v9");
+}
+
+#[test]
+fn test_node_merge_catch_up_logs_restart() {
+    let _guard = ::setup();
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster);
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_on_store1 = find_peer(&region, 1).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    // after source peer is applied but before set it to tombstone
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(left.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+    let mut kvs = vec![];
+    // WRITE_BATCH_MAX_KEYS = 128
+    for i in 0..128 {
+        let key = format!("k1_{}", i);
+        kvs.push((key.as_bytes().to_vec(), b"value".to_vec()));
+    }
+    cluster.must_put_kvs(&kvs);
+
+    cluster.must_put(b"k11", b"v11");
+    must_get_none(&cluster.get_engine(3), b"k11");
+
+    fail::cfg("skip_merge_tombstone_persist", "return()").unwrap();
+    pd_client.must_merge(left.get_id(), right.get_id());
+    thread::sleep(Duration::from_millis(100));
+    cluster.shutdown();
+    fail::remove("skip_merge_tombstone_persist");
+    cluster.start();
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
 }
