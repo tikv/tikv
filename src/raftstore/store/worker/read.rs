@@ -566,7 +566,7 @@ mod tests {
         let (ch, rx) = sync_channel(1);
         let reader = LocalReader {
             store_meta,
-            store_id: Some(store_id),
+            store_id: Cell::new(Some(store_id)),
             router: ch,
             kv_engine: Arc::new(db),
             delegates: RefCell::new(HashMap::default()),

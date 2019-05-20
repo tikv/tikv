@@ -702,8 +702,11 @@ pub fn set_tls_engine<E: Engine>(engine: E) {
 }
 
 /// Destroy the thread local engine.
-pub fn destroy_tls_engine() {
-    TLS_ENGINE_ANY.with(|e| unsafe { *e.get() = ptr::null_mut() });
+pub fn destroy_tls_engine<E: Engine>() {
+    TLS_ENGINE_ANY.with(|e| unsafe {
+        drop(Box::from_raw(*e.get() as *mut E));
+        *e.get() = ptr::null_mut();
+    });
 }
 
 #[cfg(test)]

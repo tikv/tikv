@@ -71,7 +71,7 @@ pub fn build_read_pool<E: Engine>(
         .on_tick(move || tls_flush(&pd_sender))
         .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
         .before_stop(move || {
-            destroy_tls_engine();
+            destroy_tls_engine::<E>();
             tls_flush(&pd_sender2)
         })
         .build()
@@ -82,7 +82,7 @@ pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
 
     Builder::from_config(&Config::default_for_test())
         .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine())
+        .before_stop(|| destroy_tls_engine::<E>())
         .build()
 }
 
