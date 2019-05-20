@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
+use smallvec::SmallVec;
 
 use tikv_util::collections::HashMap;
 use tipb::executor::Aggregation;
@@ -126,6 +127,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchMultiGroupHashAggregation
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
+            group_keys_buffer: Vec::with_capacity(1024),
+            group_keys_buffer_offset: Vec::with_capacity(128),
             states_offset_each_row: Vec::with_capacity(
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
@@ -146,6 +149,21 @@ pub struct MultiGroupHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: HashMap<Vec<u8>, GroupInfo>,
     group_by_exps: Vec<RpnExpression>,
+
+    /// Suppose that we have the following group columns:
+    ///
+    /// ```ignore
+    /// Col1    Col2
+    /// Aaa     D
+    /// Bb      Eeeee
+    /// Cccc    Ff
+    /// ```
+    ///
+    /// `group_keys_buffer` will be `[AaaBbCcccDEeeeeFf   ]`
+    /// `group_keys_offset` will be `[0, 3,5,  9,10, 15,17]`
+    group_keys_buffer: Vec<u8>,
+    group_keys_buffer_offset: Vec<usize>,
+
     states_offset_each_row: Vec<usize>,
 }
 
@@ -155,16 +173,27 @@ struct GroupInfo {
     /// `MultiGroupHashAggregationImpl::states`.
     states_start_offset: usize,
 
-    /// The length of each GROUP BY column in the group key.
+    /// The offset of each GROUP BY column in the group key. There will be an additional offset
+    /// at the end, which equals to the group key length.
     ///
     /// For example, if the group key `AaaFfffff` is composed by two group column `[Aaa, Ffffff]`,
-    /// then the value of this field is `[3, 6]`.
+    /// then the value of this field is `[0, 3, 9]`.
     ///
+    /// Note 1:
     /// We want aggregation executor to provide each GROUP BY column independently, which will be
     /// useful in future executors (like Projection executor). However, currently this segmentation
     /// is not useful because we return data by row and columns will be always pasted together.
     /// Thus segmentation or not doesn't make any differences.
-    group_key_segments: Vec<usize>,
+    ///
+    /// Note 2:
+    /// We use `SmallVec<[..; 6]>` so that when group by columns <= 5 SmallVec avoids allocation.
+    /// We think the case that there are more than 5 group by columns are rare.
+    ///
+    /// Note 3:
+    /// We use `SmallVec<[u32; ..]>` instead of `SmallVec<[usize; ..]>` because the length of the
+    /// group key will not exceed `u32`. Using `u32` instead of `usize` makes this field small
+    /// and can be fit into the cache line better.
+    group_key_offsets: SmallVec<[u32; 6]>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for MultiGroupHashAggregationImpl {
@@ -185,41 +214,61 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for MultiGroupHashAggregat
         mut input: LazyBatchColumnVec,
     ) -> Result<()> {
         let rows_len = input.rows_len();
+        let group_by_exps_len = self.group_by_exps.len();
 
         // 1. Calculate which group each src row belongs to.
-        // TODO: Reuse this vector each iterate.
         self.states_offset_each_row.clear();
-
-        let mut group_keys = vec![Vec::new(); rows_len];
-        let mut group_key_segments = vec![Vec::new(); rows_len];
+        self.group_keys_buffer.clear();
+        self.group_keys_buffer_offset.clear();
 
         let src_schema = entities.src.schema();
+
         for group_by_exp in &self.group_by_exps {
             let group_by_result =
                 group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
             for row_index in 0..rows_len {
                 // Unwrap is fine because we have verified the group by expression before.
                 let group_column = group_by_result.vector_value().unwrap();
-                let group_key_previous_length = group_keys[row_index].len();
+                self.group_keys_buffer_offset
+                    .push(self.group_keys_buffer.len());
                 group_column.encode(
                     row_index,
                     group_by_result.field_type(),
-                    &mut group_keys[row_index],
+                    &mut self.group_keys_buffer,
                 )?;
-                // Only put encoded length of this column (instead of all columns) in the array.
-                let group_column_len = group_keys[row_index].len() - group_key_previous_length;
-                group_key_segments[row_index].push(group_column_len);
             }
         }
 
-        for (group_key, segments) in group_keys.into_iter().zip(group_key_segments) {
+        // One extra offset, to be used as the end offset.
+        self.group_keys_buffer_offset
+            .push(self.group_keys_buffer.len());
+
+        for row_index in 0..rows_len {
+            // The group key of row i (i start from 0) is the combination of slots
+            // [i, i + row_len, i + row_len * 2, ...] in `group_keys_buffer`, where slots are
+            // indexed by `group_keys_buffer_offset`.
+
+            // TODO: We still need to allocate `rows_len` group key each time.
+            // TODO: We don't need to construct `group_key_offsets` when group_key exists in
+            // hash map.
+            let mut group_key = Vec::with_capacity(32);
+            let mut group_key_offsets = SmallVec::new();
+            for group_col_index in 0..group_by_exps_len {
+                let slot_index = row_index + group_col_index * rows_len;
+                let offset_begin = self.group_keys_buffer_offset[slot_index];
+                let offset_end = self.group_keys_buffer_offset[slot_index + 1];
+                group_key_offsets.push(group_key.len() as u32);
+                group_key.extend_from_slice(&self.group_keys_buffer[offset_begin..offset_end]);
+            }
+            group_key_offsets.push(group_key.len() as u32);
+
             match self.groups.entry(group_key) {
                 Entry::Vacant(entry) => {
                     let offset = self.states.len();
                     self.states_offset_each_row.push(offset);
                     entry.insert(GroupInfo {
                         states_start_offset: offset,
-                        group_key_segments: segments,
+                        group_key_offsets,
                     });
                     for aggr_fn in &entities.each_aggr_fn {
                         self.states.push(aggr_fn.create_state());
@@ -250,6 +299,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for MultiGroupHashAggregat
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
         let number_of_groups = self.groups.len();
+        let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self
             .group_by_exps
             .iter()
@@ -266,14 +316,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for MultiGroupHashAggregat
             )?;
 
             // Extract group column from group key for each group
-            let mut group_key_start_offset = 0;
-            for (group_index, group_segment_len) in
-                group_info.group_key_segments.into_iter().enumerate()
-            {
-                group_by_columns[group_index].push_raw(
-                    &group_key[group_key_start_offset..group_key_start_offset + group_segment_len],
-                );
-                group_key_start_offset += group_segment_len;
+            for group_index in 0..group_by_exps_len {
+                let offset_begin = group_info.group_key_offsets[group_index] as usize;
+                let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
+                group_by_columns[group_index].push_raw(&group_key[offset_begin..offset_end]);
             }
         }
 

@@ -131,6 +131,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregatio
             groups,
             group_by_exp,
             group_by_field_type: Some(group_by_field_type),
+            states_offset_each_row: Vec::with_capacity(
+                crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
+            ),
         };
 
         Ok(Self(AggregationExecutor::new(
@@ -185,6 +188,7 @@ pub struct SingleGroupHashAggregationImpl {
     groups: Groups,
     group_by_exp: RpnExpression,
     group_by_field_type: Option<FieldType>,
+    states_offset_each_row: Vec<usize>,
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggregationImpl {
@@ -201,11 +205,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
         entities: &mut Entities<Src>,
         mut input: LazyBatchColumnVec,
     ) -> Result<()> {
-        let rows_len = input.rows_len();
-
         // 1. Calculate which group each src row belongs to.
-        // TODO: Reuse this vector each iterate.
-        let mut states_offset_each_row = Vec::with_capacity(rows_len);
+        self.states_offset_each_row.clear();
+
         let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
             input.rows_len(),
@@ -223,7 +225,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
                             &entities.each_aggr_fn,
                             group,
                             &mut self.states,
-                            &mut states_offset_each_row
+                            &mut self.states_offset_each_row
                         );
                     } else {
                         panic!();
@@ -237,7 +239,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
             entities,
             &mut input,
             &mut self.states,
-            &states_offset_each_row,
+            &self.states_offset_each_row,
         )?;
 
         Ok(())
@@ -280,19 +282,19 @@ fn calc_groups_each_row<T: Evaluable>(
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<T>, usize>,
     states: &mut Vec<Box<dyn AggrFunctionState>>,
-    output_states_offset_each_row: &mut Vec<usize>,
+    states_offset_each_row: &mut Vec<usize>,
 ) {
     for val in rows {
         // Not using the entry API so that when entry exists there is no clone.
         match group.get(val) {
             Some(offset) => {
                 // Group exists, use the offset of existing group.
-                output_states_offset_each_row.push(*offset);
+                states_offset_each_row.push(*offset);
             }
             None => {
                 // Group does not exist, prepare groups.
                 let offset = states.len();
-                output_states_offset_each_row.push(offset);
+                states_offset_each_row.push(offset);
                 group.insert(val.clone(), offset);
                 for aggr_fn in aggr_fns {
                     states.push(aggr_fn.create_state());
