@@ -189,14 +189,21 @@ mod tests {
 
     #[test]
     fn test_arithmetic_real() {
-        let test_cases = vec![(PlusReal, Some(1.01001), Some(-0.01), Some(1.00001))];
-        for (sig, lhs, rhs, expected) in test_cases {
+        let test_cases = vec![
+            (PlusReal, Some(1.01001), Some(-0.01), Some(1.00001), false),
+            (PlusReal, Some(1e308), Some(1e308), None, true),
+        ];
+        for (sig, lhs, rhs, expected, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(lhs)
                 .push_param(rhs)
-                .evaluate::<Real>(sig)
-                .unwrap();
-            assert_eq!(output, expected, "{:?}, {:?}", output, expected);
+                .evaluate::<Real>(sig);
+            if is_err {
+                assert!(output.is_err())
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expected, "{:?}, {:?}", output, expected);
+            }
         }
     }
 
