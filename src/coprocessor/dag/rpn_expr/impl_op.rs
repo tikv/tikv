@@ -91,9 +91,7 @@ impl RpnFnIntIsTrue {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Int>,
     ) -> Result<Option<i64>> {
-        // We can simply return the arg because IS TRUE for int shares the same
-        // semantic with `as_mysql_bool`.
-        Ok(*arg)
+        Ok(Some(arg.map_or(0, |v| (v != 0) as i64)))
     }
 }
 
@@ -108,7 +106,7 @@ impl RpnFnRealIsTrue {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Real>,
     ) -> Result<Option<i64>> {
-        Ok(arg.map(|v| (v != 0f64) as i64))
+        Ok(Some(arg.map_or(0, |v| (v != 0f64) as i64)))
     }
 }
 
@@ -123,7 +121,7 @@ impl RpnFnDecimalIsTrue {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Decimal>,
     ) -> Result<Option<i64>> {
-        Ok(arg.as_ref().map(|v| !v.is_zero() as i64))
+        Ok(Some(arg.as_ref().map_or(0, |v| !v.is_zero() as i64)))
     }
 }
 
@@ -138,7 +136,7 @@ impl RpnFnIntIsFalse {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Int>,
     ) -> Result<Option<i64>> {
-        Ok(arg.map(|v| (v == 0) as i64))
+        Ok(Some(arg.map_or(0, |v| (v == 0) as i64)))
     }
 }
 
@@ -153,7 +151,7 @@ impl RpnFnRealIsFalse {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Real>,
     ) -> Result<Option<i64>> {
-        Ok(arg.map(|v| (v == 0f64) as i64))
+        Ok(Some(arg.map_or(0, |v| (v == 0f64) as i64)))
     }
 }
 
@@ -168,7 +166,7 @@ impl RpnFnDecimalIsFalse {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Decimal>,
     ) -> Result<Option<i64>> {
-        Ok(arg.as_ref().map(|v| v.is_zero() as i64))
+        Ok(Some(arg.as_ref().map_or(0, |v| v.is_zero() as i64)))
     }
 }
 
@@ -282,16 +280,16 @@ mod tests {
     #[test]
     fn test_is_true() {
         let test_cases = vec![
-            (ScalarValue::Int(None), ScalarFuncSig::IntIsTrue, None),
+            (ScalarValue::Int(None), ScalarFuncSig::IntIsTrue, Some(0)),
             (0.into(), ScalarFuncSig::IntIsTrue, Some(0)),
             (1.into(), ScalarFuncSig::IntIsTrue, Some(1)),
-            (ScalarValue::Real(None), ScalarFuncSig::RealIsTrue, None),
+            (ScalarValue::Real(None), ScalarFuncSig::RealIsTrue, Some(0)),
             (0.0.into(), ScalarFuncSig::RealIsTrue, Some(0)),
             (1.0.into(), ScalarFuncSig::RealIsTrue, Some(1)),
             (
                 ScalarValue::Decimal(None),
                 ScalarFuncSig::DecimalIsTrue,
-                None,
+                Some(0),
             ),
             (
                 Decimal::zero().into(),
@@ -316,16 +314,16 @@ mod tests {
     #[test]
     fn test_is_false() {
         let test_cases = vec![
-            (ScalarValue::Int(None), ScalarFuncSig::IntIsFalse, None),
+            (ScalarValue::Int(None), ScalarFuncSig::IntIsFalse, Some(0)),
             (0.into(), ScalarFuncSig::IntIsFalse, Some(1)),
             (1.into(), ScalarFuncSig::IntIsFalse, Some(0)),
-            (ScalarValue::Real(None), ScalarFuncSig::RealIsFalse, None),
+            (ScalarValue::Real(None), ScalarFuncSig::RealIsFalse, Some(0)),
             (0.0.into(), ScalarFuncSig::RealIsFalse, Some(1)),
             (1.0.into(), ScalarFuncSig::RealIsFalse, Some(0)),
             (
                 ScalarValue::Decimal(None),
                 ScalarFuncSig::DecimalIsFalse,
-                None,
+                Some(0),
             ),
             (
                 Decimal::zero().into(),
