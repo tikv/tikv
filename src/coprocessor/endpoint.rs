@@ -502,8 +502,8 @@ mod tests {
     use tipb::expression::Expr;
 
     use crate::coprocessor::readpool_impl::build_read_pool_for_test;
-    use crate::storage::TestEngineBuilder;
     use crate::storage::kv::{destroy_tls_engine, set_tls_engine, RocksEngine};
+    use crate::storage::TestEngineBuilder;
 
     /// A unary `RequestHandler` that always produces a fixture.
     struct UnaryFixture {
