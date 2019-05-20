@@ -226,6 +226,12 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_read_index_cmd() -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::ReadIndex);
+    cmd
+}
+
 pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
@@ -418,6 +424,24 @@ pub fn read_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     cluster.call_command(request, timeout)
 }
+
+pub fn read_index_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.call_command(request, timeout)
+}
+
 
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
