@@ -32,9 +32,9 @@ pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKS
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
-    TestEngineBuilder,
+    destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
+    Engine, Error as EngineError, FlowStatistics, Iterator, Modify, RegionInfoProvider,
+    RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
@@ -462,8 +462,8 @@ impl<E: Engine> TestStorageBuilder<E> {
     pub fn build(self) -> Result<Storage<E>> {
         let engine = Arc::new(Mutex::new(self.engine.clone()));
         let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
-            .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
-            .before_stop(|| destroy_tls_engine_any())
+            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .before_stop(|| destroy_tls_engine())
             .build();
         Storage::from_engine(
             self.engine,
@@ -642,8 +642,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -696,8 +695,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -760,8 +758,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1041,8 +1038,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1096,8 +1092,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1380,8 +1375,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1486,8 +1480,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
