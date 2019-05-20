@@ -29,7 +29,6 @@ use futures::future;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::ScheduleError;
 
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::txn::latch::{Latches, Lock};
@@ -442,7 +441,7 @@ impl<E: Engine> Scheduler<E> {
 }
 
 impl<E: Engine> MsgScheduler for Scheduler<E> {
-    fn on_msg(&self, task: Msg) -> ::std::result::Result<(), ScheduleError<Msg>> {
+    fn on_msg(&self, task: Msg) {
         match task {
             Msg::ReadFinished { cid, tag, pr } => self.on_read_finished(cid, pr, tag),
             Msg::WriteFinished {
@@ -454,7 +453,6 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
             Msg::FinishedWithErr { cid, err, .. } => self.finish_with_err(cid, err),
             _ => unreachable!(),
         }
-        Ok(())
     }
 }
 
