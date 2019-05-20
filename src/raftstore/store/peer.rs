@@ -1594,11 +1594,25 @@ impl Peer {
         metrics.read_index += 1;
 
         let renew_lease_time = monotonic_raw_now();
-        if let Some(read) = self.pending_reads.reads.back_mut() {
-            if read.renew_lease_time + self.cfg.raft_store_max_leader_lease() > renew_lease_time {
-                read.cmds.push((req, cb));
-                return false;
+        match self.inspect_lease() {
+            // Here combine the new read request with the previous one even if the lease expired is
+            // ok because in this case, the previous read index must be sent out with a valid
+            // lease instead of a suspect lease. So there must no pending transfer-leader proposals
+            // before or after the previous read index, and the lease can be renewed when get
+            // heartbeat responses.
+            LeaseState::Valid | LeaseState::Expired => {
+                if let Some(read) = self.pending_reads.reads.back_mut() {
+                    let max_lease = self.cfg.raft_store_max_leader_lease();
+                    if read.renew_lease_time + max_lease > renew_lease_time {
+                        read.cmds.push((req, cb));
+                        return false;
+                    }
+                }
             }
+            // If the current lease is suspect, new read requests can't be appended into
+            // `pending_reads` because if the leader is transfered, the latest read could
+            // be dirty.
+            _ => {}
         }
 
         // Should we call pre_propose here?

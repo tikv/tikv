@@ -16,7 +16,7 @@ use std::sync::atomic::*;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use std::{thread, time, usize};
+use std::{mem, thread, time, usize};
 
 use rand;
 
@@ -363,11 +363,12 @@ pub struct RegionPacketFilter {
     direction: Direction,
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     msg_type: Option<MessageType>,
+    dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
 }
 
 impl Filter<RaftMessage> for RegionPacketFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
-        msgs.retain(|m| {
+        let retain = |m: &RaftMessage| {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
             let to_store_id = m.get_to_peer().get_store_id();
@@ -394,7 +395,13 @@ impl Filter<RaftMessage> for RegionPacketFilter {
                 };
             }
             true
-        });
+        };
+        let origin_msgs = mem::replace(msgs, Vec::default());
+        let (retained, dropped) = origin_msgs.into_iter().partition(retain);
+        *msgs = retained;
+        if let Some(dropped_messages) = self.dropped_messages.as_ref() {
+            dropped_messages.lock().unwrap().extend_from_slice(&dropped);
+        }
         check_messages(msgs)
     }
 }
@@ -407,6 +414,7 @@ impl RegionPacketFilter {
             direction: Direction::Both,
             msg_type: None,
             block: Either::Right(Arc::new(AtomicBool::new(true))),
+            dropped_messages: None,
         }
     }
 
@@ -427,6 +435,11 @@ impl RegionPacketFilter {
 
     pub fn when(mut self, condition: Arc<AtomicBool>) -> RegionPacketFilter {
         self.block = Either::Right(condition);
+        self
+    }
+
+    pub fn reserve_dropped(mut self, dropped: Arc<Mutex<Vec<RaftMessage>>>) -> RegionPacketFilter {
+        self.dropped_messages = Some(dropped);
         self
     }
 }
