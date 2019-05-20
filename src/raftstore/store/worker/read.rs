@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
+use std::cell::{Cell,RefCell};
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -150,7 +150,7 @@ impl Progress {
 }
 
 pub struct LocalReader<C: ProposalRouter> {
-    store_id: Option<u64>,
+    store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: Arc<DB>,
     metrics: RefCell<ReadMetrics>,
@@ -167,7 +167,7 @@ impl LocalReader<RaftRouter> {
             store_meta,
             kv_engine,
             router,
-            store_id: None,
+            store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: "[local_reader]".to_string(),
@@ -208,11 +208,11 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
-        if self.store_id.is_none() {
-            let store_id = self.store_meta.lock().unwrap().store_id;
-            self.store_id = Some(store_id);
+        if self.store_id.get().is_none() {
+            let store_id = self.store_meta.lock().unwrap().store_id.clone();
+            self.store_id.set(store_id);
         }
-        let store_id = self.store_id.unwrap();
+        let store_id = self.store_id.get().unwrap();
 
         if let Err(e) = util::check_store_id(req, store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
@@ -376,7 +376,7 @@ impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
             store_meta: self.store_meta.clone(),
             kv_engine: self.kv_engine.clone(),
             router: self.router.clone(),
-            store_id: self.store_id,
+            store_id: self.store_id.clone(),
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: self.tag.clone(),
