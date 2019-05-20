@@ -127,7 +127,7 @@ tipb_helper = { path = "components/tipb_helper" }
 # TODO: update the revision after we have upgraded every component beyond protobuf 2.0
 tipb = { version = "0.0.1", git = "https://github.com/pingcap/tipb.git", rev = "af5d98495e746cc38f83b23be2ea4b3e4b2c437f" }
 # TODO: use master branch after the next version is released.
-kvproto = { version = "0.0.1", git = "https://github.com/pingcap/kvproto.git", rev = "1aa667dafd66c97f755f825d6f824bc3f1ac1a55" }
+kvproto = { version = "0.0.1", git = "https://github.com/pingcap/kvproto.git", rev = "11e0e6d3aacf889552c897fbf2ae290a1d6ecc9e" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }

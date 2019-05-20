@@ -8,5 +8,5 @@ publish = false
 tikv_util = { path = "../tikv_util" }
 tikv = { path = "../../", default-features = false }
 test_raftstore = { path = "../test_raftstore" }
-kvproto = { version = "0.0.1", git = "https://github.com/pingcap/kvproto.git", rev = "1aa667dafd66c97f755f825d6f824bc3f1ac1a55" }
+kvproto = { version = "0.0.1", git = "https://github.com/pingcap/kvproto.git", rev = "11e0e6d3aacf889552c897fbf2ae290a1d6ecc9e" }
 futures = "0.1"
