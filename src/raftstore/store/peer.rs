@@ -105,8 +105,8 @@ impl ReadIndexQueue {
             }
         } else {
             error!(
-                "cannot find corresponding read from pending reads: {:?}, read_index: {}",
-                id, read_index
+                "cannot find corresponding read from pending reads";
+                "id"=>?id, "read-index" =>read_index,
             );
         }
     }
@@ -1271,10 +1271,6 @@ impl Peer {
                 read.read_index = Some(state.index);
                 propose_time = Some(read.renew_lease_time);
             }
-            debug!(
-                "not ready to handle read {}",
-                self.pending_reads.reads.len()
-            );
         }
 
         // Note that only after handle read_states can we identify what requests are
@@ -1768,7 +1764,6 @@ impl Peer {
             && self.is_leader()
         {
             // The message gets dropped silently, can't be handled anymore.
-            debug!("drop the statle read {:?}", ctx);
             apply::notify_stale_req(self.term(), cb);
             return false;
         }
@@ -1781,11 +1776,6 @@ impl Peer {
             renew_lease_time,
             read_index: None,
         });
-        debug!(
-            "start read index queue {}, and new ctx {:?}",
-            self.pending_reads.reads.len(),
-            ctx
-        );
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
@@ -2043,10 +2033,6 @@ impl Peer {
         check_epoch: bool,
         read_index: Option<u64>,
     ) -> ReadResponse {
-        debug!(
-            "begin to handle read for req {:?}, read_index {:?}",
-            req, read_index
-        );
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,
@@ -2385,12 +2371,6 @@ impl ReadExecutor {
         region: &metapb::Region,
         read_index: Option<u64>,
     ) -> ReadResponse {
-        debug!(
-            "[region {}] handle msg {:?} with read index {:?}",
-            region.get_id(),
-            msg,
-            read_index
-        );
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
@@ -2461,7 +2441,6 @@ impl ReadExecutor {
         } else {
             None
         };
-        debug!("[region {}] got response {:?}", region.get_id(), response);
         ReadResponse { response, snapshot }
     }
 }

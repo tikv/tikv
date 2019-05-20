@@ -835,6 +835,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::new();
         let mut header = RaftRequestHeader::new();
@@ -868,8 +870,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     let raft_resps = v.response.get_responses();
                     if raft_resps.len() != 1 {
                         error!(
-                            "[region {}] invalid read index response: {:?}",
-                            region_id, raft_resps
+                            "invalid read index response";
+                            "region_id"=>region_id, "response" =>?raft_resps
                         );
                         resp.mut_region_error().set_message(format!(
                             "Internal Error: invalid response: {:?}",
@@ -883,9 +885,13 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                 resp
             })
             .and_then(|res| sink.success(res).map_err(Error::from))
+            .map(|_| timer.observe_duration())
             .map_err(move |e| {
-                debug!("{} failed: {:?}", "split_region", e);
-                GRPC_MSG_FAIL_COUNTER.split_region.inc();
+                debug!("kv rpc failed";
+                    "request" => "read_index",
+                    "err" => ?e
+                );
+                GRPC_MSG_FAIL_COUNTER.read_index.inc();
             });
 
         ctx.spawn(future);
