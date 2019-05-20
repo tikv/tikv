@@ -710,3 +710,7 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+
+[pessimistic-txn]
+## Enable pessimistic transaction
+# enabled = false
