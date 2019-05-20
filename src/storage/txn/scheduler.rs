@@ -42,7 +42,6 @@ use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
 const TASKS_SLOTS_NUM: usize = 1 << 10; // 1024 slots.
-                                        // >>>>>>> 4aacf5b3a07915b47a85960424886009519c9602
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
