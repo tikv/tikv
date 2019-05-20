@@ -327,14 +327,14 @@ mod tests {
     use crate::storage::{FixtureStore, Key};
 
     /// Test Helper for normal test with fixed schema and data.
-    /// Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
-    /// Column id:    1,             2,             4
-    /// Column offset: 0,            1,             2
-    /// Table Data:  (1,             10,            5.2),
-    ///              (3,             -5,            NULL),
-    ///              (4,             NULL,          4.5 (DEFAULT)),
-    ///              (5,             NULL,          0.1),
-    ///              (6,             NULL,          4.5 (DEFAULT)),
+    /// Table Schema:  ID (INT, PK),   Foo (INT),     Bar (FLOAT, Default 4.5)
+    /// Column id:     1,              2,             4
+    /// Column offset: 0,              1,             2
+    /// Table Data:    1,              10,            5.2
+    ///                3,              -5,            NULL
+    ///                4,              NULL,          4.5 (DEFAULT)
+    ///                5,              NULL,          0.1
+    ///                6,              NULL,          4.5 (DEFAULT)
     struct TableScanTestHelper {
         // ID(INT,PK), Foo(INT), Bar(Float,Default 4.5)
         pub data: Vec<(i64, Option<i64>, Option<Real>)>,
