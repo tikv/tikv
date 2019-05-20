@@ -6,6 +6,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Reject transfer leader when the region recently changed config [#4684](https://github.com/tikv/tikv/pull/4684)
 - Add priority label to coprocessor metrics [#4643](https://github.com/tikv/tikv/pull/4643)
 - Fix the issue that read index may read stale data during transfering leader [#4724](https://github.com/tikv/tikv/pull/4724)
+- Fix the issue that `CommitMerge` may cause TiKV unable to restart [#4615](https://github.com/tikv/tikv/pull/4615)
 
 ## [2.1.9]
 - Fix potential quorum changes when transferring leader (https://github.com/pingcap/raft-rs/issues/221)
