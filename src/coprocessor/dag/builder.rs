@@ -46,6 +46,12 @@ impl DAGBuilder {
                     let descriptor = ed.get_selection();
                     BatchSelectionExecutor::check_supported(&descriptor)?;
                 }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    let descriptor = ed.get_aggregation();
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
+                }
                 ExecType::TypeLimit => {}
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
@@ -124,6 +130,20 @@ impl DAGBuilder {
                         ed.take_selection().take_conditions().into_vec(),
                     )?)
                 }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["simple_aggregation"])
+                        .inc();
+
+                    Box::new(BatchSimpleAggregationExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.mut_aggregation().take_agg_func().into_vec(),
+                    )?)
+                }
                 ExecType::TypeLimit => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
 
@@ -172,23 +192,29 @@ impl DAGBuilder {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_selection(),
                     Arc::clone(&ctx),
                     src,
                 )?),
                 ExecType::TypeAggregation => Box::new(HashAggExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_aggregation(),
                     Arc::clone(&ctx),
                     src,
                 )?),
                 ExecType::TypeStreamAgg => Box::new(StreamAggExecutor::new(
+                    C::new(summary_slot_index),
                     Arc::clone(&ctx),
                     src,
                     exec.take_aggregation(),
                 )?),
-                ExecType::TypeTopN => {
-                    Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-                }
+                ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_topN(),
+                    Arc::clone(&ctx),
+                    src,
+                )?),
                 ExecType::TypeLimit => Box::new(LimitExecutor::new(
                     C::new(summary_slot_index),
                     exec.take_limit(),
