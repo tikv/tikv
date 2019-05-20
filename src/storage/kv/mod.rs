@@ -3,7 +3,7 @@
 use std::cell::{Cell, UnsafeCell};
 use std::cmp::Ordering;
 use std::time::Duration;
-use std::{error, mem, ptr, result};
+use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
@@ -692,7 +692,10 @@ pub fn with_tls_engine<E: Engine, F, R>(f: F) -> R
 where
     F: FnOnce(&E) -> R,
 {
-    TLS_ENGINE_ANY.with(|e| f(unsafe { mem::transmute(*e.get()) }))
+    TLS_ENGINE_ANY.with(|e| {
+        let engine = unsafe { &*(*e.get() as *const E) };
+        f(engine)
+    })
 }
 
 /// Set the thread local engine.

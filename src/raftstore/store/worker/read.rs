@@ -209,7 +209,7 @@ impl<C: ProposalRouter> LocalReader<C> {
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
         if self.store_id.get().is_none() {
-            let store_id = self.store_meta.lock().unwrap().store_id.clone();
+            let store_id = self.store_meta.lock().unwrap().store_id;
             self.store_id.set(store_id);
         }
         let store_id = self.store_id.get().unwrap();
