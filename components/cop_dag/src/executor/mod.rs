@@ -256,3 +256,174 @@ pub trait Executor {
         None
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use std::collections::btree_map::BTreeMap;
+    use std::ops::Bound;
+
+    use crate::codec::{Datum, table};
+    use crate::executor::{Executor, TableScanExecutor};
+    use crate::Error;
+    use crate::storage::{Store, Scanner, Statistics, Key, Value};
+
+    use tipb::schema::ColumnInfo;
+    use tipb::executor::TableScan;
+    use protobuf::RepeatedField;
+    use kvproto::coprocessor::KeyRange;
+    use cop_datatype::{FieldTypeTp, FieldTypeAccessor};
+
+    pub fn new_col_info(cid: i64, tp: FieldTypeTp) -> ColumnInfo {
+        let mut col_info = ColumnInfo::new();
+        col_info.as_mut_accessor().set_tp(tp);
+        col_info.set_column_id(cid);
+        col_info
+    }
+
+    // the first column should be i64 since it will be used as row handle
+    pub fn gen_table_data(
+        tid: i64,
+        cis: &[ColumnInfo],
+        rows: &[Vec<Datum>],
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut kv_data = Vec::new();
+        let col_ids: Vec<i64> = cis.iter().map(|c| c.get_column_id()).collect();
+        for cols in rows.iter() {
+            let col_values: Vec<_> = cols.to_vec();
+            let value = table::encode_row(col_values, &col_ids).unwrap();
+            let key = table::encode_row_key(tid, cols[0].i64());
+            kv_data.push((key, value));
+        }
+        kv_data
+    }
+
+    struct TestStore {
+        storage: BTreeMap<Key, Value>,
+    }
+
+    struct TestScanner {
+        data: std::vec::IntoIter<(Key, Value)>,
+    }
+
+    impl TestStore {
+        pub fn new(kv_data: &[(Vec<u8>, Vec<u8>)]) -> TestStore {
+            TestStore {
+                storage: kv_data.iter().map(|(key, val)| {
+                    (Key::from_raw(key), val.clone())
+                }).collect()
+            }
+        }
+    }
+
+    impl Store for TestStore {
+        type Error = Error;
+        type Scanner = TestScanner;
+
+        fn get(&self, key: &Key, _statistics: &mut Statistics) -> Result<Option<Vec<u8>>, Self::Error> {
+            Ok(self.storage.get(key).map(|val| val.clone()))
+        }
+
+        fn batch_get(
+            &self,
+            keys: &[Key],
+            statistics: &mut Statistics,
+        ) -> Vec<Result<Option<Vec<u8>>, Self::Error>> {
+            keys.iter()
+                .map(|key| self.get(key, statistics))
+                .collect()
+        }
+
+        fn scanner(
+            &self,
+            desc: bool,
+            key_only: bool,
+            lower_bound: Option<Key>,
+            upper_bound: Option<Key>,
+        ) -> Result<Self::Scanner, Self::Error> {
+            let lower = lower_bound.as_ref().map_or(Bound::Unbounded, |v| {
+                if !desc {
+                    Bound::Included(v)
+                } else {
+                    Bound::Excluded(v)
+                }
+            });
+            let upper = upper_bound.as_ref().map_or(Bound::Unbounded, |v| {
+                if desc {
+                    Bound::Included(v)
+                } else {
+                    Bound::Excluded(v)
+                }
+            });
+            let vec: Vec<(Key, Value)> = self
+                .storage
+                .range((lower, upper))
+                .map(|(k, v)| {
+                    let owned_k = k.clone();
+                    let owned_v = if key_only { vec![] } else { v.clone() };
+                    (owned_k, owned_v)
+                })
+                .collect();
+            Ok(Self::Scanner {
+                data: vec.into_iter(),
+            })
+        }
+    }
+
+    impl Scanner for TestScanner {
+        type Error = Error;
+
+        fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>, Self::Error> {
+            let value = self.data.next();
+            match value {
+                None => Ok(None),
+                Some((k, v)) => Ok(Some((k, v))),
+            }
+        }
+
+        fn scan(
+            &mut self,
+            limit: usize,
+        ) -> Result<Vec<Result<(Vec<u8>, Vec<u8>), Self::Error>>, Self::Error> {
+            let mut results = Vec::with_capacity(limit);
+            while results.len() < limit {
+                match self.next() {
+                    Ok(Some((k, v))) => {
+                        results.push(Ok((k.to_raw().unwrap(), v)));
+                    }
+                    Ok(None) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(results)
+        }
+
+        fn take_statistics(&mut self) -> Statistics {
+            Statistics::default()
+        }
+    }
+
+    #[inline]
+    pub fn get_range(table_id: i64, start: i64, end: i64) -> KeyRange {
+        let mut key_range = KeyRange::new();
+        key_range.set_start(table::encode_row_key(table_id, start));
+        key_range.set_end(table::encode_row_key(table_id, end));
+        key_range
+    }
+
+    pub fn gen_table_scan_executor(
+        tid: i64,
+        cis: Vec<ColumnInfo>,
+        raw_data: &[Vec<Datum>],
+        key_ranges: Option<Vec<KeyRange>>,
+    ) -> Box<dyn Executor + Send> {
+        let table_data = gen_table_data(tid, &cis, raw_data);
+        let mut test_store = TestStore::new(&table_data);
+
+        let mut table_scan = TableScan::new();
+        table_scan.set_table_id(tid);
+        table_scan.set_columns(RepeatedField::from_vec(cis.clone()));
+
+        let key_ranges = key_ranges.unwrap_or_else(|| vec![get_range(tid, 0, i64::max_value())]);
+        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, test_store, true).unwrap())
+    }
+}
