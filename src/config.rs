@@ -36,6 +36,7 @@ use crate::server::readpool;
 use crate::server::Config as ServerConfig;
 use crate::server::CONFIG_ROCKSDB_GAUGE;
 use crate::storage::config::DEFAULT_DATA_DIR;
+use crate::storage::lock_manager::Config as PessimisticTxnConfig;
 use crate::storage::{Config as StorageConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks::util::config::{self as rocks_config, CompressionType};
 use engine::rocks::util::{
@@ -1195,6 +1196,7 @@ pub struct TiKvConfig {
     pub raftdb: RaftDbConfig,
     pub security: SecurityConfig,
     pub import: ImportConfig,
+    pub pessimistic_txn: PessimisticTxnConfig,
 }
 
 impl Default for TiKvConfig {
@@ -1215,6 +1217,7 @@ impl Default for TiKvConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             import: ImportConfig::default(),
+            pessimistic_txn: PessimisticTxnConfig::default(),
         }
     }
 }
@@ -1261,6 +1264,7 @@ impl TiKvConfig {
         self.coprocessor.validate()?;
         self.security.validate()?;
         self.import.validate()?;
+        self.pessimistic_txn.validate()?;
         Ok(())
     }
 
