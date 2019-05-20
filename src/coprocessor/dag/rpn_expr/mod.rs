@@ -14,9 +14,9 @@ pub use self::types::{RpnExpression, RpnExpressionBuilder};
 use cop_datatype::{FieldTypeAccessor, FieldTypeFlag};
 use tipb::expression::{Expr, ScalarFuncSig};
 
+use self::impl_arithmetic::*;
 use self::impl_compare::*;
 use self::impl_op::*;
-use self::impl_arithmetic::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::Result;
 
@@ -25,7 +25,8 @@ fn map_int_sig<F>(
     children: &[Expr],
     mapper: F,
 ) -> Result<Box<dyn RpnFunction>>
-    where F: Fn(bool, bool) -> Box<dyn RpnFunction>
+where
+    F: Fn(bool, bool) -> Box<dyn RpnFunction>,
 {
     // FIXME: The signature for different signed / unsigned int should be inferred at TiDB side.
     if children.len() != 2 {
@@ -46,9 +47,7 @@ fn map_int_sig<F>(
     Ok(mapper(lhs_is_unsigned, rhs_is_unsigned))
 }
 
-fn compare_mapper<F: CmpOp>(
-    lhs_is_unsigned: bool, rhs_is_unsigned: bool,
-) -> Box<dyn RpnFunction> {
+fn compare_mapper<F: CmpOp>(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
     match (lhs_is_unsigned, rhs_is_unsigned) {
         (false, false) => Box::new(RpnFnCompare::<BasicComparer<Int, F>>::new()),
         (false, true) => Box::new(RpnFnCompare::<IntUintComparer<F>>::new()),
@@ -57,9 +56,7 @@ fn compare_mapper<F: CmpOp>(
     }
 }
 
-fn plus_mapper(
-    lhs_is_unsigned: bool, rhs_is_unsigned: bool,
-) -> Box<dyn RpnFunction> {
+fn plus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
     match (lhs_is_unsigned, rhs_is_unsigned) {
         (false, false) => Box::new(RpnFnArithmetic::<IntIntPlus>::new()),
         (false, true) => Box::new(RpnFnArithmetic::<IntUintPlus>::new()),
