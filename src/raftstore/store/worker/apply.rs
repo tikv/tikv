@@ -232,6 +232,7 @@ struct Stash {
     region: Option<Region>,
     exec_ctx: Option<ExecContext>,
     last_applied_index: u64,
+    for_merge_source: bool,
 }
 
 struct ApplyContextCore<'a> {
@@ -252,6 +253,8 @@ struct ApplyContextCore<'a> {
     sync_log_hint: bool,
     exec_ctx: Option<ExecContext>,
     use_delete_range: bool,
+    // indicates it is catching up logs for merge.
+    for_merge_source: bool,
 }
 
 impl<'a> ApplyContextCore<'a> {
@@ -271,6 +274,7 @@ impl<'a> ApplyContextCore<'a> {
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: false,
+            for_merge_source: false,
         }
     }
 
@@ -363,13 +367,16 @@ impl<'a> ApplyContextCore<'a> {
     /// the context is ready to switch to apply other `ApplyDelegate`.
     pub fn stash(&mut self, delegate: &mut ApplyDelegate) -> Stash {
         self.commit_opt(delegate, false);
-        Stash {
+        let stash = Stash {
             // last cbs should not be popped, because if the ApplyContext
             // is flushed, the callbacks can be flushed too.
             region: self.cbs.last().map(|cbs| cbs.region.clone()),
             exec_ctx: self.exec_ctx.take(),
             last_applied_index: self.last_applied_index,
-        }
+            for_merge_source: self.for_merge_source,
+        };
+        self.for_merge_source = true;
+        stash
     }
 
     /// Restore the dirty state, so context can resume applying from
@@ -378,6 +385,7 @@ impl<'a> ApplyContextCore<'a> {
         if let Some(region) = stash.region {
             self.cbs.push(ApplyCallback::new(region));
         }
+        self.for_merge_source = stash.for_merge_source;
         self.exec_ctx = stash.exec_ctx;
         self.last_applied_index = stash.last_applied_index;
     }
@@ -459,7 +467,7 @@ pub fn notify_stale_req(term: u64, cb: Callback) {
 }
 
 /// Check if a write is needed to be issued before handle the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
+fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize, for_merge_source: bool) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -472,7 +480,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest, wb_keys: usize) -> bool {
     }
 
     // When write batch contains more than `recommended` keys, write the batch to engine.
-    if wb_keys >= WRITE_BATCH_MAX_KEYS {
+    if wb_keys >= WRITE_BATCH_MAX_KEYS && !for_merge_source {
         return true;
     }
 
@@ -624,7 +632,7 @@ impl ApplyDelegate {
         if !data.is_empty() {
             let cmd = util::parse_data_at(data, index, &self.tag);
 
-            if should_write_to_engine(&cmd, apply_ctx.wb().count()) {
+            if should_write_to_engine(&cmd, apply_ctx.wb().count(), apply_ctx.for_merge_source) {
                 apply_ctx.commit(self);
             }
 
@@ -2083,12 +2091,13 @@ impl Runner {
             .use_delete_range(self.use_delete_range)
             .enable_sync_log(self.sync_log);
         for apply in applys {
-            if apply.entries.is_empty() || core.merged_regions.contains(&apply.region_id) {
+            let region_id = apply.region_id;
+            if apply.entries.is_empty() || core.merged_regions.contains(&region_id) {
                 continue;
             }
-            let mut delegate = match self.delegates.get_mut(&apply.region_id) {
+            let mut delegate = match self.delegates.get_mut(&region_id) {
                 None => {
-                    error!("[region {}] is missing", apply.region_id);
+                    error!("[region {}] is missing", region_id);
                     continue;
                 }
                 Some(e) => e.take().unwrap(),
@@ -2099,13 +2108,21 @@ impl Runner {
             {
                 let mut ctx = ApplyContext::new(&mut core, &mut self.delegates);
                 delegate.handle_raft_committed_entries(&mut ctx, apply.entries);
+                fail_point!(
+                    "skip_merge_tombstone_persist",
+                    { delegate.id() == 3 && delegate.region_id() == 1 },
+                    |_| {
+                        ctx.delegates.remove(&region_id);
+                        ctx.cbs.drain(..);
+                    }
+                );
             }
 
             if delegate.pending_remove {
                 delegate.destroy();
-                self.delegates.remove(&apply.region_id);
+                self.delegates.remove(&region_id);
             } else {
-                *self.delegates.get_mut(&apply.region_id).unwrap() = Some(delegate);
+                *self.delegates.get_mut(&region_id).unwrap() = Some(delegate);
             }
         }
 
@@ -2297,7 +2314,7 @@ mod tests {
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
         let wb = WriteBatch::new();
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count(), false), true);
 
         // IngestSST command
         let mut req = Request::new();
@@ -2306,7 +2323,7 @@ mod tests {
         let mut cmd = RaftCmdRequest::new();
         cmd.mut_requests().push(req);
         let wb = WriteBatch::new();
-        assert_eq!(should_write_to_engine(&cmd, wb.count()), true);
+        assert_eq!(should_write_to_engine(&cmd, wb.count(), false), true);
 
         // Write batch keys reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -2315,7 +2332,8 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_write_to_engine(&req, wb.count()), true);
+        assert_eq!(should_write_to_engine(&req, wb.count(), false), true);
+        assert_eq!(should_write_to_engine(&req, wb.count(), true), false);
 
         // Write batch keys not reach WRITE_BATCH_MAX_KEYS
         let req = RaftCmdRequest::new();
@@ -2324,7 +2342,7 @@ mod tests {
             let key = format!("key_{}", i);
             wb.put(key.as_bytes(), b"value").unwrap();
         }
-        assert_eq!(should_write_to_engine(&req, wb.count()), false);
+        assert_eq!(should_write_to_engine(&req, wb.count(), false), false);
     }
 
     #[test]

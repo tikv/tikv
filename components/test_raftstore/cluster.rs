@@ -645,6 +645,24 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
+    pub fn must_put_kvs(&mut self, kvs: &[(Vec<u8>, Vec<u8>)]) {
+        self.must_put_kvs_cf("default", kvs);
+    }
+
+    pub fn must_put_kvs_cf(&mut self, cf: &str, kvs: &[(Vec<u8>, Vec<u8>)]) {
+        let mut cmds = vec![];
+        for (key, value) in kvs {
+            cmds.push(new_put_cf_cmd(cf, key, value))
+        }
+
+        let resp = self.request(&kvs[0].0, cmds, false, Duration::from_secs(5));
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), kvs.len());
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Put);
+    }
+
     pub fn must_put(&mut self, key: &[u8], value: &[u8]) {
         self.must_put_cf("default", key, value);
     }
