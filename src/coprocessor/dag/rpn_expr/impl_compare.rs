@@ -7,7 +7,7 @@ use cop_codegen::RpnFunction;
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
-use crate::coprocessor::{codec, Error, Result};
+use crate::coprocessor::Result;
 
 #[derive(RpnFunction)]
 #[rpn_function(args = 2)]
@@ -75,34 +75,6 @@ impl<T: Evaluable + Ord, F: CmpOp> Comparer for BasicComparer<T, F> {
             (None, _) | (_, None) => F::compare_partial_null(),
             (Some(lhs), Some(rhs)) => Some(F::compare_order(lhs.cmp(rhs)) as i64),
         })
-    }
-}
-
-pub struct RealComparer<F: CmpOp> {
-    _phantom_f: std::marker::PhantomData<F>,
-}
-
-impl<F: CmpOp> Comparer for RealComparer<F> {
-    type T = Real;
-
-    #[inline]
-    fn compare(lhs: &Option<Real>, rhs: &Option<Real>) -> Result<Option<i64>> {
-        match (lhs, rhs) {
-            (None, None) => Ok(F::compare_null()),
-            (None, _) | (_, None) => Ok(F::compare_partial_null()),
-            (Some(lhs), Some(rhs)) => lhs
-                .partial_cmp(rhs)
-                // FIXME: It is weird to be a codec error.
-                // FIXME: This should never happen because special numbers like NaN and Inf are not
-                // allowed at all.
-                .ok_or_else(|| {
-                    Error::from(codec::Error::InvalidDataType(format!(
-                        "{} and {} can't be compared",
-                        lhs, rhs
-                    )))
-                })
-                .map(|v| Some(F::compare_order(v) as i64)),
-        }
     }
 }
 
