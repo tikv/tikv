@@ -241,6 +241,7 @@ mod tests {
     use super::super::RpnFnCallPayload;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
+    use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
@@ -255,7 +256,7 @@ mod tests {
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_scalar());
-        assert_eq!(*val.scalar_value().unwrap().as_real(), Some(1.5));
+        assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -265,9 +266,9 @@ mod tests {
             {
                 // this column is not referenced
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(5, EvalType::Real);
-                col.mut_decoded().push_real(Some(1.0));
+                col.mut_decoded().push_real(Real::new(1.0).ok());
                 col.mut_decoded().push_real(None);
-                col.mut_decoded().push_real(Some(7.5));
+                col.mut_decoded().push_real(Real::new(7.5).ok());
                 col.mut_decoded().push_real(None);
                 col.mut_decoded().push_real(None);
                 col
@@ -311,7 +312,7 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(1.0), None, Some(7.5), None, None]
+            [Real::new(1.0).ok(), None, Real::new(7.5).ok(), None, None]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -380,8 +381,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.0))
             }
         }
@@ -397,7 +398,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(3.0), Some(3.0), Some(3.0)]
+            [
+                Real::new(3.0).ok(),
+                Real::new(3.0).ok(),
+                Real::new(3.0).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -508,9 +513,9 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
             }
         }
@@ -527,7 +532,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(3.5), Some(3.5), Some(3.5)]
+            [
+                Real::new(3.5).ok(),
+                Real::new(3.5).ok(),
+                Real::new(3.5).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -544,18 +553,18 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
-                v2: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v1: &Option<Real>,
+                v2: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() - v2.unwrap()))
             }
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-            col.mut_decoded().push_real(Some(1.0));
-            col.mut_decoded().push_real(Some(5.5));
-            col.mut_decoded().push_real(Some(-4.3));
+            col.mut_decoded().push_real(Real::new(1.0).ok());
+            col.mut_decoded().push_real(Real::new(5.5).ok());
+            col.mut_decoded().push_real(Real::new(-4.3).ok());
             col
         }]);
         let schema = &[FieldTypeTp::Double.into()];
@@ -571,7 +580,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(-0.5), Some(4.0), Some(-5.8)]
+            [
+                Real::new(-0.5).ok(),
+                Real::new(4.0).ok(),
+                Real::new(-5.8).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -588,9 +601,9 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() - v2.unwrap() as f64))
             }
         }
@@ -615,7 +628,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(0.5), Some(-3.5), Some(5.5)]
+            [
+                Real::new(0.5).ok(),
+                Real::new(-3.5).ok(),
+                Real::new(5.5).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -632,11 +649,11 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
             ) -> Result<Option<i64>> {
                 Ok(Some(
-                    (v1.unwrap() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
+                    (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
                 ))
             }
         }
@@ -651,9 +668,9 @@ mod tests {
             },
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
         ]);
@@ -799,10 +816,10 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
-                v2: &Option<f64>,
-                v3: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v1: &Option<Real>,
+                v2: &Option<Real>,
+                v3: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
             }
         }
@@ -813,8 +830,11 @@ mod tests {
         struct FnB;
 
         impl FnB {
-            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<f64>> {
-                Ok(Some(42.0))
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(42.0).ok())
             }
         }
 
@@ -829,8 +849,8 @@ mod tests {
                 _payload: RpnFnCallPayload<'_>,
                 v1: &Option<i64>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some((v2.unwrap() - v1.unwrap()) as f64))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
             }
         }
 
@@ -853,9 +873,9 @@ mod tests {
         let mut columns = LazyBatchColumnVec::from(vec![
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
             {
@@ -896,7 +916,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(25.0), Some(3.8), Some(146.0)]
+            [
+                Real::new(25.0).ok(),
+                Real::new(3.8).ok(),
+                Real::new(146.0).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -942,8 +966,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.0))
             }
         }
@@ -977,8 +1001,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.5))
             }
         }
@@ -1022,10 +1046,10 @@ mod tests {
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
                 a: &Option<i64>,
-                b: &Option<f64>,
+                b: &Option<Real>,
                 c: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some(a.unwrap() as f64 - b.unwrap() * c.unwrap() as f64))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
             }
         }
 
@@ -1038,10 +1062,10 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                a: &Option<f64>,
+                a: &Option<Real>,
                 b: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some(a.unwrap() * (b.unwrap() as f64 - 1.5)))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
             }
         }
 
@@ -1065,9 +1089,9 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                a: &Option<f64>,
+                a: &Option<Real>,
             ) -> Result<Option<i64>> {
-                Ok(Some(a.unwrap() as i64))
+                Ok(Some(a.unwrap().into_inner() as i64))
             }
         }
 
@@ -1175,9 +1199,9 @@ mod tests {
             },
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
         ]);

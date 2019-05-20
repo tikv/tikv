@@ -317,7 +317,7 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::codec::data_type::{Real, VectorValue};
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
@@ -328,16 +328,16 @@ mod tests {
 
     /// Test Helper for normal test with fixed schema and data.
     /// Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
-    /// Column id:    1,            2,         4
-    /// Column offset:   0,            1          2
-    /// Table Data:  (1,            Some(10),  Some(5.2)),
-    ///              (3,            Some(-5),   None),
-    ///              (4,             None,      default(4.5)),
-    ///              (5,             None,      Some(0.1)),
-    ///              (6,             None,      default(4.5)),
+    /// Column id:    1,             2,             4
+    /// Column offset: 0,            1,             2
+    /// Table Data:  (1,             10,            5.2),
+    ///              (3,             -5,            NULL),
+    ///              (4,             NULL,          4.5 (DEFAULT)),
+    ///              (5,             NULL,          0.1),
+    ///              (6,             NULL,          4.5 (DEFAULT)),
     struct TableScanTestHelper {
         // ID(INT,PK), Foo(INT), Bar(Float,Default 4.5)
-        pub data: Vec<(i64, Option<i64>, Option<f64>)>,
+        pub data: Vec<(i64, Option<i64>, Option<Real>)>,
         pub table_id: i64,
         pub columns_info: Vec<ColumnInfo>,
         pub field_types: Vec<FieldType>,
@@ -391,11 +391,11 @@ mod tests {
             ];
 
             let expect_rows = vec![
-                (1, Some(10), Some(5.2)),
+                (1, Some(10), Real::new(5.2).ok()),
                 (3, Some(-5), None),
-                (4, None, Some(4.5)),
-                (5, None, Some(0.1)),
-                (6, None, Some(4.5)),
+                (4, None, Real::new(4.5).ok()),
+                (5, None, Real::new(0.1).ok()),
+                (6, None, Real::new(4.5).ok()),
             ];
 
             // The column info for each column in `data`.

@@ -123,3 +123,17 @@ impl_from! { Bytes }
 impl_from! { DateTime }
 impl_from! { Duration }
 impl_from! { Json }
+
+impl From<Option<f64>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<f64>) -> ScalarValue {
+        ScalarValue::Real(s.and_then(|f| Real::new(f).ok()))
+    }
+}
+
+impl From<f64> for ScalarValue {
+    #[inline]
+    fn from(s: f64) -> ScalarValue {
+        ScalarValue::Real(Real::new(s).ok())
+    }
+}
