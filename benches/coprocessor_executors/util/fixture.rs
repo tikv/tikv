@@ -188,8 +188,10 @@ impl FixtureBuilder {
         let columns_info: Vec<_> = self
             .field_types
             .into_iter()
-            .map(|ft| {
+            .enumerate()
+            .map(|(index, ft)| {
                 let mut ci = ColumnInfo::new();
+                ci.set_column_id(index as i64);
                 ci.as_mut_accessor()
                     .set_tp(ft.tp())
                     .set_flag(ft.flag())
