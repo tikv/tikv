@@ -15,7 +15,7 @@ use crate::coprocessor::Result;
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
 
-impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserAvg {
+impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::Avg);
         super::util::check_aggr_exp_supported_one_child(aggr_def)

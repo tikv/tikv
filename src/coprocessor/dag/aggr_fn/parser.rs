@@ -40,7 +40,7 @@ pub trait AggrDefinitionParser {
     ) -> Result<Box<dyn AggrFunction>>;
 }
 
-/// Parse all aggregate function definition from ProtoBuf.
+/// Parse all aggregate function definition from protobuf.
 pub struct AllAggrDefinitionParser;
 
 impl AggrDefinitionParser for AllAggrDefinitionParser {
