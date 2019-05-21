@@ -385,4 +385,13 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
     ) {
         unimplemented!()
     }
+
+    fn scan_regions(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: ScanRegionsRequest,
+        _sink: UnarySink<ScanRegionsResponse>,
+    ) {
+        unimplemented!()
+    }
 }
