@@ -1147,6 +1147,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "match_template"
+version = "0.0.1"
+dependencies = [
+ "proc-macro2 0.4.29 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quote 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 0.15.33 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "matches"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2272,6 +2281,7 @@ dependencies = [
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "log_wrappers 0.0.1",
+ "match_template 0.0.1",
  "more-asserts 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "murmur3 0.4.0 (git+https://github.com/pingcap/murmur3.git)",
  "nix 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
