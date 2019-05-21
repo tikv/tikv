@@ -413,8 +413,8 @@
 
 ## Options for `Titan`.
 [rocksdb.titan]
-## Enables `Titan`. Note that Titan is still a experimental feature, once enabled it can't fallback,
-## or there will be some data loses.
+## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
+## enabled, it can't fall back. Forced fallback may result in data loss.
 ## default: false
 # enabled = false
 
