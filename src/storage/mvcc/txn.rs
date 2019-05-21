@@ -163,15 +163,21 @@ impl<S: Snapshot> MvccTxn<S> {
         }
     }
 
-    fn check_data_constraint(&mut self, write: &Write, key: &Key) -> Result<()> {
-        if write.write_type == WriteType::Put
-            || (write.write_type != WriteType::Delete
-                && self.key_exist(&key, write.start_ts - 1)?)
-        {
-            Err(Error::AlreadyExist { key: key.to_raw()? })
-        } else {
-            Ok(())
+    fn check_data_constraint(
+        &mut self,
+        should_not_exist: bool,
+        write: &Write,
+        key: &Key,
+    ) -> Result<()> {
+        if should_not_exist {
+            if write.write_type == WriteType::Put
+                || (write.write_type != WriteType::Delete
+                    && self.key_exist(&key, write.start_ts - 1)?)
+            {
+                return Err(Error::AlreadyExist { key: key.to_raw()? });
+            }
         }
+        Ok(())
     }
 
     pub fn acquire_pessimistic_lock(
@@ -249,9 +255,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Check data constraint when acquiring pessimistic lock.
-            if should_not_exist {
-                self.check_data_constraint(&write, &key)?;
-            }
+            self.check_data_constraint(should_not_exist, &write, &key)?;
         }
 
         self.lock_key(
@@ -350,9 +354,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
-                    if should_not_exist {
-                        self.check_data_constraint(&write, &key)?;
-                    }
+                    self.check_data_constraint(should_not_exist, &write, &key)?;
                 }
             }
             // ... or locks at any timestamp.
