@@ -141,6 +141,39 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
+    // If the value is short, lock key and put value.
+    // If not, lock key.
+    fn put_lock(
+        &mut self,
+        key: Key,
+        lock_type: LockType,
+        primary: Vec<u8>,
+        ttl: u64,
+        value: Option<Value>,
+        is_pessimistic_txn: bool,
+    ) {
+        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
+            self.lock_key(key, lock_type, primary, ttl, value, is_pessimistic_txn);
+        } else {
+            // value is long
+            let ts = self.start_ts;
+            self.put_value(key.clone(), ts, value.unwrap());
+
+            self.lock_key(key, lock_type, primary, ttl, None, is_pessimistic_txn);
+        }
+    }
+
+    fn check_data_constraint(&mut self, write: &Write, key: &Key) -> Result<()> {
+        if write.write_type == WriteType::Put
+            || (write.write_type != WriteType::Delete
+                && self.key_exist(&key, write.start_ts - 1)?)
+        {
+            Err(Error::AlreadyExist { key: key.to_raw()? })
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn acquire_pessimistic_lock(
         &mut self,
         key: Key,
@@ -185,15 +218,20 @@ impl<S: Snapshot> MvccTxn<S> {
                 });
             }
 
-            // Handle rollback.
-            // If the start timestamp of write is equal to transaction's start timestamp
-            // as well as commit timestamp, the lock is already rollbacked.
-            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
-                assert!(write.write_type == WriteType::Rollback);
-                return Err(Error::PessimisticLockRollbacked {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                });
+            if write.start_ts == self.start_ts {
+                // If the `commit_ts` of write is equal to transaction's `start_ts`,
+                // the lock is already rollbacked.
+                if commit_ts == self.start_ts {
+                    assert!(write.write_type == WriteType::Rollback);
+                    return Err(Error::PessimisticLockRollbacked {
+                        start_ts: self.start_ts,
+                        key: key.into_raw()?,
+                    });
+                } else {
+                    // If the `commit_ts` is not equal to `start_ts`,
+                    // the transaction has been commited.
+                    return Err(Error::Committed { commit_ts });
+                }
             }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
@@ -212,14 +250,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
             // Check data constraint when acquiring pessimistic lock.
             if should_not_exist {
-                if write.write_type == WriteType::Put
-                    || (write.write_type != WriteType::Delete
-                        && self.key_exist(&key, write.start_ts - 1)?)
-                {
-                    return Err(Error::AlreadyExist {
-                        key: key.into_raw()?,
-                    });
-                }
+                self.check_data_constraint(&write, &key)?;
             }
         }
 
@@ -277,30 +308,14 @@ impl<S: Snapshot> MvccTxn<S> {
             });
         }
         // No need to check data constraint, it's resolved by pessimistic locks.
-        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                value,
-                true,
-            );
-        } else {
-            // value is long
-            let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
-
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-                true,
-            );
-        }
-
+        self.put_lock(
+            key,
+            lock_type,
+            primary.to_vec(),
+            options.lock_ttl,
+            value,
+            true,
+        );
         Ok(())
     }
 
@@ -336,14 +351,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         });
                     }
                     if should_not_exist {
-                        if write.write_type == WriteType::Put
-                            || (write.write_type != WriteType::Delete
-                                && self.key_exist(&key, write.start_ts - 1)?)
-                        {
-                            return Err(Error::AlreadyExist {
-                                key: key.into_raw()?,
-                            });
-                        }
+                        self.check_data_constraint(&write, &key)?;
                     }
                 }
             }
@@ -357,6 +365,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         ttl: lock.ttl,
                     });
                 }
+                // TODO: remove it in future
                 if lock.lock_type == LockType::Pessimistic {
                     return Err(Error::LockTypeNotMatch {
                         start_ts: self.start_ts,
@@ -369,31 +378,14 @@ impl<S: Snapshot> MvccTxn<S> {
                 return Ok(());
             }
         }
-
-        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                value,
-                false,
-            );
-        } else {
-            // value is long
-            let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
-
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-                false,
-            );
-        }
-
+        self.put_lock(
+            key,
+            lock_type,
+            primary.to_vec(),
+            options.lock_ttl,
+            value,
+            false,
+        );
         Ok(())
     }
 
