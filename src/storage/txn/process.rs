@@ -145,10 +145,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.detector_scheduler.take()
     }
 
-    pub fn clone_pool(&self) -> SchedPool<E> {
-        self.sched_pool.clone().unwrap()
-    }
-
     /// Start the execution of the task.
     pub fn execute(mut self, cb_ctx: CbContext, snapshot: EngineResult<E::Snap>, task: Task) {
         debug!(
