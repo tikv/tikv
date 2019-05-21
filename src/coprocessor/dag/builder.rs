@@ -36,21 +36,32 @@ impl DAGBuilder {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)?;
+                    BatchTableScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchTableScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)?;
+                    BatchIndexScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)?;
+                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeAggregation | ExecType::TypeStreamAgg
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
-                    BatchSimpleAggregationExecutor::check_supported(&descriptor)?;
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!(
+                            "Unable to use BatchSimpleAggregationExecutor: {}",
+                            e
+                        ))
+                    })?;
                 }
                 ExecType::TypeLimit => {}
                 _ => {
