@@ -1,12 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::client::Client;
+use super::util::extract_physical_timestamp;
 use super::waiter_manager::Scheduler as WaiterMgrScheduler;
 use super::{Error, Lock, Result};
 use crate::pd::{PdClient, RpcClient, INVALID_ID};
 use crate::tikv_util::collections::{HashMap, HashSet};
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
+use crate::tikv_util::time::duration_to_ms;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
@@ -20,9 +22,12 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
+
+// 5 mins
+const TXN_DETECT_INFO_TTL: u64 = 300000;
 
 #[derive(Default)]
 struct DetectTable {
@@ -84,6 +89,13 @@ impl DetectTable {
 
     pub fn clear(&mut self) {
         self.wait_for_map.clear();
+    }
+
+    pub fn expire<F>(&mut self, is_expired: F)
+    where
+        F: Fn(u64) -> bool,
+    {
+        self.wait_for_map.retain(|ts, _| !is_expired(*ts));
     }
 }
 
@@ -350,7 +362,7 @@ pub struct Detector {
     pd_client: Arc<RpcClient>,
     inner: Rc<RefCell<Inner>>,
     monitor_membership_interval: u64,
-    is_membership_change_monitor_scheduled: bool,
+    is_initialized: bool,
 }
 
 unsafe impl Send for Detector {}
@@ -372,11 +384,11 @@ impl Detector {
                 security_mgr,
             ))),
             monitor_membership_interval,
-            is_membership_change_monitor_scheduled: false,
+            is_initialized: false,
         }
     }
 
-    fn schedule_membership_change_monitor(&mut self, handle: &Handle) {
+    fn schedule_membership_change_monitor(&self, handle: &Handle) {
         info!("schedule membership change monitor");
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
@@ -396,7 +408,32 @@ impl Detector {
         })
         .map_err(|e| panic!("unexpected err: {:?}", e));
         handle.spawn(timer);
-        self.is_membership_change_monitor_scheduled = true;
+    }
+
+    fn schedule_detect_table_expiration(&self, handle: &Handle) {
+        info!("schedule detect table expiration");
+        let detect_table = Rc::clone(&self.inner.borrow().detect_table);
+        let timer = Interval::new_interval(Duration::from_millis(TXN_DETECT_INFO_TTL))
+            .for_each(move |_| {
+                let now = duration_to_ms(
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap(),
+                );
+                detect_table.borrow_mut().expire(|ts| {
+                    let ts = extract_physical_timestamp(ts);
+                    ts + TXN_DETECT_INFO_TTL <= now
+                });
+                Ok(())
+            })
+            .map_err(|e| panic!("unexpected err: {:?}", e));
+        handle.spawn(timer);
+    }
+
+    fn init(&mut self, handle: &Handle) {
+        self.schedule_membership_change_monitor(handle);
+        self.schedule_detect_table_expiration(handle);
+        self.is_initialized = true;
     }
 
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
@@ -464,7 +501,7 @@ impl Detector {
             return;
         }
 
-        let detect_table = Rc::clone(&self.inner.borrow().detect_table);
+        let detect_table = Rc::clone(&inner.detect_table);
         let s = stream
             .map_err(Error::Grpc)
             .and_then(move |mut req| {
@@ -516,8 +553,8 @@ impl Detector {
 
 impl FutureRunnable<Task> for Detector {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_membership_change_monitor_scheduled {
-            self.schedule_membership_change_monitor(handle);
+        if !self.is_initialized {
+            self.init(handle);
         }
 
         match task {
@@ -591,6 +628,7 @@ impl deadlock_grpc::Deadlock for Service {
 
 #[cfg(test)]
 mod tests {
+    use super::super::util::PHYSICAL_SHIFT_BITS;
     use super::*;
 
     #[test]
@@ -626,5 +664,24 @@ mod tests {
         // clean up non-exist entry
         detect_table.clean_up(3);
         detect_table.clean_up_wait_for(3, 1, 1);
+    }
+
+    #[test]
+    fn test_detect_table_expire() {
+        let mut detect_table = DetectTable::default();
+        let now = duration_to_ms(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap(),
+        );
+        detect_table.detect(now << PHYSICAL_SHIFT_BITS, 1, 1);
+        detect_table.detect((now - 100) << PHYSICAL_SHIFT_BITS, 1, 1);
+        detect_table.detect((now - 200) << PHYSICAL_SHIFT_BITS, 1, 1);
+        assert_eq!(detect_table.wait_for_map.len(), 3);
+        detect_table.expire(|ts| {
+            let ts = extract_physical_timestamp(ts);
+            ts + 101 <= now
+        });
+        assert_eq!(detect_table.wait_for_map.len(), 2);
     }
 }
