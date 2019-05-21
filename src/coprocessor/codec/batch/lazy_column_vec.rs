@@ -217,6 +217,7 @@ mod tests {
 
     use cop_datatype::EvalType;
 
+    use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     /// Pushes a raw row. There must be no empty datum.
@@ -329,7 +330,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Real);
-                assert_eq!(col.as_real_slice(), &[Some(1.0), None]);
+                assert_eq!(col.as_real_slice(), &[Real::new(1.0).ok(), None]);
             }
             assert!(columns.is_column_decoded(1));
         }
@@ -378,7 +379,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), None, Some(7.5)]
+                &[Real::new(1.3).ok(), None, Real::new(7.5).ok()]
             );
         }
 
@@ -409,13 +410,13 @@ mod tests {
             assert_eq!(
                 column1.decoded().as_real_slice(),
                 &[
-                    Some(1.3),
+                    Real::new(1.3).ok(),
                     None,
-                    Some(7.5),
-                    Some(101.51),
+                    Real::new(7.5).ok(),
+                    Real::new(101.51).ok(),
                     None,
-                    Some(1.9),
-                    Some(101.51)
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
                 ]
             );
         }
@@ -444,7 +445,12 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), Some(7.5), Some(1.9), Some(101.51)]
+                &[
+                    Real::new(1.3).ok(),
+                    Real::new(7.5).ok(),
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
+                ]
             );
         }
 
@@ -471,7 +477,12 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), Some(7.5), Some(1.9), Some(101.51)]
+                &[
+                    Real::new(1.3).ok(),
+                    Real::new(7.5).ok(),
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
+                ]
             );
         }
 
@@ -518,7 +529,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(7.77), None, Some(7.17)]
+                &[Real::new(7.77).ok(), None, Real::new(7.17).ok()]
             );
         }
 
@@ -546,7 +557,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(7.77), None, Some(7.17)]
+                &[Real::new(7.77).ok(), None, Real::new(7.17).ok()]
             );
         }
 
@@ -568,7 +579,10 @@ mod tests {
             column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 2);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
-            assert_eq!(column1.decoded().as_real_slice(), &[Some(7.77), Some(7.17)]);
+            assert_eq!(
+                column1.decoded().as_real_slice(),
+                &[Real::new(7.77).ok(), Real::new(7.17).ok()]
+            );
         }
 
         columns.retain_rows_by_index(|_| false);
