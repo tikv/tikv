@@ -23,12 +23,24 @@ pub fn selection(exprs: &[Expr]) -> PbExecutor {
     exec
 }
 
-/// Builds a simple aggregate executor descriptor.
+/// Builds a simple aggregation executor descriptor.
 pub fn simple_aggregate(aggr_expr: &Expr) -> PbExecutor {
     let mut exec = PbExecutor::new();
     exec.set_tp(ExecType::TypeStreamAgg);
     exec.mut_aggregation()
         .mut_agg_func()
         .push(aggr_expr.clone());
+    exec
+}
+
+/// Builds a hash aggregation executor descriptor.
+pub fn hash_aggregate(aggr_expr: &Expr, group_bys: &[Expr]) -> PbExecutor {
+    let mut exec = PbExecutor::new();
+    exec.set_tp(ExecType::TypeAggregation);
+    exec.mut_aggregation()
+        .mut_agg_func()
+        .push(aggr_expr.clone());
+    exec.mut_aggregation()
+        .set_group_by(group_bys.to_vec().into());
     exec
 }

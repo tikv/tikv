@@ -54,3 +54,37 @@ pub fn build_dag_handler<TargetTxnStore: TxnStore + 'static>(
     )
     .unwrap()
 }
+
+pub struct BenchCase<I> {
+    pub name: &'static str,
+    pub f: Box<dyn Fn(&mut criterion::Bencher, &I) + 'static>,
+}
+
+impl<I> PartialEq for BenchCase<I> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name.eq(other.name)
+    }
+}
+
+impl<I> PartialOrd for BenchCase<I> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.name.partial_cmp(other.name)
+    }
+}
+
+impl<I> Ord for BenchCase<I> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.name.cmp(other.name)
+    }
+}
+
+impl<I> Eq for BenchCase<I> {}
+
+impl<I> BenchCase<I> {
+    pub fn new(name: &'static str, f: impl Fn(&mut criterion::Bencher, &I) + 'static) -> Self {
+        Self {
+            name,
+            f: Box::new(f),
+        }
+    }
+}

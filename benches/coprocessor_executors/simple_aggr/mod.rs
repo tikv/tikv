@@ -6,7 +6,7 @@ use cop_datatype::FieldTypeTp;
 use tipb::expression::ExprType;
 use tipb_helper::ExprDefBuilder;
 
-use crate::util::FixtureBuilder;
+use crate::util::{BenchCase, FixtureBuilder};
 
 /// COUNT(1)
 fn bench_simple_aggr_count_1(b: &mut criterion::Bencher, input: &Input) {
@@ -72,8 +72,8 @@ pub fn bench(c: &mut criterion::Criterion) {
     let bencher_options: Vec<Box<dyn util::SimpleAggrBencher>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
-    for bencher in &bencher_options {
-        for rows in &rows_options {
+    for rows in &rows_options {
+        for bencher in &bencher_options {
             inputs.push(Input {
                 src_rows: *rows,
                 bencher: bencher.box_clone(),
@@ -81,26 +81,29 @@ pub fn bench(c: &mut criterion::Criterion) {
         }
     }
 
-    c.bench_function_over_inputs(
-        "simple_aggr_count_1",
-        bench_simple_aggr_count_1,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "simple_aggr_count_int_column",
-        bench_simple_aggr_count_int_column,
-        inputs.clone(),
-    );
+    let mut cases = vec![
+        BenchCase::new("simple_aggr_count_1", bench_simple_aggr_count_1),
+        BenchCase::new(
+            "simple_aggr_count_int_column",
+            bench_simple_aggr_count_int_column,
+        ),
+    ];
     if crate::util::bench_level() >= 2 {
-        c.bench_function_over_inputs(
-            "simple_aggr_count_real_column",
-            bench_simple_aggr_count_real_column,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "simple_aggr_count_bytes_column",
-            bench_simple_aggr_count_bytes_column,
-            inputs.clone(),
-        );
+        let mut additional_cases = vec![
+            BenchCase::new(
+                "simple_aggr_count_real_column",
+                bench_simple_aggr_count_real_column,
+            ),
+            BenchCase::new(
+                "simple_aggr_count_bytes_column",
+                bench_simple_aggr_count_bytes_column,
+            ),
+        ];
+        cases.append(&mut additional_cases);
+    }
+
+    cases.sort();
+    for case in cases {
+        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
     }
 }

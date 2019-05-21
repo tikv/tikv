@@ -6,7 +6,7 @@ use cop_datatype::FieldTypeTp;
 use tipb::expression::ScalarFuncSig;
 use tipb_helper::ExprDefBuilder;
 
-use crate::util::FixtureBuilder;
+use crate::util::{BenchCase, FixtureBuilder};
 
 /// For SQLs like `WHERE column`.
 fn bench_selection_column(b: &mut criterion::Bencher, input: &Input) {
@@ -83,8 +83,8 @@ pub fn bench(c: &mut criterion::Criterion) {
     let bencher_options: Vec<Box<dyn util::SelectionBencher>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
-    for bencher in &bencher_options {
-        for rows in &rows_options {
+    for rows in &rows_options {
+        for bencher in &bencher_options {
             inputs.push(Input {
                 src_rows: *rows,
                 bencher: bencher.box_clone(),
@@ -92,22 +92,27 @@ pub fn bench(c: &mut criterion::Criterion) {
         }
     }
 
-    c.bench_function_over_inputs(
+    let mut cases = vec![BenchCase::new(
         "selection_binary_func_column_constant",
         bench_selection_binary_func_column_constant,
-        inputs.clone(),
-    );
+    )];
     if crate::util::bench_level() >= 1 {
-        c.bench_function_over_inputs("selection_column", bench_selection_column, inputs.clone());
-        c.bench_function_over_inputs(
-            "selection_binary_func_column_column",
-            bench_selection_binary_func_column_column,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "selection_multiple_predicate",
-            bench_selection_multiple_predicate,
-            inputs.clone(),
-        );
+        let mut additional_cases = vec![
+            BenchCase::new("selection_column", bench_selection_column),
+            BenchCase::new(
+                "selection_binary_func_column_column",
+                bench_selection_binary_func_column_column,
+            ),
+            BenchCase::new(
+                "selection_multiple_predicate",
+                bench_selection_multiple_predicate,
+            ),
+        ];
+        cases.append(&mut additional_cases);
+    }
+
+    cases.sort();
+    for case in cases {
+        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
     }
 }

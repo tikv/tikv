@@ -6,7 +6,7 @@ use cop_datatype::FieldTypeTp;
 use tipb::expression::{ExprType, ScalarFuncSig};
 use tipb_helper::ExprDefBuilder;
 
-use crate::util::FixtureBuilder;
+use crate::util::{BenchCase, FixtureBuilder};
 
 /// COUNT(1) GROUP BY COL where COL is a int column.
 /// Each row is a new group.
@@ -136,8 +136,8 @@ pub fn bench(c: &mut criterion::Criterion) {
     let bencher_options: Vec<Box<dyn util::HashAggrBencher>> =
         vec![Box::new(util::NormalBencher), Box::new(util::BatchBencher)];
 
-    for bencher in &bencher_options {
-        for rows in &rows_options {
+    for rows in &rows_options {
+        for bencher in &bencher_options {
             inputs.push(Input {
                 src_rows: *rows,
                 bencher: bencher.box_clone(),
@@ -145,41 +145,44 @@ pub fn bench(c: &mut criterion::Criterion) {
         }
     }
 
-    c.bench_function_over_inputs(
-        "hash_aggr_count_1_group_by_int_col_2_groups",
-        bench_hash_aggr_count_1_group_by_int_col_2_groups,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "hash_aggr_count_1_group_by_fn_2_groups",
-        bench_hash_aggr_count_1_group_by_fn_2_groups,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "hash_aggr_count_1_group_by_decimal_col_2_groups",
-        bench_hash_aggr_count_1_group_by_decimal_col_2_groups,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "hash_aggr_count_1_group_by_int_col_real_col_2_groups",
-        bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups,
-        inputs.clone(),
-    );
+    let mut cases = vec![
+        BenchCase::new(
+            "hash_aggr_count_1_group_by_int_col_2_groups",
+            bench_hash_aggr_count_1_group_by_int_col_2_groups,
+        ),
+        BenchCase::new(
+            "hash_aggr_count_1_group_by_fn_2_groups",
+            bench_hash_aggr_count_1_group_by_fn_2_groups,
+        ),
+        BenchCase::new(
+            "hash_aggr_count_1_group_by_decimal_col_2_groups",
+            bench_hash_aggr_count_1_group_by_decimal_col_2_groups,
+        ),
+        BenchCase::new(
+            "hash_aggr_count_1_group_by_int_col_real_col_2_groups",
+            bench_hash_aggr_count_1_group_by_int_col_real_col_2_groups,
+        ),
+    ];
     if crate::util::bench_level() >= 1 {
-        c.bench_function_over_inputs(
-            "hash_aggr_count_1_group_by_int_col",
-            bench_hash_aggr_count_1_group_by_int_col,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "hash_aggr_count_1_group_by_decimal_col",
-            bench_hash_aggr_count_1_group_by_decimal_col,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "hash_aggr_count_1_group_by_int_col_real_col",
-            bench_hash_aggr_count_1_group_by_int_col_real_col,
-            inputs.clone(),
-        );
+        let mut additional_cases = vec![
+            BenchCase::new(
+                "hash_aggr_count_1_group_by_int_col",
+                bench_hash_aggr_count_1_group_by_int_col,
+            ),
+            BenchCase::new(
+                "hash_aggr_count_1_group_by_decimal_col",
+                bench_hash_aggr_count_1_group_by_decimal_col,
+            ),
+            BenchCase::new(
+                "hash_aggr_count_1_group_by_int_col_real_col",
+                bench_hash_aggr_count_1_group_by_int_col_real_col,
+            ),
+        ];
+        cases.append(&mut additional_cases);
+    }
+
+    cases.sort();
+    for case in cases {
+        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
     }
 }

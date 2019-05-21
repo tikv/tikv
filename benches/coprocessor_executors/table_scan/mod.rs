@@ -5,6 +5,7 @@ mod util;
 
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
+use crate::util::BenchCase;
 
 const ROWS: usize = 5000;
 
@@ -202,68 +203,48 @@ pub fn bench(c: &mut criterion::Criterion) {
         inputs.append(&mut additional_inputs);
     }
 
-    c.bench_function_over_inputs(
-        "table_scan_primary_key",
-        bench_table_scan_primary_key,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "table_scan_long_datum_all",
-        bench_table_scan_long_datum_all,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs(
-        "table_scan_datum_absent_large_row",
-        bench_table_scan_datum_absent_large_row,
-        inputs.clone(),
-    );
+    let mut cases = vec![
+        BenchCase::new("table_scan_primary_key", bench_table_scan_primary_key),
+        BenchCase::new("table_scan_long_datum_all", bench_table_scan_long_datum_all),
+        BenchCase::new(
+            "table_scan_datum_absent_large_row",
+            bench_table_scan_datum_absent_large_row,
+        ),
+    ];
     if crate::util::bench_level() >= 1 {
-        c.bench_function_over_inputs(
-            "table_scan_datum_front",
-            bench_table_scan_datum_front,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_datum_all",
-            bench_table_scan_datum_all,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_point_range",
-            bench_table_scan_point_range,
-            inputs.clone(),
-        );
+        let mut additional_cases = vec![
+            BenchCase::new("table_scan_datum_front", bench_table_scan_datum_front),
+            BenchCase::new("table_scan_datum_all", bench_table_scan_datum_all),
+            BenchCase::new("table_scan_point_range", bench_table_scan_point_range),
+        ];
+        cases.append(&mut additional_cases);
     }
     if crate::util::bench_level() >= 2 {
-        c.bench_function_over_inputs(
-            "table_scan_datum_multi_front",
-            bench_table_scan_datum_multi_front,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_datum_end",
-            bench_table_scan_datum_end,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_long_datum_primary_key",
-            bench_table_scan_long_datum_primary_key,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_long_datum_normal",
-            bench_table_scan_long_datum_normal,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_long_datum_long",
-            bench_table_scan_long_datum_long,
-            inputs.clone(),
-        );
-        c.bench_function_over_inputs(
-            "table_scan_datum_absent",
-            bench_table_scan_datum_absent,
-            inputs.clone(),
-        );
+        let mut additional_cases = vec![
+            BenchCase::new(
+                "table_scan_datum_multi_front",
+                bench_table_scan_datum_multi_front,
+            ),
+            BenchCase::new("table_scan_datum_end", bench_table_scan_datum_end),
+            BenchCase::new(
+                "table_scan_long_datum_primary_key",
+                bench_table_scan_long_datum_primary_key,
+            ),
+            BenchCase::new(
+                "table_scan_long_datum_normal",
+                bench_table_scan_long_datum_normal,
+            ),
+            BenchCase::new(
+                "table_scan_long_datum_long",
+                bench_table_scan_long_datum_long,
+            ),
+            BenchCase::new("table_scan_datum_absent", bench_table_scan_datum_absent),
+        ];
+        cases.append(&mut additional_cases);
+    }
+
+    cases.sort();
+    for case in cases {
+        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
     }
 }

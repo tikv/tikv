@@ -5,6 +5,7 @@ mod util;
 
 use crate::util::scan_bencher::ScanBencher;
 use crate::util::store::*;
+use crate::util::BenchCase;
 
 const ROWS: usize = 5000;
 
@@ -72,10 +73,13 @@ pub fn bench(c: &mut criterion::Criterion) {
         inputs.append(&mut additional_inputs);
     }
 
-    c.bench_function_over_inputs(
-        "index_scan_primary_key",
-        bench_index_scan_primary_key,
-        inputs.clone(),
-    );
-    c.bench_function_over_inputs("index_scan_index", bench_index_scan_index, inputs.clone());
+    let mut cases = vec![
+        BenchCase::new("index_scan_primary_key", bench_index_scan_primary_key),
+        BenchCase::new("index_scan_index", bench_index_scan_index),
+    ];
+
+    cases.sort();
+    for case in cases {
+        c.bench_function_over_inputs(case.name, case.f, inputs.clone());
+    }
 }
