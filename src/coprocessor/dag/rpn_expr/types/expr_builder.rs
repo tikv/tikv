@@ -10,8 +10,8 @@ use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
 use crate::coprocessor::{
     codec::{
-        data_type::ScalarValue,
-        mysql::{DecimalDecoder, Duration, JsonDecoder, Time, Tz, MAX_FSP},
+        data_type::*,
+        mysql::{DecimalDecoder, JsonDecoder, Tz, MAX_FSP},
     },
     Error, Result,
 };
@@ -327,14 +327,10 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match eval_type {
-        EvalType::Int => ScalarValue::Int(None),
-        EvalType::Real => ScalarValue::Real(None),
-        EvalType::Decimal => ScalarValue::Decimal(None),
-        EvalType::Bytes => ScalarValue::Bytes(None),
-        EvalType::DateTime => ScalarValue::DateTime(None),
-        EvalType::Duration => ScalarValue::Duration(None),
-        EvalType::Json => ScalarValue::Json(None),
+    match_template_evaluable! {
+        TT, match eval_type {
+            EvalType::TT => ScalarValue::TT(None),
+        }
     }
 }
 
@@ -367,7 +363,7 @@ fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
         .as_slice()
         .read_f64()
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
-    Ok(ScalarValue::Real(Some(value)))
+    Ok(ScalarValue::Real(Real::new(value).ok()))
 }
 
 #[inline]
@@ -381,7 +377,7 @@ fn extract_scalar_value_date_time(
         .read_u64()
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
-    let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
@@ -439,7 +435,7 @@ mod tests {
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
             _v: &Option<i64>,
-        ) -> Result<Option<f64>> {
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -453,8 +449,8 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
         ) -> Result<Option<i64>> {
             unreachable!()
         }
@@ -486,10 +482,10 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
-            _v3: &Option<f64>,
-        ) -> Result<Option<f64>> {
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
+            _v3: &Option<Real>,
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -703,7 +699,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             -1.5
         );
 
@@ -714,7 +711,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             100.12
         );
 

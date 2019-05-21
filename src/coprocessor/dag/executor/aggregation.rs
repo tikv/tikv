@@ -10,7 +10,7 @@ use tipb::expression::{Expr, ExprType};
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -64,7 +64,8 @@ impl dyn AggrFunc {
     }
 }
 
-struct AggExecutor {
+struct AggExecutor<C: ExecSummaryCollector> {
+    summary_collector: C,
     group_by: Vec<Expression>,
     aggr_func: Vec<AggFuncExpr>,
     executed: bool,
@@ -74,19 +75,21 @@ struct AggExecutor {
     first_collect: bool,
 }
 
-impl AggExecutor {
+impl<C: ExecSummaryCollector> AggExecutor<C> {
     fn new(
+        summary_collector: C,
         group_by: Vec<Expr>,
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<AggExecutor> {
+    ) -> Result<Self> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
         visitor.batch_visit(&aggr_func)?;
         let ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
+            summary_collector,
             group_by: Expression::batch_build(&ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
             executed: false,
@@ -151,21 +154,22 @@ impl AggExecutor {
 // HashAggExecutor deals with the aggregate functions.
 // When Next() is called, it reads all the data from src
 // and updates all the values in group_key_aggrs, then returns a result.
-pub struct HashAggExecutor {
-    inner: AggExecutor,
+pub struct HashAggExecutor<C: ExecSummaryCollector> {
+    inner: AggExecutor<C>,
     group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<dyn AggrFunc>>>,
     cursor: usize,
 }
 
-impl HashAggExecutor {
+impl<C: ExecSummaryCollector> HashAggExecutor<C> {
     pub fn new(
+        summary_collector: C,
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<HashAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
-        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
+        let inner = AggExecutor::new(summary_collector, group_bys, aggs, eval_config, src)?;
         Ok(HashAggExecutor {
             inner,
             group_key_aggrs: OrderMap::new(),
@@ -206,10 +210,8 @@ impl HashAggExecutor {
         }
         Ok(())
     }
-}
 
-impl Executor for HashAggExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
+    fn next_impl(&mut self) -> Result<Option<Row>> {
         if !self.inner.executed {
             self.aggregate()?;
             self.inner.executed = true;
@@ -237,6 +239,19 @@ impl Executor for HashAggExecutor {
             None => Ok(None),
         }
     }
+}
+
+impl<C: ExecSummaryCollector> Executor for HashAggExecutor<C> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.inner.summary_collector.on_start_iterate();
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
+            self.inner.summary_collector.on_finish_iterate(timer, 1)
+        } else {
+            self.inner.summary_collector.on_finish_iterate(timer, 0)
+        }
+        ret
+    }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.inner.collect_output_counts(counts);
@@ -246,48 +261,29 @@ impl Executor for HashAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
-impl Executor for StreamAggExecutor {
+impl<C: ExecSummaryCollector> Executor for StreamAggExecutor<C> {
     fn next(&mut self) -> Result<Option<Row>> {
-        if self.inner.executed {
-            return Ok(None);
+        let timer = self.inner.summary_collector.on_start_iterate();
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
+            self.inner.summary_collector.on_finish_iterate(timer, 1)
+        } else {
+            self.inner.summary_collector.on_finish_iterate(timer, 0)
         }
-
-        while let Some(cols) = self.inner.next()? {
-            self.has_data = true;
-            let new_group = self.meet_new_group(&cols)?;
-            let ret = if new_group {
-                Some(self.get_partial_result()?)
-            } else {
-                None
-            };
-            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
-            }
-            if new_group {
-                return Ok(ret);
-            }
-        }
-        self.inner.executed = true;
-        // If there is no data in the t, then whether there is 'group by' that can affect the result.
-        // e.g. select count(*) from t. Result is 0.
-        // e.g. select count(*) from t group by c. Result is empty.
-        if !self.has_data && !self.inner.group_by.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(self.get_partial_result()?))
+        ret
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -298,24 +294,24 @@ impl Executor for StreamAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
 // StreamAggExecutor deals with the aggregation functions.
 // It assumes all the input data is sorted by group by key.
 // When next() is called, it finds a group and returns a result for the same group.
-pub struct StreamAggExecutor {
-    inner: AggExecutor,
+pub struct StreamAggExecutor<C: ExecSummaryCollector> {
+    inner: AggExecutor<C>,
     // save partial agg result
     agg_funcs: Vec<Box<dyn AggrFunc>>,
     cur_group_row: Vec<Datum>,
@@ -324,16 +320,17 @@ pub struct StreamAggExecutor {
     has_data: bool,
 }
 
-impl StreamAggExecutor {
+impl<C: ExecSummaryCollector> StreamAggExecutor<C> {
     pub fn new(
+        summary_collector: C,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
-    ) -> Result<StreamAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let group_len = group_bys.len();
-        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
+        let inner = AggExecutor::new(summary_collector, group_bys, aggs, eval_config, src)?;
         // Get aggregation functions.
         let mut funcs = Vec::with_capacity(inner.aggr_func.len());
         for expr in &inner.aggr_func {
@@ -393,6 +390,36 @@ impl StreamAggExecutor {
 
         self.count += 1;
         Ok(Row::agg(cols, Vec::default()))
+    }
+
+    fn next_impl(&mut self) -> Result<Option<Row>> {
+        if self.inner.executed {
+            return Ok(None);
+        }
+
+        while let Some(cols) = self.inner.next()? {
+            self.has_data = true;
+            let new_group = self.meet_new_group(&cols)?;
+            let ret = if new_group {
+                Some(self.get_partial_result()?)
+            } else {
+                None
+            };
+            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
+                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+            }
+            if new_group {
+                return Ok(ret);
+            }
+        }
+        self.inner.executed = true;
+        // If there is no data in the t, then whether there is 'group by' that can affect the result.
+        // e.g. select count(*) from t. Result is 0.
+        // e.g. select count(*) from t group by c. Result is empty.
+        if !self.has_data && !self.inner.group_by.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.get_partial_result()?))
     }
 }
 
@@ -520,6 +547,7 @@ mod tests {
         .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
+            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -558,6 +586,7 @@ mod tests {
         .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
+            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -614,6 +643,7 @@ mod tests {
         .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
+            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
@@ -754,8 +784,13 @@ mod tests {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init the hash aggregation executor
-        let mut aggr_ect =
-            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
+        let mut aggr_ect = HashAggExecutor::new(
+            ExecSummaryCollectorDisabled,
+            aggregation,
+            Arc::new(EvalConfig::default()),
+            ts_ect,
+        )
+        .unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {

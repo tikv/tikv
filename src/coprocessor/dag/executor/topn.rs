@@ -11,7 +11,7 @@ use tipb::expression::ByItem;
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
@@ -43,7 +43,8 @@ impl OrderBy {
 
 /// Retrieves rows from the source executor, orders rows according to expressions and produces part
 /// of the rows.
-pub struct TopNExecutor {
+pub struct TopNExecutor<C: ExecSummaryCollector> {
+    summary_collector: C,
     order_by: OrderBy,
     related_cols_offset: Vec<usize>, // offset of related columns
     iter: Option<IntoIter<Row>>,
@@ -54,12 +55,13 @@ pub struct TopNExecutor {
     first_collect: bool,
 }
 
-impl TopNExecutor {
+impl<C: ExecSummaryCollector> TopNExecutor<C> {
     pub fn new(
+        summary_collector: C,
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<TopNExecutor> {
+    ) -> Result<Self> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -69,6 +71,7 @@ impl TopNExecutor {
         let mut eval_ctx = EvalContext::new(Arc::clone(&eval_cfg));
         let order_by = OrderBy::new(&mut eval_ctx, order_by)?;
         Ok(TopNExecutor {
+            summary_collector,
             order_by,
             related_cols_offset: visitor.column_offsets(),
             iter: None,
@@ -107,18 +110,26 @@ impl TopNExecutor {
         self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
-}
 
-impl Executor for TopNExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
+    fn next_impl(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        match iter.next() {
-            Some(sort_row) => Ok(Some(sort_row)),
-            None => Ok(None),
+        Ok(iter.next())
+    }
+}
+
+impl<C: ExecSummaryCollector> Executor for TopNExecutor<C> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
+        let ret = self.next_impl();
+        if let Ok(Some(_)) = ret {
+            self.summary_collector.on_finish_iterate(timer, 1);
+        } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
         }
+        ret
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -133,6 +144,15 @@ impl Executor for TopNExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             if let Some(mut topn_warnings) = self.eval_warnings.take() {
@@ -142,14 +162,6 @@ impl Executor for TopNExecutor {
         } else {
             self.eval_warnings.take()
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
-    }
-
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.src.collect_execution_summaries(target);
     }
 }
 
@@ -170,6 +182,7 @@ pub mod tests {
 
     use super::super::tests::*;
     use super::*;
+    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     fn new_order_by(offset: i64, desc: bool) -> ByItem {
         let mut item = ByItem::new();
@@ -399,8 +412,13 @@ pub mod tests {
         let limit = 4;
         topn.set_limit(limit);
         // init topn executor
-        let mut topn_ect =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
+        let mut topn_ect = TopNExecutor::new(
+            ExecSummaryCollectorDisabled,
+            topn,
+            Arc::new(EvalConfig::default()),
+            ts_ect,
+        )
+        .unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
             topn_rows.push(row.take_origin());
@@ -444,8 +462,13 @@ pub mod tests {
         topn.set_order_by(RepeatedField::from_vec(ob_vec));
         // test with limit=0
         topn.set_limit(0);
-        let mut topn_ect =
-            TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
+        let mut topn_ect = TopNExecutor::new(
+            ExecSummaryCollectorDisabled,
+            topn,
+            Arc::new(EvalConfig::default()),
+            ts_ect,
+        )
+        .unwrap();
         assert!(topn_ect.next().unwrap().is_none());
     }
 }

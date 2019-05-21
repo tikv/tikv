@@ -164,7 +164,7 @@ mod tests {
         state.push_result(&mut ctx, mut_inner).unwrap();
         assert_eq!(mut_inner.as_slice(), &[Some(0)]);
 
-        state.update(&mut ctx, &Some(5.0f64)).unwrap();
+        state.update(&mut ctx, &Real::new(5.0).ok()).unwrap();
         state.update(&mut ctx, &Option::<Real>::None).unwrap();
         state.update(&mut ctx, &Some(7i64)).unwrap();
 

@@ -70,9 +70,7 @@ impl ExprColumnRefVisitor {
             }
             self.cols_offset.insert(offset);
         } else {
-            for sub_expr in expr.get_children() {
-                self.visit(sub_expr)?;
-            }
+            self.batch_visit(expr.get_children())?;
         }
         Ok(())
     }

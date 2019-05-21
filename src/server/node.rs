@@ -16,6 +16,7 @@ use crate::raftstore::store::{
 use crate::server::readpool::ReadPool;
 use crate::server::Config as ServerConfig;
 use crate::server::ServerRaftStoreRouter;
+use crate::storage::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::{Config as StorageConfig, RaftKv, Storage};
 use engine::rocks::DB;
 use engine::Engines;
@@ -36,12 +37,22 @@ pub fn create_raft_storage<S>(
     read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
     raft_store_router: Option<ServerRaftStoreRouter>,
+    waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+    detector_scheduler: Option<DetectorScheduler>,
 ) -> Result<Storage<RaftKv<S>>>
 where
     S: RaftStoreRouter + 'static,
 {
     let engine = RaftKv::new(router);
-    let store = Storage::from_engine(engine, cfg, read_pool, local_storage, raft_store_router)?;
+    let store = Storage::from_engine(
+        engine,
+        cfg,
+        read_pool,
+        local_storage,
+        raft_store_router,
+        waiter_mgr_scheduler,
+        detector_scheduler,
+    )?;
     Ok(store)
 }
 

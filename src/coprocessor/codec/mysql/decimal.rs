@@ -530,9 +530,9 @@ fn do_add<'a>(mut lhs: &'a Decimal, mut rhs: &'a Decimal) -> Res<Decimal> {
     res
 }
 
-fn do_div_mod(
-    mut lhs: Decimal,
-    rhs: Decimal,
+fn do_div_mod_impl(
+    lhs: &Decimal,
+    rhs: &Decimal,
     mut frac_incr: u8,
     do_mod: bool,
 ) -> Option<Res<Decimal>> {
@@ -545,8 +545,7 @@ fn do_div_mod(
     let l_frac_cnt = word_cnt!(lhs.frac_cnt) * DIGITS_PER_WORD;
     let (l_idx, l_prec) = lhs.remove_leading_zeroes(lhs.int_cnt + l_frac_cnt);
     if l_prec == 0 {
-        lhs.reset_to_zero();
-        return Some(Res::Ok(lhs));
+        return Some(Res::Ok(Decimal::zero()));
     }
 
     frac_incr = frac_incr.saturating_sub(l_frac_cnt - lhs.frac_cnt + r_frac_cnt - rhs.frac_cnt);
@@ -685,14 +684,12 @@ fn do_div_mod(
 
         let mut frac_word_to = word_cnt!(res.frac_cnt);
         if int_word_to == 0 && frac_word_to == 0 {
-            lhs.reset_to_zero();
-            return Some(Res::Ok(lhs));
+            return Some(Res::Ok(Decimal::zero()));
         }
         let mut l_stop;
         if int_word_to <= 0 {
             if (-int_word_to) as u8 >= WORD_BUF_LEN {
-                lhs.reset_to_zero();
-                return Some(Res::Truncated(lhs));
+                return Some(Res::Truncated(Decimal::zero()));
             }
             l_stop = (l_idx as i8 + int_word_to + frac_word_to as i8) as u8;
             frac_word_to = (frac_word_to as i8 + int_word_to) as u8;
@@ -723,6 +720,10 @@ fn do_div_mod(
         dest.copy_from_slice(src);
     }
     Some(res)
+}
+
+fn do_div_mod(lhs: Decimal, rhs: Decimal, frac_incr: u8, do_mod: bool) -> Option<Res<Decimal>> {
+    do_div_mod_impl(&lhs, &rhs, frac_incr, do_mod)
 }
 
 /// `do_mul` multiplies two decimals.
@@ -2180,8 +2181,15 @@ impl Rem for Decimal {
     type Output = Option<Res<Decimal>>;
 
     fn rem(self, rhs: Decimal) -> Option<Res<Decimal>> {
+        &self % &rhs
+    }
+}
+
+impl<'a, 'b> Rem<&'a Decimal> for &'b Decimal {
+    type Output = Option<Res<Decimal>>;
+    fn rem(self, rhs: &'a Decimal) -> Self::Output {
         let result_frac_cnt = cmp::max(self.result_frac_cnt, rhs.result_frac_cnt);
-        let mut res = do_div_mod(self, rhs, 0, true);
+        let mut res = do_div_mod_impl(self, rhs, 0, true);
         if let Some(ref mut dec) = res {
             dec.result_frac_cnt = result_frac_cnt;
         }
