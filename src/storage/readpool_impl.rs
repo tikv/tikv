@@ -1,6 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,6 +8,7 @@ use prometheus::local::*;
 
 use crate::pd::PdTask;
 use crate::server::readpool::{self, Builder, Config, ReadPool};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
@@ -37,8 +37,6 @@ thread_local! {
             local_read_flow_stats: HashMap::default(),
         }
     );
-
-    static TLS_ENGINE_ANY: RefCell<Option<Box<dyn Any>>> = RefCell::new(None);
 }
 
 pub fn build_read_pool<E: Engine>(
@@ -52,9 +50,9 @@ pub fn build_read_pool<E: Engine>(
     Builder::from_config(config)
         .name_prefix("store-read")
         .on_tick(move || tls_flush(&pd_sender))
-        .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
+        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
         .before_stop(move || {
-            destroy_tls_engine_any();
+            destroy_tls_engine::<E>();
             tls_flush(&pd_sender2)
         })
         .build()
@@ -64,8 +62,8 @@ pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
     let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(&Config::default_for_test())
-        .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine_any())
+        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+        .before_stop(|| destroy_tls_engine::<E>())
         .build()
 }
 
@@ -175,26 +173,5 @@ pub fn tls_collect_read_flow(region_id: u64, statistics: &crate::storage::Statis
             .or_insert_with(crate::storage::FlowStatistics::default);
         flow_stats.add(&statistics.write.flow_stats);
         flow_stats.add(&statistics.data.flow_stats);
-    });
-}
-
-#[inline]
-pub fn with_tls_engine_any<F, R>(f: F) -> R
-where
-    F: FnOnce(Option<&Box<dyn Any>>) -> R,
-{
-    TLS_ENGINE_ANY.with(|e| f(e.borrow().as_ref()))
-}
-
-#[inline]
-pub fn set_tls_engine_any<E: Engine>(engine: E) {
-    TLS_ENGINE_ANY.with(|e| {
-        *e.borrow_mut() = Some(Box::new(engine));
-    });
-}
-
-pub fn destroy_tls_engine_any() {
-    TLS_ENGINE_ANY.with(|e| {
-        *e.borrow_mut() = None;
     });
 }

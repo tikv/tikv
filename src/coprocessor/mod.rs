@@ -1,8 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-//! Coprocessor mainly handles some simple SQL query executors. Most TiDB read queries are processed
-//! by Coprocessor instead of KV interface. By doing so, the CPU of TiKV nodes can be utilized for
-//! computing and the amount of data to transfer can be reduced (i.e. filtered at TiKV side).
+//! Handles simple SQL query executors locally.
+//!
+//! Most TiDB read queries are processed by Coprocessor instead of KV interface.
+//! By doing so, the CPU of TiKV nodes can be utilized for computing and the
+//! amount of data to transfer can be reduced (i.e. filtered at TiKV side).
 //!
 //! Notice that Coprocessor handles more than simple SQL query executors (DAG request). It also
 //! handles analyzing requests and checksum requests.
@@ -16,6 +18,9 @@
 //! 5. Return handling result as a response.
 //!
 //! Please refer to `Endpoint` for more details.
+
+#[macro_use]
+mod macros;
 
 mod checksum;
 pub mod codec;

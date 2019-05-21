@@ -145,6 +145,8 @@ impl Simulator for ServerCluster {
             storage_read_pool,
             None,
             None,
+            None,
+            None,
         )?;
         self.storages.insert(node_id, raft_engine.clone());
 
@@ -180,6 +182,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
+                None,
             ));
             match server {
                 Some(Ok(_)) => break,

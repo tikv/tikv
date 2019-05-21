@@ -1,6 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Arc, Mutex};
@@ -152,7 +152,7 @@ impl Progress {
 }
 
 pub struct LocalReader<C: ProposalRouter> {
-    store_id: Option<u64>,
+    store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: Arc<DB>,
     engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
@@ -176,7 +176,7 @@ impl LocalReader<RaftRouter> {
             kv_engine,
             engine_snapshot,
             router,
-            store_id: None,
+            store_id: Cell::new(None),
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: "[local_reader]".to_string(),
@@ -217,11 +217,12 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
-        // Check store id.
-        let store_id = self.store_id.unwrap_or_else(|| {
-            let meta = self.store_meta.lock().unwrap();
-            meta.store_id.unwrap()
-        });
+        if self.store_id.get().is_none() {
+            let store_id = self.store_meta.lock().unwrap().store_id;
+            self.store_id.set(store_id);
+        }
+        let store_id = self.store_id.get().unwrap();
+
         if let Err(e) = util::check_store_id(req, store_id) {
             self.metrics.borrow_mut().rejected_by_store_id_mismatch += 1;
             debug!("rejected by store id not match"; "err" => %e);
@@ -386,7 +387,7 @@ impl<C: ProposalRouter + Clone> Clone for LocalReader<C> {
             kv_engine: self.kv_engine.clone(),
             engine_snapshot: self.engine_snapshot.clone(),
             router: self.router.clone(),
-            store_id: self.store_id,
+            store_id: self.store_id.clone(),
             metrics: Default::default(),
             delegates: RefCell::new(HashMap::default()),
             tag: self.tag.clone(),
@@ -582,7 +583,7 @@ mod tests {
             store_meta,
             kv_engine,
             engine_snapshot,
-            store_id: Some(store_id),
+            store_id: Cell::new(Some(store_id)),
             router: ch,
             delegates: RefCell::new(HashMap::default()),
             metrics: Default::default(),

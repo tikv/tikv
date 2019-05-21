@@ -3,18 +3,17 @@
 pub mod config;
 pub mod gc_worker;
 pub mod kv;
+pub mod lock_manager;
 mod metrics;
 pub mod mvcc;
 pub mod readpool_impl;
 pub mod txn;
 pub mod types;
 
-use std::cmp;
-use std::error;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::io::Error as IoError;
 use std::sync::{atomic, Arc, Mutex};
-use std::u64;
+use std::{cmp, error, u64};
 
 use engine::rocks::DB;
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
@@ -25,23 +24,23 @@ use kvproto::kvrpcpb::{CommandPri, Context, KeyRange, LockInfo};
 use crate::server::readpool::{self, Builder as ReadPoolBuilder, ReadPool};
 use crate::server::ServerRaftStoreRouter;
 use tikv_util::collections::HashMap;
-use tikv_util::worker::{self, Builder, ScheduleError, Worker};
 
 use self::gc_worker::GCWorker;
 use self::metrics::*;
 use self::mvcc::Lock;
-use self::txn::CMD_BATCH_SIZE;
 
 pub use self::config::{BlockCacheConfig, Config, DEFAULT_DATA_DIR, DEFAULT_ROCKSDB_SUB_DIR};
 pub use self::gc_worker::{AutoGCConfig, GCSafePointProvider};
 pub use self::kv::raftkv::RaftKv;
 pub use self::kv::{
-    CFStatistics, Cursor, CursorBuilder, Engine, Error as EngineError, FlowStatistics, Iterator,
-    Modify, RegionInfoProvider, RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary,
-    TestEngineBuilder,
+    destroy_tls_engine, set_tls_engine, with_tls_engine, CFStatistics, Cursor, CursorBuilder,
+    Engine, Error as EngineError, FlowStatistics, Iterator, Modify, RegionInfoProvider,
+    RocksEngine, ScanMode, Snapshot, Statistics, StatisticsSummary, TestEngineBuilder,
 };
+use self::lock_manager::{DetectorScheduler, WaiterMgrScheduler};
 pub use self::mvcc::Scanner as StoreScanner;
 pub use self::readpool_impl::*;
+use self::txn::scheduler::Scheduler as TxnScheduler;
 pub use self::txn::{FixtureStore, FixtureStoreScanner};
 pub use self::txn::{Msg, Scanner, Scheduler, SnapshotStore, Store};
 pub use self::types::{Key, KvPair, MvccInfo, Value};
@@ -50,6 +49,7 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 64;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub const PESSIMISTIC_TXN: u8 = b'p';
 
 use engine::{CfName, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
 
@@ -91,6 +91,14 @@ pub enum Command {
         mutations: Vec<Mutation>,
         primary: Vec<u8>,
         start_ts: u64,
+        options: Options,
+    },
+    AcquirePessimisticLock {
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
         options: Options,
     },
     Commit {
@@ -155,6 +163,20 @@ impl Display for Command {
                 "kv::command::prewrite mutations({}) @ {} | {:?}",
                 mutations.len(),
                 start_ts,
+                ctx
+            ),
+            Command::AcquirePessimisticLock {
+                ref ctx,
+                ref keys,
+                start_ts,
+                for_update_ts,
+                ..
+            } => write!(
+                f,
+                "kv::command::acquirepessimisticlock keys({}) @ {},{} | {:?}",
+                keys.len(),
+                start_ts,
+                for_update_ts,
                 ctx
             ),
             Command::Commit {
@@ -260,6 +282,13 @@ impl Command {
         self.get_context().get_priority()
     }
 
+    pub fn is_sys_cmd(&self) -> bool {
+        match *self {
+            Command::ScanLock { .. } | Command::ResolveLock { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn priority_tag(&self) -> &'static str {
         match self.get_context().get_priority() {
             CommandPri::Low => "low",
@@ -275,6 +304,7 @@ impl Command {
     pub fn tag(&self) -> &'static str {
         match *self {
             Command::Prewrite { .. } => "prewrite",
+            Command::AcquirePessimisticLock { .. } => "pessimistic_lock",
             Command::Commit { .. } => "commit",
             Command::Cleanup { .. } => "cleanup",
             Command::Rollback { .. } => "rollback",
@@ -290,6 +320,7 @@ impl Command {
     pub fn ts(&self) -> u64 {
         match *self {
             Command::Prewrite { start_ts, .. }
+            | Command::AcquirePessimisticLock { start_ts, .. }
             | Command::Cleanup { start_ts, .. }
             | Command::Rollback { start_ts, .. }
             | Command::MvccByStartTs { start_ts, .. } => start_ts,
@@ -305,6 +336,7 @@ impl Command {
     pub fn get_context(&self) -> &Context {
         match *self {
             Command::Prewrite { ref ctx, .. }
+            | Command::AcquirePessimisticLock { ref ctx, .. }
             | Command::Commit { ref ctx, .. }
             | Command::Cleanup { ref ctx, .. }
             | Command::Rollback { ref ctx, .. }
@@ -320,6 +352,7 @@ impl Command {
     pub fn mut_context(&mut self) -> &mut Context {
         match *self {
             Command::Prewrite { ref mut ctx, .. }
+            | Command::AcquirePessimisticLock { ref mut ctx, .. }
             | Command::Commit { ref mut ctx, .. }
             | Command::Cleanup { ref mut ctx, .. }
             | Command::Rollback { ref mut ctx, .. }
@@ -349,7 +382,14 @@ impl Command {
                     }
                 }
             }
-            Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
+            Command::AcquirePessimisticLock { ref keys, .. } => {
+                for (key, _) in keys {
+                    bytes += key.as_encoded().len();
+                }
+            }
+            Command::Commit { ref keys, .. }
+            | Command::Rollback { ref keys, .. }
+            | Command::Pause { ref keys, .. } => {
                 for key in keys {
                     bytes += key.as_encoded().len();
                 }
@@ -361,11 +401,6 @@ impl Command {
             }
             Command::Cleanup { ref key, .. } => {
                 bytes += key.as_encoded().len();
-            }
-            Command::Pause { ref keys, .. } => {
-                for key in keys {
-                    bytes += key.as_encoded().len();
-                }
             }
             _ => {}
         }
@@ -379,6 +414,8 @@ pub struct Options {
     pub skip_constraint_check: bool,
     pub key_only: bool,
     pub reverse_scan: bool,
+    pub is_first_lock: bool,
+    pub is_pessimistic_lock: Vec<bool>,
 }
 
 impl Options {
@@ -388,6 +425,8 @@ impl Options {
             skip_constraint_check,
             key_only,
             reverse_scan: false,
+            is_first_lock: false,
+            is_pessimistic_lock: vec![],
         }
     }
 
@@ -458,8 +497,8 @@ impl<E: Engine> TestStorageBuilder<E> {
     pub fn build(self) -> Result<Storage<E>> {
         let engine = Arc::new(Mutex::new(self.engine.clone()));
         let read_pool = ReadPoolBuilder::from_config(&readpool::Config::default_for_test())
-            .after_start(move || set_tls_engine_any(engine.lock().unwrap().clone()))
-            .before_stop(|| destroy_tls_engine_any())
+            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .before_stop(|| destroy_tls_engine::<E>())
             .build();
         Storage::from_engine(
             self.engine,
@@ -467,6 +506,8 @@ impl<E: Engine> TestStorageBuilder<E> {
             read_pool,
             self.local_storage,
             self.raft_store_router,
+            None,
+            None,
         )
     }
 }
@@ -494,10 +535,7 @@ pub struct Storage<E: Engine> {
     // TODO: Too many Arcs, would be slow when clone.
     engine: E,
 
-    /// The worker to execute storage commands.
-    worker: Arc<Mutex<Worker<Msg>>>,
-    /// `worker_scheduler` is used to schedule tasks to run in `worker`.
-    worker_scheduler: worker::Scheduler<Msg>,
+    sched: TxnScheduler<E>,
 
     /// The thread pool used to run most read operations.
     read_pool: ReadPool,
@@ -511,6 +549,8 @@ pub struct Storage<E: Engine> {
 
     // Fields below are storage configurations.
     max_key_size: usize,
+
+    pessimistic_txn_enabled: bool,
 }
 
 impl<E: Engine> Clone for Storage<E> {
@@ -524,12 +564,12 @@ impl<E: Engine> Clone for Storage<E> {
 
         Self {
             engine: self.engine.clone(),
-            worker: self.worker.clone(),
-            worker_scheduler: self.worker_scheduler.clone(),
+            sched: self.sched.clone(),
             read_pool: self.read_pool.clone(),
             gc_worker: self.gc_worker.clone(),
             refs: self.refs.clone(),
             max_key_size: self.max_key_size,
+            pessimistic_txn_enabled: self.pessimistic_txn_enabled,
         }
     }
 }
@@ -545,18 +585,6 @@ impl<E: Engine> Drop for Storage<E> {
 
         if refs != 1 {
             return;
-        }
-
-        // This is the last reference of the storage. Now all its references are dropped. Stop and
-        // destroy the storage now.
-        let mut worker = self.worker.lock().unwrap();
-        if let Err(e) = worker.schedule(Msg::Quit) {
-            error!("Failed to ask scheduler to quit"; "err" => ?e);
-        }
-
-        let h = worker.stop().unwrap();
-        if let Err(e) = h.join() {
-            error!("Failed to join sched_handle"; "err" => ?e);
         }
 
         let r = self.gc_worker.stop();
@@ -576,17 +604,15 @@ impl<E: Engine> Storage<E> {
         read_pool: ReadPool,
         local_storage: Option<Arc<DB>>,
         raft_store_router: Option<ServerRaftStoreRouter>,
+        waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
+        detector_scheduler: Option<DetectorScheduler>,
     ) -> Result<Self> {
-        let worker = Arc::new(Mutex::new(
-            Builder::new("storage-scheduler")
-                .batch_size(CMD_BATCH_SIZE)
-                .pending_capacity(config.scheduler_notify_capacity)
-                .create(),
-        ));
-        let worker_scheduler = worker.lock().unwrap().scheduler();
-        let runner = Scheduler::new(
+        let pessimistic_txn_enabled =
+            waiter_mgr_scheduler.is_some() && detector_scheduler.is_some();
+        let sched = TxnScheduler::new(
             engine.clone(),
-            worker_scheduler.clone(),
+            waiter_mgr_scheduler,
+            detector_scheduler,
             config.scheduler_concurrency,
             config.scheduler_worker_pool_size,
             config.scheduler_pending_write_threshold.0 as usize,
@@ -598,19 +624,18 @@ impl<E: Engine> Storage<E> {
             config.gc_ratio_threshold,
         );
 
-        worker.lock().unwrap().start(runner)?;
         gc_worker.start()?;
 
         info!("Storage started.");
 
         Ok(Storage {
             engine,
-            worker,
-            worker_scheduler,
+            sched,
             read_pool,
             gc_worker,
             refs: Arc::new(atomic::AtomicUsize::new(1)),
             max_key_size: config.max_key_size,
+            pessimistic_txn_enabled,
         })
     }
 
@@ -632,11 +657,8 @@ impl<E: Engine> Storage<E> {
     #[inline]
     fn schedule(&self, cmd: Command, cb: StorageCb) -> Result<()> {
         fail_point!("storage_drop_message", |_| Ok(()));
-        match self.worker_scheduler.schedule(Msg::RawCmd { cmd, cb }) {
-            Ok(()) => Ok(()),
-            Err(ScheduleError::Full(_)) => Err(Error::SchedTooBusy),
-            Err(ScheduleError::Stopped(_)) => Err(Error::Closed),
-        }
+        self.sched.run_cmd(cmd, cb);
+        Ok(())
     }
 
     /// Get a snapshot of `engine`.
@@ -667,8 +689,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -721,8 +742,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -785,8 +805,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -871,9 +890,9 @@ impl<E: Engine> Storage<E> {
         callback: Callback<Vec<Result<()>>>,
     ) -> Result<()> {
         for m in &mutations {
-            let size = m.key().as_encoded().len();
-            if size > self.max_key_size {
-                callback(Err(Error::KeyTooLarge(size, self.max_key_size)));
+            let key_size = m.key().as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
                 return Ok(());
             }
         }
@@ -886,6 +905,41 @@ impl<E: Engine> Storage<E> {
         };
         self.schedule(cmd, StorageCb::Booleans(callback))?;
         KV_COMMAND_COUNTER_VEC_STATIC.prewrite.inc();
+        Ok(())
+    }
+
+    pub fn async_acquire_pessimistic_lock(
+        &self,
+        ctx: Context,
+        keys: Vec<(Key, bool)>,
+        primary: Vec<u8>,
+        start_ts: u64,
+        for_update_ts: u64,
+        options: Options,
+        callback: Callback<Vec<Result<()>>>,
+    ) -> Result<()> {
+        if !self.pessimistic_txn_enabled {
+            callback(Err(Error::PessimisticTxnNotEnabled));
+            return Ok(());
+        }
+
+        for k in &keys {
+            let key_size = k.0.as_encoded().len();
+            if key_size > self.max_key_size {
+                callback(Err(Error::KeyTooLarge(key_size, self.max_key_size)));
+                return Ok(());
+            }
+        }
+        let cmd = Command::AcquirePessimisticLock {
+            ctx,
+            keys,
+            primary,
+            start_ts,
+            for_update_ts,
+            options,
+        };
+        self.schedule(cmd, StorageCb::Booleans(callback))?;
+        KV_COMMAND_COUNTER_VEC_STATIC.pessimistic_lock.inc();
         Ok(())
     }
 
@@ -1066,8 +1120,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1121,8 +1174,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1405,8 +1457,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1511,8 +1562,7 @@ impl<E: Engine> Storage<E> {
             tls_collect_command_count(CMD, priority);
             let command_duration = tikv_util::time::Instant::now_coarse();
 
-            with_tls_engine_any(|engine_any| {
-                let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+            with_tls_engine(|engine| {
                 Self::async_snapshot(engine, &ctx)
                     .and_then(move |snapshot: E::Snap| {
                         tls_processing_read_observe_duration(CMD, || {
@@ -1658,6 +1708,9 @@ quick_error! {
         InvalidCf (cf_name: String) {
             description("invalid cf name")
             display("invalid cf name: {}", cf_name)
+        }
+        PessimisticTxnNotEnabled {
+            description("pessimistic transaction is not enabled")
         }
     }
 }

@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, u64};
 
+use crate::pd::{PdClient, PdTask};
+use crate::raftstore::{Error, Result};
 use engine::Engines;
 use engine::CF_RAFT;
 use engine::{Peekable, Snapshot as EngineSnapshot};
@@ -24,11 +26,8 @@ use kvproto::raft_serverpb::{
 };
 use protobuf::{Message, RepeatedField};
 use raft::eraftpb::ConfChangeType;
-use raft::Ready;
 use raft::{self, SnapshotStatus, INVALID_INDEX, NO_LIMIT};
-
-use crate::pd::{PdClient, PdTask};
-use crate::raftstore::{Error, Result};
+use raft::{Ready, StateRole};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::duration_to_sec;
 use tikv_util::worker::{Scheduler, Stopped};
@@ -272,6 +271,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
                 PeerMsg::CasualMessage(msg) => self.on_casual_msg(msg),
                 PeerMsg::Start => self.start(),
+                PeerMsg::HeartbeatPd => {
+                    if self.fsm.peer.is_leader() {
+                        self.register_pd_heartbeat_tick()
+                    }
+                }
                 PeerMsg::Noop => {}
             }
         }
@@ -505,6 +509,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     fn on_clear_region_size(&mut self) {
         self.fsm.peer.approximate_size = None;
         self.fsm.peer.approximate_keys = None;
+        self.register_split_region_check_tick();
     }
 
     fn on_significant_msg(&mut self, msg: SignificantMsg) {
@@ -556,6 +561,17 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         self.fsm.peer.raft_group.report_snapshot(to_peer_id, status)
     }
 
+    fn on_role_changed(&mut self, ready: &Ready) {
+        // Update leader lease when the Raft state changes.
+        if let Some(ref ss) = ready.ss {
+            if StateRole::Leader == ss.raft_state {
+                self.register_split_region_check_tick();
+                self.fsm.peer.heartbeat_pd(&self.ctx);
+                self.register_pd_heartbeat_tick();
+            }
+        }
+    }
+
     pub fn collect_ready(&mut self, proposals: &mut Vec<RegionProposal>) {
         let has_ready = self.fsm.has_ready;
         self.fsm.has_ready = false;
@@ -567,7 +583,15 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if let Some(p) = self.fsm.peer.take_apply_proposals() {
             proposals.push(p);
         }
-        self.fsm.peer.handle_raft_ready_append(self.ctx);
+        let res = self.fsm.peer.handle_raft_ready_append(self.ctx);
+        if let Some(r) = res {
+            self.on_role_changed(&r.0);
+            if !r.0.entries.is_empty() {
+                self.register_raft_gc_log_tick();
+                self.register_split_region_check_tick();
+            }
+            self.ctx.ready_res.push(r);
+        }
     }
 
     pub fn post_raft_ready_append(&mut self, mut ready: Ready, invoke_ctx: InvokeContext) {
@@ -728,6 +752,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     res.merged,
                     &res.metrics,
                 );
+                // After applying, several metrics are updated, report it to pd to
+                // get fair schedule.
+                self.register_pd_heartbeat_tick();
             }
             ApplyTaskRes::Destroy { peer_id, .. } => {
                 assert_eq!(peer_id, self.fsm.peer.peer_id());
@@ -1292,6 +1319,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         let peer_id = cp.peer.get_id();
+        let now = Instant::now();
         match change_type {
             ConfChangeType::AddNode | ConfChangeType::AddLearnerNode => {
                 let peer = cp.peer.clone();
@@ -1300,13 +1328,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
 
                 // Add this peer to cache and heartbeats.
-                let now = Instant::now();
                 let id = peer.get_id();
                 self.fsm.peer.peer_heartbeats.insert(id, now);
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.peers_start_pending_time.push((id, now));
                 }
-                self.fsm.peer.recent_added_peer.update(id, now);
+                self.fsm.peer.recent_conf_change_time = now;
                 self.fsm.peer.insert_peer_cache(peer);
             }
             ConfChangeType::RemoveNode => {
@@ -1319,6 +1346,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                         .retain(|&(p, _)| p != peer_id);
                 }
                 self.fsm.peer.remove_peer_from_cache(peer_id);
+                self.fsm.peer.recent_conf_change_time = now;
             }
         }
 
@@ -1379,6 +1407,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_ready_split_region(&mut self, derived: metapb::Region, regions: Vec<metapb::Region>) {
+        self.register_split_region_check_tick();
         let mut guard = self.ctx.store_meta.lock().unwrap();
         let meta: &mut StoreMeta = &mut *guard;
         let region_id = derived.get_id();
@@ -1759,6 +1788,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         region: metapb::Region,
         source: metapb::Region,
     ) -> Option<Arc<AtomicBool>> {
+        self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
         let ready_to_merge = self.check_locks(&source, &mut meta);
@@ -2201,7 +2231,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     #[allow(clippy::if_same_then_else)]
     fn on_raft_gc_log_tick(&mut self) {
-        self.register_raft_gc_log_tick();
+        if !self.fsm.peer.get_store().is_cache_empty() || !self.ctx.cfg.hibernate_regions {
+            self.register_raft_gc_log_tick();
+        }
         debug_assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response heartbeat in the
@@ -2304,6 +2336,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             new_compact_log_request(region_id, self.fsm.peer.peer.clone(), compact_idx, term);
         self.propose_raft_command(request, Callback::None);
 
+        self.register_raft_gc_log_tick();
         PEER_GC_RAFT_LOG_COUNTER.inc_by(total_gc_logs as i64);
     }
 
@@ -2315,15 +2348,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_split_region_check_tick(&mut self) {
-        self.register_split_region_check_tick();
+        if !self.ctx.cfg.hibernate_regions {
+            self.register_split_region_check_tick();
+        }
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+
         // To avoid frequent scan, we only add new scan tasks if all previous tasks
         // have finished.
         // TODO: check whether a gc progress has been started.
         if self.ctx.split_check_scheduler.is_busy() {
-            return;
-        }
-
-        if !self.fsm.peer.is_leader() {
+            self.register_split_region_check_tick();
             return;
         }
 
@@ -2350,6 +2386,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         self.fsm.peer.size_diff_hint = 0;
         self.fsm.peer.compaction_declined_bytes = 0;
+        self.register_split_region_check_tick();
     }
 
     fn on_prepare_split_region(
@@ -2451,10 +2488,14 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
     fn on_approximate_region_size(&mut self, size: u64) {
         self.fsm.peer.approximate_size = Some(size);
+        self.register_split_region_check_tick();
+        self.register_pd_heartbeat_tick();
     }
 
     fn on_approximate_region_keys(&mut self, keys: u64) {
         self.fsm.peer.approximate_keys = Some(keys);
+        self.register_split_region_check_tick();
+        self.register_pd_heartbeat_tick();
     }
 
     fn on_compaction_declined_bytes(&mut self, declined_bytes: u64) {
@@ -2462,6 +2503,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         if self.fsm.peer.compaction_declined_bytes >= self.ctx.cfg.region_split_check_diff.0 {
             UPDATE_REGION_SIZE_BY_COMPACTION_COUNTER.inc();
         }
+        self.register_split_region_check_tick();
     }
 
     fn on_schedule_half_split_region(
@@ -2501,7 +2543,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
     }
 
     fn on_pd_heartbeat_tick(&mut self) {
-        self.register_pd_heartbeat_tick();
+        if !self.ctx.cfg.hibernate_regions {
+            self.register_pd_heartbeat_tick();
+        }
         self.fsm.peer.check_peers();
 
         if !self.fsm.peer.is_leader() {
@@ -2526,6 +2570,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
         if self.fsm.peer.is_applying_snapshot() || self.fsm.peer.has_pending_snapshot() {
             return;
+        }
+
+        // Schedule a pd heartbeat to discover down and pending peer when
+        // hibernate_regions is enabled.
+        if self.fsm.peer.is_leader() {
+            self.register_pd_heartbeat_tick();
         }
 
         // If this peer detects the leader is missing for a long long time,
@@ -2636,6 +2686,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         for sst in &ssts {
             self.fsm.peer.size_diff_hint += sst.get_length();
         }
+        self.register_split_region_check_tick();
 
         let task = CleanupSSTTask::DeleteSST { ssts };
         if let Err(e) = self.ctx.cleanup_sst_scheduler.schedule(task) {

@@ -14,12 +14,12 @@ use tipb::select::DAGRequest;
 
 use crate::server::readpool::{self, ReadPool};
 use crate::server::Config;
+use crate::storage::kv::with_tls_engine;
 use crate::storage::{self, Engine, SnapshotStore};
 use tikv_util::Either;
 
 use crate::coprocessor::dag::executor::ExecutorMetrics;
 use crate::coprocessor::metrics::*;
-use crate::coprocessor::readpool_impl::with_tls_engine_any;
 use crate::coprocessor::tracker::Tracker;
 use crate::coprocessor::*;
 
@@ -221,8 +221,7 @@ impl<E: Engine> Endpoint<E> {
         // deadline may exceed.
         future::result(tracker.req_ctx.deadline.check_if_exceeded())
             .and_then(move |_| {
-                with_tls_engine_any(|engine_any| {
-                    let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+                with_tls_engine(|engine| {
                     Self::async_snapshot(engine, &tracker.req_ctx.context)
                         .map(|snapshot| (tracker, snapshot))
                 })
@@ -319,8 +318,7 @@ impl<E: Engine> Endpoint<E> {
         let tracker_and_handler_future =
             future::result(tracker.req_ctx.deadline.check_if_exceeded())
                 .and_then(move |_| {
-                    with_tls_engine_any(|engine_any| {
-                        let engine = engine_any.unwrap().as_ref().downcast_ref().unwrap();
+                    with_tls_engine(|engine| {
                         Self::async_snapshot(engine, &tracker.req_ctx.context)
                             .map(|snapshot| (tracker, snapshot))
                     })
@@ -503,9 +501,8 @@ mod tests {
     use tipb::executor::Executor;
     use tipb::expression::Expr;
 
-    use crate::coprocessor::readpool_impl::{
-        build_read_pool_for_test, destroy_tls_engine_any, set_tls_engine_any,
-    };
+    use crate::coprocessor::readpool_impl::build_read_pool_for_test;
+    use crate::storage::kv::{destroy_tls_engine, set_tls_engine, RocksEngine};
     use crate::storage::TestEngineBuilder;
 
     /// A unary `RequestHandler` that always produces a fixture.
@@ -742,8 +739,8 @@ mod tests {
             ..readpool::Config::default_for_test()
         })
         .name_prefix("cop-test-full")
-        .after_start(move || set_tls_engine_any(engine_lock.lock().unwrap().clone()))
-        .before_stop(|| destroy_tls_engine_any())
+        .after_start(move || set_tls_engine(engine_lock.lock().unwrap().clone()))
+        .before_stop(|| destroy_tls_engine::<RocksEngine>())
         .build();
 
         let cop = Endpoint::new(&Config::default(), engine, read_pool);
@@ -1013,8 +1010,8 @@ mod tests {
         let engine_lock = Arc::new(Mutex::new(engine.clone()));
         let read_pool =
             readpool::Builder::from_config(&readpool::Config::default_with_concurrency(1))
-                .after_start(move || set_tls_engine_any(engine_lock.lock().unwrap().clone()))
-                .before_stop(|| destroy_tls_engine_any())
+                .after_start(move || set_tls_engine(engine_lock.lock().unwrap().clone()))
+                .before_stop(|| destroy_tls_engine::<RocksEngine>())
                 .build();
 
         let mut config = Config::default();

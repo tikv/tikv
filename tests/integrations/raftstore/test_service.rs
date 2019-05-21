@@ -652,8 +652,9 @@ fn test_debug_region_size() {
         .put_msg_cf(cf_raft, &region_state_key, &state)
         .unwrap();
 
-    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_RAFT];
-    let (k, v) = (keys::data_key(b"k"), b"v");
+    let cfs = vec![CF_DEFAULT, CF_LOCK, CF_WRITE];
+    // At lease 8 bytes for the WRITE cf.
+    let (k, v) = (keys::data_key(b"kkkk_kkkk"), b"v");
     for cf in &cfs {
         let cf_handle = engine.cf_handle(cf).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), v).unwrap();
@@ -722,7 +723,7 @@ fn test_debug_scan_mvcc() {
         keys::data_key(b"meta_lock_2"),
     ];
     for k in &keys {
-        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None).to_bytes();
+        let v = Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, false).to_bytes();
         let cf_handle = engine.cf_handle(CF_LOCK).unwrap();
         engine.put_cf(cf_handle, k.as_slice(), &v).unwrap();
     }
