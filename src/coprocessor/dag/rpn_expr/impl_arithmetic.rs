@@ -237,7 +237,6 @@ impl ArithmeticOp for DecimalMod {
 
 #[cfg(test)]
 mod tests {
-
     use std::{i64, u64};
 
     use super::*;
