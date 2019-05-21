@@ -8,7 +8,7 @@ use std::error::Error;
 pub struct Config {
     pub enabled: bool,
     pub wait_for_lock_timeout: u64,
-    pub wake_up_dealy_duration: u64,
+    pub wake_up_delay_duration: u64,
     pub monitor_membership_interval: u64,
 }
 
@@ -17,7 +17,7 @@ impl Default for Config {
         Self {
             enabled: true,
             wait_for_lock_timeout: 1000,
-            wake_up_dealy_duration: 1,
+            wake_up_delay_duration: 1,
             monitor_membership_interval: 3000,
         }
     }

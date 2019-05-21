@@ -210,7 +210,7 @@ pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
     wait_for_lock_timeout: u64,
-    wake_up_dealy_duration: u64,
+    wake_up_delay_duration: u64,
 }
 
 unsafe impl Send for WaiterManager {}
@@ -219,13 +219,13 @@ impl WaiterManager {
     pub fn new(
         detector_scheduler: DetectorScheduler,
         wait_for_lock_timeout: u64,
-        wake_up_dealy_duration: u64,
+        wake_up_delay_duration: u64,
     ) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
             detector_scheduler,
             wait_for_lock_timeout,
-            wake_up_dealy_duration,
+            wake_up_delay_duration,
         }
     }
 
@@ -268,10 +268,10 @@ impl WaiterManager {
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
                 .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
-            if self.wake_up_dealy_duration > 0 {
+            if self.wake_up_delay_duration > 0 {
                 // Sleep a little so the transaction with small start_ts will more likely get the lock.
                 let when = Instant::now()
-                    + Duration::from_millis(self.wake_up_dealy_duration * (i as u64));
+                    + Duration::from_millis(self.wake_up_delay_duration * (i as u64));
                 let timer = Delay::new(when)
                     .and_then(move |_| {
                         wake_up_waiter(waiter, commit_ts);

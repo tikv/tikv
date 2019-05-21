@@ -314,7 +314,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         let waiter_mgr_runner = WaiterManager::new(
             DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
             cfg.pessimistic_txn.wait_for_lock_timeout,
-            cfg.pessimistic_txn.wake_up_dealy_duration,
+            cfg.pessimistic_txn.wake_up_delay_duration,
         );
         let detector_runner = Detector::new(
             node.id(),
