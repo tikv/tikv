@@ -9,7 +9,7 @@ mod vector_like;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
-pub type Real = f64;
+pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
