@@ -224,7 +224,7 @@ mod tests {
                 _ctx: &mut EvalContext,
                 target: &mut [VectorValue],
             ) -> Result<()> {
-                target[0].push_real(Some(self.sum as f64));
+                target[0].push_real(Real::new(self.sum as f64).ok());
                 Ok(())
             }
         }
@@ -244,7 +244,7 @@ mod tests {
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Some(1.0f64));
+                .update(&mut ctx, &Real::new(1.0).ok());
         });
         assert!(result.is_err());
 
@@ -261,7 +261,7 @@ mod tests {
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target[0].as_real_slice(), &[Some(4.0)]);
+        assert_eq!(target[0].as_real_slice(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
         assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
@@ -270,7 +270,10 @@ mod tests {
         assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target[0].as_real_slice(), &[Some(4.0), Some(5.0)]);
+        assert_eq!(
+            target[0].as_real_slice(),
+            &[Real::new(4.0).ok(), Real::new(5.0).ok()]
+        );
 
         // Push result into other VectorValue should panic.
         let result = panic_hook::recover_safe(|| {

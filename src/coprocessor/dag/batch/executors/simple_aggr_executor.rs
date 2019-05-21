@@ -374,8 +374,13 @@ mod tests {
             vec![
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Some(7.0), None, None]),
-                        VectorValue::Real(vec![Some(1.0), Some(2.0), None, Some(4.5)]),
+                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
+                        VectorValue::Real(vec![
+                            Real::new(1.0).ok(),
+                            Real::new(2.0).ok(),
+                            None,
+                            Real::new(4.5).ok(),
+                        ]),
                         VectorValue::Bytes(vec![
                             Some(b"abc".to_vec()),
                             None,
@@ -394,8 +399,8 @@ mod tests {
                 },
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Some(1.5)]),
-                        VectorValue::Real(vec![Some(4.5)]),
+                        VectorValue::Real(vec![Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![Real::new(4.5).ok()]),
                         VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
                         VectorValue::Int(vec![Some(5)]),
                     ]),
@@ -466,7 +471,7 @@ mod tests {
         struct AggrFnBarState {
             rows_with_null: usize,
             rows_without_null: usize,
-            sum: f64,
+            sum: Real,
         }
 
         impl AggrFnBarState {
@@ -474,7 +479,7 @@ mod tests {
                 Self {
                     rows_with_null: 0,
                     rows_without_null: 0,
-                    sum: 0.0,
+                    sum: Real::from(0.0),
                 }
             }
         }
@@ -490,7 +495,7 @@ mod tests {
                 self.rows_with_null += 1;
                 if let Some(value) = value {
                     self.rows_without_null += 1;
-                    self.sum += value;
+                    self.sum += *value;
                 }
                 Ok(())
             }
@@ -613,17 +618,23 @@ mod tests {
         // Bar(42.5) for 5 rows, so it is (5, 5, 42.5*5).
         assert_eq!(r.data[2].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[4].decoded().as_real_slice(), &[Some(212.5)]);
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[Real::new(212.5).ok()]
+        );
         // Bar(NULL) for 5 rows, so it is (5, 0, 0).
         assert_eq!(r.data[5].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
-        assert_eq!(r.data[7].decoded().as_real_slice(), &[Some(0.0)]);
+        assert_eq!(r.data[7].decoded().as_real_slice(), &[Real::new(0.0).ok()]);
         // Foo([abc, NULL, "", HelloWorld, aaaaa]) => 3+0+0+10+5
         assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(18)]);
         // Bar([1.0, 2.0, NULL, 4.5, 4.5]) => (5, 4, 12.0)
         assert_eq!(r.data[9].decoded().as_int_slice(), &[Some(5)]);
         assert_eq!(r.data[10].decoded().as_int_slice(), &[Some(4)]);
-        assert_eq!(r.data[11].decoded().as_real_slice(), &[Some(12.0)]);
+        assert_eq!(
+            r.data[11].decoded().as_real_slice(),
+            &[Real::new(12.0).ok()]
+        );
         assert!(r.is_drained.unwrap());
     }
 
@@ -693,13 +704,16 @@ mod tests {
         assert_eq!(r.data[3].decoded().as_int_slice(), &[Some(4)]);
         // AVG(42.5) for 5 rows, so it is (5, 212.5). Notice that AVG returns sum.
         assert_eq!(r.data[4].decoded().as_int_slice(), &[Some(5)]);
-        assert_eq!(r.data[5].decoded().as_real_slice(), &[Some(212.5)]);
+        assert_eq!(
+            r.data[5].decoded().as_real_slice(),
+            &[Real::new(212.5).ok()]
+        );
         // AVG(NULL) for 5 rows, so it is (0, NULL).
         assert_eq!(r.data[6].decoded().as_int_slice(), &[Some(0)]);
         assert_eq!(r.data[7].decoded().as_decimal_slice(), &[None]);
         // Foo([NULL, 7.0, NULL, NULL, 1.5]) => (2, 8.5)
         assert_eq!(r.data[8].decoded().as_int_slice(), &[Some(2)]);
-        assert_eq!(r.data[9].decoded().as_real_slice(), &[Some(8.5)]);
+        assert_eq!(r.data[9].decoded().as_real_slice(), &[Real::new(8.5).ok()]);
         assert!(r.is_drained.unwrap());
     }
 
@@ -713,7 +727,7 @@ mod tests {
         struct AggrFnFooState;
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
-            type ParameterType = f64;
+            type ParameterType = Real;
 
             fn update_concrete(
                 &mut self,
