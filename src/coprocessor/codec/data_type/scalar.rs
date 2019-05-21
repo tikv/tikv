@@ -31,14 +31,10 @@ pub enum ScalarValue {
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match self {
-            ScalarValue::Int(_) => EvalType::Int,
-            ScalarValue::Real(_) => EvalType::Real,
-            ScalarValue::Decimal(_) => EvalType::Decimal,
-            ScalarValue::Bytes(_) => EvalType::Bytes,
-            ScalarValue::DateTime(_) => EvalType::DateTime,
-            ScalarValue::Duration(_) => EvalType::Duration,
-            ScalarValue::Json(_) => EvalType::Json,
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValue::TT(_) => EvalType::TT,
+            }
         }
     }
 
@@ -51,14 +47,10 @@ impl ScalarValue {
 impl AsMySQLBool for ScalarValue {
     #[inline]
     fn as_mysql_bool(&self, context: &mut EvalContext) -> Result<bool> {
-        match self {
-            ScalarValue::Int(ref v) => v.as_mysql_bool(context),
-            ScalarValue::Real(ref v) => v.as_mysql_bool(context),
-            ScalarValue::Decimal(ref v) => v.as_mysql_bool(context),
-            ScalarValue::Bytes(ref v) => v.as_mysql_bool(context),
-            ScalarValue::DateTime(ref v) => v.as_mysql_bool(context),
-            ScalarValue::Duration(ref v) => v.as_mysql_bool(context),
-            ScalarValue::Json(ref v) => v.as_mysql_bool(context),
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValue::TT(v) => v.as_mysql_bool(context),
+            }
         }
     }
 }

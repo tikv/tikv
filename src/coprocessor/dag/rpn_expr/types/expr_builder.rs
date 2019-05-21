@@ -324,14 +324,10 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match eval_type {
-        EvalType::Int => ScalarValue::Int(None),
-        EvalType::Real => ScalarValue::Real(None),
-        EvalType::Decimal => ScalarValue::Decimal(None),
-        EvalType::Bytes => ScalarValue::Bytes(None),
-        EvalType::DateTime => ScalarValue::DateTime(None),
-        EvalType::Duration => ScalarValue::Duration(None),
-        EvalType::Json => ScalarValue::Json(None),
+    match_template_evaluable! {
+        TT, match eval_type {
+            EvalType::TT => ScalarValue::TT(None),
+        }
     }
 }
 
