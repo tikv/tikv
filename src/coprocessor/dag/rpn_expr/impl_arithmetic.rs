@@ -7,17 +7,30 @@ use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::{Decimal, Res};
 use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::rpn_expr::Uint;
 use crate::coprocessor::Result;
 use std::fmt::Debug;
 
 #[derive(Debug, RpnFunction)]
 #[rpn_function(args = 2)]
-pub struct RpnFnArithmetic<A: ArithmeticOp> {
-    _phantom: std::marker::PhantomData<A>,
+pub struct RpnFnArithmetic<Arg0, Arg1, Ret, Op>
+where
+    Arg0: Evaluable,
+    Arg1: Evaluable,
+    Ret: Evaluable,
+    Op: ArithmeticOp<Arg0, Arg1, Ret>,
+{
+    _phantom: std::marker::PhantomData<(Arg0, Arg1, Ret, Op)>,
 }
 
-impl<A: ArithmeticOp> RpnFnArithmetic<A> {
-    pub fn new() -> Self {
+impl<Arg0, Arg1, Ret, Op> RpnFnArithmetic<Arg0, Arg1, Ret, Op>
+where
+    Arg0: Evaluable,
+    Arg1: Evaluable,
+    Ret: Evaluable,
+    Op: ArithmeticOp<Arg0, Arg1, Ret>,
+{
+    fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
         }
@@ -25,13 +38,13 @@ impl<A: ArithmeticOp> RpnFnArithmetic<A> {
 
     #[inline]
     fn call(
-        _ctx: &mut EvalContext,
+        ctx: &mut EvalContext,
         _payload: RpnFnCallPayload<'_>,
-        arg0: &Option<A::T>,
-        arg1: &Option<A::T>,
-    ) -> Result<Option<A::T>> {
+        arg0: &Option<Arg0>,
+        arg1: &Option<Arg1>,
+    ) -> Result<Option<Ret>> {
         if let (Some(lhs), Some(rhs)) = (arg0, arg1) {
-            A::calc(lhs, rhs)
+            Op::calc(ctx, lhs, rhs)
         } else {
             // All arithmetical functions with a NULL argument return NULL
             Ok(None)
@@ -39,40 +52,55 @@ impl<A: ArithmeticOp> RpnFnArithmetic<A> {
     }
 }
 
-impl<A: ArithmeticOp> Clone for RpnFnArithmetic<A> {
+impl<Arg0, Arg1, Ret, Op> Clone for RpnFnArithmetic<Arg0, Arg1, Ret, Op>
+where
+    Arg0: Evaluable,
+    Arg1: Evaluable,
+    Ret: Evaluable,
+    Op: ArithmeticOp<Arg0, Arg1, Ret>,
+{
     fn clone(&self) -> Self {
         Self::new()
     }
 }
 
-impl<A: ArithmeticOp> Copy for RpnFnArithmetic<A> {}
-
-pub trait ArithmeticOp: Send + Sync + Debug + 'static {
-    type T: Evaluable;
-
-    fn calc(lhs: &Self::T, rhs: &Self::T) -> Result<Option<Self::T>>;
+impl<Arg0, Arg1, Ret, Op> Copy for RpnFnArithmetic<Arg0, Arg1, Ret, Op>
+where
+    Arg0: Evaluable,
+    Arg1: Evaluable,
+    Ret: Evaluable,
+    Op: ArithmeticOp<Arg0, Arg1, Ret>,
+{
 }
 
-#[derive(Debug)]
-pub struct IntIntPlus;
+pub trait ArithmeticOp<Arg0, Arg1 = Arg0, Ret = Arg0>: Send + Sync + Debug + 'static
+where
+    Arg0: Evaluable,
+    Arg1: Evaluable,
+    Ret: Evaluable,
+{
+    fn calc(ctx: &mut EvalContext, lhs: &Arg0, rhs: &Arg1) -> Result<Option<Ret>>;
 
-impl ArithmeticOp for IntIntPlus {
-    type T = Int;
+    fn func() -> RpnFnArithmetic<Arg0, Arg1, Ret, Self>
+    where
+        Self: Sized,
+    {
+        RpnFnArithmetic::new()
+    }
+}
 
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+binary_op![Plus, Mod];
+
+impl ArithmeticOp<Int> for Plus<Int, Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_add(*rhs)
             .ok_or_else(|| Error::overflow("BIGINT", &format!("({} + {})", lhs, rhs)).into())
             .map(Some)
     }
 }
 
-#[derive(Debug)]
-pub struct IntUintPlus;
-
-impl ArithmeticOp for IntUintPlus {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Plus<Int, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         let res = if *lhs >= 0 {
             (*lhs as u64).checked_add(*rhs as u64)
         } else {
@@ -85,24 +113,14 @@ impl ArithmeticOp for IntUintPlus {
     }
 }
 
-#[derive(Debug)]
-pub struct UintIntPlus;
-
-impl ArithmeticOp for UintIntPlus {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
-        IntUintPlus::calc(rhs, lhs)
+impl ArithmeticOp<Int> for Plus<Uint, Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        Plus::<Int, Uint>::calc(_ctx, rhs, lhs)
     }
 }
 
-#[derive(Debug)]
-pub struct UintUintPlus;
-
-impl ArithmeticOp for UintUintPlus {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Plus<Uint, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         (*lhs as u64)
             .checked_add(*rhs as u64)
             .ok_or_else(|| {
@@ -112,13 +130,8 @@ impl ArithmeticOp for UintUintPlus {
     }
 }
 
-#[derive(Debug)]
-pub struct RealPlus;
-
-impl ArithmeticOp for RealPlus {
-    type T = Real;
-
-    fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+impl ArithmeticOp<Real> for Plus<Real, Real> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
             Err(Error::overflow("DOUBLE", &format!("({} + {})", lhs, rhs)))?;
@@ -127,25 +140,15 @@ impl ArithmeticOp for RealPlus {
     }
 }
 
-#[derive(Debug)]
-pub struct DecimalPlus;
-
-impl ArithmeticOp for DecimalPlus {
-    type T = Decimal;
-
-    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+impl ArithmeticOp<Decimal> for Plus<Decimal, Decimal> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         let res: codec::Result<Decimal> = (lhs + rhs).into();
         Ok(Some(res?))
     }
 }
 
-#[derive(Debug)]
-pub struct IntIntMod;
-
-impl ArithmeticOp for IntIntMod {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Mod<Int, Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
             return Ok(None);
         }
@@ -153,13 +156,8 @@ impl ArithmeticOp for IntIntMod {
     }
 }
 
-#[derive(Debug)]
-pub struct IntUintMod;
-
-impl ArithmeticOp for IntUintMod {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Mod<Int, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
             return Ok(None);
         }
@@ -169,13 +167,8 @@ impl ArithmeticOp for IntUintMod {
     }
 }
 
-#[derive(Debug)]
-pub struct UintIntMod;
-
-impl ArithmeticOp for UintIntMod {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Mod<Uint, Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
             return Ok(None);
         }
@@ -185,12 +178,8 @@ impl ArithmeticOp for UintIntMod {
     }
 }
 
-#[derive(Debug)]
-pub struct UintUintMod;
-impl ArithmeticOp for UintUintMod {
-    type T = Int;
-
-    fn calc(lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+impl ArithmeticOp<Int> for Mod<Uint, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
             return Ok(None);
         }
@@ -198,13 +187,8 @@ impl ArithmeticOp for UintUintMod {
     }
 }
 
-#[derive(Debug)]
-pub struct RealMod;
-
-impl ArithmeticOp for RealMod {
-    type T = Real;
-
-    fn calc(lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+impl ArithmeticOp<Real> for Mod<Real, Real> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         if (*rhs).into_inner() == 0f64 {
             return Ok(None);
         }
@@ -212,13 +196,8 @@ impl ArithmeticOp for RealMod {
     }
 }
 
-#[derive(Debug)]
-pub struct DecimalMod;
-
-impl ArithmeticOp for DecimalMod {
-    type T = Decimal;
-
-    fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+impl ArithmeticOp<Decimal> for Mod<Decimal, Decimal> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         if rhs.is_zero() {
             return Ok(None);
         }
@@ -246,7 +225,7 @@ mod tests {
     use crate::coprocessor::dag::rpn_expr::types::test_util::RpnFnScalarEvaluator;
 
     #[test]
-    fn test_arithmetic_int() {
+    fn test_plus_int() {
         let test_cases = vec![
             (None, false, Some(1), false, None),
             (Some(1), false, None, false, None),
@@ -286,32 +265,27 @@ mod tests {
     }
 
     #[test]
-    fn test_arithmetic_real() {
+    fn test_plus_real() {
         let test_cases = vec![
-            (
-                Real::new(1.01001).ok(),
-                Real::new(-0.01).ok(),
-                Real::new(1.00001).ok(),
-                false,
-            ),
-            (Real::new(1e308).ok(), Real::new(1e308).ok(), None, true),
+            (1.01001, -0.01, Some(1.00001), false),
+            (1e308, 1e308, None, true),
         ];
         for (lhs, rhs, expected, is_err) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(lhs)
-                .push_param(rhs)
+                .push_param(Real::new(lhs).ok())
+                .push_param(Real::new(rhs).ok())
                 .evaluate(ScalarFuncSig::PlusReal);
             if is_err {
                 assert!(output.is_err())
             } else {
-                let output = output.unwrap();
+                let output = output.unwrap().map(Real::into_inner);
                 assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
             }
         }
     }
 
     #[test]
-    fn test_arithmetic_decimal() {
+    fn test_plus_decimal() {
         let test_cases = vec![("1.1", "2.2", "3.3")];
         for (lhs, rhs, expected) in test_cases {
             let expected: Option<Decimal> = expected.parse().ok();

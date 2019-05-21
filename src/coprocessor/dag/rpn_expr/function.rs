@@ -345,3 +345,10 @@ impl Helper {
         Ok(Ret::into_vector_value(result))
     }
 }
+
+macro_rules! binary_op {
+    ($($Op:ident),* $(,)*) => {$(
+    #[derive(Debug)]
+    pub struct $Op<LHS, RHS>(std::marker::PhantomData<(LHS, RHS)>);
+    )*};
+}

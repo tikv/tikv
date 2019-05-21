@@ -20,6 +20,10 @@ use self::impl_op::*;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::Result;
 
+/// A mark type representing an unsigned int parameter
+#[derive(Debug)]
+struct Uint;
+
 fn map_int_sig<F>(
     value: ScalarFuncSig,
     children: &[Expr],
@@ -56,22 +60,15 @@ fn compare_mapper<F: CmpOp>(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box
     }
 }
 
-fn plus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
-    match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => Box::new(RpnFnArithmetic::<IntIntPlus>::new()),
-        (false, true) => Box::new(RpnFnArithmetic::<IntUintPlus>::new()),
-        (true, false) => Box::new(RpnFnArithmetic::<UintIntPlus>::new()),
-        (true, true) => Box::new(RpnFnArithmetic::<UintUintPlus>::new()),
-    }
-}
-
-fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
-    match (lhs_is_unsigned, rhs_is_unsigned) {
-        (false, false) => Box::new(RpnFnArithmetic::<IntIntMod>::new()),
-        (false, true) => Box::new(RpnFnArithmetic::<IntUintMod>::new()),
-        (true, false) => Box::new(RpnFnArithmetic::<UintIntMod>::new()),
-        (true, true) => Box::new(RpnFnArithmetic::<UintUintMod>::new()),
-    }
+macro_rules! int_arith {
+    ($Op:ident) => {
+        |lhs_is_unsigned, rhs_is_unsigned| match (lhs_is_unsigned, rhs_is_unsigned) {
+            (false, false) => Box::new($Op::<Int, Int>::func()),
+            (false, true) => Box::new($Op::<Int, Uint>::func()),
+            (true, false) => Box::new($Op::<Uint, Int>::func()),
+            (true, true) => Box::new($Op::<Uint, Uint>::func()),
+        }
+    };
 }
 
 #[rustfmt::skip]
@@ -141,12 +138,12 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::DecimalIsFalse => Box::new(RpnFnDecimalIsFalse),
         ScalarFuncSig::LogicalAnd => Box::new(RpnFnLogicalAnd),
         ScalarFuncSig::LogicalOr => Box::new(RpnFnLogicalOr),
-        ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
-        ScalarFuncSig::PlusReal => Box::new(RpnFnArithmetic::<RealPlus>::new()),
-        ScalarFuncSig::PlusDecimal => Box::new(RpnFnArithmetic::<DecimalPlus>::new()),
-        ScalarFuncSig::ModReal => Box::new(RpnFnArithmetic::<RealMod>::new()),
-        ScalarFuncSig::ModDecimal => Box::new(RpnFnArithmetic::<DecimalMod>::new()),
-        ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
+        ScalarFuncSig::PlusInt => map_int_sig(value, children, int_arith!(Plus))?,
+        ScalarFuncSig::PlusReal => Box::new(Plus::<Real, Real>::func()),
+        ScalarFuncSig::PlusDecimal => Box::new(Plus::<Decimal, Decimal>::func()),
+        ScalarFuncSig::ModReal => Box::new(Mod::<Real, Real>::func()),
+        ScalarFuncSig::ModDecimal => Box::new(Mod::<Decimal, Decimal>::func()),
+        ScalarFuncSig::ModInt => map_int_sig(value, children, int_arith!(Mod))?,
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
