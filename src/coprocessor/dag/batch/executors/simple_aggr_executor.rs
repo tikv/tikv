@@ -20,7 +20,7 @@ use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     summary_collector: C,
@@ -81,12 +81,7 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
         for def in aggr_definitions {
-            AggrDefinitionParser::check_supported(def).map_err(|e| {
-                Error::Other(box_err!(
-                    "Unable to use BatchSimpleAggregationExecutor: {}",
-                    e
-                ))
-            })?;
+            AggrDefinitionParser::check_supported(def)?;
         }
         Ok(())
     }
