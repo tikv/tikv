@@ -14,7 +14,7 @@ use crate::coprocessor::{Error, Result};
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
 
-impl super::parser::Parser for AggrFnDefinitionParserAvg {
+impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         use cop_datatype::FieldTypeAccessor;
         use std::convert::TryFrom;
