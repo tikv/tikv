@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::deadlock::Scheduler as DetectorScheduler;
-use super::util::*;
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -28,7 +27,6 @@ pub enum Task {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: u64,
     },
     WakeUp {
         // lock info
@@ -72,7 +70,6 @@ struct Waiter {
     cb: StorageCb,
     pr: ProcessResult,
     lock: Lock,
-    timeout: u64,
 }
 
 type Waiters = Vec<Waiter>;
@@ -176,22 +173,15 @@ impl Scheduler {
         cb: StorageCb,
         pr: ProcessResult,
         lock: Lock,
-        ttl: u64,
         is_first_lock: bool,
     ) {
-        let timeout = calculate_wait_for_lock_timeout(lock.ts, ttl);
-        if timeout == 0 {
-            execute_callback(cb, pr);
-        } else {
-            self.notify_scheduler(Task::WaitFor {
-                start_ts,
-                cb,
-                pr,
-                lock,
-                is_first_lock,
-                timeout,
-            });
-        }
+        self.notify_scheduler(Task::WaitFor {
+            start_ts,
+            cb,
+            pr,
+            lock,
+            is_first_lock,
+        });
     }
 
     pub fn wake_up(&self, lock_ts: u64, hashes: Vec<u64>, commit_ts: u64) {
@@ -219,7 +209,7 @@ impl Scheduler {
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
-    max_wait_for_lock_timeout: u64,
+    wait_for_lock_timeout: u64,
     wake_up_dealy_duration: u64,
 }
 
@@ -228,13 +218,13 @@ unsafe impl Send for WaiterManager {}
 impl WaiterManager {
     pub fn new(
         detector_scheduler: DetectorScheduler,
-        max_wait_for_lock_timeout: u64,
+        wait_for_lock_timeout: u64,
         wake_up_dealy_duration: u64,
     ) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
             detector_scheduler,
-            max_wait_for_lock_timeout,
+            wait_for_lock_timeout,
             wake_up_dealy_duration,
         }
     }
@@ -242,11 +232,6 @@ impl WaiterManager {
     fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
         let lock = waiter.lock.clone();
         let start_ts = waiter.start_ts;
-        let timeout = if waiter.timeout > self.max_wait_for_lock_timeout {
-            self.max_wait_for_lock_timeout
-        } else {
-            waiter.timeout
-        };
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
@@ -255,7 +240,7 @@ impl WaiterManager {
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             let detector_scheduler = self.detector_scheduler.clone();
-            let when = Instant::now() + Duration::from_millis(timeout);
+            let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
@@ -332,7 +317,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 pr,
                 lock,
                 is_first_lock,
-                timeout,
             } => {
                 self.handle_wait_for(
                     handle,
@@ -342,7 +326,6 @@ impl FutureRunnable<Task> for WaiterManager {
                         cb,
                         pr,
                         lock,
-                        timeout,
                     },
                 );
             }
@@ -369,8 +352,8 @@ impl FutureRunnable<Task> for WaiterManager {
 
 fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
     // Maybe we can store the latest commit_ts in TiKV, and use
-    // it as `conflict_start_ts` when waker's `commit_ts` is smaller
-    // than waiter's for_update_ts.
+    // it as `conflict_start_ts` when waker's `conflict_commit_ts`
+    // is smaller than waiter's for_update_ts.
     //
     // If so TiDB can use this `conflict_start_ts` as `for_update_ts`
     // directly, there is no need to get a ts from PD.
@@ -389,10 +372,10 @@ fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::util::PHYSICAL_SHIFT_BITS;
+    use super::super::util::*;
     use super::*;
     use crate::storage::Key;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::Duration;
     use test_util::KvGenerator;
 
     fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
@@ -401,7 +384,6 @@ mod tests {
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
-            timeout: 0,
         }
     }
 
@@ -493,44 +475,13 @@ mod tests {
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
-        // immediately
-        let (tx, rx) = mpsc::channel();
-        let cb = Box::new(move |result| {
-            tx.send(result).unwrap();
-        });
-        let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(
-            0,
-            StorageCb::Boolean(cb),
-            pr,
-            Lock { ts: 0, hash: 0 },
-            100,
-            true,
-        );
-        assert_eq!(
-            rx.recv_timeout(Duration::from_millis(50)).unwrap().unwrap(),
-            ()
-        );
-
         // timeout
-        let ts = (SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            << PHYSICAL_SHIFT_BITS) as u64;
         let (tx, rx) = mpsc::channel();
         let cb = Box::new(move |result| {
             tx.send(result).unwrap();
         });
         let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(
-            0,
-            StorageCb::Boolean(cb),
-            pr,
-            Lock { ts, hash: 0 },
-            10000,
-            true,
-        );
+        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 }, true);
         assert_eq!(
             rx.recv_timeout(Duration::from_millis(1100))
                 .unwrap()
@@ -539,11 +490,6 @@ mod tests {
         );
 
         // wake-up
-        let ts = (SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            << PHYSICAL_SHIFT_BITS) as u64;
         let (tx, rx) = mpsc::channel();
         let cb = Box::new(move |result| {
             tx.send(result).unwrap();
@@ -552,11 +498,13 @@ mod tests {
             0,
             StorageCb::Boolean(cb),
             ProcessResult::Res,
-            Lock { ts, hash: 1 },
-            10000,
+            Lock { ts: 0, hash: 1 },
             true,
         );
-        waiter_mgr_scheduler.wake_up(ts, vec![3, 1, 2], 1);
-        assert!(rx.recv_timeout(Duration::from_millis(80)).unwrap().is_err());
+        waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
+        assert!(rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .is_err());
     }
 }

@@ -70,7 +70,6 @@ pub enum Msg {
         start_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
-        ttl: u64,
         is_first_lock: bool,
     },
 }
@@ -469,7 +468,6 @@ impl<E: Engine> Scheduler<E> {
         start_ts: u64,
         pr: ProcessResult,
         lock: lock_manager::Lock,
-        ttl: u64,
         is_first_lock: bool,
     ) {
         debug!("command waits for lock released"; "cid" => cid);
@@ -482,7 +480,6 @@ impl<E: Engine> Scheduler<E> {
             tctx.cb,
             pr,
             lock.clone(),
-            ttl,
             is_first_lock,
         );
         self.release_lock(&tctx.lock, cid);
@@ -505,9 +502,8 @@ impl<E: Engine> MsgScheduler for Scheduler<E> {
                 start_ts,
                 pr,
                 lock,
-                ttl,
                 is_first_lock,
-            } => self.on_wait_for_lock(cid, start_ts, pr, lock, ttl, is_first_lock),
+            } => self.on_wait_for_lock(cid, start_ts, pr, lock, is_first_lock),
             _ => unreachable!(),
         }
     }
