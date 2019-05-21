@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
-use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
 
 /// Retrieves rows from the source executor and filter rows by expressions.
-pub struct SelectionExecutor<C: ExecSummaryCollector> {
-    summary_collector: C,
+pub struct SelectionExecutor {
     conditions: Vec<Expression>,
     related_cols_offset: Vec<usize>, // offset of related columns
     ctx: EvalContext,
@@ -20,9 +19,8 @@ pub struct SelectionExecutor<C: ExecSummaryCollector> {
     first_collect: bool,
 }
 
-impl<C: ExecSummaryCollector> SelectionExecutor<C> {
+impl SelectionExecutor {
     pub fn new(
-        summary_collector: C,
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
@@ -32,7 +30,6 @@ impl<C: ExecSummaryCollector> SelectionExecutor<C> {
         visitor.batch_visit(&conditions)?;
         let ctx = EvalContext::new(eval_cfg);
         Ok(SelectionExecutor {
-            summary_collector,
             conditions: Expression::batch_build(&ctx, conditions)?,
             related_cols_offset: visitor.column_offsets(),
             ctx,
@@ -57,16 +54,9 @@ impl<C: ExecSummaryCollector> SelectionExecutor<C> {
     }
 }
 
-impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
+impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.summary_collector.on_start_iterate();
-        let ret = self.next_impl();
-        if let Ok(Some(_)) = ret {
-            self.summary_collector.on_finish_iterate(timer, 1);
-        } else {
-            self.summary_collector.on_finish_iterate(timer, 0);
-        }
-        ret
+        self.next_impl()
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -83,7 +73,6 @@ impl<C: ExecSummaryCollector> Executor for SelectionExecutor<C> {
 
     fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
         self.src.collect_execution_summaries(target);
-        self.summary_collector.collect_into(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
@@ -113,7 +102,6 @@ mod tests {
 
     use super::super::tests::*;
     use super::*;
-    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
     fn new_const_expr() -> Expr {
         let mut expr = Expr::new();
@@ -203,13 +191,9 @@ mod tests {
         let expr = new_const_expr();
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(
-            ExecSummaryCollectorDisabled,
-            selection,
-            Arc::new(EvalConfig::default()),
-            inner_table_scan,
-        )
-        .unwrap();
+        let mut selection_executor =
+            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
+                .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
@@ -246,13 +230,9 @@ mod tests {
         let expr = new_col_gt_u64_expr(2, 5);
         selection.mut_conditions().push(expr);
 
-        let mut selection_executor = SelectionExecutor::new(
-            ExecSummaryCollectorDisabled,
-            selection,
-            Arc::new(EvalConfig::default()),
-            inner_table_scan,
-        )
-        .unwrap();
+        let mut selection_executor =
+            SelectionExecutor::new(selection, Arc::new(EvalConfig::default()), inner_table_scan)
+                .unwrap();
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {

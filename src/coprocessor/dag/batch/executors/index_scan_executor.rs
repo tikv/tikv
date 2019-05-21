@@ -16,21 +16,15 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
+pub struct BatchIndexScanExecutor<S: Store>(
     super::util::scan_executor::ScanExecutor<
-        C,
         S,
         IndexScanExecutorImpl,
         super::util::ranges_iter::PointRangeConditional,
     >,
 );
 
-impl
-    BatchIndexScanExecutor<
-        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
-        FixtureStore,
-    >
-{
+impl BatchIndexScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -38,9 +32,8 @@ impl
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
+impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -79,7 +72,6 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
             decode_handle,
         };
         let wrapper = super::util::scan_executor::ScanExecutor::new(
-            summary_collector,
             imp,
             store,
             desc,
@@ -90,7 +82,7 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor<C, S> {
+impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -251,7 +243,6 @@ mod tests {
     use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -331,7 +322,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -378,7 +368,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -445,7 +434,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -490,7 +478,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![

@@ -16,14 +16,12 @@ use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
 
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
-    summary_collector: C,
+pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
 
@@ -51,7 +49,7 @@ pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExe
     ordered_aggr_fn_input_exprs: Vec<RpnExpression>,
 }
 
-impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test<F>(src: Src, aggr_definitions: Vec<Expr>, parse_aggr_definition: F) -> Self
     where
@@ -64,7 +62,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
         ) -> Result<Box<dyn AggrFunction>>,
     {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             aggr_definitions,
@@ -74,7 +71,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
     }
 }
 
-impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -87,25 +84,13 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor<C, Src> {
-    pub fn new(
-        summary_collector: C,
-        config: Arc<EvalConfig>,
-        src: Src,
-        aggr_definitions: Vec<Expr>,
-    ) -> Result<Self> {
-        Self::new_impl(
-            summary_collector,
-            config,
-            src,
-            aggr_definitions,
-            AggrDefinitionParser::parse,
-        )
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, aggr_definitions: Vec<Expr>) -> Result<Self> {
+        Self::new_impl(config, src, aggr_definitions, AggrDefinitionParser::parse)
     }
 
     /// Provides ability to customize `AggrDefinitionParser::parse`. Useful in tests.
     fn new_impl<F>(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         aggr_definitions: Vec<Expr>,
@@ -166,7 +151,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
             .collect();
 
         Ok(Self {
-            summary_collector,
             context: EvalContext::new(config),
             src,
             is_ended: false,
@@ -293,9 +277,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSimpleAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.ordered_schema.as_slice()
@@ -305,10 +287,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch();
 
-        let ret = match result {
+        match result {
             Err(e) => {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
@@ -335,18 +316,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
                     is_drained: Ok(true),
                 }
             }
-        };
-
-        self.summary_collector
-            .on_finish_iterate(timer, ret.data.rows_len());
-        ret
+        }
     }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
     }
 }
 
