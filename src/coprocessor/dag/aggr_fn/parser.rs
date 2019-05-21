@@ -7,7 +7,7 @@ use crate::coprocessor::dag::aggr_fn::AggrFunction;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
 
-/// Parse a specific aggregate function definition from ProtoBuf.
+/// Parse a specific aggregate function definition from protobuf.
 ///
 /// All aggregate function implementations should include an impl for this trait as well as
 /// add a match arm in `map_pb_sig_to_aggr_func_parser` so that the aggregate function can be
