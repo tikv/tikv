@@ -7,6 +7,7 @@ use chrono;
 use clap::ArgMatches;
 
 use crate::config::{MetricConfig, TiKvConfig};
+use slog::Drain;
 use tikv_util::collections::HashMap;
 use tikv_util::{self, logger};
 
@@ -31,10 +32,27 @@ pub fn initial_logger(config: &TiKvConfig) {
     let log_rotation_timespan =
         chrono::Duration::from_std(config.log_rotation_timespan.clone().into())
             .expect("config.log_rotation_timespan is an invalid duration.");
+
+    // Collects following targets.
+    const ENABLED_TARGETS: &[&str] = &[
+        "tikv::",
+        "tests::",
+        "benches::",
+        "integrations::",
+        "failpoints::",
+        "raft::",
+        // Collects logs for test components.
+        "test_",
+    ];
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
+        let filtered = drainer.filter(|record| {
+            ENABLED_TARGETS
+                .iter()
+                .any(|target| record.module().starts_with(target))
+        });
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
+        logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     } else {
@@ -46,8 +64,14 @@ pub fn initial_logger(config: &TiKvConfig) {
                     e
                 );
             });
+
+        let filtered = drainer.filter(|record| {
+            ENABLED_TARGETS
+                .iter()
+                .any(|target| record.module().starts_with(target))
+        });
         // use async drainer and init std log.
-        logger::init_log(drainer, config.log_level, true, true).unwrap_or_else(|e| {
+        logger::init_log(filtered, config.log_level, true, true).unwrap_or_else(|e| {
             fatal!("failed to initialize log: {}", e);
         });
     };
