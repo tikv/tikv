@@ -347,9 +347,10 @@ impl Inner {
 }
 
 pub struct Detector {
-    is_member_change_watcher_scheduled: bool,
     pd_client: Arc<RpcClient>,
     inner: Rc<RefCell<Inner>>,
+    monitor_membership_interval: u64,
+    is_member_change_watcher_scheduled: bool,
 }
 
 unsafe impl Send for Detector {}
@@ -360,16 +361,18 @@ impl Detector {
         waiter_mgr_scheduler: WaiterMgrScheduler,
         security_mgr: Arc<SecurityManager>,
         pd_client: Arc<RpcClient>,
+        monitor_membership_interval: u64,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
-            is_member_change_watcher_scheduled: false,
             pd_client,
             inner: Rc::new(RefCell::new(Inner::new(
                 store_id,
                 waiter_mgr_scheduler,
                 security_mgr,
             ))),
+            monitor_membership_interval,
+            is_member_change_watcher_scheduled: false,
         }
     }
 
@@ -378,17 +381,20 @@ impl Detector {
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
         let handle_copy = handle.clone();
-        let timer = Interval::new(Instant::now(), Duration::from_secs(5))
-            .for_each(move |_| {
-                if let Err(e) = inner
-                    .borrow_mut()
-                    .watch_member_change(&handle_copy, &pd_client)
-                {
-                    warn!("watch member change failed"; "err" => ?e);
-                }
-                Ok(())
-            })
-            .map_err(|e| panic!("unexpected err: {:?}", e));
+        let timer = Interval::new(
+            Instant::now(),
+            Duration::from_millis(self.monitor_membership_interval),
+        )
+        .for_each(move |_| {
+            if let Err(e) = inner
+                .borrow_mut()
+                .watch_member_change(&handle_copy, &pd_client)
+            {
+                warn!("watch member change failed"; "err" => ?e);
+            }
+            Ok(())
+        })
+        .map_err(|e| panic!("unexpected err: {:?}", e));
         handle.spawn(timer);
         self.is_member_change_watcher_scheduled = true;
     }
