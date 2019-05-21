@@ -350,7 +350,7 @@ pub struct Detector {
     pd_client: Arc<RpcClient>,
     inner: Rc<RefCell<Inner>>,
     monitor_membership_interval: u64,
-    is_member_change_watcher_scheduled: bool,
+    is_membership_change_monitor_scheduled: bool,
 }
 
 unsafe impl Send for Detector {}
@@ -372,12 +372,12 @@ impl Detector {
                 security_mgr,
             ))),
             monitor_membership_interval,
-            is_member_change_watcher_scheduled: false,
+            is_membership_change_monitor_scheduled: false,
         }
     }
 
-    fn schedule_member_change_watcher(&mut self, handle: &Handle) {
-        info!("schedule member change watcher");
+    fn schedule_membership_change_monitor(&mut self, handle: &Handle) {
+        info!("schedule membership change monitor");
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
         let handle_copy = handle.clone();
@@ -396,7 +396,7 @@ impl Detector {
         })
         .map_err(|e| panic!("unexpected err: {:?}", e));
         handle.spawn(timer);
-        self.is_member_change_watcher_scheduled = true;
+        self.is_membership_change_monitor_scheduled = true;
     }
 
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
@@ -516,8 +516,8 @@ impl Detector {
 
 impl FutureRunnable<Task> for Detector {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_member_change_watcher_scheduled {
-            self.schedule_member_change_watcher(handle);
+        if !self.is_membership_change_monitor_scheduled {
+            self.schedule_membership_change_monitor(handle);
         }
 
         match task {
