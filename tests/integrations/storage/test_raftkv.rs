@@ -73,7 +73,6 @@ fn test_read_leader_in_lease() {
 
 #[test]
 fn test_read_index_on_replica() {
-    test_util::setup_for_ci();
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
     cluster.run();
