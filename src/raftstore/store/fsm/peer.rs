@@ -2155,9 +2155,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let request = msg.get_requests();
 
         // ReadIndex can be process on the replicas.
-        if !self.fsm.peer.is_leader()
-            && !(request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex)
-        {
+        let is_read_index_request =
+            request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
+        if !(self.fsm.peer.is_leader() || is_read_index_request) {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             return Err(Error::NotLeader(region_id, leader));

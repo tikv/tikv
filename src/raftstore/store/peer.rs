@@ -1246,7 +1246,7 @@ impl Peer {
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
-        if !self.is_leader() && ready.read_states.len() != 0 {
+        if !self.is_leader() && !ready.read_states.is_empty() {
             for state in &ready.read_states {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
