@@ -25,7 +25,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::u64;
 
-use futures::future;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
@@ -33,9 +32,7 @@ use tikv_util::collections::HashMap;
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{
-    execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, Task,
-};
+use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
@@ -362,37 +359,23 @@ impl<E: Engine> Scheduler<E> {
         let task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-
-        let engine = self.engine.clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
-        let sched_pool = executor.clone_pool();
-        let inner = self.clone();
+
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
         });
+        if let Err(e) = self.engine.async_snapshot(&ctx, cb) {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[tag, "async_snapshot_err"])
+                .inc();
 
-        sched_pool.pool.spawn(move || {
-            if let Err(e) = engine.async_snapshot(&ctx, cb) {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "async_snapshot_err"])
-                    .inc();
-
-                error!("engine async_snapshot failed, err: {:?}", e);
-                notify_scheduler(
-                    inner,
-                    Msg::FinishedWithErr {
-                        cid,
-                        err: e.into(),
-                        tag,
-                    },
-                );
-            } else {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "snapshot"])
-                    .inc();
-            }
-            future::ok::<_, ()>(())
-        });
+            error!("engine async_snapshot failed"; "err" => ?e);
+            self.finish_with_err(cid, e.into());
+        } else {
+            SCHED_STAGE_COUNTER_VEC
+                .with_label_values(&[tag, "snapshot"])
+                .inc();
+        }
     }
 
     /// Calls the callback with an error.

@@ -133,6 +133,10 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         self.sched_pool.take().unwrap()
     }
 
+    fn clone_pool(&mut self) -> SchedPool<E> {
+        self.sched_pool.clone().unwrap()
+    }
+
     fn take_scheduler(&mut self) -> S {
         self.scheduler.take().unwrap()
     }
@@ -143,10 +147,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     fn take_detector_scheduler(&mut self) -> Option<DetectorScheduler> {
         self.detector_scheduler.take()
-    }
-
-    pub fn clone_pool(&self) -> SchedPool<E> {
-        self.sched_pool.clone().unwrap()
     }
 
     /// Start the execution of the task.
@@ -170,7 +170,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                notify_scheduler(
+                wakeup_scheduler(
                     self.take_scheduler(),
                     Msg::FinishedWithErr {
                         cid: task.cid,
@@ -195,7 +195,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         if let Some(term) = cb_ctx.term {
             task.cmd.mut_context().set_term(term);
         }
-        let sched_pool = self.take_pool();
+        let sched_pool = self.clone_pool();
         let engine = sched_pool.engine;
         let readonly = task.cmd.readonly();
         sched_pool.pool.spawn(move || {
@@ -238,7 +238,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        wakeup_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
         statistics
     }
 
@@ -291,20 +291,24 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     }
                 } else {
                     let sched = scheduler.clone();
+                    let sched_pool = self.take_pool();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        notify_scheduler(
-                            sched,
-                            Msg::WriteFinished {
-                                cid,
-                                pr,
-                                result,
-                                tag,
-                            },
-                        );
-                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                            .with_label_values(&[tag])
-                            .observe(rows as f64);
+                        sched_pool.pool.spawn(move || {
+                            wakeup_scheduler(
+                                sched,
+                                Msg::WriteFinished {
+                                    cid,
+                                    pr,
+                                    result,
+                                    tag,
+                                },
+                            );
+                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                .with_label_values(&[tag])
+                                .observe(rows as f64);
+                            future::ok::<_, ()>(())
+                        })
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
@@ -331,7 +335,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
-        notify_scheduler(scheduler, msg);
+        wakeup_scheduler(scheduler, msg);
         statistics
     }
 }
@@ -772,7 +776,7 @@ fn process_write_impl<S: Snapshot>(
     })
 }
 
-pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
+pub fn wakeup_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 
