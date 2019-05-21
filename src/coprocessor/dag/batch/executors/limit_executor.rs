@@ -63,7 +63,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
 mod tests {
     use super::*;
     use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::codec::data_type::{Real, VectorValue};
     use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use cop_datatype::{EvalType, FieldTypeTp};
@@ -71,7 +71,7 @@ mod tests {
 
     struct MockExecutor {
         // ID(INT,PK), Foo(INT), Bar(Float,Default 4.5)
-        data: Vec<(i64, Option<i64>, Option<f64>)>,
+        data: Vec<(i64, Option<i64>, Option<Real>)>,
         field_types: Vec<FieldType>,
         offset: usize,
         cfg: EvalConfig,
@@ -81,11 +81,11 @@ mod tests {
         /// create the MockExecutor with fixed schema and data.
         fn new() -> MockExecutor {
             let expect_rows = vec![
-                (1, Some(10), Some(5.2)),
+                (1, Some(10), Real::new(5.2).ok()),
                 (3, Some(-5), None),
-                (4, None, Some(4.5)),
-                (5, None, Some(0.1)),
-                (6, None, Some(4.5)),
+                (4, None, Real::new(4.5).ok()),
+                (5, None, Real::new(0.1).ok()),
+                (6, None, Real::new(4.5).ok()),
             ];
             let field_types = vec![
                 FieldTypeTp::LongLong.into(),

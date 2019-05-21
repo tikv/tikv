@@ -16,6 +16,9 @@ use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
+use crate::storage::lock_manager::{
+    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+};
 use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
@@ -187,12 +190,38 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         pd_sender.clone(),
     );
 
+    // Create waiter manager worker and deadlock detector worker if pessimistic-txn is enabled
+    // Make clippy happy
+    let (mut waiter_mgr_worker, mut detector_worker) = if cfg.pessimistic_txn.enabled {
+        (
+            Some(FutureWorker::new("waiter-manager")),
+            Some(FutureWorker::new("deadlock-detector")),
+        )
+    } else {
+        (None, None)
+    };
+    // Make clippy happy
+    let deadlock_service = if cfg.pessimistic_txn.enabled {
+        Some(DeadlockService::new(
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+        ))
+    } else {
+        None
+    };
+
     let storage = create_raft_storage(
         raft_router.clone(),
         &cfg.storage,
         storage_read_pool,
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
+        waiter_mgr_worker
+            .as_ref()
+            .map(|worker| WaiterMgrScheduler::new(worker.scheduler())),
+        detector_worker
+            .as_ref()
+            .map(|worker| DetectorScheduler::new(worker.scheduler())),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -230,6 +259,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
+        deadlock_service,
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
     let trans = server.transport();
@@ -257,7 +287,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(pd_client, region_info_accessor.clone(), node.id());
+    let auto_gc_cfg = AutoGCConfig::new(
+        Arc::clone(&pd_client),
+        region_info_accessor.clone(),
+        node.id(),
+    );
     if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {}", e);
     }
@@ -273,6 +307,29 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             "failed to start metrics flusher";
             "err" => %e
         );
+    }
+
+    // Start waiter manager and deadlock detector
+    if cfg.pessimistic_txn.enabled {
+        let waiter_mgr_runner = WaiterManager::new(DetectorScheduler::new(
+            detector_worker.as_ref().unwrap().scheduler(),
+        ));
+        let detector_runner = Detector::new(
+            node.id(),
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
+            Arc::clone(&security_mgr),
+            pd_client,
+        );
+        waiter_mgr_worker
+            .as_mut()
+            .unwrap()
+            .start(waiter_mgr_runner)
+            .unwrap_or_else(|e| fatal!("failed to start waiter manager: {}", e));
+        detector_worker
+            .as_mut()
+            .unwrap()
+            .start(detector_runner)
+            .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
     }
 
     // Run server.
@@ -319,6 +376,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             "ignore failure when stopping resolver";
             "err" => ?e
         );
+    }
+
+    if cfg.pessimistic_txn.enabled {
+        if let Some(Err(e)) = waiter_mgr_worker.unwrap().stop().map(JoinHandle::join) {
+            info!(
+                "ignore failure when stopping waiter manager worker";
+                "err" => ?e
+            );
+        }
+        if let Some(Err(e)) = detector_worker.unwrap().stop().map(JoinHandle::join) {
+            info!(
+                "ignore failure when stopping deadlock detector worker";
+                "err" => ?e
+            );
+        }
     }
 }
 

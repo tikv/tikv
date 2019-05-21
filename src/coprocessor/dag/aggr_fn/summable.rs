@@ -33,12 +33,12 @@ impl Summable for Decimal {
 impl Summable for Real {
     #[inline]
     fn zero() -> Self {
-        0.0
+        Real::new(0.0).unwrap()
     }
 
     #[inline]
     fn add_assign(&mut self, _ctx: &mut EvalContext, other: &Self) -> Result<()> {
-        *self += other;
+        *self += *other;
         Ok(())
     }
 }
