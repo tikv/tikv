@@ -117,7 +117,12 @@ fn test_read_index_on_replica() {
         std::time::Duration::from_secs(5),
     );
     assert!(!resp.as_ref().unwrap().get_header().has_error());
-    assert_ne!(resp.unwrap().get_responses()[0].get_read_index().get_read_index(), 0);
+    assert_ne!(
+        resp.unwrap().get_responses()[0]
+            .get_read_index()
+            .get_read_index(),
+        0
+    );
 }
 
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {

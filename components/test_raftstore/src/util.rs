@@ -442,7 +442,6 @@ pub fn read_index_on_peer<T: Simulator>(
     cluster.call_command(request, timeout)
 }
 
-
 pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     if resp.get_header().has_error() {
         panic!("failed to read {:?}", resp);

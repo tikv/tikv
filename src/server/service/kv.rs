@@ -870,7 +870,7 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         req: ReadIndexRequest,
         sink: UnarySink<ReadIndexResponse>,
     ) {
-        let timer = GRPC_MSG_HISTOGRAM_VEC.split_region.start_coarse_timer();
+        let timer = GRPC_MSG_HISTOGRAM_VEC.read_index.start_coarse_timer();
 
         let region_id = req.get_context().get_region_id();
         let mut cmd = RaftCmdRequest::new();
