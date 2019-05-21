@@ -20,14 +20,15 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use std::cell::UnsafeCell;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
-use tikv_util::collections::HashMap;
+use tikv_util::collections::{HashMap, HashMapEntry};
 
 use crate::storage::kv::Result as EngineResult;
 use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
@@ -93,6 +94,7 @@ impl Display for Msg {
 
 // It stores context of a task.
 struct TaskContext {
+    cid: u64,
     task: Option<Task>,
 
     lock: Lock,
@@ -106,7 +108,7 @@ struct TaskContext {
 }
 
 impl TaskContext {
-    fn new(task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
+    fn new(cid: u64, task: Task, latches: &Latches, cb: StorageCb) -> TaskContext {
         let tag = task.cmd().tag();
         let lock = gen_command_lock(latches, task.cmd());
         let write_bytes = if lock.is_write_lock() {
@@ -116,6 +118,7 @@ impl TaskContext {
         };
 
         TaskContext {
+            cid,
             task: Some(task),
             lock,
             cb,
@@ -139,7 +142,7 @@ impl TaskContext {
 
 struct SchedulerInner<E: Engine> {
     // slot_id -> { cid -> `TaskContext` } in the slot.
-    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
+    task_contexts: Vec<RwLock<HashMap<u64, UnsafeCell<TaskContext>>>>,
 
     // cmd id generator
     id_alloc: AtomicU64,
@@ -177,15 +180,16 @@ impl<E: Engine> SchedulerInner<E> {
     }
 
     fn dequeue_task(&self, cid: u64) -> Task {
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
-        let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
+        let tasks = self.task_contexts[id_index(cid)].read().unwrap();
+        let tctx_raw = tasks.get(&cid).unwrap().get();
+        let task = unsafe { (*tctx_raw).task.take().unwrap() };
         assert_eq!(task.cid, cid);
         task
     }
 
-    fn enqueue_task(&self, task: Task, callback: StorageCb) {
+    fn enqueue_task(&self, task: Task, callback: StorageCb) -> WakeUp {
         let cid = task.cid;
-        let tctx = TaskContext::new(task, &self.latches, callback);
+        let tctx = TaskContext::new(cid, task, &self.latches, callback);
 
         let running_write_bytes = self
             .running_write_bytes
@@ -193,18 +197,23 @@ impl<E: Engine> SchedulerInner<E> {
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
-        if tasks.insert(cid, tctx).is_some() {
-            panic!("TaskContext cid={} shouldn't exist", cid);
+        let mut tasks = self.task_contexts[id_index(cid)].write().unwrap();
+        match tasks.entry(cid) {
+            HashMapEntry::Occupied(_) => panic!("TaskContext cid={} shouldn't exist", cid),
+            HashMapEntry::Vacant(e) => {
+                let tctx_raw = e.insert(UnsafeCell::new(tctx)).get();
+                WakeUp::ByRef(tctx_raw)
+            }
         }
     }
 
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts[id_index(cid)]
-            .lock()
+            .write()
             .unwrap()
             .remove(&cid)
-            .unwrap();
+            .unwrap()
+            .into_inner();
 
         let running_write_bytes = self
             .running_write_bytes
@@ -223,9 +232,15 @@ impl<E: Engine> SchedulerInner<E> {
     /// Tries to acquire all the required latches for a command.
     ///
     /// Returns `true` if successful; returns `false` otherwise.
-    fn acquire_lock(&self, cid: u64) -> bool {
-        let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
-        let tctx = task_contexts.get_mut(&cid).unwrap();
+    fn acquire_lock(&self, wake_up: WakeUp) -> bool {
+        let (tctx_cell, cid) = match wake_up {
+            WakeUp::ById(cid) => {
+                let task_contexts = self.task_contexts[id_index(cid)].read().unwrap();
+                (task_contexts.get(&cid).unwrap().get(), cid)
+            }
+            WakeUp::ByRef(t) => (t, unsafe { (*t).cid }),
+        };
+        let tctx = unsafe { &mut (*tctx_cell) };
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
             return true;
@@ -243,6 +258,20 @@ pub struct Scheduler<E: Engine> {
 
 unsafe impl<E: Engine> Send for Scheduler<E> {}
 
+enum WakeUp {
+    ById(u64),
+    ByRef(*mut TaskContext),
+}
+
+impl WakeUp {
+    fn get_cid(&self) -> u64 {
+        match *self {
+            WakeUp::ById(cid) => cid,
+            WakeUp::ByRef(t) => unsafe { (*t).cid },
+        }
+    }
+}
+
 impl<E: Engine> Scheduler<E> {
     /// Creates a scheduler.
     pub fn new(
@@ -253,12 +282,12 @@ impl<E: Engine> Scheduler<E> {
         worker_pool_size: usize,
         sched_pending_write_threshold: usize,
     ) -> Self {
-        // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
+        // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `RwLock`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
         info!("Scheduler::new is called to initialize the transaction scheduler");
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
-            task_contexts.push(Mutex::new(Default::default()));
+            task_contexts.push(RwLock::new(Default::default()));
         }
 
         let inner = Arc::new(SchedulerInner {
@@ -305,7 +334,7 @@ impl<E: Engine> Scheduler<E> {
     fn release_lock(&self, lock: &Lock, cid: u64) {
         let wakeup_list = self.inner.latches.release(lock, cid);
         for wcid in wakeup_list {
-            self.try_to_wake_up(wcid);
+            self.try_to_wake_up(WakeUp::ById(wcid));
         }
     }
 
@@ -316,9 +345,8 @@ impl<E: Engine> Scheduler<E> {
         let tag = cmd.tag();
         let priority_tag = cmd.priority_tag();
         let task = Task::new(cid, cmd);
-        // TODO: enqueue_task should return an reference of the tctx.
-        self.inner.enqueue_task(task, callback);
-        self.try_to_wake_up(cid);
+        let tctx_ref = self.inner.enqueue_task(task, callback);
+        self.try_to_wake_up(tctx_ref);
 
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tag, "new"])
@@ -330,8 +358,9 @@ impl<E: Engine> Scheduler<E> {
 
     /// Tries to acquire all the necessary latches. If all the necessary latches are acquired,
     /// the method initiates a get snapshot operation for furthur processing.
-    fn try_to_wake_up(&self, cid: u64) {
-        if self.inner.acquire_lock(cid) {
+    fn try_to_wake_up(&self, wake_up: WakeUp) {
+        let cid = wake_up.get_cid();
+        if self.inner.acquire_lock(wake_up) {
             self.get_snapshot(cid);
         }
     }
