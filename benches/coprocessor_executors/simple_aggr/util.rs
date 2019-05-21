@@ -45,6 +45,7 @@ impl SimpleAggrBencher for NormalBencher {
             meta.mut_agg_func().push(aggr_expr.clone());
             let src = fb.clone().build_normal_fixture_executor();
             StreamAggExecutor::new(
+                ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
                 black_box(meta),

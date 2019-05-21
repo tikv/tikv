@@ -60,6 +60,7 @@ impl HashAggrBencher for NormalBencher {
             meta.set_group_by(group_by_expr.to_vec().into());
             let src = fb.clone().build_normal_fixture_executor();
             let ex = HashAggExecutor::new(
+                ExecSummaryCollectorDisabled,
                 black_box(meta),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),

@@ -3,7 +3,9 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use rand::{Rng, SeedableRng, XorShiftRng};
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
 
 use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
 use test_coprocessor::*;
@@ -23,9 +25,9 @@ use tikv::storage::RocksEngine;
 
 use crate::util::bencher::Bencher;
 
-const SEED_1: [u32; 4] = [0x525C, 0x682A, 0x2F7C, 0xE3DB];
-const SEED_2: [u32; 4] = [0xB7CE, 0xACC3, 0x8146, 0x676B];
-const SEED_3: [u32; 4] = [0x2B87, 0x7E35, 0x1BD8, 0x628E];
+const SEED_1: u64 = 0x525C682A2F7CE3DB;
+const SEED_2: u64 = 0xB7CEACC38146676B;
+const SEED_3: u64 = 0x2B877E351BD8628E;
 
 #[derive(Clone)]
 pub struct FixtureBuilder {
@@ -54,7 +56,7 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_i64_random(mut self) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_1);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
             col.push(Datum::I64(rng.gen()));
@@ -65,10 +67,10 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_i64_sampled(mut self, samples: &[i64]) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_1);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::I64(*rng.choose(samples).unwrap()));
+            col.push(Datum::I64(*samples.choose(&mut rng).unwrap()));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::LongLong.into());
@@ -76,10 +78,10 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_f64_random(mut self) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_1);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::F64(rng.next_f64()));
+            col.push(Datum::F64(rng.gen_range(-1e50, 1e50)));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::Double.into());
@@ -87,10 +89,10 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_f64_sampled(mut self, samples: &[f64]) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_1);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            col.push(Datum::F64(*rng.choose(samples).unwrap()));
+            col.push(Datum::F64(*samples.choose(&mut rng).unwrap()));
         }
         self.columns.push(col);
         self.field_types.push(FieldTypeTp::Double.into());
@@ -98,7 +100,7 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_decimal_random(mut self) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_2);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_2);
         let mut col = Vec::with_capacity(self.rows);
         let mut dec_str = String::new();
         for _ in 0..self.rows {
@@ -120,10 +122,10 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_decimal_sampled(mut self, samples: &[&str]) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_2);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_2);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            let dec_str = *rng.choose(samples).unwrap();
+            let dec_str = *samples.choose(&mut rng).unwrap();
             col.push(Datum::Dec(Decimal::from_str(dec_str).unwrap()));
         }
         self.columns.push(col);
@@ -132,10 +134,13 @@ impl FixtureBuilder {
     }
 
     pub fn push_column_bytes_random_fixed_len(mut self, len: usize) -> Self {
-        let mut rng: XorShiftRng = SeedableRng::from_seed(SEED_3);
+        let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_3);
         let mut col = Vec::with_capacity(self.rows);
         for _ in 0..self.rows {
-            let str: String = rng.gen_ascii_chars().take(len).collect();
+            let str: String = std::iter::repeat(())
+                .map(|_| rng.sample(rand::distributions::Alphanumeric))
+                .take(len)
+                .collect();
             col.push(Datum::Bytes(str.into_bytes()));
         }
         self.columns.push(col);
