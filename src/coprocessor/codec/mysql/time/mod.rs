@@ -771,6 +771,12 @@ impl PartialEq for Time {
     }
 }
 
+impl std::hash::Hash for Time {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.time.hash(state);
+    }
+}
+
 impl Eq for Time {}
 
 impl Ord for Time {
