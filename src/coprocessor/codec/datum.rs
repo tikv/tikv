@@ -1834,7 +1834,6 @@ mod tests {
             ),
             (Datum::Bytes(b"[1, 2, 3]".to_vec()), "[1, 2, 3]"),
             (Datum::Bytes(b"{}".to_vec()), "{}"),
-            (Datum::I64(1), "true"),
         ];
 
         for (d, json) in tests {
