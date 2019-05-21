@@ -398,9 +398,14 @@ impl ApplyContext {
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
         }
+
         // Clean snapshot cache.
-        self.engine_snapshot
-            .store(ptr::null_mut(), Ordering::Release);
+        let prev_snapshot = self
+            .engine_snapshot
+            .swap(ptr::null_mut(), Ordering::Release);
+        if !prev_snapshot.is_null() {
+            let _: Box<SyncSnapshot> = unsafe { Box::from_raw(prev_snapshot) };
+        }
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);

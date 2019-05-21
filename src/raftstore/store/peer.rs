@@ -2265,6 +2265,7 @@ impl ReadExecutor {
                 .compare_exchange(prev_snapshot, snapshot, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
+                // TODO: only call `register_release_engine_snapshot_tick` here.
                 self.snapshot = Some(unsafe { (*snapshot).clone() });
                 break;
             }

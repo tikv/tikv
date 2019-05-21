@@ -1908,9 +1908,13 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn on_release_engine_snapshot_tick(&self) {
-        self.ctx
+        let prev_snapshot = self
+            .ctx
             .engine_snapshot
-            .store(ptr::null_mut(), Ordering::Release);
+            .swap(ptr::null_mut(), Ordering::Release);
+        if !prev_snapshot.is_null() {
+            let _: Box<SyncSnapshot> = unsafe { Box::from_raw(prev_snapshot) };
+        }
         self.register_release_engine_snapshot_tick();
     }
 
