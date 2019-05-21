@@ -28,12 +28,13 @@ pub enum RpnStackNodeVectorValue<'a> {
     Ref(&'a VectorValue),
 }
 
-impl<'a> AsRef<VectorValue> for RpnStackNodeVectorValue<'a> {
-    #[inline]
-    fn as_ref(&self) -> &VectorValue {
+impl<'a> std::ops::Deref for RpnStackNodeVectorValue<'a> {
+    type Target = VectorValue;
+
+    fn deref(&self) -> &Self::Target {
         match self {
-            RpnStackNodeVectorValue::Owned(ref value) => &value,
-            RpnStackNodeVectorValue::Ref(ref value) => *value,
+            RpnStackNodeVectorValue::Owned(value) => &value,
+            RpnStackNodeVectorValue::Ref(value) => *value,
         }
     }
 }
@@ -79,7 +80,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn vector_value(&self) -> Option<&VectorValue> {
         match self {
             RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { ref value, .. } => Some(value.as_ref()),
+            RpnStackNode::Vector { ref value, .. } => Some(&value),
         }
     }
 
@@ -88,7 +89,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         match self {
             RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_ref().as_vector_like(),
+            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
         }
     }
 
@@ -219,9 +220,8 @@ impl RpnExpression {
                 }
             }
             RpnStackNode::Vector { value, .. } => {
-                let vec_ref = value.as_ref();
-                assert_eq!(vec_ref.len(), rows);
-                vec_ref.eval_as_mysql_bools(context, outputs)?;
+                assert_eq!(value.len(), rows);
+                value.eval_as_mysql_bools(context, outputs)?;
             }
         }
         Ok(())
