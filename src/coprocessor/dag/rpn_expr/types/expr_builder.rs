@@ -8,9 +8,9 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
-use crate::coprocessor::codec::data_type::ScalarValue;
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::{Error, Result};
 
 /// Helper to build an `RpnExpression`.
@@ -324,14 +324,10 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match eval_type {
-        EvalType::Int => ScalarValue::Int(None),
-        EvalType::Real => ScalarValue::Real(None),
-        EvalType::Decimal => ScalarValue::Decimal(None),
-        EvalType::Bytes => ScalarValue::Bytes(None),
-        EvalType::DateTime => ScalarValue::DateTime(None),
-        EvalType::Duration => ScalarValue::Duration(None),
-        EvalType::Json => ScalarValue::Json(None),
+    match_template_evaluable! {
+        TT, match eval_type {
+            EvalType::TT => ScalarValue::TT(None),
+        }
     }
 }
 
@@ -358,7 +354,7 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_f64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
-    Ok(ScalarValue::Real(Some(value)))
+    Ok(ScalarValue::Real(Real::new(value).ok()))
 }
 
 #[inline]
@@ -370,7 +366,7 @@ fn extract_scalar_value_date_time(
     let v = number::decode_u64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
-    let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
@@ -422,7 +418,7 @@ mod tests {
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
             _v: &Option<i64>,
-        ) -> Result<Option<f64>> {
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -436,8 +432,8 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
         ) -> Result<Option<i64>> {
             unreachable!()
         }
@@ -469,10 +465,10 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
-            _v3: &Option<f64>,
-        ) -> Result<Option<f64>> {
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
+            _v3: &Option<Real>,
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -686,7 +682,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             -1.5
         );
 
@@ -697,7 +694,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             100.12
         );
 
