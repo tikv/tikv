@@ -29,7 +29,7 @@ use fs2::FileExt;
 use std::fs::File;
 use std::path::Path;
 use std::ptr::null_mut;
-use std::sync::{Arc, Mutex, atomic::AtomicPtr};
+use std::sync::{atomic::AtomicPtr, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tikv_util::check_environment_variables;
