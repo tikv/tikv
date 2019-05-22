@@ -17,12 +17,12 @@ pub struct Config {
     pub endpoints: Vec<String>,
     /// The interval at which to retry a PD connection initialization.
     ///
-    /// Default is 300ms. Setting this to 0 disables retry.
+    /// Default is 300ms.
     pub retry_interval: ReadableDuration,
     /// The maximum number of times to retry a PD connection initialization.
     ///
-    /// Default is 10.
-    pub retry_max_count: Option<usize>,
+    /// Default is isize::MAX, represented by -1.
+    pub retry_max_count: isize,
     /// If the client observes the same error message on retry, it can repeat the message only
     /// every `n` times.
     ///
@@ -35,7 +35,7 @@ impl Default for Config {
         Config {
             endpoints: Default::default(),
             retry_interval: ReadableDuration::millis(300),
-            retry_max_count: Some(10),
+            retry_max_count: std::isize::MAX,
             retry_log_every: 10,
         }
     }
@@ -54,8 +54,8 @@ impl Config {
             return Err("please specify pd.endpoints.".into());
         }
 
-        if self.retry_log_every == 0 {
-            return Err("pd.retry_log_every cannot be 0".into());
+        if self.retry_max_count < -1 {
+            return Err("pd.retry_max_count cannot be < -1".into());
         }
 
         Ok(())

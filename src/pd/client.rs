@@ -37,57 +37,28 @@ impl RpcClient {
                 .build(),
         );
 
-        if cfg.retry_interval.0.as_millis() == 0 {
-            let (client, members) = validate_endpoints(Arc::clone(&env), cfg, &security_mgr)?;
-
-            Ok(RpcClient {
-                cluster_id: members.get_header().get_cluster_id(),
-                leader_client: LeaderClient::new(env, security_mgr, client, members),
-            })
-        } else {
-            // We don't want to repeat the *same* error multiple times in `RETY_LOG_PER` count...
-            // But if the log message changes we need to output both.
-            // We can't compare PD Errors, but we can compare strings.
-            let mut cached_error = None;
-            let mut attempts_with_cached_error = 0;
-
-            while Some(attempts_with_cached_error) != cfg.retry_max_count {
-                match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
-                    Ok((client, members)) => {
-                        return Ok(RpcClient {
-                            cluster_id: members.get_header().get_cluster_id(),
-                            leader_client: LeaderClient::new(env, security_mgr, client, members),
-                        });
+        // -1 means the max.
+        let retries = match cfg.retry_max_count {
+            -1 => std::isize::MAX,
+            v => v,
+        };
+        for i in 0..retries {
+            match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
+                Ok((client, members)) => {
+                    return Ok(RpcClient {
+                        cluster_id: members.get_header().get_cluster_id(),
+                        leader_client: LeaderClient::new(env, security_mgr, client, members),
+                    });
+                },
+                Err(e) => {
+                    if i as usize % cfg.retry_log_every == 0 {
+                        warn!("validate PD endpoints failed"; "err" => ?e);
                     }
-                    Err(e) => {
-                        match cached_error.as_mut() {
-                            None => {
-                                warn!("validate PD endpoints failed"; "err" => ?e);
-                                attempts_with_cached_error += 1;
-                                cached_error = Some(format!("{}", e));
-                            }
-                            Some(ref mut cached) if **cached == format!("{}", e) => {
-                                if attempts_with_cached_error % cfg.retry_log_every == 0 {
-                                    warn!("multiple attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
-                                }
-                                attempts_with_cached_error += 1;
-                            }
-                            Some(ref mut cached) => {
-                                warn!("multiple previous attempts to validate PD endpoints failed"; "attempts" => attempts_with_cached_error, "err" => ?*cached);
-                                warn!("last attempt to validate PD endpoints failed"; "err" => ?e);
-                                attempts_with_cached_error = 1;
-                                **cached = format!("{}", e);
-                            }
-                        }
-                        thread::sleep(cfg.retry_interval.0);
-                    }
+                    thread::sleep(cfg.retry_interval.0);
                 }
             }
-            Err(box_err!(
-                "endpoints are invalid, retry limit of {} reached",
-                attempts_with_cached_error
-            ))
         }
+        Err(box_err!("endpoints are invalid"))
     }
 
     /// Creates a new request header.
