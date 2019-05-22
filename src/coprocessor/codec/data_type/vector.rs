@@ -306,7 +306,7 @@ impl VectorValue {
                     if tp == FieldTypeTp::Float {
                         v = (v as f32) as f64;
                     }
-                    vec.push(Some(v));
+                    vec.push(Real::new(v).ok()); // NaN to None
                 }
                 flag => {
                     return Err(Error::InvalidDataType(format!(
@@ -494,7 +494,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         output.push(datum::FLOAT_FLAG);
-                        output.encode_f64(val)?;
+                        output.encode_f64(val.into_inner())?;
                     }
                 }
                 Ok(())
@@ -719,11 +719,11 @@ mod tests {
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
-        column.push_real(Some(1.0));
+        column.push_real(Real::new(1.0).ok());
         assert_eq!(column.len(), 1);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0)]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -731,15 +731,18 @@ mod tests {
         assert_eq!(column.len(), 2);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
-        column.push_real(Some(4.5));
+        column.push_real(Real::new(4.5).ok());
         assert_eq!(column.len(), 3);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
+        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -747,7 +750,10 @@ mod tests {
         assert_eq!(column.len(), 4);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5), None]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
+        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -755,7 +761,7 @@ mod tests {
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -785,10 +791,10 @@ mod tests {
         assert_eq!(column.capacity(), 3);
 
         column.push_real(None);
-        column.push_real(Some(2.0));
-        column.push_real(Some(1.0));
+        column.push_real(Real::new(2.0).ok());
+        column.push_real(Real::new(1.0).ok());
         column.push_real(None);
-        column.push_real(Some(5.0));
+        column.push_real(Real::new(5.0).ok());
         column.push_real(None);
 
         let retain_map = &[true, true, false, false, true, false];
@@ -796,36 +802,53 @@ mod tests {
 
         assert_eq!(column.len(), 3);
         assert!(column.capacity() > 3);
-        assert_eq!(column.as_real_slice(), &[None, Some(2.0), Some(5.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(2.0).ok(), Real::new(5.0).ok()]
+        );
 
         column.push_real(None);
-        column.push_real(Some(1.5));
+        column.push_real(Real::new(1.5).ok());
         column.push_real(None);
-        column.push_real(Some(4.0));
+        column.push_real(Real::new(4.0).ok());
 
         assert_eq!(column.len(), 7);
         assert_eq!(
             column.as_real_slice(),
-            &[None, Some(2.0), Some(5.0), None, Some(1.5), None, Some(4.0)]
+            &[
+                None,
+                Real::new(2.0).ok(),
+                Real::new(5.0).ok(),
+                None,
+                Real::new(1.5).ok(),
+                None,
+                Real::new(4.0).ok()
+            ]
         );
 
         let retain_map = &[true, false, true, false, false, true, true];
         column.retain_by_index(|idx| retain_map[idx]);
 
         assert_eq!(column.len(), 4);
-        assert_eq!(column.as_real_slice(), &[None, Some(5.0), None, Some(4.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
+        );
 
         column.retain_by_index(|_| true);
         assert_eq!(column.len(), 4);
-        assert_eq!(column.as_real_slice(), &[None, Some(5.0), None, Some(4.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
+        );
 
         column.retain_by_index(|_| false);
         assert_eq!(column.len(), 0);
         assert_eq!(column.as_real_slice(), &[]);
 
         column.push_real(None);
-        column.push_real(Some(1.5));
-        assert_eq!(column.as_real_slice(), &[None, Some(1.5)]);
+        column.push_real(Real::new(1.5).ok());
+        assert_eq!(column.as_real_slice(), &[None, Real::new(1.5).ok()]);
     }
 
     #[test]
@@ -839,28 +862,28 @@ mod tests {
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
 
-        column2.push_real(Some(1.0));
+        column2.push_real(Real::new(1.0).ok());
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert_eq!(column1.capacity(), 0);
         assert_eq!(column1.as_real_slice(), &[]);
         assert_eq!(column2.len(), 1);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_slice(), &[Some(1.0)]);
+        assert_eq!(column2.as_real_slice(), &[Real::new(1.0).ok()]);
 
         column1.push_real(None);
         column1.push_real(None);
         column1.append(&mut column2);
         assert_eq!(column1.len(), 3);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_slice(), &[None, None, Some(1.0)]);
+        assert_eq!(column1.as_real_slice(), &[None, None, Real::new(1.0).ok()]);
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
         assert_eq!(column2.as_real_slice(), &[]);
 
-        column1.push_real(Some(1.1));
-        column2.push_real(Some(3.5));
-        column2.push_real(Some(4.1));
+        column1.push_real(Real::new(1.1).ok());
+        column2.push_real(Real::new(3.5).ok());
+        column2.push_real(Real::new(4.1).ok());
         column2.truncate(1);
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
@@ -870,13 +893,19 @@ mod tests {
         assert!(column2.capacity() > 3);
         assert_eq!(
             column2.as_real_slice(),
-            &[Some(3.5), None, None, Some(1.0), Some(1.1)]
+            &[
+                Real::new(3.5).ok(),
+                None,
+                None,
+                Real::new(1.0).ok(),
+                Real::new(1.1).ok()
+            ]
         );
     }
 
     #[test]
     fn test_from() {
-        let slice: &[_] = &[None, Some(1.0)];
+        let slice: &[_] = &[None, Real::new(1.0).ok()];
         let vec = slice.to_vec();
         let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);
