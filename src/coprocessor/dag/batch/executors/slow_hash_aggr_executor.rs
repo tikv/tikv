@@ -213,9 +213,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         for group_by_exp in &self.group_by_exps {
             let group_by_result =
                 group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
+            // Unwrap is fine because we have verified the group by expression before.
+            let group_column = group_by_result.vector_value().unwrap();
             for row_index in 0..rows_len {
-                // Unwrap is fine because we have verified the group by expression before.
-                let group_column = group_by_result.vector_value().unwrap();
                 group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
                 group_column.encode(
                     row_index,
