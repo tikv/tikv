@@ -240,7 +240,7 @@ mod tests {
     use kvproto::coprocessor::KeyRange;
     use tipb::schema::ColumnInfo;
 
-    use crate::coprocessor::codec::data_type::Real;
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::expr::EvalConfig;
