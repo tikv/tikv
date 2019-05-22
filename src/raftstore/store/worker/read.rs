@@ -208,6 +208,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+        // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
             self.store_id.set(store_id);
@@ -300,7 +301,7 @@ impl<C: ProposalRouter> LocalReader<C> {
                         break;
                     }
                 }
-                // It can not handle the rquest, forwards to raftstore.
+                // It can not handle the request, forwards to raftstore.
                 Ok(None) => {
                     if self.delegates.borrow().get(&region_id).is_some() {
                         // Remove delegate for updating it by next cmd execution.
@@ -346,7 +347,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
-    /// Returns `true`, it can be saftly sent to localreader,
+    /// Returns `true`, it can be safely sent to localreader,
     /// Returns `false`, it must not be sent to localreader.
     #[inline]
     pub fn acceptable(request: &RaftCmdRequest) -> bool {

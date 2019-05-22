@@ -366,7 +366,6 @@ impl Peer {
     }
 
     /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
-    /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
@@ -822,15 +821,7 @@ impl Peer {
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
                     let progress_term = ReadProgress::term(self.term());
-                    let progress_lease = self.maybe_renew_leader_lease(monotonic_raw_now());
-                    {
-                        let mut meta = ctx.store_meta.lock().unwrap();
-                        let reader = meta.readers.get_mut(&self.region_id).unwrap();
-                        self.maybe_update_read_progress(reader, progress_term);
-                        if let Some(progress) = progress_lease {
-                            self.maybe_update_read_progress(reader, progress);
-                        }
-                    }
+                    self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
@@ -1138,11 +1129,7 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        if let Some(progress) = self.maybe_renew_leader_lease(propose_time) {
-                            let mut meta = ctx.store_meta.lock().unwrap();
-                            let reader = meta.readers.get_mut(&self.region_id).unwrap();
-                            self.maybe_update_read_progress(reader, progress);
-                        }
+                        self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }
                 }
@@ -1230,11 +1217,7 @@ impl Peer {
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
-            if let Some(progress) = self.maybe_renew_leader_lease(propose_time) {
-                let mut meta = ctx.store_meta.lock().unwrap();
-                let reader = meta.readers.get_mut(&self.region_id).unwrap();
-                self.maybe_update_read_progress(reader, progress);
-            }
+            self.maybe_renew_leader_lease(propose_time, ctx, None);
         }
     }
 
@@ -1299,12 +1282,16 @@ impl Peer {
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease(&mut self, ts: Timespec) -> Option<ReadProgress> {
+    fn maybe_renew_leader_lease<T, C>(
+        &mut self,
+        ts: Timespec,
+        ctx: &mut PollContext<T, C>,
+        progress: Option<ReadProgress>,
+    ) {
         // A nonleader peer should never has leader lease.
-        if !self.is_leader() {
-            return None;
-        }
-        if self.is_splitting() {
+        let read_progress = if !self.is_leader() {
+            None
+        } else if self.is_splitting() {
             // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1313,9 +1300,8 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return None;
-        }
-        if self.is_merging() {
+            None
+        } else if self.is_merging() {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
             // if commit merge runs slow on sibling peers.
@@ -1324,14 +1310,25 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return None;
-        }
-        self.leader_lease.renew(ts);
-        let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-            Some(ReadProgress::leader_lease(remote_lease))
-        } else {
             None
+        } else {
+            self.leader_lease.renew(ts);
+            let term = self.term();
+            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
+                Some(ReadProgress::leader_lease(remote_lease))
+            } else {
+                None
+            }
+        };
+        if let Some(progress) = progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
+        }
+        if let Some(progress) = read_progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
         }
     }
 
