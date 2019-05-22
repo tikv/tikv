@@ -220,26 +220,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         for (index, aggr_fn_state) in &mut self.aggr_fn_states.iter_mut().enumerate() {
             let output_cardinality = self.aggr_fn_output_cardinality[index];
             assert!(output_cardinality > 0);
-
-            if output_cardinality == 1 {
-                // Single output column, we use `Vec<Option<T>>` as container.
-                let output_type = self.ordered_aggr_fn_output_types[output_offset];
-                match_template_evaluable! {
-                    TT, match output_type {
-                        EvalType::TT => {
-                            let concrete_output_column: &mut Vec<Option<TT>> = output_columns[output_offset].as_mut();
-                            aggr_fn_state.push_result(&mut self.context, concrete_output_column)?;
-                        }
-                    }
-                }
-            } else {
-                // Multi output column, we use `[VectorValue]` as container.
-                aggr_fn_state.push_result(
-                    &mut self.context,
-                    &mut output_columns[output_offset..output_offset + output_cardinality],
-                )?;
-            }
-
+            aggr_fn_state.push_result(
+                &mut self.context,
+                &mut output_columns[output_offset..output_offset + output_cardinality],
+            )?;
             output_offset += output_cardinality;
         }
 
@@ -430,7 +414,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Bytes;
-            type ResultTargetType = Vec<Option<i64>>;
 
             fn update_concrete(
                 &mut self,
@@ -443,12 +426,12 @@ mod tests {
                 Ok(())
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
-                target.push(Some(self.len as i64));
+                target[0].push(Some(self.len as i64));
                 Ok(())
             }
         }
@@ -484,7 +467,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnBarState {
             type ParameterType = Real;
-            type ResultTargetType = [VectorValue];
 
             fn update_concrete(
                 &mut self,
@@ -499,10 +481,10 @@ mod tests {
                 Ok(())
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
                 target[0].push_int(Some(self.rows_with_null as i64));
                 target[1].push_int(Some(self.rows_without_null as i64));
@@ -741,7 +723,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnFooState {
             type ParameterType = Real;
-            type ResultTargetType = Vec<Option<i64>>;
 
             fn update_concrete(
                 &mut self,
@@ -752,12 +733,12 @@ mod tests {
                 unreachable!()
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Self::ResultTargetType,
+                target: &mut [VectorValue],
             ) -> Result<()> {
-                target.push(Some(42));
+                target[0].push_int(Some(42));
                 Ok(())
             }
         }
