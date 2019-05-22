@@ -179,6 +179,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
     let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+
     let engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
@@ -246,7 +247,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         pd_sender.clone(),
         engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, engine, cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -309,14 +310,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Start waiter manager and deadlock detector
     if cfg.pessimistic_txn.enabled {
-        let waiter_mgr_runner = WaiterManager::new(DetectorScheduler::new(
-            detector_worker.as_ref().unwrap().scheduler(),
-        ));
+        let waiter_mgr_runner = WaiterManager::new(
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+            cfg.pessimistic_txn.wait_for_lock_timeout,
+            cfg.pessimistic_txn.wake_up_delay_duration,
+        );
         let detector_runner = Detector::new(
             node.id(),
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
             Arc::clone(&security_mgr),
             pd_client,
+            cfg.pessimistic_txn.monitor_membership_interval,
         );
         waiter_mgr_worker
             .as_mut()

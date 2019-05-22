@@ -90,7 +90,7 @@ impl ReadDelegate {
                 {
                     // Cache snapshot_time for remaining requests in the same batch.
                     *last_valid_ts = snapshot_time;
-                    let mut resp = executor.execute(req, &self.region);
+                    let mut resp = executor.execute(req, &self.region, None);
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
                     return Some(resp);

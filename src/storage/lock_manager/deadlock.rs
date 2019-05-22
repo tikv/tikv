@@ -347,9 +347,10 @@ impl Inner {
 }
 
 pub struct Detector {
-    is_member_change_watcher_scheduled: bool,
     pd_client: Arc<RpcClient>,
     inner: Rc<RefCell<Inner>>,
+    monitor_membership_interval: u64,
+    is_membership_change_monitor_scheduled: bool,
 }
 
 unsafe impl Send for Detector {}
@@ -360,37 +361,42 @@ impl Detector {
         waiter_mgr_scheduler: WaiterMgrScheduler,
         security_mgr: Arc<SecurityManager>,
         pd_client: Arc<RpcClient>,
+        monitor_membership_interval: u64,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
-            is_member_change_watcher_scheduled: false,
             pd_client,
             inner: Rc::new(RefCell::new(Inner::new(
                 store_id,
                 waiter_mgr_scheduler,
                 security_mgr,
             ))),
+            monitor_membership_interval,
+            is_membership_change_monitor_scheduled: false,
         }
     }
 
-    fn schedule_member_change_watcher(&mut self, handle: &Handle) {
-        info!("schedule member change watcher");
+    fn schedule_membership_change_monitor(&mut self, handle: &Handle) {
+        info!("schedule membership change monitor");
         let pd_client = Arc::clone(&self.pd_client);
         let inner = Rc::clone(&self.inner);
         let handle_copy = handle.clone();
-        let timer = Interval::new(Instant::now(), Duration::from_secs(5))
-            .for_each(move |_| {
-                if let Err(e) = inner
-                    .borrow_mut()
-                    .watch_member_change(&handle_copy, &pd_client)
-                {
-                    warn!("watch member change failed"; "err" => ?e);
-                }
-                Ok(())
-            })
-            .map_err(|e| panic!("unexpected err: {:?}", e));
+        let timer = Interval::new(
+            Instant::now(),
+            Duration::from_millis(self.monitor_membership_interval),
+        )
+        .for_each(move |_| {
+            if let Err(e) = inner
+                .borrow_mut()
+                .watch_member_change(&handle_copy, &pd_client)
+            {
+                warn!("watch member change failed"; "err" => ?e);
+            }
+            Ok(())
+        })
+        .map_err(|e| panic!("unexpected err: {:?}", e));
         handle.spawn(timer);
-        self.is_member_change_watcher_scheduled = true;
+        self.is_membership_change_monitor_scheduled = true;
     }
 
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
@@ -510,8 +516,8 @@ impl Detector {
 
 impl FutureRunnable<Task> for Detector {
     fn run(&mut self, task: Task, handle: &Handle) {
-        if !self.is_member_change_watcher_scheduled {
-            self.schedule_member_change_watcher(handle);
+        if !self.is_membership_change_monitor_scheduled {
+            self.schedule_membership_change_monitor(handle);
         }
 
         match task {

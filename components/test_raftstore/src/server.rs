@@ -132,7 +132,7 @@ impl Simulator for ServerCluster {
         let storage_read_pool =
             storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let store = create_raft_storage(
-            raft_engine.clone(),
+            RaftKv::new(sim_router.clone()),
             &cfg.storage,
             storage_read_pool,
             None,
@@ -160,8 +160,8 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool =
-            coprocessor::readpool_impl::build_read_pool_for_test(raft_engine.clone());
-        let cop = coprocessor::Endpoint::new(&server_cfg, raft_engine, cop_read_pool);
+            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
