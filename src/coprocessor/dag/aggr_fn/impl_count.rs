@@ -111,7 +111,8 @@ impl<T: Evaluable> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateCount
 impl super::AggrFunctionState for AggrFnStateCount {
     #[inline]
     fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
-        target[0].push_int(Some(self.count as Int));
+        assert_eq!(target.len(), 1);
+        target[0].push(Some(self.count as Int));
         Ok(())
     }
 }

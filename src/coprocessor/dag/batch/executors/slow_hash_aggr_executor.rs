@@ -293,6 +293,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
+    fn groups_len(&self) -> usize {
+        self.groups.len()
+    }
+
+    #[inline]
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,

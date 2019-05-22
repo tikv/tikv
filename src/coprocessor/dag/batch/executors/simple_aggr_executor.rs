@@ -3,10 +3,8 @@
 //! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is more even more simpler
 //! than stream aggregation.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
 
@@ -136,7 +134,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         let rows_len = input.rows_len();
 
         assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
-        assert_eq!(self.states.len(), entities.each_aggr_expr_types.len());
 
         for idx in 0..self.states.len() {
             let aggr_state = &mut self.states[idx];
@@ -147,26 +144,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
                 entities.src.schema(),
                 &mut input,
             )?;
-            let input_type = entities.each_aggr_expr_types[idx];
 
             match aggr_fn_input {
-                RpnStackNode::Scalar { value, field_type } => {
-                    assert_eq!(input_type, EvalType::try_from(field_type.tp()).unwrap());
+                RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
-                        TT, match input_type {
-                            EvalType::TT => {
-                                let scalar_value: &Option<TT> = value.as_ref();
+                        TT, match value {
+                            ScalarValue::TT(scalar_value) => {
                                 aggr_state.update_repeat(&mut entities.context, scalar_value, rows_len)?;
                             },
                         }
                     }
                 }
-                RpnStackNode::Vector { value, field_type } => {
-                    assert_eq!(input_type, EvalType::try_from(field_type.tp()).unwrap());
+                RpnStackNode::Vector { value, .. } => {
                     match_template_evaluable! {
-                        TT, match input_type {
-                            EvalType::TT => {
-                                let vector_value: &[Option<TT>] = value.as_ref();
+                        TT, match &*value {
+                            VectorValue::TT(vector_value) => {
                                 aggr_state.update_vector(&mut entities.context, vector_value)?;
                             },
                         }
@@ -176,6 +168,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         }
 
         Ok(())
+    }
+
+    #[inline]
+    fn groups_len(&self) -> usize {
+        1
     }
 
     #[inline]
