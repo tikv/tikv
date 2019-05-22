@@ -505,6 +505,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
+    // (lock, is_first_lock)
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 

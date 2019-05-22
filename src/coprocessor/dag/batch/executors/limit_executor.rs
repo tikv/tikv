@@ -63,7 +63,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
 mod tests {
     use super::*;
     use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-    use crate::coprocessor::codec::data_type::{Real, VectorValue};
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use cop_datatype::{EvalType, FieldTypeTp};
