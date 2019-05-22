@@ -12,7 +12,7 @@ use crate::coprocessor::{Error, Result};
 /// All aggregate function implementations should include an impl for this trait as well as
 /// add a match arm in `map_pb_sig_to_aggr_func_parser` so that the aggregate function can be
 /// actually utilized.
-pub trait Parser {
+pub trait AggrDefinitionParser {
     /// Checks whether the inner expression of the aggregate function definition is supported.
     /// It is ensured that `aggr_def.tp` maps the current parser instance.
     fn check_supported(&self, aggr_def: &Expr) -> Result<()>;
@@ -36,11 +36,8 @@ pub trait Parser {
     ) -> Result<Box<dyn AggrFunction>>;
 }
 
-/// Parse all aggregate function definition from protobuf.
-pub struct AggrDefinitionParser;
-
 #[inline]
-fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn Parser>> {
+fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinitionParser>> {
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
@@ -51,10 +48,13 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn Parser>> {
     }
 }
 
-impl AggrDefinitionParser {
+/// Parse all aggregate function definition from protobuf.
+pub struct AllAggrDefinitionParser;
+
+impl AggrDefinitionParser for AllAggrDefinitionParser {
     /// Checks whether the aggregate function definition is supported.
     #[inline]
-    pub fn check_supported(aggr_def: &Expr) -> Result<()> {
+    fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp())?;
         parser.check_supported(aggr_def).map_err(|e| {
             Error::Other(box_err!(
@@ -72,7 +72,8 @@ impl AggrDefinitionParser {
     ///
     /// May panic if the aggregate function definition is not supported.
     #[inline]
-    pub fn parse(
+    fn parse(
+        &self,
         aggr_def: Expr,
         time_zone: &Tz,
         max_columns: usize,

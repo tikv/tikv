@@ -4,7 +4,6 @@ use cop_codegen::RpnFunction;
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::{Decimal, Res};
 use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -219,6 +218,8 @@ impl ArithmeticOp for DecimalMod {
     type T = Decimal;
 
     fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        use crate::coprocessor::codec::mysql::Res;
+
         if rhs.is_zero() {
             return Ok(None);
         }
