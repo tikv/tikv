@@ -32,7 +32,7 @@ const CHECK_CLUSTER_BOOTSTRAPPED_RETRY_SECONDS: u64 = 3;
 /// Creates a new storage engine which is backed by the Raft consensus
 /// protocol.
 pub fn create_raft_storage<S>(
-    router: S,
+    engine: RaftKv<S>,
     cfg: &StorageConfig,
     read_pool: ReadPool,
     local_storage: Option<Arc<DB>>,
@@ -43,7 +43,6 @@ pub fn create_raft_storage<S>(
 where
     S: RaftStoreRouter + 'static,
 {
-    let engine = RaftKv::new(router);
     let store = Storage::from_engine(
         engine,
         cfg,
