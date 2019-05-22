@@ -129,7 +129,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         let mut schema = Vec::with_capacity(aggr_fn_len * 2);
         let mut each_aggr_fn = Vec::with_capacity(aggr_fn_len);
         let mut each_aggr_cardinality = Vec::with_capacity(aggr_fn_len);
-        let mut each_aggr_exprs = Vec::with_capacity(aggr_fn_len * 2);
+        let mut each_aggr_exprs = Vec::with_capacity(aggr_fn_len);
 
         for aggr_def in aggr_defs {
             let schema_len = schema.len();
