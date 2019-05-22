@@ -1231,7 +1231,7 @@ impl Peer {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 if !is_read_index_request {
                     let term = self.term();
-                    // stale request because this peer
+                    // Only read index request is valid.
                     for (_, cb) in read.cmds.drain(..) {
                         apply::notify_stale_req(term, cb);
                     }
