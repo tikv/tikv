@@ -140,7 +140,7 @@ impl Simulator for ServerCluster {
         let storage_read_pool =
             storage::readpool_impl::build_read_pool_for_test(raft_engine.clone());
         let store = create_raft_storage(
-            raft_engine.clone(),
+            RaftKv::new(sim_router.clone()),
             &cfg.storage,
             storage_read_pool,
             None,

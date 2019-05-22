@@ -17,6 +17,7 @@ use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
+use crate::storage::kv::raftkv::RaftKv;
 use crate::storage::lock_manager::{
     Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
@@ -187,10 +188,12 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
     let raft_engine = RaftKv::new(raft_router.clone());
 
+    let engine = RaftKv::new(raft_router.clone());
+
     let storage_read_pool = storage::readpool_impl::build_read_pool(
         &cfg.readpool.storage.build_config(),
         pd_sender.clone(),
-        raft_engine.clone(),
+        engine.clone(),
     );
 
     // Create waiter manager worker and deadlock detector worker if pessimistic-txn is enabled
@@ -214,7 +217,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     };
 
     let storage = create_raft_storage(
-        raft_engine.clone(),
+        engine.clone(),
         &cfg.storage,
         storage_read_pool,
         Some(engines.kv.clone()),
@@ -250,9 +253,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
         &cfg.readpool.coprocessor.build_config(),
         pd_sender.clone(),
-        raft_engine.clone(),
+        engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, raft_engine, cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, engine.clone(), cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
