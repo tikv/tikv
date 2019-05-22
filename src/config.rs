@@ -571,6 +571,8 @@ impl RaftCfConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
+// Note that Titan is still an experimental feature. Once enabled, it can't fall back.
+// Forced fallback may result in data loss.
 pub struct TitanDBConfig {
     pub enabled: bool,
     pub dirname: String,
