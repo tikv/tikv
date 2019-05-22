@@ -100,9 +100,8 @@ impl RpnFnScalarEvaluator {
             // Only used in tests, so clone is fine.
             RpnStackNode::Scalar { value, .. } => Ok(T::borrow_scalar_value(value).clone()),
             RpnStackNode::Vector { value, .. } => {
-                let value = value.as_ref();
                 assert_eq!(value.len(), 1);
-                Ok(T::borrow_vector_value(value)[0].clone())
+                Ok(T::borrow_vector_value(&value)[0].clone())
             }
         }
     }
