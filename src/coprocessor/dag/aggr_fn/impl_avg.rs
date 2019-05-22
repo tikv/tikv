@@ -140,7 +140,6 @@ where
     VectorValue: VectorValueExt<T>,
 {
     type ParameterType = T;
-    type ResultTargetType = [VectorValue];
 
     #[inline]
     fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
@@ -155,11 +154,7 @@ where
     }
 
     #[inline]
-    fn push_result_concrete(
-        &self,
-        _ctx: &mut EvalContext,
-        target: &mut [VectorValue],
-    ) -> Result<()> {
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         // Note: The result of `AVG()` is returned as `(count, sum)`.
         assert_eq!(target.len(), 2);
         target[0].push_int(Some(self.count as Int));
