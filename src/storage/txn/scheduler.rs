@@ -38,7 +38,7 @@ use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
-const TASKS_SLOTS_NUM: usize = 1 << 10; // 1024 slots.
+const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
