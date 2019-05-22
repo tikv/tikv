@@ -14,6 +14,7 @@ use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::{Error, Result};
 
 /// Helper to build an `RpnExpression`.
+#[derive(Debug, Clone)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {

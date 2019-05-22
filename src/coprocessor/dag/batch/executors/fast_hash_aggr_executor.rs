@@ -321,3 +321,220 @@ fn calc_groups_each_row<T: Evaluable>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::FieldTypeTp;
+    use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
+    use crate::coprocessor::dag::expr::EvalWarnings;
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+
+    // Test cases also cover BatchSlowHashAggregationExecutor.
+
+    #[test]
+    fn test_it_works_integration() {
+        use tipb::expression::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - COUNT(col_1 + 5.0)
+        // - AVG(col_0)
+        // And group by:
+        // - col_0 + col_1
+
+        let group_by_exp = RpnExpressionBuilder::new()
+            .push_column_ref(0)
+            .push_column_ref(1)
+            .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+            .build();
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::PlusReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                        .push_child(ExprDefBuilder::constant_real(5.0)),
+                )
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                .build(),
+        ];
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp.clone(),
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp.clone()],
+                aggr_definitions.clone(),
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
+            assert_eq!(r.data.rows_len(), 3);
+            assert_eq!(r.data.columns_len(), 5); // 4 result column, 1 group by column
+
+            // Let's check group by column first. Group by column is decoded in fast hash agg,
+            // but not decoded in slow hash agg. So decode it anyway.
+            r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+
+            // The row order is not defined. Let's sort it by the group by column before asserting.
+            let mut sort_column: Vec<(usize, _)> = r.data[4]
+                .decoded()
+                .as_real_slice()
+                .iter()
+                .map(|v| {
+                    use std::hash::{Hash, Hasher};
+                    let mut s = std::collections::hash_map::DefaultHasher::new();
+                    v.hash(&mut s);
+                    s.finish()
+                })
+                .enumerate()
+                .collect();
+            sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+
+            // Use the order of the sorted column to sort other columns
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[4].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[Real::new(9.0).ok(), Real::new(6.0).ok(), None]
+            );
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[0].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(1), Some(1), Some(3)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[1].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(1), Some(1), Some(2)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[2].decoded().as_int_slice()[*idx])
+                .collect();
+            assert_eq!(&ordered_column, &[Some(1), Some(1), Some(0)]);
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[3].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[Real::new(7.0).ok(), Real::new(1.5).ok(), None]
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_row() {
+        struct MyParser;
+
+        impl AggrDefinitionParser for MyParser {
+            fn check_supported(&self, _aggr_def: &Expr) -> Result<()> {
+                unreachable!()
+            }
+
+            fn parse(
+                &self,
+                _aggr_def: Expr,
+                _time_zone: &Tz,
+                _max_columns: usize,
+                _schema: &[FieldType],
+                out_schema: &mut Vec<FieldType>,
+                out_exp: &mut Vec<RpnExpression>,
+            ) -> Result<Box<dyn AggrFunction>> {
+                out_schema.push(FieldTypeTp::LongLong.into());
+                out_exp.push(RpnExpressionBuilder::new().push_constant(1).build());
+                Ok(Box::new(AggrFnUnreachable))
+            }
+        }
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                RpnExpressionBuilder::new().push_column_ref(0).build(),
+                vec![Expr::new()],
+                MyParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![RpnExpressionBuilder::new().push_column_ref(0).build()],
+                vec![Expr::new()],
+                MyParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = MockExecutor::new(
+                vec![FieldTypeTp::LongLong.into()],
+                vec![
+                    BatchExecuteResult {
+                        data: LazyBatchColumnVec::empty(),
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(false),
+                    },
+                    BatchExecuteResult {
+                        data: LazyBatchColumnVec::empty(),
+                        warnings: EvalWarnings::default(),
+                        is_drained: Ok(true),
+                    },
+                ],
+            );
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(r.is_drained.unwrap());
+        }
+    }
+}
