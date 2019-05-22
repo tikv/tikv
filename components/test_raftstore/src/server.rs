@@ -131,7 +131,7 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = readpool::Builder::build_for_test();
         let store = create_raft_storage(
-            sim_router.clone(),
+            RaftKv::new(sim_router.clone()),
             &cfg.storage,
             storage_read_pool,
             None,
