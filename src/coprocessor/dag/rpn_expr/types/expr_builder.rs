@@ -19,6 +19,9 @@ pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
+        // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
+        // it can be different from the one we calculated (e.g. pass a column / fn with different
+        // type).
         box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {

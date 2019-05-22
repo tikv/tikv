@@ -7,8 +7,8 @@ use criterion::black_box;
 use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchMultiGroupHashAggregationExecutor;
-use tikv::coprocessor::dag::batch::executors::BatchSingleGroupHashAggregationExecutor;
+use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
+use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
 use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
@@ -95,17 +95,17 @@ impl HashAggrBencher for BatchBencher {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             if group_by_expr.len() == 1 {
-                let ex = BatchSingleGroupHashAggregationExecutor::new(
+                let ex = BatchFastHashAggregationExecutor::new(
                     ExecSummaryCollectorDisabled,
                     black_box(Arc::new(EvalConfig::default())),
                     black_box(Box::new(src)),
-                    black_box(group_by_expr[0].clone()),
+                    black_box(group_by_expr.to_vec()),
                     black_box(vec![aggr_expr.clone()]),
                 )
                 .unwrap();
                 Box::new(ex) as Box<dyn BatchExecutor>
             } else if group_by_expr.len() > 1 {
-                let ex = BatchMultiGroupHashAggregationExecutor::new(
+                let ex = BatchSlowHashAggregationExecutor::new(
                     ExecSummaryCollectorDisabled,
                     black_box(Arc::new(EvalConfig::default())),
                     black_box(Box::new(src)),

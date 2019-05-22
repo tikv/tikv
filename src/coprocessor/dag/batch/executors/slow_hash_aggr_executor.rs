@@ -19,17 +19,17 @@ use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
-/// Multi Group Hash Aggregation Executor supports multiple groups but uses less efficient ways to
+/// Slow Hash Aggregation Executor supports multiple groups but uses less efficient ways to
 /// store group keys in hash tables.
 ///
 /// FIXME: It is not correct to just store the serialized data as the group key.
 /// See pingcap/tidb#10467.
-pub struct BatchMultiGroupHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, MultiGroupHashAggregationImpl>,
+pub struct BatchSlowHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
+    AggregationExecutor<C, Src, SlowHashAggregationImpl>,
 );
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchMultiGroupHashAggregationExecutor<C, Src>
+    for BatchSlowHashAggregationExecutor<C, Src>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -47,7 +47,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchMultiGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -67,12 +67,12 @@ impl<Src: BatchExecutor> BatchMultiGroupHashAggregationExecutor<ExecSummaryColle
     }
 }
 
-impl BatchMultiGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         let group_by_definitions = descriptor.get_group_by();
-        assert!(group_by_definitions.len() > 1);
+        assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
             if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
@@ -88,7 +88,7 @@ impl BatchMultiGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dy
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchMultiGroupHashAggregationExecutor<C, Src> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecutor<C, Src> {
     pub fn new(
         summary_collector: C,
         config: Arc<EvalConfig>,
@@ -123,7 +123,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchMultiGroupHashAggregation
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        let aggr_impl = MultiGroupHashAggregationImpl {
+        let aggr_impl = SlowHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
@@ -145,7 +145,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchMultiGroupHashAggregation
     }
 }
 
-pub struct MultiGroupHashAggregationImpl {
+pub struct SlowHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: HashMap<Vec<u8>, GroupInfo>,
     group_by_exps: Vec<RpnExpression>,
@@ -170,7 +170,7 @@ pub struct MultiGroupHashAggregationImpl {
 #[derive(Debug)]
 struct GroupInfo {
     /// The start offset of the states of this group stored in
-    /// `MultiGroupHashAggregationImpl::states`.
+    /// `SlowHashAggregationImpl::states`.
     states_start_offset: usize,
 
     /// The offset of each GROUP BY column in the group key. There will be an additional offset
@@ -196,7 +196,7 @@ struct GroupInfo {
     group_key_offsets: SmallVec<[u32; 6]>,
 }
 
-impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for MultiGroupHashAggregationImpl {
+impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImpl {
     #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
         let src_schema = entities.src.schema();

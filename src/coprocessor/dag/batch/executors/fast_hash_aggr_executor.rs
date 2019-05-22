@@ -19,14 +19,23 @@ use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
-/// Single Group Hash Aggregation Executor uses hash when comparing group key, which is faster
-/// than multi-group's implementation.
-pub struct BatchSingleGroupHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SingleGroupHashAggregationImpl>,
+macro_rules! match_template_hashable {
+    ($t:tt, $($tail:tt)*) => {
+        match_template! {
+            $t = [Int, Real, Bytes, Duration],
+            $($tail)*
+        }
+    };
+}
+
+/// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
+/// group by column.
+pub struct BatchFastHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
+    AggregationExecutor<C, Src, FastHashAggregationImpl>,
 );
 
 impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSingleGroupHashAggregationExecutor<C, Src>
+    for BatchFastHashAggregationExecutor<C, Src>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -44,9 +53,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor>
-    BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Src>
-{
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -66,13 +73,25 @@ impl<Src: BatchExecutor>
     }
 }
 
-impl BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         let group_by_definitions = descriptor.get_group_by();
-        assert_eq!(group_by_definitions.len(), 1);
+        assert!(!group_by_definitions.is_empty());
+        if group_by_definitions.len() > 1 {
+            return Err(box_err!("Multi group is not supported"));
+        }
+
         let def = &group_by_definitions[0];
+
+        // Only a subset of all eval types are supported.
+        let eval_type = box_try!(EvalType::try_from(def.get_field_type().tp()));
+        match eval_type {
+            EvalType::Int | EvalType::Real | EvalType::Bytes | EvalType::Duration => {}
+            _ => return Err(box_err!("Eval type {} is not supported", eval_type)),
+        }
+
         RpnExpressionBuilder::check_expr_tree_supported(def)?;
         if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
             return Err(box_err!("Group by expression is not a column"));
@@ -86,16 +105,17 @@ impl BatchSingleGroupHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<d
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregationExecutor<C, Src> {
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecutor<C, Src> {
     pub fn new(
         summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
-        group_by_exp_def: Expr,
+        group_by_exp_defs: Vec<Expr>,
         aggr_defs: Vec<Expr>,
     ) -> Result<Self> {
+        assert_eq!(group_by_exp_defs.len(), 1);
         let group_by_exp = RpnExpressionBuilder::build_from_expr_tree(
-            group_by_exp_def,
+            group_by_exp_defs.into_iter().next().unwrap(),
             &config.tz,
             src.schema().len(),
         )?;
@@ -120,13 +140,14 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregatio
     ) -> Result<Self> {
         let group_by_field_type = group_by_exp.ret_field_type(src.schema()).clone();
         let group_by_eval_type = EvalType::try_from(group_by_field_type.tp()).unwrap();
-        let groups = match_template_evaluable! {
+        let groups = match_template_hashable! {
             TT, match group_by_eval_type {
                 EvalType::TT => Groups::TT(HashMap::default()),
+                _ => unreachable!(),
             }
         };
 
-        let aggr_impl = SingleGroupHashAggregationImpl {
+        let aggr_impl = FastHashAggregationImpl {
             states: Vec::with_capacity(1024),
             groups,
             group_by_exp,
@@ -149,21 +170,18 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSingleGroupHashAggregatio
 
 /// All groups.
 enum Groups {
-    // The value of each hash table is the start index in `SingleGroupHashAggregationImpl::states`
+    // The value of each hash table is the start index in `FastHashAggregationImpl::states`
     // field. When there are new groups (i.e. new entry in the hash table), the states of the groups
     // will be appended to `states`.
     Int(HashMap<Option<Int>, usize>),
     Real(HashMap<Option<Real>, usize>),
-    Decimal(HashMap<Option<Decimal>, usize>),
     Bytes(HashMap<Option<Bytes>, usize>),
-    DateTime(HashMap<Option<DateTime>, usize>),
     Duration(HashMap<Option<Duration>, usize>),
-    Json(HashMap<Option<Json>, usize>),
 }
 
 impl Groups {
     fn eval_type(&self) -> EvalType {
-        match_template_evaluable! {
+        match_template_hashable! {
             TT, match self {
                 Groups::TT(_) => {
                     EvalType::TT
@@ -173,7 +191,7 @@ impl Groups {
     }
 
     fn len(&self) -> usize {
-        match_template_evaluable! {
+        match_template_hashable! {
             TT, match self {
                 Groups::TT(groups) => {
                     groups.len()
@@ -183,7 +201,7 @@ impl Groups {
     }
 }
 
-pub struct SingleGroupHashAggregationImpl {
+pub struct FastHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: Groups,
     group_by_exp: RpnExpression,
@@ -191,7 +209,7 @@ pub struct SingleGroupHashAggregationImpl {
     states_offset_each_row: Vec<usize>,
 }
 
-impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggregationImpl {
+impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
     #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
         entities
@@ -216,7 +234,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
         )?;
         // Unwrap is fine because we have verified the group by expression before.
         let group_by_vector = group_by_result.vector_value().unwrap();
-        match_template_evaluable! {
+        match_template_hashable! {
             TT, match group_by_vector {
                 VectorValue::TT(v) => {
                     if let Groups::TT(group) = &mut self.groups {
@@ -231,6 +249,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
                         panic!();
                     }
                 },
+                _ => unreachable!(),
             }
         }
 
@@ -257,10 +276,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SingleGroupHashAggrega
             self.groups.eval_type(),
         );
 
-        match_template_evaluable! {
+        match_template_hashable! {
             TT, match &mut self.groups {
                 Groups::TT(groups) => {
-                    // Single group column
                     // Take the map out, and then use `HashMap::into_iter()`. This should be faster
                     // then using `HashMap::drain()`.
                     // TODO: Verify performance difference.
