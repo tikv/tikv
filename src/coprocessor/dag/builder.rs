@@ -173,7 +173,7 @@ impl DAGBuilder {
                         .is_ok()
                     {
                         COPR_EXECUTOR_COUNT
-                            .with_label_values(&["fast_group_hash_aggregation"])
+                            .with_label_values(&["fast_hash_aggregation"])
                             .inc();
 
                         Box::new(BatchFastHashAggregationExecutor::new(
@@ -185,7 +185,7 @@ impl DAGBuilder {
                         )?)
                     } else {
                         COPR_EXECUTOR_COUNT
-                            .with_label_values(&["slow_group_hash_aggregation"])
+                            .with_label_values(&["slow_hash_aggregation"])
                             .inc();
 
                         Box::new(BatchSlowHashAggregationExecutor::new(
