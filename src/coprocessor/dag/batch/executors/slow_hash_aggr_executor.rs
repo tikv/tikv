@@ -299,3 +299,103 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         Ok(group_by_columns)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::FieldTypeTp;
+    use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::codec::data_type::*;
+    use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+
+    #[test]
+    fn test_it_works_integration() {
+        use tipb::expression::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - AVG(col_0 + 5.0)
+        // And group by:
+        // - col_3
+        // - col_0 + 1
+
+        let group_by_exps = vec![
+            RpnExpressionBuilder::new().push_column_ref(3).build(),
+            RpnExpressionBuilder::new()
+                .push_column_ref(0)
+                .push_constant(1.0)
+                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .build(),
+        ];
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::PlusReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                        .push_child(ExprDefBuilder::constant_real(5.0)),
+                )
+                .build(),
+        ];
+
+        let src_exec = make_src_executor_1();
+        let mut exec = BatchSlowHashAggregationExecutor::new_for_test(
+            src_exec,
+            group_by_exps,
+            aggr_definitions,
+            AllAggrDefinitionParser,
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let mut r = exec.next_batch(1);
+        // col_3, col_0 + 1 can result in:
+        // 1,     NULL
+        // NULL,  8
+        // NULL,  NULL
+        // 5,     2.5
+        // Thus there are 4 groups.
+        assert_eq!(r.data.rows_len(), 4);
+        assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
+
+        // Let's check the two group by column first.
+        r.data[3].decode(&Tz::utc(), &exec.schema()[3]).unwrap();
+        assert_eq!(
+            r.data[3].decoded().as_int_slice(),
+            &[Some(5), None, None, Some(1)]
+        );
+        r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]
+        );
+
+        assert_eq!(
+            r.data[0].decoded().as_int_slice(),
+            &[Some(1), Some(1), Some(2), Some(1)]
+        );
+        assert_eq!(
+            r.data[1].decoded().as_int_slice(),
+            &[Some(1), Some(1), Some(0), Some(0)]
+        );
+        assert_eq!(
+            r.data[2].decoded().as_real_slice(),
+            &[Real::new(6.5).ok(), Real::new(12.0).ok(), None, None]
+        );
+    }
+}
