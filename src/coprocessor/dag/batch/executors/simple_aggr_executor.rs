@@ -171,6 +171,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     }
 
     #[inline]
+    fn groups_len(&self) -> usize {
+        1
+    }
+
+    #[inline]
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,

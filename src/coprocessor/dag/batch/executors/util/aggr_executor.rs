@@ -58,6 +58,9 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
         input: LazyBatchColumnVec,
     ) -> Result<()>;
 
+    /// Returns the current number of groups.
+    fn groups_len(&self) -> usize;
+
     /// Iterates aggregate function states for each group.
     ///
     /// Implementors should call `iteratee` for each group with the aggregate function states of
@@ -214,12 +217,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     ///
     /// This function is ensured to be called at most once.
     fn aggregate(&mut self) -> Result<LazyBatchColumnVec> {
+        let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self
             .entities
             .all_result_column_types
             .iter()
-            // Assume that there can be 1024 groups.
-            .map(|eval_type| VectorValue::with_capacity(1024, *eval_type))
+            .map(|eval_type| VectorValue::with_capacity(groups_len, *eval_type))
             .collect();
 
         // Aggregate results for each group
