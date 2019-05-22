@@ -127,8 +127,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
-            group_keys_buffer: Vec::with_capacity(1024),
-            group_keys_buffer_offset: Vec::with_capacity(128),
             states_offset_each_row: Vec::with_capacity(
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
@@ -149,21 +147,6 @@ pub struct SlowHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: HashMap<Vec<u8>, GroupInfo>,
     group_by_exps: Vec<RpnExpression>,
-
-    /// Suppose that we have the following group columns:
-    ///
-    /// ```ignore
-    /// Col1    Col2
-    /// Aaa     D
-    /// Bb      Eeeee
-    /// Cccc    Ff
-    /// ```
-    ///
-    /// `group_keys_buffer` will be `[AaaBbCcccDEeeeeFf   ]`
-    /// `group_keys_offset` will be `[0, 3,5,  9,10, 15,17]`
-    group_keys_buffer: Vec<u8>,
-    group_keys_buffer_offset: Vec<usize>,
-
     states_offset_each_row: Vec<usize>,
 }
 
@@ -214,54 +197,39 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         mut input: LazyBatchColumnVec,
     ) -> Result<()> {
         let rows_len = input.rows_len();
-        let group_by_exps_len = self.group_by_exps.len();
 
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_row.clear();
-        self.group_keys_buffer.clear();
-        self.group_keys_buffer_offset.clear();
 
         let src_schema = entities.src.schema();
 
+        // TODO: Eliminate these allocations.
+        let mut group_by_keys = Vec::with_capacity(rows_len);
+        let mut group_by_keys_offsets = Vec::with_capacity(rows_len);
+        for _ in 0..rows_len {
+            group_by_keys.push(Vec::with_capacity(32));
+            group_by_keys_offsets.push(SmallVec::new());
+        }
         for group_by_exp in &self.group_by_exps {
             let group_by_result =
                 group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
             for row_index in 0..rows_len {
                 // Unwrap is fine because we have verified the group by expression before.
                 let group_column = group_by_result.vector_value().unwrap();
-                self.group_keys_buffer_offset
-                    .push(self.group_keys_buffer.len());
+                group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
                 group_column.encode(
                     row_index,
                     group_by_result.field_type(),
-                    &mut self.group_keys_buffer,
+                    &mut group_by_keys[row_index],
                 )?;
             }
         }
-
         // One extra offset, to be used as the end offset.
-        self.group_keys_buffer_offset
-            .push(self.group_keys_buffer.len());
-
         for row_index in 0..rows_len {
-            // The group key of row i (i start from 0) is the combination of slots
-            // [i, i + row_len, i + row_len * 2, ...] in `group_keys_buffer`, where slots are
-            // indexed by `group_keys_buffer_offset`.
+            group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
+        }
 
-            // TODO: We still need to allocate `rows_len` group key each time.
-            // TODO: We don't need to construct `group_key_offsets` when group_key exists in
-            // hash map.
-            let mut group_key = Vec::with_capacity(32);
-            let mut group_key_offsets = SmallVec::new();
-            for group_col_index in 0..group_by_exps_len {
-                let slot_index = row_index + group_col_index * rows_len;
-                let offset_begin = self.group_keys_buffer_offset[slot_index];
-                let offset_end = self.group_keys_buffer_offset[slot_index + 1];
-                group_key_offsets.push(group_key.len() as u32);
-                group_key.extend_from_slice(&self.group_keys_buffer[offset_begin..offset_end]);
-            }
-            group_key_offsets.push(group_key.len() as u32);
-
+        for (group_key, group_key_offsets) in group_by_keys.into_iter().zip(group_by_keys_offsets) {
             match self.groups.entry(group_key) {
                 Entry::Vacant(entry) => {
                     let offset = self.states.len();
