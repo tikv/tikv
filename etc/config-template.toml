@@ -169,11 +169,12 @@
 ## If the client observes the same error message on retry, it can repeat the message only
 ## every `n` times.
 ## Set to 1 to disable this feature.
+## Default is 10.
 # retry-log-every = 10
 
 ## The maximum number of times to retry a PD connection initialization.
-## Default is -1, meaning isize::MAX times.
 ## Set to 0 to disable retry.
+## Default is -1, meaning isize::MAX times.
 # retry-max-count = -1
 
 [raftstore]
