@@ -72,7 +72,7 @@ pub enum GroupState {
     /// The group is out of order. Leadership may not be hold.
     Chaos,
     /// The group is about to be out of order. It leave some
-    /// safe space to avoid step chaos too often.
+    /// safe space to avoid stepping chaos too often.
     PreChaos,
     /// The group is hibernated.
     Idle,
@@ -778,24 +778,21 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
 
         self.fsm.peer.mut_store().flush_cache_metrics();
-        if !self.ctx.cfg.hibernate_regions {
+        let res = match res {
+            // hibernate_region is false.
+            None => {
+                self.register_raft_base_tick();
+                return;
+            }
+            Some(res) => res,
+        };
+        if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
             self.register_raft_base_tick();
         } else {
-            let res = match res {
-                None => {
-                    self.register_raft_base_tick();
-                    return;
-                }
-                Some(res) => res,
-            };
-            if !self.fsm.peer.check_after_tick(self.fsm.group_state, res) {
+            debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
+            self.fsm.group_state = GroupState::Idle;
+            if !self.fsm.peer.is_leader() {
                 self.register_raft_base_tick();
-            } else {
-                debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
-                self.fsm.group_state = GroupState::Idle;
-                if !self.fsm.peer.is_leader() {
-                    self.register_raft_base_tick();
-                }
             }
         }
     }
