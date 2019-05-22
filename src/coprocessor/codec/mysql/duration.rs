@@ -86,7 +86,7 @@ fn buf_to_int(buf: &[u8]) -> u32 {
     buf.iter().fold(0, |acc, c| acc * 10 + u32::from(c - b'0'))
 }
 
-/// Extract a `u32` from a buffer which matches pattern: `\d+.*`
+/// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
 ///
 /// ```compile_fail
 /// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
@@ -107,7 +107,7 @@ fn read_int(input: &[u8]) -> IResult<&[u8], u32> {
     })
 }
 
-/// Extract a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
+/// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
 /// This function assumes that `fsp` is valid
 ///
 /// ```compile_fail
