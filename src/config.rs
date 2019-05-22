@@ -1,5 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+//! Configuration for the entire server.
+//!
+//! TiKV is configured through the `TiKvConfig` type, which is in turn
+//! made up of many other configuration types.
+
 use std::error::Error;
 use std::fs;
 use std::i32;
@@ -9,8 +14,9 @@ use std::path::Path;
 use std::usize;
 
 use engine::rocks::{
-    BlockBasedOptions, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
-    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, TitanDBOptions,
+    BlockBasedOptions, Cache, ColumnFamilyOptions, CompactionPriority, DBCompactionStyle,
+    DBCompressionType, DBOptions, DBRateLimiterMode, DBRecoveryMode, LRUCacheOptions,
+    TitanDBOptions,
 };
 use slog;
 use sys_info;
@@ -45,7 +51,7 @@ const LOCKCF_MIN_MEM: usize = 256 * MB as usize;
 const LOCKCF_MAX_MEM: usize = GB as usize;
 const RAFT_MIN_MEM: usize = 256 * MB as usize;
 const RAFT_MAX_MEM: usize = 2 * GB as usize;
-pub const LAST_CONFIG_FILE: &str = "last_tikv.toml";
+const LAST_CONFIG_FILE: &str = "last_tikv.toml";
 
 fn memory_mb_for_cf(is_raft_db: bool, cf: &str) -> usize {
     let total_mem = sys_info::mem_info().unwrap().total * KB;
@@ -99,7 +105,7 @@ impl TitanCfConfig {
         let mut opts = TitanDBOptions::new();
         opts.set_min_blob_size(self.min_blob_size);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, 0, 0.0);
+        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0 as u64);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0 as u64);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -155,7 +161,7 @@ macro_rules! cf_config {
 }
 
 macro_rules! write_into_metrics {
-    ($cf:expr, $tag:expr,$metrics:expr) => {{
+    ($cf:expr, $tag:expr, $metrics:expr) => {{
         $metrics
             .with_label_values(&[$tag, "block_size"])
             .set($cf.block_size.0 as f64);
@@ -263,11 +269,17 @@ macro_rules! write_into_metrics {
 }
 
 macro_rules! build_cf_opt {
-    ($opt:ident) => {{
+    ($opt:ident, $cache:ident) => {{
         let mut block_base_opts = BlockBasedOptions::new();
         block_base_opts.set_block_size($opt.block_size.0 as usize);
         block_base_opts.set_no_block_cache($opt.disable_block_cache);
-        block_base_opts.set_lru_cache($opt.block_cache_size.0 as usize, -1, 0, 0.0);
+        if let Some(cache) = $cache {
+            block_base_opts.set_block_cache(cache);
+        } else {
+            let mut cache_opts = LRUCacheOptions::new();
+            cache_opts.set_capacity($opt.block_cache_size.0 as usize);
+            block_base_opts.set_block_cache(&Cache::new_lru_cache(cache_opts));
+        }
         block_base_opts.set_cache_index_and_filter_blocks($opt.cache_index_and_filter_blocks);
         block_base_opts
             .set_pin_l0_filter_and_index_blocks_in_cache($opt.pin_l0_filter_and_index_blocks);
@@ -357,8 +369,8 @@ impl Default for DefaultCfConfig {
 }
 
 impl DefaultCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(RangePropertiesCollectorFactory {
             prop_size_index_distance: self.prop_size_index_distance,
             prop_keys_index_distance: self.prop_keys_index_distance,
@@ -421,8 +433,8 @@ impl Default for WriteCfConfig {
 }
 
 impl WriteCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         // Prefix extractor(trim the timestamp at tail) for write cf.
         let e = Box::new(FixedSuffixSliceTransform::new(8));
         cf_opts
@@ -487,8 +499,8 @@ impl Default for LockCfConfig {
 }
 
 impl LockCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -543,8 +555,8 @@ impl Default for RaftCfConfig {
 }
 
 impl RaftCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(NoopSliceTransform);
         cf_opts
             .set_prefix_extractor("NoopSliceTransform", f)
@@ -715,22 +727,22 @@ impl DbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
             // TODO: rmeove CF_RAFT.
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
-    pub fn build_cf_opts_v2(&self) -> Vec<CFOptions<'_>> {
+    pub fn build_cf_opts_v2(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt()),
-            CFOptions::new(CF_LOCK, self.lockcf.build_opt()),
-            CFOptions::new(CF_WRITE, self.writecf.build_opt()),
-            CFOptions::new(CF_RAFT, self.raftcf.build_opt()),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
+            CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
+            CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
+            CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
 
@@ -796,8 +808,8 @@ impl Default for RaftDefaultCfConfig {
 }
 
 impl RaftDefaultCfConfig {
-    pub fn build_opt(&self) -> ColumnFamilyOptions {
-        let mut cf_opts = build_cf_opt!(self);
+    pub fn build_opt(&self, cache: &Option<Cache>) -> ColumnFamilyOptions {
+        let mut cf_opts = build_cf_opt!(self, cache);
         let f = Box::new(FixedPrefixSliceTransform::new(region_raft_prefix_len()));
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
@@ -849,7 +861,7 @@ impl Default for RaftDbConfig {
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
             max_total_wal_size: ReadableSize::gb(4),
-            max_background_jobs: 2,
+            max_background_jobs: 4,
             max_manifest_file_size: ReadableSize::mb(20),
             create_if_missing: true,
             max_open_files: 40960,
@@ -860,7 +872,7 @@ impl Default for RaftDbConfig {
             info_log_roll_time: ReadableDuration::secs(0),
             info_log_keep_log_file_num: 10,
             info_log_dir: "".to_owned(),
-            max_sub_compactions: 1,
+            max_sub_compactions: 2,
             writable_file_max_buffer_size: ReadableSize::mb(1),
             use_direct_io_for_flush_and_compaction: false,
             enable_pipelined_write: true,
@@ -916,8 +928,8 @@ impl RaftDbConfig {
         opts
     }
 
-    pub fn build_cf_opts(&self) -> Vec<CFOptions<'_>> {
-        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt())]
+    pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
+        vec![CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache))]
     }
 }
 
@@ -1327,6 +1339,18 @@ impl TiKvConfig {
                 + self.server.end_point_request_max_handle_duration.as_secs();
             self.raft_store.clean_stale_peer_delay = ReadableDuration::secs(delay_secs);
         }
+        // When shared block cache is enabled, if its capacity is set, it overrides individual
+        // block cache sizes. Otherwise use the sum of block cache size of all column families
+        // as the shared cache size.
+        let cache_cfg = &mut self.storage.block_cache;
+        if cache_cfg.shared && cache_cfg.capacity.is_none() {
+            cache_cfg.capacity = Some(ReadableSize {
+                0: self.rocksdb.defaultcf.block_cache_size.0
+                    + self.rocksdb.writecf.block_cache_size.0
+                    + self.rocksdb.lockcf.block_cache_size.0
+                    + self.raftdb.defaultcf.block_cache_size.0,
+            });
+        }
     }
 
     pub fn check_critical_cfg_with(&self, last_cfg: &Self) -> Result<(), String> {
@@ -1403,6 +1427,11 @@ impl TiKvConfig {
     }
 }
 
+/// Prevents launching with an incompatible configuration
+///
+/// Loads the previously-loaded configuration from `last_tikv.toml`,
+/// compares key configuration items and fails if they are not
+/// identical.
 pub fn check_and_persist_critical_config(config: &TiKvConfig) -> Result<(), String> {
     // Check current critical configurations with last time, if there are some
     // changes, user must guarantee relevant works have been done.

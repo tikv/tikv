@@ -130,8 +130,9 @@ impl<T: Simulator> Cluster<T> {
         for _ in 0..self.count {
             let dir = TempDir::new("test_cluster").unwrap();
             let kv_path = dir.path().join("kv");
+            let cache = self.cfg.storage.block_cache.build_shared_cache();
             let kv_db_opt = self.cfg.rocksdb.build_opt();
-            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opt = self.cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(kv_path.to_str().unwrap(), kv_db_opt, kv_cfs_opt)
                     .unwrap(),
@@ -141,7 +142,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine);
+            let engines = Engines::new(engine, raft_engine, cache.is_some());
             self.dbs.push(engines);
             self.paths.push(dir);
         }
@@ -199,6 +200,7 @@ impl<T: Simulator> Cluster<T> {
         debug!("starting node {}", node_id);
         let engines = self.engines[&node_id].clone();
         let (router, system) = create_raft_batch_system(&self.cfg.raft_store);
+        debug!("calling run node"; "node_id" => node_id);
         // FIXME: rocksdb event listeners may not work, because we change the router.
         self.sim
             .wl()
@@ -267,7 +269,7 @@ impl<T: Simulator> Cluster<T> {
         mut request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let mut retry_cnt = 0;
+        let timer = Instant::now();
         let region_id = request.get_header().get_region_id();
         loop {
             let leader = match self.leader_of_region(region_id) {
@@ -279,8 +281,7 @@ impl<T: Simulator> Cluster<T> {
                 e @ Err(_) => return e,
                 Ok(resp) => resp,
             };
-            if self.refresh_leader_if_needed(&resp, region_id) && retry_cnt < 10 {
-                retry_cnt += 1;
+            if self.refresh_leader_if_needed(&resp, region_id) && timer.elapsed() < timeout {
                 warn!(
                     "{:?} is no longer leader, let's retry",
                     request.get_header().get_peer()
@@ -349,33 +350,38 @@ impl<T: Simulator> Cluster<T> {
         }
         self.reset_leader_of_region(region_id);
         let mut leader = None;
-        let mut retry_cnt = 500;
+        let mut leaders = HashMap::new();
 
         let node_ids = self.sim.rl().get_node_ids();
-        let mut count = 0;
-        while (leader.is_none() || count < store_ids.len()) && retry_cnt > 0 {
-            count = 0;
-            leader = None;
-            for store_id in &store_ids {
-                // For some tests, we stop the node but pd still has this information,
-                // and we must skip this.
-                if !node_ids.contains(store_id) {
-                    count += 1;
-                    continue;
-                }
-                let l = self.query_leader(*store_id, region_id, Duration::from_secs(1));
-                if l.is_none() {
-                    continue;
-                }
-                if leader.is_none() {
-                    leader = l;
-                    count += 1;
-                } else if l == leader {
-                    count += 1;
+        // For some tests, we stop the node but pd still has this information,
+        // and we must skip this.
+        let alive_store_ids: Vec<_> = store_ids
+            .iter()
+            .filter(|id| node_ids.contains(id))
+            .cloned()
+            .collect();
+        for _ in 0..500 {
+            for store_id in &alive_store_ids {
+                let l = match self.query_leader(*store_id, region_id, Duration::from_secs(1)) {
+                    None => continue,
+                    Some(l) => l,
+                };
+                leaders
+                    .entry(l.get_id())
+                    .or_insert_with(|| (l, vec![]))
+                    .1
+                    .push(*store_id);
+            }
+            if let Some((_, (l, c))) = leaders.drain().max_by_key(|(_, (_, c))| c.len()) {
+                // It may be a step down leader.
+                if c.contains(&l.get_store_id()) {
+                    leader = Some(l);
+                    if c.len() > store_ids.len() / 2 {
+                        break;
+                    }
                 }
             }
             sleep_ms(10);
-            retry_cnt -= 1;
         }
 
         if let Some(l) = leader {
@@ -399,8 +405,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_id(region_id);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         let peer = new_peer(peer_id, peer_id);
         region.mut_peers().push(peer.clone());
         self.pd_client.add_region(&region);
@@ -420,8 +426,8 @@ impl<T: Simulator> Cluster<T> {
         region.set_id(1);
         region.set_start_key(keys::EMPTY_KEY.to_vec());
         region.set_end_key(keys::EMPTY_KEY.to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         for (&id, engines) in &self.engines {
             let peer = new_peer(id, id);
@@ -533,6 +539,10 @@ impl<T: Simulator> Cluster<T> {
             self.reset_leader_of_region(region_id);
             return true;
         }
+        // Not match epoch can be introduced by wrong leader.
+        if err.has_epoch_not_match() {
+            self.reset_leader_of_region(region_id);
+        }
         if !err.has_not_leader() {
             return false;
         }
@@ -553,7 +563,10 @@ impl<T: Simulator> Cluster<T> {
         read_quorum: bool,
         timeout: Duration,
     ) -> RaftCmdResponse {
-        for _ in 0..20 {
+        let timer = Instant::now();
+        let mut tried_times = 0;
+        while tried_times < 10 || timer.elapsed() < timeout {
+            tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
             let req = new_request(
@@ -588,7 +601,7 @@ impl<T: Simulator> Cluster<T> {
             }
             return resp;
         }
-        panic!("request failed after retry for 20 times");
+        panic!("request timeout");
     }
 
     // Get region when the `filter` returns true.
@@ -777,19 +790,16 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn must_transfer_leader(&mut self, region_id: u64, leader: metapb::Peer) {
-        let mut try_cnt = 0;
+        let timer = Instant::now();
         loop {
             self.reset_leader_of_region(region_id);
             if self.leader_of_region(region_id) == Some(leader.clone()) {
                 return;
             }
-            if try_cnt > 250 {
+            if timer.elapsed() > Duration::from_secs(5) {
                 panic!("failed to transfer leader to [{}] {:?}", region_id, leader);
             }
-            if try_cnt % 50 == 0 {
-                self.transfer_leader(region_id, leader.clone());
-            }
-            try_cnt += 1;
+            self.transfer_leader(region_id, leader.clone());
         }
     }
 
@@ -931,8 +941,8 @@ impl<T: Simulator> Cluster<T> {
 
             if try_cnt > 250 {
                 panic!(
-                    "region {} doesn't exist on store {} after {} tries",
-                    region_id, store_id, try_cnt
+                    "region {} doesn't exist on store {} after {} tries: {:?}",
+                    region_id, store_id, try_cnt, resp
                 );
             }
             try_cnt += 1;

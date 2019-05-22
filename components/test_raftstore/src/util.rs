@@ -380,7 +380,9 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
                 is_write = true
             }
-            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+            CmdType::Invalid | CmdType::Prewrite | CmdType::ReadIndex => {
+                panic!("Invalid RaftCmdRequest: {:?}", cmd)
+            }
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
@@ -495,7 +497,8 @@ pub fn create_test_engine(
                 cmpacted_handler,
                 Some(dummpy_filter),
             ));
-            let kv_cfs_opt = cfg.rocksdb.build_cf_opts();
+            let cache = cfg.storage.block_cache.build_shared_cache();
+            let kv_cfs_opt = cfg.rocksdb.build_cf_opts(&cache);
             let engine = Arc::new(
                 rocks::util::new_engine_opt(
                     path.as_ref().unwrap().path().to_str().unwrap(),
@@ -509,7 +512,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)
