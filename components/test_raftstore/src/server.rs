@@ -131,9 +131,11 @@ impl Simulator for ServerCluster {
         let pd_worker = FutureWorker::new("test-pd-worker");
         let storage_read_pool = readpool::Builder::build_for_test();
         let store = create_raft_storage(
-            sim_router.clone(),
+            RaftKv::new(sim_router.clone()),
             &cfg.storage,
             storage_read_pool,
+            None,
+            None,
             None,
             None,
         )?;
@@ -156,8 +158,9 @@ impl Simulator for ServerCluster {
         let snap_mgr = SnapManager::new(tmp_str, Some(router.clone()));
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
-        let cop_read_pool = readpool::Builder::build_for_test();
-        let cop = coprocessor::Endpoint::new(&server_cfg, store.get_engine(), cop_read_pool);
+        let cop_read_pool =
+            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(
@@ -170,6 +173,7 @@ impl Simulator for ServerCluster {
                 snap_mgr.clone(),
                 Some(engines.clone()),
                 Some(import_service.clone()),
+                None,
             ));
             match server {
                 Some(Ok(_)) => break,

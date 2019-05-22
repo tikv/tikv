@@ -10,7 +10,7 @@ use super::super::interface::*;
 use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
 pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
     summary_collector: C,
@@ -26,9 +26,7 @@ impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
         let conditions = descriptor.get_conditions();
         for c in conditions {
-            RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
-                Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-            })?;
+            RpnExpressionBuilder::check_expr_tree_supported(c)?;
         }
         Ok(())
     }
@@ -149,7 +147,7 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
@@ -221,7 +219,7 @@ mod tests {
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
                         VectorValue::Int(vec![Some(1), None]),
-                        VectorValue::Real(vec![None, Some(7.0)]),
+                        VectorValue::Real(vec![None, Real::new(7.0).ok()]),
                     ]),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
@@ -271,7 +269,10 @@ mod tests {
             assert_eq!(r.data.rows_len(), 2);
             assert_eq!(r.data.columns_len(), 2);
             assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(1), None]);
-            assert_eq!(r.data[1].decoded().as_real_slice(), &[None, Some(7.0)]);
+            assert_eq!(
+                r.data[1].decoded().as_real_slice(),
+                &[None, Real::new(7.0).ok()]
+            );
             assert!(!r.is_drained.unwrap());
 
             let r = exec.next_batch(1);
@@ -527,6 +528,8 @@ mod tests {
 
     #[test]
     fn test_predicate_error() {
+        use crate::coprocessor::Error;
+
         /// This function returns error when value is None.
         #[derive(Debug, Clone, Copy, RpnFunction)]
         #[rpn_function(args = 1)]

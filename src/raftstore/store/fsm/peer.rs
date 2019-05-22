@@ -19,7 +19,8 @@ use kvproto::import_sstpb::SSTMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
 use kvproto::pdpb::CheckPolicy;
 use kvproto::raft_cmdpb::{
-    AdminCmdType, AdminRequest, RaftCmdRequest, RaftCmdResponse, StatusCmdType, StatusResponse,
+    AdminCmdType, AdminRequest, CmdType, RaftCmdRequest, RaftCmdResponse, StatusCmdType,
+    StatusResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftMessage, RaftSnapshotData, RaftTruncatedState, RegionLocalState,
@@ -2151,7 +2152,12 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         // Check whether the store has the right peer to handle the request.
         let region_id = self.region_id();
         let leader_id = self.fsm.peer.leader_id();
-        if !self.fsm.peer.is_leader() {
+        let request = msg.get_requests();
+
+        // ReadIndex can be processed on the replicas.
+        let is_read_index_request =
+            request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
+        if !(self.fsm.peer.is_leader() || is_read_index_request) {
             self.ctx.raft_metrics.invalid_proposal.not_leader += 1;
             let leader = self.fsm.peer.get_peer_from_cache(leader_id);
             return Err(Error::NotLeader(region_id, leader));
