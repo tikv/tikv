@@ -253,7 +253,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         pd_sender.clone(),
         engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, engine.clone(), cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
