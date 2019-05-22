@@ -3,12 +3,11 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::{cmp, usize};
 
 use crossbeam::channel::{TryRecvError, TrySendError};
@@ -281,7 +280,7 @@ struct ApplyContext {
     router: ApplyRouter,
     notifier: Notifier,
     engines: Engines,
-    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
     cbs: MustConsumeVec<ApplyCallback>,
     apply_res: Vec<ApplyRes>,
     exec_ctx: Option<ExecContext>,
@@ -308,7 +307,7 @@ impl ApplyContext {
         importer: Arc<SSTImporter>,
         region_scheduler: Scheduler<RegionTask>,
         engines: Engines,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         router: BatchRouter<ApplyFsm, ControlFsm>,
         notifier: Notifier,
         cfg: &Config,
@@ -400,12 +399,7 @@ impl ApplyContext {
         }
 
         // Clean snapshot cache.
-        let prev_snapshot = self
-            .engine_snapshot
-            .swap(ptr::null_mut(), Ordering::Release);
-        if !prev_snapshot.is_null() {
-            let _: Box<SyncSnapshot> = unsafe { Box::from_raw(prev_snapshot) };
-        }
+        *self.engine_snapshot.write().unwrap() = None;
 
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
@@ -2742,7 +2736,7 @@ pub struct Builder {
     importer: Arc<SSTImporter>,
     region_scheduler: Scheduler<RegionTask>,
     engines: Engines,
-    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
     sender: Notifier,
     router: ApplyRouter,
 }
@@ -3000,9 +2994,7 @@ mod tests {
         let (region_scheduler, snapshot_rx) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
-        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            Snapshot::new(engines.kv.clone()).into_sync(),
-        ))));
+        let engine_snapshot = Arc::new(RwLock::new(None));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3341,9 +3333,7 @@ mod tests {
         let sender = Notifier::Sender(tx);
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
-        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            Snapshot::new(engines.kv.clone()).into_sync(),
-        ))));
+        let engine_snapshot = Arc::new(RwLock::new(None));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,
@@ -3686,9 +3676,7 @@ mod tests {
         let (region_scheduler, _) = dummy_scheduler();
         let cfg = Arc::new(Config::default());
         let (router, mut system) = create_apply_batch_system(&cfg);
-        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            Snapshot::new(engines.kv.clone()).into_sync(),
-        ))));
+        let engine_snapshot = Arc::new(RwLock::new(None));
         let builder = super::Builder {
             tag: "test-store".to_owned(),
             cfg,

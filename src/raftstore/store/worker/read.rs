@@ -2,8 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
-use std::sync::atomic::AtomicPtr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crossbeam::TrySendError;
@@ -155,7 +154,7 @@ pub struct LocalReader<C: ProposalRouter> {
     store_id: Cell<Option<u64>>,
     store_meta: Arc<Mutex<StoreMeta>>,
     kv_engine: Arc<DB>,
-    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
     metrics: RefCell<ReadMetrics>,
     // region id -> ReadDelegate
     delegates: RefCell<HashMap<u64, Option<ReadDelegate>>>,
@@ -167,7 +166,7 @@ pub struct LocalReader<C: ProposalRouter> {
 impl LocalReader<RaftRouter> {
     pub fn new(
         kv_engine: Arc<DB>,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         router: RaftRouter,
     ) -> Self {
@@ -576,9 +575,7 @@ mod tests {
             rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None).unwrap();
         let (ch, rx) = sync_channel(1);
         let kv_engine = Arc::new(db);
-        let engine_snapshot = Arc::new(AtomicPtr::new(Box::into_raw(Box::new(
-            rocks::Snapshot::new(kv_engine.clone()).into_sync(),
-        ))));
+        let engine_snapshot = Arc::new(RwLock::new(None));
         let reader = LocalReader {
             store_meta,
             kv_engine,

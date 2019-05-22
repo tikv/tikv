@@ -13,9 +13,8 @@ use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::{Ready, StateRole};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
 use time::{self, Timespec};
@@ -218,7 +217,7 @@ pub struct PollContext<T, C: 'static> {
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
-    pub engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    pub engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -689,7 +688,7 @@ pub struct RaftPollerBuilder<T, C> {
     pd_client: Arc<C>,
     global_stat: GlobalStoreStat,
     pub engines: Engines,
-    pub engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    pub engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
     applying_snap_count: Arc<AtomicUsize>,
 }
 
@@ -944,7 +943,7 @@ impl RaftBatchSystem {
         meta: metapb::Store,
         mut cfg: Config,
         engines: Engines,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
@@ -1908,13 +1907,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 
     fn on_release_engine_snapshot_tick(&self) {
-        let prev_snapshot = self
-            .ctx
-            .engine_snapshot
-            .swap(ptr::null_mut(), Ordering::Release);
-        if !prev_snapshot.is_null() {
-            let _: Box<SyncSnapshot> = unsafe { Box::from_raw(prev_snapshot) };
-        }
+        *self.ctx.engine_snapshot.write().unwrap() = None;
         self.register_release_engine_snapshot_tick();
     }
 

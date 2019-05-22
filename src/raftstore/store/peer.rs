@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 use std::collections::Bound::{Excluded, Unbounded};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{atomic, Arc};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use std::{cmp, mem, slice, u64};
 
@@ -2219,7 +2219,7 @@ impl RequestInspector for Peer {
 pub struct ReadExecutor {
     check_epoch: bool,
     engine: Arc<DB>,
-    engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+    engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
     snapshot: Option<SyncSnapshot>,
     snapshot_time: Option<Timespec>,
     need_snapshot_time: bool,
@@ -2228,7 +2228,7 @@ pub struct ReadExecutor {
 impl ReadExecutor {
     pub fn new(
         engine: Arc<DB>,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         check_epoch: bool,
         need_snapshot_time: bool,
     ) -> Self {
@@ -2253,26 +2253,21 @@ impl ReadExecutor {
         if self.snapshot.is_some() {
             return;
         }
+
         loop {
-            let prev_snapshot = self.engine_snapshot.load(Ordering::Acquire);
-            if !prev_snapshot.is_null() {
-                self.snapshot = Some(unsafe { (*prev_snapshot).clone() });
+            if let Some(snapshot) = self.engine_snapshot.read().unwrap().as_ref() {
+                self.snapshot = Some(snapshot.clone());
                 break;
             }
-            let snapshot = Box::into_raw(Box::new(Snapshot::new(self.engine.clone()).into_sync()));
-            if self
-                .engine_snapshot
-                .compare_exchange(prev_snapshot, snapshot, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                // TODO: only call `register_release_engine_snapshot_tick` here.
-                self.snapshot = Some(unsafe { (*snapshot).clone() });
+            let mut option_snapshot = self.engine_snapshot.write().unwrap();
+            if option_snapshot.is_none() {
+                let snapshot = Snapshot::new(self.engine.clone()).into_sync();
+                *option_snapshot = Some(snapshot.clone());
+                self.snapshot = Some(snapshot);
                 break;
             }
         }
-        // Reading current timespec after snapshot, in case we do not
-        // expire lease in time.
-        atomic::fence(atomic::Ordering::Release);
+
         if self.need_snapshot_time {
             self.snapshot_time = Some(monotonic_raw_now());
         }

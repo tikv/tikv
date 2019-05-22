@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -24,7 +24,6 @@ use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::raft_serverpb::StoreIdent;
 use protobuf::RepeatedField;
-use std::sync::atomic::AtomicPtr;
 use tikv_util::worker::FutureWorker;
 
 const MAX_CHECK_CLUSTER_BOOTSTRAPPED_RETRY_COUNT: u64 = 60;
@@ -114,7 +113,7 @@ where
     pub fn start<T>(
         &mut self,
         engines: Engines,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
@@ -319,7 +318,7 @@ where
         &mut self,
         store_id: u64,
         engines: Engines,
-        engine_snapshot: Arc<AtomicPtr<SyncSnapshot>>,
+        engine_snapshot: Arc<RwLock<Option<SyncSnapshot>>>,
         trans: T,
         snap_mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,

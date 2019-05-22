@@ -28,8 +28,7 @@ use engine::Engines;
 use fs2::FileExt;
 use std::fs::File;
 use std::path::Path;
-use std::ptr::null_mut;
-use std::sync::{atomic::AtomicPtr, Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tikv_util::check_environment_variables;
@@ -178,7 +177,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-    let engine_snapshot = Arc::new(AtomicPtr::new(null_mut()));
+    let engine_snapshot = Arc::new(RwLock::new(None));
     let local_reader = LocalReader::new(
         engines.kv.clone(),
         Arc::clone(&engine_snapshot),
