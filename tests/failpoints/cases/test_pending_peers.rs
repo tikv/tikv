@@ -94,7 +94,6 @@ fn test_pending_snapshot() {
     loop {
         let term2 = cluster.region_term(1, 2);
         let term1 = cluster.truncated_state(1, 1).get_term();
-        debug!("term2 {}, term1 {}", term2, term1);
         if term2 == term1 || start.elapsed() > election_timeout * 10 {
             break;
         }

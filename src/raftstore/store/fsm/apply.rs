@@ -614,6 +614,7 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
@@ -2586,7 +2587,7 @@ impl ApplyFsm {
             |_| unimplemented!()
         );
 
-        // Because apply states are wrote to raft engine, so we have to
+        // Because apply states are written to raft engine, so we have to
         // force sync to make sure there is no lost update after restart.
         apply_ctx.sync_log_hint = true;
         apply_ctx.flush();
