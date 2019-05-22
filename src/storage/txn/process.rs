@@ -175,14 +175,17 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                wakeup_scheduler(
-                    self.take_scheduler(),
-                    Msg::FinishedWithErr {
-                        cid: task.cid,
-                        err: Error::from(err),
-                        tag: task.tag,
-                    },
-                );
+                self.take_pool().pool.spawn(move || {
+                    wakeup_scheduler(
+                        self.take_scheduler(),
+                        Msg::FinishedWithErr {
+                            cid: task.cid,
+                            err: Error::from(err),
+                            tag: task.tag,
+                        },
+                    );
+                    future::ok::<_, ()>(())
+                });
             }
         }
     }
