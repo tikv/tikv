@@ -906,7 +906,8 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
                     if raft_resps.len() != 1 {
                         error!(
                             "invalid read index response";
-                            "region_id"=>region_id, "response" =>?raft_resps
+                            "region_id" => region_id,
+                            "response" =>?raft_resps
                         );
                         resp.mut_region_error().set_message(format!(
                             "Internal Error: invalid response: {:?}",

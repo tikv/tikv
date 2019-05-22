@@ -1212,8 +1212,8 @@ impl Peer {
         self.proposals.gc();
     }
 
-    /// Responses to the ready read request.
-    fn post_pending_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    /// Responses to the ready read index request on the replica, the replica is not a leader.
+    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let (read_index, is_read_index_request) = {
@@ -1228,10 +1228,15 @@ impl Peer {
                     }
                 };
 
-                if !self.ready_to_handle_read() && !is_read_index_request {
-                    break;
-                }
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                if !is_read_index_request {
+                    let term = self.term();
+                    // stale request because this peer
+                    for (_, cb) in read.cmds.drain(..) {
+                        apply::notify_stale_req(term, cb);
+                    }
+                    continue;
+                }
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, read_index));
                 }
@@ -1242,7 +1247,7 @@ impl Peer {
 
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
-        // The follower may lost `ReadIndexResp`, so the pending_reads is not
+        // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
         // `ready`.
@@ -1250,10 +1255,11 @@ impl Peer {
             for state in &ready.read_states {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
-                self.post_pending_reads(ctx);
+                self.post_pending_read_index_on_replica(ctx);
             }
             return;
         }
+
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
@@ -1324,7 +1330,7 @@ impl Peer {
             has_ready = true;
         }
         if !self.is_leader() {
-            self.post_pending_reads(ctx)
+            self.post_pending_read_index_on_replica(ctx)
         } else {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {

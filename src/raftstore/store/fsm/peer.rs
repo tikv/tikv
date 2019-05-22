@@ -2154,7 +2154,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let leader_id = self.fsm.peer.leader_id();
         let request = msg.get_requests();
 
-        // ReadIndex can be process on the replicas.
+        // ReadIndex can be processed on the replicas.
         let is_read_index_request =
             request.len() == 1 && request[0].get_cmd_type() == CmdType::ReadIndex;
         if !(self.fsm.peer.is_leader() || is_read_index_request) {
