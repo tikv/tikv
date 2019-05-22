@@ -203,7 +203,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
         let src_schema = entities.src.schema();
 
-        // TODO: Eliminate these allocations.
+        // TODO: Eliminate these allocations using an allocator.
         let mut group_by_keys = Vec::with_capacity(rows_len);
         let mut group_by_keys_offsets = Vec::with_capacity(rows_len);
         for _ in 0..rows_len {
@@ -215,13 +215,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
                 group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
             // Unwrap is fine because we have verified the group by expression before.
             let group_column = group_by_result.vector_value().unwrap();
+            let field_type = group_by_result.field_type();
             for row_index in 0..rows_len {
                 group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
-                group_column.encode(
-                    row_index,
-                    group_by_result.field_type(),
-                    &mut group_by_keys[row_index],
-                )?;
+                group_column.encode(row_index, field_type, &mut group_by_keys[row_index])?;
             }
         }
         // One extra offset, to be used as the end offset.
