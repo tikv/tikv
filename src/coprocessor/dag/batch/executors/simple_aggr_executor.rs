@@ -85,7 +85,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
         let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,

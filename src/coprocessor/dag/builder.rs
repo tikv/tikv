@@ -184,25 +184,29 @@ impl DAGBuilder {
                             .with_label_values(&["fast_hash_aggregation"])
                             .inc();
 
-                        Box::new(BatchFastHashAggregationExecutor::new(
-                            C::new(summary_slot_index),
-                            config.clone(),
-                            executor,
-                            ed.mut_aggregation().take_group_by().into_vec(),
-                            ed.mut_aggregation().take_agg_func().into_vec(),
-                        )?)
+                        Box::new(
+                            BatchFastHashAggregationExecutor::new(
+                                config.clone(),
+                                executor,
+                                ed.mut_aggregation().take_group_by().into_vec(),
+                                ed.mut_aggregation().take_agg_func().into_vec(),
+                            )?
+                            .with_summary_collector(C::new(summary_slot_index)),
+                        )
                     } else {
                         COPR_EXECUTOR_COUNT
                             .with_label_values(&["slow_hash_aggregation"])
                             .inc();
 
-                        Box::new(BatchSlowHashAggregationExecutor::new(
-                            C::new(summary_slot_index),
-                            config.clone(),
-                            executor,
-                            ed.mut_aggregation().take_group_by().into_vec(),
-                            ed.mut_aggregation().take_agg_func().into_vec(),
-                        )?)
+                        Box::new(
+                            BatchSlowHashAggregationExecutor::new(
+                                config.clone(),
+                                executor,
+                                ed.mut_aggregation().take_group_by().into_vec(),
+                                ed.mut_aggregation().take_agg_func().into_vec(),
+                            )?
+                            .with_summary_collector(C::new(summary_slot_index)),
+                        )
                     }
                 }
                 ExecType::TypeLimit => {
