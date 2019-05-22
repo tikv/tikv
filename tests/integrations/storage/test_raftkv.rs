@@ -71,6 +71,59 @@ fn test_read_leader_in_lease() {
     assert_eq!(can_read(&ctx, &storage, k2, v2), true);
 }
 
+#[test]
+fn test_read_index_on_replica() {
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.run();
+
+    let k1 = b"k1";
+    let (k2, v2) = (b"k2", b"v2");
+
+    // make sure leader has been elected.
+    assert_eq!(cluster.must_get(k1), None);
+
+    let region = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(region.get_id()).unwrap();
+    let storage = cluster.sim.rl().storages[&leader.get_id()].clone();
+
+    let mut ctx = Context::new();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(leader.clone());
+
+    // write some data
+    let peers = region.get_peers();
+    assert_none(&ctx, &storage, k2);
+    must_put(&ctx, &storage, k2, v2);
+
+    // read on follower
+    let mut follower_peer = None;
+    for p in peers {
+        if p.get_id() != leader.get_id() {
+            follower_peer = Some(p.clone());
+            break;
+        }
+    }
+
+    assert!(follower_peer.is_some());
+    ctx.set_peer(follower_peer.as_ref().unwrap().clone());
+    let resp = read_index_on_peer(
+        &mut cluster,
+        follower_peer.unwrap(),
+        region.clone(),
+        false,
+        std::time::Duration::from_secs(5),
+    );
+    assert!(!resp.as_ref().unwrap().get_header().has_error());
+    assert_ne!(
+        resp.unwrap().get_responses()[0]
+            .get_read_index()
+            .get_read_index(),
+        0
+    );
+}
+
 fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
     engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
 }
