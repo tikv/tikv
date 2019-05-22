@@ -14,8 +14,8 @@ use test_coprocessor::*;
 use tikv::storage::RocksEngine;
 
 /// SELECT COUNT(1) FROM Table, or SELECT COUNT(PrimaryKey) FROM Table
-fn bench_select_count_1_from_table(b: &mut criterion::Bencher, input: &Input) {
-    let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
+fn bench_select_count_1(b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
     // TODO: Change to use `DAGSelect` helper when it no longer place unnecessary columns.
     let executors = &[
@@ -33,8 +33,8 @@ fn bench_select_count_1_from_table(b: &mut criterion::Bencher, input: &Input) {
 }
 
 /// SELECT COUNT(column) FROM Table
-fn bench_select_count_column_from_table(b: &mut criterion::Bencher, input: &Input) {
-    let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
+fn bench_select_count_col(b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -51,8 +51,8 @@ fn bench_select_count_column_from_table(b: &mut criterion::Bencher, input: &Inpu
 }
 
 /// SELECT column FROM Table WHERE column
-fn bench_select_where_column_from_table(b: &mut criterion::Bencher, input: &Input) {
-    let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
+fn bench_select_where_col(b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -64,12 +64,8 @@ fn bench_select_where_column_from_table(b: &mut criterion::Bencher, input: &Inpu
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-fn bench_select_column_from_table_where_func_impl(
-    selectivity: f64,
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
+fn bench_select_col_where_fn_impl(selectivity: f64, b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -89,35 +85,22 @@ fn bench_select_column_from_table_where_func_impl(
 }
 
 /// SELECT column FROM Table WHERE column > X (selectivity = 5%)
-fn bench_select_column_from_table_where_func_selectivity_l(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_column_from_table_where_func_impl(0.05, b, input);
+fn bench_select_col_where_fn_sel_l(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_col_where_fn_impl(0.05, b, input);
 }
 
 /// SELECT column FROM Table WHERE column > X (selectivity = 50%)
-fn bench_select_column_from_table_where_func_selectivity_m(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_column_from_table_where_func_impl(0.5, b, input);
+fn bench_select_col_where_fn_sel_m(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_col_where_fn_impl(0.5, b, input);
 }
 
 /// SELECT column FROM Table WHERE column > X (selectivity = 95%)
-fn bench_select_column_from_table_where_func_selectivity_h(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_column_from_table_where_func_impl(0.95, b, input);
+fn bench_select_col_where_fn_sel_h(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_col_where_fn_impl(0.95, b, input);
 }
 
-fn bench_select_count_1_from_table_where_func_impl(
-    selectivity: f64,
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    let (table, store) = crate::table_scan::fixture::table_with_two_columns(input.rows);
+fn bench_select_count_1_where_fn_impl(selectivity: f64, b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = crate::table_scan::fixture::table_with_2_columns(input.rows);
 
     let executors = &[
         table_scan(&[table["foo"].as_column_info()]),
@@ -142,30 +125,21 @@ fn bench_select_count_1_from_table_where_func_impl(
 }
 
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 5%)
-fn bench_select_count_1_from_table_where_func_selectivity_l(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_count_1_from_table_where_func_impl(0.05, b, input);
+fn bench_select_count_1_where_fn_sel_l(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_count_1_where_fn_impl(0.05, b, input);
 }
 
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 50%)
-fn bench_select_count_1_from_table_where_func_selectivity_m(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_count_1_from_table_where_func_impl(0.5, b, input);
+fn bench_select_count_1_where_fn_sel_m(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_count_1_where_fn_impl(0.5, b, input);
 }
 
 /// SELECT COUNT(1) FROM Table WHERE column > X (selectivity = 95%)
-fn bench_select_count_1_from_table_where_func_selectivity_h(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
-    bench_select_count_1_from_table_where_func_impl(0.95, b, input);
+fn bench_select_count_1_where_fn_sel_h(b: &mut criterion::Bencher, input: &Input) {
+    bench_select_count_1_where_fn_impl(0.95, b, input);
 }
 
-fn bench_select_count_1_from_table_group_by_int_column_impl(
+fn bench_select_count_1_group_by_int_col_impl(
     table: Table,
     store: Store<RocksEngine>,
     b: &mut criterion::Bencher,
@@ -186,25 +160,19 @@ fn bench_select_count_1_from_table_group_by_int_column_impl(
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column (2 groups)
-fn bench_select_count_1_from_table_group_by_int_column_group_few(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col (2 groups)
+fn bench_select_count_1_group_by_int_col_group_few(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
-    bench_select_count_1_from_table_group_by_int_column_impl(table, store, b, input);
+    bench_select_count_1_group_by_int_col_impl(table, store, b, input);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column (n groups, n = row_count)
-fn bench_select_count_1_from_table_group_by_int_column_group_many(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col (n groups, n = row_count)
+fn bench_select_count_1_group_by_int_col_group_many(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
-    bench_select_count_1_from_table_group_by_int_column_impl(table, store, b, input);
+    bench_select_count_1_group_by_int_col_impl(table, store, b, input);
 }
 
-fn bench_select_count_1_from_table_group_by_fn_impl(
+fn bench_select_count_1_group_by_fn_impl(
     table: Table,
     store: Store<RocksEngine>,
     b: &mut criterion::Bencher,
@@ -230,25 +198,19 @@ fn bench_select_count_1_from_table_group_by_fn_impl(
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column + 1 (2 groups)
-fn bench_select_count_1_from_table_group_by_fn_group_few(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col + 1 (2 groups)
+fn bench_select_count_1_group_by_fn_group_few(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
-    bench_select_count_1_from_table_group_by_fn_impl(table, store, b, input);
+    bench_select_count_1_group_by_fn_impl(table, store, b, input);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column + 1 (n groups, n = row_count)
-fn bench_select_count_1_from_table_group_by_fn_group_many(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col + 1 (n groups, n = row_count)
+fn bench_select_count_1_group_by_fn_group_many(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
-    bench_select_count_1_from_table_group_by_fn_impl(table, store, b, input);
+    bench_select_count_1_group_by_fn_impl(table, store, b, input);
 }
 
-fn bench_select_count_1_from_table_group_by_two_columns_impl(
+fn bench_select_count_1_group_by_2_col_impl(
     table: Table,
     store: Store<RocksEngine>,
     b: &mut criterion::Bencher,
@@ -275,26 +237,20 @@ fn bench_select_count_1_from_table_group_by_two_columns_impl(
         .bench(b, executors, &[table.get_record_range_all()], &store);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column, int_column + 1 (2 groups)
-fn bench_select_count_1_from_table_group_by_two_columns_group_few(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (2 groups)
+fn bench_select_count_1_group_by_2_col_group_few(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_two_groups(input.rows);
-    bench_select_count_1_from_table_group_by_two_columns_impl(table, store, b, input);
+    bench_select_count_1_group_by_2_col_impl(table, store, b, input);
 }
 
-// SELECT COUNT(1) FROM Table GROUP BY int_column, int_column + 1 (n groups, n = row_count)
-fn bench_select_count_1_from_table_group_by_two_columns_group_many(
-    b: &mut criterion::Bencher,
-    input: &Input,
-) {
+// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (n groups, n = row_count)
+fn bench_select_count_1_group_by_2_col_group_many(b: &mut criterion::Bencher, input: &Input) {
     let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
-    bench_select_count_1_from_table_group_by_two_columns_impl(table, store, b, input);
+    bench_select_count_1_group_by_2_col_impl(table, store, b, input);
 }
 
-// SELECT COUNT(1) FROM Table WHERE id > X GROUP BY int_column (2 groups, selectivity = 5%)
-fn bench_select_count_1_from_table_where_func_group_by_int_column_group_few_selectivity_l(
+// SELECT COUNT(1) FROM Table WHERE id > X GROUP BY int_col (2 groups, selectivity = 5%)
+fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l(
     b: &mut criterion::Bencher,
     input: &Input,
 ) {
@@ -371,74 +327,59 @@ pub fn bench(c: &mut criterion::Criterion) {
     }
 
     let mut cases = vec![
-        BenchCase::new("select_count_1_from_table", bench_select_count_1_from_table),
+        BenchCase::new("select_count_1", bench_select_count_1),
+        BenchCase::new("select_col_where_fn_sel_m", bench_select_col_where_fn_sel_m),
         BenchCase::new(
-            "select_column_from_table_where_func_selectivity_m",
-            bench_select_column_from_table_where_func_selectivity_m,
+            "select_count_1_where_fn_sel_m",
+            bench_select_count_1_where_fn_sel_m,
         ),
         BenchCase::new(
-            "select_count_1_from_table_where_func_selectivity_m",
-            bench_select_count_1_from_table_where_func_selectivity_m,
+            "select_count_1_group_by_fn_group_few",
+            bench_select_count_1_group_by_fn_group_few,
         ),
         BenchCase::new(
-            "select_count_1_from_table_group_by_fn_group_few",
-            bench_select_count_1_from_table_group_by_fn_group_few,
+            "select_count_1_group_by_2_col_group_few",
+            bench_select_count_1_group_by_2_col_group_few,
         ),
         BenchCase::new(
-            "select_count_1_from_table_group_by_two_columns_group_few",
-            bench_select_count_1_from_table_group_by_two_columns_group_few,
-        ),
-        BenchCase::new(
-            "select_count_1_from_table_where_func_group_by_int_column_group_few_selectivity_l",
-            bench_select_count_1_from_table_where_func_group_by_int_column_group_few_selectivity_l,
+            "select_count_1_where_fn_group_by_int_col_group_few_sel_l",
+            bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l,
         ),
     ];
     if crate::util::bench_level() >= 1 {
         let mut additional_cases = vec![
+            BenchCase::new("select_count_col", bench_select_count_col),
+            BenchCase::new("select_col_where_fn_sel_l", bench_select_col_where_fn_sel_l),
+            BenchCase::new("select_col_where_fn_sel_h", bench_select_col_where_fn_sel_h),
             BenchCase::new(
-                "select_count_column_from_table",
-                bench_select_count_column_from_table,
+                "select_count_1_where_fn_sel_l",
+                bench_select_count_1_where_fn_sel_l,
             ),
             BenchCase::new(
-                "select_column_from_table_where_func_selectivity_l",
-                bench_select_column_from_table_where_func_selectivity_l,
+                "select_count_1_where_fn_sel_h",
+                bench_select_count_1_where_fn_sel_h,
             ),
             BenchCase::new(
-                "select_column_from_table_where_func_selectivity_h",
-                bench_select_column_from_table_where_func_selectivity_h,
+                "select_count_1_group_by_int_col_group_few",
+                bench_select_count_1_group_by_int_col_group_few,
             ),
             BenchCase::new(
-                "select_count_1_from_table_where_func_selectivity_l",
-                bench_select_count_1_from_table_where_func_selectivity_l,
+                "select_count_1_group_by_int_col_group_many",
+                bench_select_count_1_group_by_int_col_group_many,
             ),
             BenchCase::new(
-                "select_count_1_from_table_where_func_selectivity_h",
-                bench_select_count_1_from_table_where_func_selectivity_h,
+                "select_count_1_group_by_fn_group_many",
+                bench_select_count_1_group_by_fn_group_many,
             ),
             BenchCase::new(
-                "select_count_1_from_table_group_by_int_column_group_few",
-                bench_select_count_1_from_table_group_by_int_column_group_few,
-            ),
-            BenchCase::new(
-                "select_count_1_from_table_group_by_int_column_group_many",
-                bench_select_count_1_from_table_group_by_int_column_group_many,
-            ),
-            BenchCase::new(
-                "select_count_1_from_table_group_by_fn_group_many",
-                bench_select_count_1_from_table_group_by_fn_group_many,
-            ),
-            BenchCase::new(
-                "select_count_1_from_table_group_by_two_columns_group_many",
-                bench_select_count_1_from_table_group_by_two_columns_group_many,
+                "select_count_1_group_by_2_col_group_many",
+                bench_select_count_1_group_by_2_col_group_many,
             ),
         ];
         cases.append(&mut additional_cases);
     }
     if crate::util::bench_level() >= 2 {
-        let mut additional_cases = vec![BenchCase::new(
-            "select_where_column_from_table",
-            bench_select_where_column_from_table,
-        )];
+        let mut additional_cases = vec![BenchCase::new("select_where_col", bench_select_where_col)];
         cases.append(&mut additional_cases);
     }
 

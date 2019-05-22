@@ -13,7 +13,7 @@ const ROWS: usize = 5000;
 ///
 /// This kind of scanner is used in SQLs like SELECT COUNT(*).
 fn bench_table_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
-    let (table, store) = fixture::table_with_two_columns(ROWS);
+    let (table, store) = fixture::table_with_2_columns(ROWS);
     input.0.bench(
         b,
         &[table["id"].as_column_info()],
@@ -157,7 +157,7 @@ fn bench_table_scan_datum_absent_large_row(b: &mut criterion::Bencher, input: &I
 
 /// 1 interested column, which is PK. However the range given are point ranges.
 fn bench_table_scan_point_range(b: &mut criterion::Bencher, input: &Input) {
-    let (table, store) = fixture::table_with_two_columns(ROWS);
+    let (table, store) = fixture::table_with_2_columns(ROWS);
 
     let mut ranges = vec![];
     for i in 0..=1024 {

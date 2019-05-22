@@ -14,7 +14,7 @@ const ROWS: usize = 5000;
 /// This kind of scanner is used in SQLs like `SELECT * FROM .. WHERE index = X`, an index lookup
 /// will be performed so that PK is needed.
 fn bench_index_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
-    let (index_id, table, store) = fixture::table_with_two_columns_and_one_index(ROWS);
+    let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
         b,
         &[table["id"].as_column_info()],
@@ -29,7 +29,7 @@ fn bench_index_scan_primary_key(b: &mut criterion::Bencher, input: &Input) {
 /// This kind of scanner is used in SQLs like `SELECT COUNT(*) FROM .. WHERE index = X` or
 /// `SELECT index FROM .. WHERE index = X`. There is no double read.
 fn bench_index_scan_index(b: &mut criterion::Bencher, input: &Input) {
-    let (index_id, table, store) = fixture::table_with_two_columns_and_one_index(ROWS);
+    let (index_id, table, store) = fixture::table_with_2_columns_and_one_index(ROWS);
     input.0.bench(
         b,
         &[table["foo"].as_column_info()],

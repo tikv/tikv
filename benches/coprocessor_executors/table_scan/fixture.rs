@@ -4,7 +4,7 @@ use test_coprocessor::*;
 use tikv::storage::RocksEngine;
 
 /// Builds a fixture table, which contains two columns: id, foo.
-pub fn table_with_two_columns(rows: usize) -> (Table, Store<RocksEngine>) {
+pub fn table_with_2_columns(rows: usize) -> (Table, Store<RocksEngine>) {
     let id = ColumnBuilder::new()
         .col_type(TYPE_LONG)
         .primary_key(true)

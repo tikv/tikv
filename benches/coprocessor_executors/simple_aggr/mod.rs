@@ -18,7 +18,7 @@ fn bench_simple_aggr_count_1(b: &mut criterion::Bencher, input: &Input) {
 }
 
 /// COUNT(COL) where COL is a int column
-fn bench_simple_aggr_count_int_column(b: &mut criterion::Bencher, input: &Input) {
+fn bench_simple_aggr_count_int_col(b: &mut criterion::Bencher, input: &Input) {
     let fb = FixtureBuilder::new(input.src_rows).push_column_i64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
@@ -27,7 +27,7 @@ fn bench_simple_aggr_count_int_column(b: &mut criterion::Bencher, input: &Input)
 }
 
 /// COUNT(COL) where COL is a real column
-fn bench_simple_aggr_count_real_column(b: &mut criterion::Bencher, input: &Input) {
+fn bench_simple_aggr_count_real_col(b: &mut criterion::Bencher, input: &Input) {
     let fb = FixtureBuilder::new(input.src_rows).push_column_f64_random();
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
@@ -36,7 +36,7 @@ fn bench_simple_aggr_count_real_column(b: &mut criterion::Bencher, input: &Input
 }
 
 /// COUNT(COL) where COL is a bytes column (note: the column is very short)
-fn bench_simple_aggr_count_bytes_column(b: &mut criterion::Bencher, input: &Input) {
+fn bench_simple_aggr_count_bytes_col(b: &mut criterion::Bencher, input: &Input) {
     let fb = FixtureBuilder::new(input.src_rows).push_column_bytes_random_fixed_len(10);
     let expr = ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
         .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::VarChar))
@@ -83,20 +83,17 @@ pub fn bench(c: &mut criterion::Criterion) {
 
     let mut cases = vec![
         BenchCase::new("simple_aggr_count_1", bench_simple_aggr_count_1),
-        BenchCase::new(
-            "simple_aggr_count_int_column",
-            bench_simple_aggr_count_int_column,
-        ),
+        BenchCase::new("simple_aggr_count_int_col", bench_simple_aggr_count_int_col),
     ];
     if crate::util::bench_level() >= 2 {
         let mut additional_cases = vec![
             BenchCase::new(
-                "simple_aggr_count_real_column",
-                bench_simple_aggr_count_real_column,
+                "simple_aggr_count_real_col",
+                bench_simple_aggr_count_real_col,
             ),
             BenchCase::new(
-                "simple_aggr_count_bytes_column",
-                bench_simple_aggr_count_bytes_column,
+                "simple_aggr_count_bytes_col",
+                bench_simple_aggr_count_bytes_col,
             ),
         ];
         cases.append(&mut additional_cases);
