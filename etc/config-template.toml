@@ -413,7 +413,8 @@
 
 ## Options for `Titan`.
 [rocksdb.titan]
-## Enables `Titan`
+## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
+## enabled, it can't fall back. Forced fallback may result in data loss.
 ## default: false
 # enabled = false
 
@@ -710,3 +711,7 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+
+[pessimistic-txn]
+## Enable pessimistic transaction
+# enabled = false
