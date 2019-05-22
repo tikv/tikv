@@ -345,10 +345,6 @@ impl Duration {
 
         let fsp = check_fsp(fsp)?;
 
-        if input.is_empty() {
-            return Ok(Duration::zero());
-        }
-
         let (mut neg, [mut day, mut hour, mut minute, mut second, fraction]) = parse(input, fsp)
             .map_err(|_| invalid_type!("invalid time format"))?
             .1;
