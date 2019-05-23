@@ -206,8 +206,10 @@ impl HashAggExecutor {
         }
         Ok(())
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl Executor for HashAggExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
         if !self.inner.executed {
             self.aggregate()?;
             self.inner.executed = true;
@@ -235,12 +237,6 @@ impl HashAggExecutor {
             None => Ok(None),
         }
     }
-}
-
-impl Executor for HashAggExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
-    }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.inner.collect_output_counts(counts);
@@ -265,7 +261,33 @@ impl Executor for HashAggExecutor {
 
 impl Executor for StreamAggExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
+        if self.inner.executed {
+            return Ok(None);
+        }
+
+        while let Some(cols) = self.inner.next()? {
+            self.has_data = true;
+            let new_group = self.meet_new_group(&cols)?;
+            let ret = if new_group {
+                Some(self.get_partial_result()?)
+            } else {
+                None
+            };
+            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
+                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+            }
+            if new_group {
+                return Ok(ret);
+            }
+        }
+        self.inner.executed = true;
+        // If there is no data in the t, then whether there is 'group by' that can affect the result.
+        // e.g. select count(*) from t. Result is 0.
+        // e.g. select count(*) from t group by c. Result is empty.
+        if !self.has_data && !self.inner.group_by.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.get_partial_result()?))
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -371,36 +393,6 @@ impl StreamAggExecutor {
 
         self.count += 1;
         Ok(Row::agg(cols, Vec::default()))
-    }
-
-    fn next_impl(&mut self) -> Result<Option<Row>> {
-        if self.inner.executed {
-            return Ok(None);
-        }
-
-        while let Some(cols) = self.inner.next()? {
-            self.has_data = true;
-            let new_group = self.meet_new_group(&cols)?;
-            let ret = if new_group {
-                Some(self.get_partial_result()?)
-            } else {
-                None
-            };
-            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
-            }
-            if new_group {
-                return Ok(ret);
-            }
-        }
-        self.inner.executed = true;
-        // If there is no data in the t, then whether there is 'group by' that can affect the result.
-        // e.g. select count(*) from t. Result is 0.
-        // e.g. select count(*) from t group by c. Result is empty.
-        if !self.has_data && !self.inner.group_by.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(self.get_partial_result()?))
     }
 }
 

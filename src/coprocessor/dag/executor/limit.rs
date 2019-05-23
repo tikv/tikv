@@ -25,8 +25,10 @@ impl LimitExecutor {
             first_collect: true,
         }
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl Executor for LimitExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
         if self.cursor >= self.limit {
             return Ok(None);
         }
@@ -36,12 +38,6 @@ impl LimitExecutor {
         } else {
             Ok(None)
         }
-    }
-}
-
-impl Executor for LimitExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
     }
 
     fn collect_output_counts(&mut self, _: &mut Vec<i64>) {

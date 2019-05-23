@@ -116,8 +116,10 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
         )
         .map_err(Error::from)
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
+    fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 self.inc_last_count();
@@ -146,12 +148,6 @@ impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
             }
             return Ok(None);
         }
-    }
-}
-
-impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
-    fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {

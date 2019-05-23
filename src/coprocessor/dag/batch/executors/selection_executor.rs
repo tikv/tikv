@@ -58,9 +58,17 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
             conditions,
         })
     }
+}
+
+impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        // The selection executor's schema comes from its child.
+        self.src.schema()
+    }
 
     #[inline]
-    fn handle_next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 
         // When there are errors during the `next_batch()` in the src executor, it means that the
@@ -103,19 +111,6 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
         // when there are errors.
         src_result.warnings.merge(&mut self.context.warnings);
         src_result
-    }
-}
-
-impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        // The selection executor's schema comes from its child.
-        self.src.schema()
-    }
-
-    #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        self.handle_next_batch(scan_rows)
     }
 
     #[inline]

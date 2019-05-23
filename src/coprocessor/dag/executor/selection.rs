@@ -37,8 +37,10 @@ impl SelectionExecutor {
             first_collect: true,
         })
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl Executor for SelectionExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
             let row = row.take_origin();
             let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
@@ -51,12 +53,6 @@ impl SelectionExecutor {
             return Ok(Some(Row::Origin(row)));
         }
         Ok(None)
-    }
-}
-
-impl Executor for SelectionExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {

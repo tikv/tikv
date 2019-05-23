@@ -107,19 +107,15 @@ impl TopNExecutor {
         self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
         Ok(())
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl Executor for TopNExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
         if self.iter.is_none() {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
         Ok(iter.next())
-    }
-}
-
-impl Executor for TopNExecutor {
-    fn next(&mut self) -> Result<Option<Row>> {
-        self.next_impl()
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
