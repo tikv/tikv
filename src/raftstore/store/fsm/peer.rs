@@ -791,6 +791,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         } else {
             debug!("stop ticking"; "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(), "res" => ?res);
             self.fsm.group_state = GroupState::Idle;
+            // Followers will stop ticking at L760. Keep ticking for followers
+            // to allow it to campaign quickly when abnormal situation is detected.
             if !self.fsm.peer.is_leader() {
                 self.register_raft_base_tick();
             }
