@@ -17,7 +17,6 @@ use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
-use crate::storage::kv::raftkv::RaftKv;
 use crate::storage::lock_manager::{
     Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
 };
@@ -177,6 +176,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
     let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
+
     let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
     let engine_snapshot = Arc::new(RwLock::new(None));
     let local_reader = LocalReader::new(
@@ -185,9 +185,8 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         store_meta.clone(),
         router.clone(),
     );
-    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
-    let raft_engine = RaftKv::new(raft_router.clone());
 
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
     let engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
@@ -255,7 +254,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         pd_sender.clone(),
         engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, engine.clone(), cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -319,14 +318,17 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 
     // Start waiter manager and deadlock detector
     if cfg.pessimistic_txn.enabled {
-        let waiter_mgr_runner = WaiterManager::new(DetectorScheduler::new(
-            detector_worker.as_ref().unwrap().scheduler(),
-        ));
+        let waiter_mgr_runner = WaiterManager::new(
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+            cfg.pessimistic_txn.wait_for_lock_timeout,
+            cfg.pessimistic_txn.wake_up_delay_duration,
+        );
         let detector_runner = Detector::new(
             node.id(),
             WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
             Arc::clone(&security_mgr),
             pd_client,
+            cfg.pessimistic_txn.monitor_membership_interval,
         );
         waiter_mgr_worker
             .as_mut()

@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use std::{thread, usize};
@@ -35,7 +34,6 @@ use tikv_util::security::SecurityManager;
 use tikv_util::worker::{FutureWorker, Worker};
 
 use super::*;
-use std::sync::atomic::AtomicPtr;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 type SimulateStoreTransport = SimulateTransport<ServerRaftStoreRouter>;
@@ -123,10 +121,10 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let engine_snapshot = Arc::new(AtomicPtr::new(ptr::null_mut()));
+        let engine_snapshot = Arc::new(RwLock::new(None));
         let local_reader = LocalReader::new(
             engines.kv.clone(),
-            engine_snapshot.clone(),
+            Arc::clone(&engine_snapshot),
             store_meta.clone(),
             router.clone(),
         );
@@ -148,7 +146,7 @@ impl Simulator for ServerCluster {
             None,
             None,
         )?;
-        self.storages.insert(node_id, raft_engine.clone());
+        self.storages.insert(node_id, raft_engine);
 
         // Create import service.
         let importer = {
@@ -168,8 +166,8 @@ impl Simulator for ServerCluster {
         let server_cfg = Arc::new(cfg.server.clone());
         let security_mgr = Arc::new(SecurityManager::new(&cfg.security).unwrap());
         let cop_read_pool =
-            coprocessor::readpool_impl::build_read_pool_for_test(raft_engine.clone());
-        let cop = coprocessor::Endpoint::new(&server_cfg, raft_engine, cop_read_pool);
+            coprocessor::readpool_impl::build_read_pool_for_test(store.get_engine());
+        let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
         let mut server = None;
         for _ in 0..100 {
             server = Some(Server::new(

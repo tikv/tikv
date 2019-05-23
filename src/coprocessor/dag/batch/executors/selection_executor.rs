@@ -151,7 +151,6 @@ mod tests {
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
-    use crate::coprocessor::Error;
 
     #[test]
     fn test_empty_rows() {
@@ -529,6 +528,8 @@ mod tests {
 
     #[test]
     fn test_predicate_error() {
+        use crate::coprocessor::Error;
+
         /// This function returns error when value is None.
         #[derive(Debug, Clone, Copy, RpnFunction)]
         #[rpn_function(args = 1)]

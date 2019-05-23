@@ -1,8 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tempdir::TempDir;
 
@@ -12,7 +11,6 @@ use kvproto::raft_serverpb::RegionLocalState;
 use engine::rocks;
 use engine::Engines;
 use engine::*;
-use std::sync::atomic::AtomicPtr;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;
@@ -87,7 +85,7 @@ fn test_node_bootstrap_with_prepared_data() {
         let dir = tmp_path.path().join("import-sst");
         Arc::new(SSTImporter::new(dir).unwrap())
     };
-    let engine_snapshot = Arc::new(AtomicPtr::new(ptr::null_mut()));
+    let engine_snapshot = Arc::new(RwLock::new(None));
 
     // try to restart this node, will clear the prepare data
     node.start(

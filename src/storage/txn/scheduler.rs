@@ -38,7 +38,7 @@ use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
-const TASKS_SLOTS_NUM: usize = 1 << 10; // 1024 slots.
+const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
@@ -476,14 +476,12 @@ impl<E: Engine> Scheduler<E> {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tctx.tag, "lock_wait"])
             .inc();
-        // TODO: timeout config
         self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
             start_ts,
             tctx.cb,
             pr,
             lock.clone(),
             is_first_lock,
-            1000,
         );
         self.release_lock(&tctx.lock, cid);
     }

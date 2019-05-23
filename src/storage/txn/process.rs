@@ -176,7 +176,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
-                    wakeup_scheduler(
+                    notify_scheduler(
                         self.take_scheduler(),
                         Msg::FinishedWithErr {
                             cid: task.cid,
@@ -245,7 +245,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        wakeup_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
         statistics
     }
 
@@ -302,7 +302,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool.pool.spawn(move || {
-                            wakeup_scheduler(
+                            notify_scheduler(
                                 sched,
                                 Msg::WriteFinished {
                                     cid,
@@ -342,7 +342,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
-        wakeup_scheduler(scheduler, msg);
+        notify_scheduler(scheduler, msg);
         statistics
     }
 }
@@ -512,6 +512,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
+    // (lock, is_first_lock)
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
@@ -783,7 +784,7 @@ fn process_write_impl<S: Snapshot>(
     })
 }
 
-pub fn wakeup_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
+pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 

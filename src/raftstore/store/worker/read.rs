@@ -91,7 +91,7 @@ impl ReadDelegate {
                 {
                     // Cache snapshot_time for remaining requests in the same batch.
                     *last_valid_ts = snapshot_time;
-                    let mut resp = executor.execute(req, &self.region);
+                    let mut resp = executor.execute(req, &self.region, None);
                     // Leader can read local if and only if it is in lease.
                     cmd_resp::bind_term(&mut resp.response, term);
                     return Some(resp);
@@ -216,6 +216,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     fn pre_propose_raft_command(&self, req: &RaftCmdRequest) -> Result<Option<ReadDelegate>> {
+        // Check store id.
         if self.store_id.get().is_none() {
             let store_id = self.store_meta.lock().unwrap().store_id;
             self.store_id.set(store_id);
@@ -303,17 +304,12 @@ impl<C: ProposalRouter> LocalReader<C> {
                             .borrow_mut()
                             .insert(region_id, Some(delegate));
                         return;
-                    } else {
-                        // Remove delegate for updating it by next cmd execution.
-                        self.delegates.borrow_mut().remove(&region_id);
-                        break;
                     }
+                    break;
                 }
-                // It can not handle the rquest, forwards to raftstore.
+                // It can not handle the request, forwards to raftstore.
                 Ok(None) => {
                     if self.delegates.borrow().get(&region_id).is_some() {
-                        // Remove delegate for updating it by next cmd execution.
-                        self.delegates.borrow_mut().remove(&region_id);
                         break;
                     }
                     let meta = self.store_meta.lock().unwrap();
@@ -322,8 +318,6 @@ impl<C: ProposalRouter> LocalReader<C> {
                             self.delegates.borrow_mut().insert(region_id, Some(reader));
                         }
                         None => {
-                            // Cleanup, the region may be removed.
-                            self.delegates.borrow_mut().remove(&region_id);
                             self.metrics.borrow_mut().rejected_by_no_region += 1;
                             debug!("rejected by no region"; "region_id" => region_id);
                             break;
@@ -344,6 +338,8 @@ impl<C: ProposalRouter> LocalReader<C> {
                 }
             }
         }
+        // Remove delegate for updating it by next cmd execution.
+        self.delegates.borrow_mut().remove(&region_id);
         // Forward to raftstore.
         self.redirect(cmd);
     }
@@ -355,7 +351,7 @@ impl<C: ProposalRouter> LocalReader<C> {
     }
 
     /// Task accepts `RaftCmdRequest`s that contain Get/Snap requests.
-    /// Returns `true`, it can be saftly sent to localreader,
+    /// Returns `true`, it can be safely sent to localreader,
     /// Returns `false`, it must not be sent to localreader.
     #[inline]
     pub fn acceptable(request: &RaftCmdRequest) -> bool {
