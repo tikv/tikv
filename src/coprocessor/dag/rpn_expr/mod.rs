@@ -4,9 +4,9 @@
 pub mod function;
 pub mod types;
 
-mod impl_arithmetic;
-mod impl_compare;
-mod impl_op;
+pub mod impl_arithmetic;
+pub mod impl_compare;
+pub mod impl_op;
 
 pub use self::function::RpnFunction;
 pub use self::types::{RpnExpression, RpnExpressionBuilder};
@@ -139,10 +139,13 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::LogicalAnd => Box::new(RpnFnLogicalAnd),
         ScalarFuncSig::LogicalOr => Box::new(RpnFnLogicalOr),
         ScalarFuncSig::PlusInt => map_int_sig(value, children, int_arith!(Plus))?,
-        ScalarFuncSig::PlusReal => Box::new(Plus::<Real, Real>::func()),
-        ScalarFuncSig::PlusDecimal => Box::new(Plus::<Decimal, Decimal>::func()),
-        ScalarFuncSig::ModReal => Box::new(Mod::<Real, Real>::func()),
-        ScalarFuncSig::ModDecimal => Box::new(Mod::<Decimal, Decimal>::func()),
+        ScalarFuncSig::PlusReal => Box::new(Plus::<Real>::func()),
+        ScalarFuncSig::PlusDecimal => Box::new(Plus::<Decimal>::func()),
+        ScalarFuncSig::MinusInt => map_int_sig(value, children, int_arith!(Minus))?,
+        ScalarFuncSig::MinusReal => Box::new(Minus::<Real>::func()),
+        ScalarFuncSig::MinusDecimal => Box::new(Minus::<Decimal>::func()),
+        ScalarFuncSig::ModReal => Box::new(Mod::<Real>::func()),
+        ScalarFuncSig::ModDecimal => Box::new(Mod::<Decimal>::func()),
         ScalarFuncSig::ModInt => map_int_sig(value, children, int_arith!(Mod))?,
         _ => return Err(box_err!(
             "ScalarFunction {:?} is not supported in batch mode",

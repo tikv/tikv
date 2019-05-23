@@ -4,7 +4,7 @@ use cop_codegen::RpnFunction;
 
 use super::types::RpnFnCallPayload;
 use crate::coprocessor::codec::data_type::*;
-use crate::coprocessor::codec::mysql::{Decimal, Res};
+use crate::coprocessor::codec::mysql::Res;
 use crate::coprocessor::codec::{self, Error};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::Uint;
@@ -89,9 +89,16 @@ where
     }
 }
 
-binary_op![Plus, Mod];
+macro_rules! arith_op {
+    ($($Op:ident),* $(,)*) => {$(
+    #[derive(Debug)]
+    pub struct $Op<LHS, RHS=LHS>(std::marker::PhantomData<(LHS, RHS)>);
+    )*};
+}
 
-impl ArithmeticOp<Int> for Plus<Int, Int> {
+arith_op![Plus, Minus, Mod];
+
+impl ArithmeticOp<Int> for Plus<Int> {
     fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         lhs.checked_add(*rhs)
             .ok_or_else(|| Error::overflow("BIGINT", &format!("({} + {})", lhs, rhs)).into())
@@ -130,7 +137,7 @@ impl ArithmeticOp<Int> for Plus<Uint, Uint> {
     }
 }
 
-impl ArithmeticOp<Real> for Plus<Real, Real> {
+impl ArithmeticOp<Real> for Plus<Real> {
     fn calc(_ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         let res = *lhs + *rhs;
         if res.is_infinite() {
@@ -140,14 +147,75 @@ impl ArithmeticOp<Real> for Plus<Real, Real> {
     }
 }
 
-impl ArithmeticOp<Decimal> for Plus<Decimal, Decimal> {
+impl ArithmeticOp<Decimal> for Plus<Decimal> {
     fn calc(_ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         let res: codec::Result<Decimal> = (lhs + rhs).into();
         Ok(Some(res?))
     }
 }
 
-impl ArithmeticOp<Int> for Mod<Int, Int> {
+impl ArithmeticOp<Int> for Minus<Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        lhs.checked_sub(*rhs)
+            .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            .map(Some)
+    }
+}
+
+impl ArithmeticOp<Int> for Minus<Int, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        if *lhs >= 0 {
+            (*lhs as u64)
+                .checked_sub(*rhs as u64)
+                .ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+                .map(|v| Some(v as i64))
+        } else {
+            Err(Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)))?
+        }
+    }
+}
+
+impl ArithmeticOp<Int> for Minus<Uint, Int> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        let res = if *rhs >= 0 {
+            (*lhs as u64).checked_sub(*rhs as u64)
+        } else {
+            (*lhs as u64).checked_add(rhs.overflowing_neg().0 as u64)
+        };
+        res.ok_or_else(|| Error::overflow("BIGINT", &format!("({} - {})", lhs, rhs)).into())
+            .map(|v| Some(v as i64))
+    }
+}
+
+impl ArithmeticOp<Int> for Minus<Uint, Uint> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
+        (*lhs as u64)
+            .checked_sub(*rhs as u64)
+            .ok_or_else(|| {
+                Error::overflow("BIGINT UNSIGNED", &format!("({} - {})", lhs, rhs)).into()
+            })
+            .map(|v| Some(v as i64))
+    }
+}
+
+impl ArithmeticOp<Real> for Minus<Real> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
+        let res = *lhs - *rhs;
+        if res.is_infinite() {
+            Err(Error::overflow("DOUBLE", &format!("({} - {})", lhs, rhs)))?;
+        }
+        Ok(Some(res))
+    }
+}
+
+impl ArithmeticOp<Decimal> for Minus<Decimal> {
+    fn calc(_ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
+        let res: codec::Result<Decimal> = (lhs - rhs).into();
+        Ok(Some(res?))
+    }
+}
+
+impl ArithmeticOp<Int> for Mod<Int> {
     fn calc(_ctx: &mut EvalContext, lhs: &Int, rhs: &Int) -> Result<Option<Int>> {
         if *rhs == 0i64 {
             return Ok(None);
@@ -187,7 +255,7 @@ impl ArithmeticOp<Int> for Mod<Uint, Uint> {
     }
 }
 
-impl ArithmeticOp<Real> for Mod<Real, Real> {
+impl ArithmeticOp<Real> for Mod<Real> {
     fn calc(_ctx: &mut EvalContext, lhs: &Real, rhs: &Real) -> Result<Option<Real>> {
         if (*rhs).into_inner() == 0f64 {
             return Ok(None);
@@ -196,7 +264,7 @@ impl ArithmeticOp<Real> for Mod<Real, Real> {
     }
 }
 
-impl ArithmeticOp<Decimal> for Mod<Decimal, Decimal> {
+impl ArithmeticOp<Decimal> for Mod<Decimal> {
     fn calc(_ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
         if rhs.is_zero() {
             return Ok(None);
@@ -293,6 +361,113 @@ mod tests {
                 .push_param(lhs.parse::<Decimal>().ok())
                 .push_param(rhs.parse::<Decimal>().ok())
                 .evaluate(ScalarFuncSig::PlusDecimal)
+                .unwrap();
+            assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+    }
+
+    #[test]
+    fn test_minus_int() {
+        let test_cases = vec![
+            (None, false, Some(1), false, None, false),
+            (Some(1), false, None, false, None, false),
+            (Some(12), false, Some(1), false, Some(11), false),
+            (
+                Some(0),
+                true,
+                Some(std::i64::MIN),
+                false,
+                Some((std::i64::MAX as u64 + 1) as i64),
+                false,
+            ),
+            (
+                Some(std::i64::MIN),
+                false,
+                Some(std::i64::MAX),
+                false,
+                None,
+                true,
+            ),
+            (
+                Some(std::i64::MAX),
+                false,
+                Some(std::i64::MIN),
+                false,
+                None,
+                true,
+            ),
+            (Some(-1), false, Some(2), true, None, true),
+            (Some(1), true, Some(2), false, None, true),
+        ];
+        for (lhs, lhs_is_unsigned, rhs, rhs_is_unsigned, expected, is_err) in test_cases {
+            let lhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if lhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let rhs_field_type = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(if rhs_is_unsigned {
+                    FieldTypeFlag::UNSIGNED
+                } else {
+                    FieldTypeFlag::empty()
+                })
+                .build();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(lhs, lhs_field_type)
+                .push_param_with_field_type(rhs, rhs_field_type)
+                .evaluate(ScalarFuncSig::MinusInt);
+            if is_err {
+                assert!(output.is_err())
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+            }
+        }
+    }
+
+    #[test]
+    fn test_minus_real() {
+        let test_cases = vec![
+            (
+                Real::new(1.01001).ok(),
+                Real::new(-0.01).ok(),
+                Real::new(1.02001).ok(),
+                false,
+            ),
+            (
+                Real::new(std::f64::MIN).ok(),
+                Real::new(std::f64::MAX).ok(),
+                None,
+                true,
+            ),
+        ];
+        for (lhs, rhs, expected, is_err) in test_cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs)
+                .push_param(rhs)
+                .evaluate(ScalarFuncSig::MinusReal);
+            if is_err {
+                assert!(output.is_err())
+            } else {
+                let output = output.unwrap();
+                assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+            }
+        }
+    }
+
+    #[test]
+    fn test_minus_decimal() {
+        let test_cases = vec![("1.1", "2.2", "-1.1")];
+        for (lhs, rhs, expected) in test_cases {
+            let expected: Option<Decimal> = expected.parse().ok();
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(lhs.parse::<Decimal>().ok())
+                .push_param(rhs.parse::<Decimal>().ok())
+                .evaluate(ScalarFuncSig::MinusDecimal)
                 .unwrap();
             assert_eq!(output, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
         }

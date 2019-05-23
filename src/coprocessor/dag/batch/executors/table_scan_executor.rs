@@ -36,7 +36,6 @@ impl
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
-            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
     }
 }
 
@@ -317,7 +316,7 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::{Real, VectorValue};
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
