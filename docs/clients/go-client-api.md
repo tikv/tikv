@@ -124,7 +124,7 @@ found val:  for key: Company
 
 RawKVClient is a client of the TiKV server and only supports the GET/PUT/DELETE/SCAN commands. The RawKVClient can be safely and concurrently accessed by multiple goroutines, as long as it is not closed. Therefore, for one process, one client is enough generally.
 
-### Possiable Error
+### Possible Error
 
 If you get the error like follows.
 
@@ -132,7 +132,7 @@ If you get the error like follows.
 build rawkv-demo: cannot load github.com/pingcap/pd/pd-client: cannot find module providing package github.com/pingcap/pd/pd-client
 ```
 
-You can run the `GO111MODULE=on go get -u github.com/pingcap/tidb@master` to fix it.
+You can run `GO111MODULE=on go get -u github.com/pingcap/tidb@master` to fix it.
 
 ## Try the Transactional Key-Value API
 
