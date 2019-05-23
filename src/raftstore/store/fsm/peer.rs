@@ -82,6 +82,13 @@ pub struct PeerFsm {
     peer: Peer,
     /// A registry for all scheduled ticks. This can avoid scheduling ticks twice accidentally.
     tick_registry: PeerTicks,
+    /// Ticks for speed up campaign in chaos state.
+    ///
+    /// Followers will keep ticking in Idle mode to measure how many ticks have been skipped.
+    /// Once it becomes chaos, those skipped ticks will be ticked so that it can campaign
+    /// quickly instead of waiting an election timeout.
+    ///
+    /// This will be reset to 0 once it receives any messages from leader.
     missing_ticks: usize,
     group_state: GroupState,
     stopped: bool,
@@ -757,6 +764,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.group_state == GroupState::Idle {
+                // missing_ticks should be less than election timeout ticks otherwise
+                // follower may tick more than an election timeout in chaos state.
                 if self.fsm.missing_ticks + 1 < self.ctx.cfg.raft_election_timeout_ticks {
                     self.register_raft_base_tick();
                     self.fsm.missing_ticks += 1;
