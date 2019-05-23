@@ -5,15 +5,13 @@ use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
 use crate::storage::txn::{execute_callback, ProcessResult};
-use crate::storage::{Error as StorageError, Key, StorageCb};
+use crate::storage::{Error as StorageError, StorageCb};
 use crate::tikv_util::collections::HashMap;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::Future;
 use kvproto::deadlock::WaitForEntry;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
@@ -29,7 +27,6 @@ pub enum Task {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: u64,
     },
     WakeUp {
         // lock info
@@ -73,7 +70,6 @@ struct Waiter {
     cb: StorageCb,
     pr: ProcessResult,
     lock: Lock,
-    timeout: u64,
 }
 
 type Waiters = Vec<Waiter>;
@@ -178,7 +174,6 @@ impl Scheduler {
         pr: ProcessResult,
         lock: Lock,
         is_first_lock: bool,
-        timeout: u64,
     ) {
         self.notify_scheduler(Task::WaitFor {
             start_ts,
@@ -186,7 +181,6 @@ impl Scheduler {
             pr,
             lock,
             is_first_lock,
-            timeout,
         });
     }
 
@@ -215,22 +209,29 @@ impl Scheduler {
 pub struct WaiterManager {
     wait_table: Rc<RefCell<WaitTable>>,
     detector_scheduler: DetectorScheduler,
+    wait_for_lock_timeout: u64,
+    wake_up_delay_duration: u64,
 }
 
 unsafe impl Send for WaiterManager {}
 
 impl WaiterManager {
-    pub fn new(detector_scheduler: DetectorScheduler) -> Self {
+    pub fn new(
+        detector_scheduler: DetectorScheduler,
+        wait_for_lock_timeout: u64,
+        wake_up_delay_duration: u64,
+    ) -> Self {
         Self {
             wait_table: Rc::new(RefCell::new(WaitTable::new())),
             detector_scheduler,
+            wait_for_lock_timeout,
+            wake_up_delay_duration,
         }
     }
 
     fn handle_wait_for(&mut self, handle: &Handle, is_first_lock: bool, waiter: Waiter) {
         let lock = waiter.lock.clone();
         let start_ts = waiter.start_ts;
-        let timeout = waiter.timeout;
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
@@ -239,7 +240,7 @@ impl WaiterManager {
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
             let detector_scheduler = self.detector_scheduler.clone();
-            let when = Instant::now() + Duration::from_millis(timeout);
+            let when = Instant::now() + Duration::from_millis(self.wait_for_lock_timeout);
             // TODO: cancel timer when wake up.
             let timer = Delay::new(when)
                 .map_err(|e| info!("timeout timer delay errored"; "err" => ?e))
@@ -267,31 +268,20 @@ impl WaiterManager {
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
                 .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
-            // Sleep a little so the transaction with small start_ts will more likely get the lock.
-            let when = Instant::now() + Duration::from_millis(10 * (i as u64));
-            let timer = Delay::new(when)
-                .and_then(move |_| {
-                    // Maybe we can store the latest commit_ts in TiKV, and use
-                    // it as `conflict_start_ts` when waker's `commit_ts` is smaller
-                    // than waiter's for_update_ts.
-                    //
-                    // If so TiDB can use this `conflict_start_ts` as `for_update_ts`
-                    // directly, there is no need to get a ts from PD.
-                    let mvcc_err = MvccError::WriteConflict {
-                        start_ts: waiter.start_ts,
-                        conflict_start_ts: lock_ts,
-                        conflict_commit_ts: commit_ts,
-                        key: vec![],
-                        primary: vec![],
-                    };
-                    let pr = ProcessResult::Failed {
-                        err: StorageError::from(TxnError::from(mvcc_err)),
-                    };
-                    execute_callback(waiter.cb, pr);
-                    Ok(())
-                })
-                .map_err(|e| info!("wake-up timer delay errored"; "err" => ?e));
-            handle.spawn(timer);
+            if self.wake_up_delay_duration > 0 {
+                // Sleep a little so the transaction with small start_ts will more likely get the lock.
+                let when = Instant::now()
+                    + Duration::from_millis(self.wake_up_delay_duration * (i as u64));
+                let timer = Delay::new(when)
+                    .and_then(move |_| {
+                        wake_up_waiter(waiter, commit_ts);
+                        Ok(())
+                    })
+                    .map_err(|e| info!("wake-up timer delay errored"; "err" => ?e));
+                handle.spawn(timer);
+            } else {
+                wake_up_waiter(waiter, commit_ts);
+            }
         }
     }
 
@@ -327,7 +317,6 @@ impl FutureRunnable<Task> for WaiterManager {
                 pr,
                 lock,
                 is_first_lock,
-                timeout,
             } => {
                 self.handle_wait_for(
                     handle,
@@ -337,7 +326,6 @@ impl FutureRunnable<Task> for WaiterManager {
                         cb,
                         pr,
                         lock,
-                        timeout,
                     },
                 );
             }
@@ -362,46 +350,33 @@ impl FutureRunnable<Task> for WaiterManager {
     }
 }
 
-pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
-    match res {
-        Err(StorageError::Txn(TxnError::Mvcc(MvccError::KeyIsLocked { key, ts, .. }))) => Lock {
-            ts: *ts,
-            hash: gen_key_hash(&Key::from_raw(&key)),
-        },
-        _ => panic!("unsupported mvcc error"),
-    }
-}
-
-pub fn gen_key_hash(key: &Key) -> u64 {
-    let mut s = DefaultHasher::new();
-    key.hash(&mut s);
-    s.finish()
-}
-
-pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
-    keys.iter().map(|key| gen_key_hash(key)).collect()
+fn wake_up_waiter(waiter: Waiter, commit_ts: u64) {
+    // Maybe we can store the latest commit_ts in TiKV, and use
+    // it as `conflict_start_ts` when waker's `conflict_commit_ts`
+    // is smaller than waiter's for_update_ts.
+    //
+    // If so TiDB can use this `conflict_start_ts` as `for_update_ts`
+    // directly, there is no need to get a ts from PD.
+    let mvcc_err = MvccError::WriteConflict {
+        start_ts: waiter.start_ts,
+        conflict_start_ts: waiter.lock.ts,
+        conflict_commit_ts: commit_ts,
+        key: vec![],
+        primary: vec![],
+    };
+    let pr = ProcessResult::Failed {
+        err: StorageError::from(TxnError::from(mvcc_err)),
+    };
+    execute_callback(waiter.cb, pr);
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::util::*;
     use super::*;
+    use crate::storage::Key;
+    use std::time::Duration;
     use test_util::KvGenerator;
-
-    #[test]
-    fn test_extract_lock_from_result() {
-        let raw_key = b"key".to_vec();
-        let key = Key::from_raw(&raw_key);
-        let ts = 100;
-        let case = StorageError::from(TxnError::from(MvccError::KeyIsLocked {
-            key: raw_key,
-            primary: vec![],
-            ts,
-            ttl: 0,
-        }));
-        let lock = extract_lock_from_result(&Err(case));
-        assert_eq!(lock.ts, ts);
-        assert_eq!(lock.hash, gen_key_hash(&key));
-    }
 
     fn dummy_waiter(start_ts: u64, lock_ts: u64, hash: u64) -> Waiter {
         Waiter {
@@ -409,7 +384,6 @@ mod tests {
             cb: StorageCb::Boolean(Box::new(|_| ())),
             pr: ProcessResult::Res,
             lock: Lock { ts: lock_ts, hash },
-            timeout: 0,
         }
     }
 
@@ -497,7 +471,7 @@ mod tests {
         let detector_scheduler = DetectorScheduler::new(detect_worker.scheduler());
 
         let mut waiter_mgr_worker = FutureWorker::new("lock-manager");
-        let waiter_mgr_runner = WaiterManager::new(detector_scheduler);
+        let waiter_mgr_runner = WaiterManager::new(detector_scheduler, 1000, 1);
         let waiter_mgr_scheduler = Scheduler::new(waiter_mgr_worker.scheduler());
         waiter_mgr_worker.start(waiter_mgr_runner).unwrap();
 
@@ -507,16 +481,9 @@ mod tests {
             tx.send(result).unwrap();
         });
         let pr = ProcessResult::Res;
-        waiter_mgr_scheduler.wait_for(
-            0,
-            StorageCb::Boolean(cb),
-            pr,
-            Lock { ts: 0, hash: 0 },
-            true,
-            100,
-        );
+        waiter_mgr_scheduler.wait_for(0, StorageCb::Boolean(cb), pr, Lock { ts: 0, hash: 0 }, true);
         assert_eq!(
-            rx.recv_timeout(Duration::from_millis(200))
+            rx.recv_timeout(Duration::from_millis(1100))
                 .unwrap()
                 .unwrap(),
             ()
@@ -531,11 +498,13 @@ mod tests {
             0,
             StorageCb::Boolean(cb),
             ProcessResult::Res,
-            Lock { ts: 1, hash: 1 },
+            Lock { ts: 0, hash: 1 },
             true,
-            100,
         );
-        waiter_mgr_scheduler.wake_up(1, vec![3, 1, 2], 1);
-        assert!(rx.recv_timeout(Duration::from_millis(80)).unwrap().is_err());
+        waiter_mgr_scheduler.wake_up(0, vec![3, 1, 2], 1);
+        assert!(rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .is_err());
     }
 }

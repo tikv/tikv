@@ -25,23 +25,20 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::u64;
 
-use futures::future;
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
 use tikv_util::collections::HashMap;
 
-use crate::storage::kv::Result as EngineResult;
+use crate::storage::kv::{with_tls_engine, Result as EngineResult};
 use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::txn::latch::{Latches, Lock};
-use crate::storage::txn::process::{
-    execute_callback, notify_scheduler, Executor, MsgScheduler, ProcessResult, Task,
-};
+use crate::storage::txn::process::{execute_callback, Executor, MsgScheduler, ProcessResult, Task};
 use crate::storage::txn::sched_pool::SchedPool;
 use crate::storage::txn::Error;
 use crate::storage::{metrics::*, Key};
 use crate::storage::{Command, Engine, Error as StorageError, StorageCb};
 
-const TASKS_SLOTS_NUM: usize = 1 << 10; // 1024 slots.
+const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
 
 /// Message types for the scheduler event loop.
 pub enum Msg {
@@ -140,7 +137,7 @@ impl TaskContext {
     }
 }
 
-struct SchedulerInner<E: Engine> {
+struct SchedulerInner {
     // slot_id -> { cid -> `TaskContext` } in the slot.
     task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
 
@@ -153,10 +150,10 @@ struct SchedulerInner<E: Engine> {
     sched_pending_write_threshold: usize,
 
     // worker pool
-    worker_pool: SchedPool<E>,
+    worker_pool: SchedPool,
 
     // high priority commands and system commands will be delivered to this pool
-    high_priority_pool: SchedPool<E>,
+    high_priority_pool: SchedPool,
 
     // used to control write flow
     running_write_bytes: AtomicUsize,
@@ -171,7 +168,7 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
-impl<E: Engine> SchedulerInner<E> {
+impl SchedulerInner {
     /// Generates the next command ID.
     #[inline]
     fn gen_id(&self) -> u64 {
@@ -240,8 +237,9 @@ impl<E: Engine> SchedulerInner<E> {
 /// Scheduler which schedules the execution of `storage::Command`s.
 #[derive(Clone)]
 pub struct Scheduler<E: Engine> {
-    engine: E,
-    inner: Arc<SchedulerInner<E>>,
+    // `engine` is `None` means currently the program is in scheduler worker threads.
+    engine: Option<E>,
+    inner: Arc<SchedulerInner>,
 }
 
 unsafe impl<E: Engine> Send for Scheduler<E> {}
@@ -281,7 +279,10 @@ impl<E: Engine> Scheduler<E> {
         });
 
         info!("Scheduler::new is finished, the transaction scheduler is initialized");
-        Scheduler { engine, inner }
+        Scheduler {
+            engine: Some(engine),
+            inner,
+        }
     }
 
     pub fn run_cmd(&self, cmd: Command, callback: StorageCb) {
@@ -296,8 +297,12 @@ impl<E: Engine> Scheduler<E> {
         } else {
             self.inner.worker_pool.clone()
         };
+        let scheduler = Scheduler {
+            engine: None,
+            inner: Arc::clone(&self.inner),
+        };
         Executor::new(
-            self.clone(),
+            scheduler,
             pool,
             self.inner.waiter_mgr_scheduler.clone(),
             self.inner.detector_scheduler.clone(),
@@ -362,37 +367,33 @@ impl<E: Engine> Scheduler<E> {
         let task = self.inner.dequeue_task(cid);
         let tag = task.tag;
         let ctx = task.context().clone();
-
-        let engine = self.engine.clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
-        let sched_pool = executor.clone_pool();
-        let inner = self.clone();
+
         let cb = Box::new(move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
         });
 
-        sched_pool.pool.spawn(move || {
+        let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "async_snapshot_err"])
                     .inc();
 
-                error!("engine async_snapshot failed, err: {:?}", e);
-                notify_scheduler(
-                    inner,
-                    Msg::FinishedWithErr {
-                        cid,
-                        err: e.into(),
-                        tag,
-                    },
-                );
+                error!("engine async_snapshot failed"; "err" => ?e);
+                self.finish_with_err(cid, e.into());
             } else {
                 SCHED_STAGE_COUNTER_VEC
                     .with_label_values(&[tag, "snapshot"])
                     .inc();
             }
-            future::ok::<_, ()>(())
-        });
+        };
+
+        if let Some(engine) = self.engine.as_ref() {
+            f(engine)
+        } else {
+            // The program is currently in scheduler worker threads.
+            with_tls_engine(f)
+        }
     }
 
     /// Calls the callback with an error.
@@ -475,14 +476,12 @@ impl<E: Engine> Scheduler<E> {
         SCHED_STAGE_COUNTER_VEC
             .with_label_values(&[tctx.tag, "lock_wait"])
             .inc();
-        // TODO: timeout config
         self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
             start_ts,
             tctx.cb,
             pr,
             lock.clone(),
             is_first_lock,
-            1000,
         );
         self.release_lock(&tctx.lock, cid);
     }
