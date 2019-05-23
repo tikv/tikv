@@ -824,8 +824,8 @@ pub trait TimeEncoder: NumberEncoder {
             self.write_u8(v.time.second() as u8)?;
             self.write_u32(v.time.nanosecond() / 1000)?;
         } else {
-            let len = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
-            let buf = vec![0; len];
+            const LEN: usize = mem::size_of::<u16>() + mem::size_of::<u32>() + 5;
+            let buf = [0; LEN];
             self.write_all_bytes(&buf)?;
         }
 
