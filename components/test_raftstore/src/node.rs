@@ -1,7 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::path::Path;
-use std::ptr;
 use std::sync::{Arc, Mutex, RwLock};
 
 use tempdir::TempDir;
@@ -26,7 +25,6 @@ use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::worker::FutureWorker;
 
 use super::*;
-use std::sync::atomic::AtomicPtr;
 use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
@@ -206,16 +204,9 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let engine_snapshot = Arc::new(AtomicPtr::new(ptr::null_mut()));
-        let local_reader = LocalReader::new(
-            engines.kv.clone(),
-            engine_snapshot.clone(),
-            store_meta.clone(),
-            router.clone(),
-        );
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         node.start(
             engines.clone(),
-            engine_snapshot,
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,

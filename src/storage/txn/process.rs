@@ -1,11 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
+use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::mvcc::{
@@ -106,18 +108,20 @@ pub trait MsgScheduler: Clone + Send + 'static {
 
 pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
-    sched_pool: Option<SchedPool<E>>,
+    sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
     waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
     detector_scheduler: Option<DetectorScheduler>,
+
+    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, S: MsgScheduler> Executor<E, S> {
     pub fn new(
         scheduler: S,
-        pool: SchedPool<E>,
+        pool: SchedPool,
         waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
         detector_scheduler: Option<DetectorScheduler>,
     ) -> Self {
@@ -126,14 +130,15 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             scheduler: Some(scheduler),
             waiter_mgr_scheduler,
             detector_scheduler,
+            _phantom: Default::default(),
         }
     }
 
-    fn take_pool(&mut self) -> SchedPool<E> {
+    fn take_pool(&mut self) -> SchedPool {
         self.sched_pool.take().unwrap()
     }
 
-    fn clone_pool(&mut self) -> SchedPool<E> {
+    fn clone_pool(&mut self) -> SchedPool {
         self.sched_pool.clone().unwrap()
     }
 
@@ -170,14 +175,17 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                wakeup_scheduler(
-                    self.take_scheduler(),
-                    Msg::FinishedWithErr {
-                        cid: task.cid,
-                        err: Error::from(err),
-                        tag: task.tag,
-                    },
-                );
+                self.take_pool().pool.spawn(move || {
+                    notify_scheduler(
+                        self.take_scheduler(),
+                        Msg::FinishedWithErr {
+                            cid: task.cid,
+                            err: Error::from(err),
+                            tag: task.tag,
+                        },
+                    );
+                    future::ok::<_, ()>(())
+                });
             }
         }
     }
@@ -196,7 +204,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             task.cmd.mut_context().set_term(term);
         }
         let sched_pool = self.clone_pool();
-        let engine = sched_pool.engine;
         let readonly = task.cmd.readonly();
         sched_pool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
@@ -210,7 +217,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             let statistics = if readonly {
                 self.process_read(snapshot, task)
             } else {
-                self.process_write(engine, snapshot, task)
+                with_tls_engine(|engine| self.process_write(engine, snapshot, task))
             };
             tls_add_statistics(tag, &statistics);
             slow_log!(
@@ -238,13 +245,13 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             Err(e) => ProcessResult::Failed { err: e.into() },
             Ok(pr) => pr,
         };
-        wakeup_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
+        notify_scheduler(self.take_scheduler(), Msg::ReadFinished { cid, pr, tag });
         statistics
     }
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(mut self, engine: E, snapshot: E::Snap, task: Task) -> Statistics {
+    fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
         let cid = task.cid;
@@ -295,7 +302,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
                         sched_pool.pool.spawn(move || {
-                            wakeup_scheduler(
+                            notify_scheduler(
                                 sched,
                                 Msg::WriteFinished {
                                     cid,
@@ -335,7 +342,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 Msg::FinishedWithErr { cid, err, tag }
             }
         };
-        wakeup_scheduler(scheduler, msg);
+        notify_scheduler(scheduler, msg);
         statistics
     }
 }
@@ -505,6 +512,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
+    // (lock, is_first_lock)
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
@@ -776,7 +784,7 @@ fn process_write_impl<S: Snapshot>(
     })
 }
 
-pub fn wakeup_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
+pub fn notify_scheduler<S: MsgScheduler>(scheduler: S, msg: Msg) {
     scheduler.on_msg(msg);
 }
 

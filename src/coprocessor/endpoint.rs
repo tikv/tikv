@@ -1,5 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use futures::sync::mpsc;
@@ -28,9 +29,6 @@ const BUSY_ERROR_MSG: &str = "server is busy (coprocessor full).";
 
 /// A pool to build and run Coprocessor request handlers.
 pub struct Endpoint<E: Engine> {
-    /// The storage engine to build Coprocessor request handlers.
-    engine: E,
-
     /// The thread pool to run Coprocessor requests.
     read_pool: ReadPool,
 
@@ -44,12 +42,13 @@ pub struct Endpoint<E: Engine> {
 
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
+
+    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine> Clone for Endpoint<E> {
     fn clone(&self) -> Self {
         Self {
-            engine: self.engine.clone(),
             read_pool: self.read_pool.clone(),
             ..*self
         }
@@ -59,9 +58,8 @@ impl<E: Engine> Clone for Endpoint<E> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 impl<E: Engine> Endpoint<E> {
-    pub fn new(cfg: &Config, engine: E, read_pool: ReadPool) -> Self {
+    pub fn new(cfg: &Config, read_pool: ReadPool) -> Self {
         Self {
-            engine,
             read_pool,
             recursion_limit: cfg.end_point_recursion_limit,
             batch_row_limit: cfg.end_point_batch_row_limit,
@@ -69,6 +67,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            _phantom: Default::default(),
         }
     }
 
@@ -627,7 +626,7 @@ mod tests {
     fn test_outdated_request() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // a normal request
         let handler_builder =
@@ -662,12 +661,11 @@ mod tests {
     fn test_stack_guard() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(
+        let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_recursion_limit: 5,
                 ..Config::default()
             },
-            engine,
             read_pool,
         );
 
@@ -699,7 +697,7 @@ mod tests {
     fn test_invalid_req_type() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let mut req = coppb::Request::new();
         req.set_tp(9999);
@@ -715,7 +713,7 @@ mod tests {
     fn test_invalid_req_body() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let mut req = coppb::Request::new();
         req.set_tp(REQ_TYPE_DAG);
@@ -743,7 +741,7 @@ mod tests {
         .before_stop(|| destroy_tls_engine::<RocksEngine>())
         .build();
 
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let (tx, rx) = mpsc::channel();
 
@@ -789,7 +787,7 @@ mod tests {
     fn test_error_unary_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let handler_builder = Box::new(|_, _: &_| {
             Ok(UnaryFixture::new(Err(Error::Other(box_err!("foo")))).into_boxed())
@@ -807,7 +805,7 @@ mod tests {
     fn test_error_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // Fail immediately
         let handler_builder = Box::new(|_, _: &_| {
@@ -851,7 +849,7 @@ mod tests {
     fn test_empty_streaming_response() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         let handler_builder = Box::new(|_, _: &_| Ok(StreamFixture::new(vec![]).into_boxed()));
         let resp_vec = cop
@@ -869,7 +867,7 @@ mod tests {
     fn test_special_streaming_handlers() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(&Config::default(), engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&Config::default(), read_pool);
 
         // handler returns `finished == true` should not be called again.
         let counter = Arc::new(atomic::AtomicIsize::new(0));
@@ -955,12 +953,11 @@ mod tests {
     fn test_channel_size() {
         let engine = TestEngineBuilder::new().build().unwrap();
         let read_pool = build_read_pool_for_test(engine.clone());
-        let cop = Endpoint::new(
+        let cop = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
                 ..Config::default()
             },
-            engine,
             read_pool,
         );
 
@@ -1018,7 +1015,7 @@ mod tests {
         config.end_point_request_max_handle_duration =
             ReadableDuration::millis((PAYLOAD_SMALL + PAYLOAD_LARGE) as u64 * 2);
 
-        let cop = Endpoint::new(&config, engine, read_pool);
+        let cop = Endpoint::<RocksEngine>::new(&config, read_pool);
 
         let (tx, rx) = std::sync::mpsc::channel();
 

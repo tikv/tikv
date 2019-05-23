@@ -29,9 +29,11 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
+#[cfg(not(feature = "no-fail"))]
+use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    ApplyTaskRes, BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
