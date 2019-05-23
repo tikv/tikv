@@ -2,6 +2,9 @@
 
 pub mod aggr_executor;
 pub mod hash_aggr_helper;
+// TODO fix me(shirly)
+#[cfg(test)]
+pub mod heap;
 #[cfg(test)]
 pub mod mock_executor;
 pub mod ranges_iter;

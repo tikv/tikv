@@ -143,6 +143,13 @@ impl LazyBatchColumn {
         };
     }
 
+    pub fn swap(&mut self, from_row: usize, to_row: usize) {
+        match self {
+            LazyBatchColumn::Raw(ref mut v) => v.swap(to_row, from_row), //swep memory
+            LazyBatchColumn::Decoded(ref mut v) => v.swap(from_row, to_row),
+        }
+    }
+
     #[inline]
     pub fn clear(&mut self) {
         self.truncate(0)

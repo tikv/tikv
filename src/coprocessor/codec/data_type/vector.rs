@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
@@ -91,6 +92,16 @@ impl VectorValue {
         }
     }
 
+    pub fn swap(&mut self, from_row: usize, to_row: usize) {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => {
+                    v.swap(to_row,from_row)
+                }
+            }
+        }
+    }
+
     /// Clears the column, removing all datums.
     #[inline]
     pub fn clear(&mut self) {
@@ -124,6 +135,31 @@ impl VectorValue {
                         idx += 1;
                         r
                     });
+                },
+            }
+        }
+    }
+
+    pub fn compare_with(
+        &self,
+        right: &VectorValue,
+        left_idx: usize,
+        right_idx: usize,
+    ) -> std::cmp::Ordering {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(ref lh) => match right {
+                    VectorValue::TT(ref rh) => {
+                        match (lh.get(left_idx).unwrap(), rh.get(right_idx).unwrap()) {
+                            (None, None) =>Ordering::Equal,
+                            (None, _) => Ordering::Greater,
+                            (_, None) => Ordering::Less,
+                            (Some(l), Some(r)) => {
+                            l.cmp(&r)
+                            }
+                        }
+                    }
+                    other => panic!("Cannot compare {} with {}", other.eval_type(), self.eval_type())
                 },
             }
         }
