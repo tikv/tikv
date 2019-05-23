@@ -200,6 +200,8 @@ pub enum CasualMessage {
     },
     /// Clear region size cache.
     ClearRegionSize,
+    /// Indicate a target region is overlapped.
+    RegionOverlapped,
 }
 
 impl fmt::Debug for CasualMessage {
@@ -238,6 +240,7 @@ impl fmt::Debug for CasualMessage {
                 fmt,
                 "clear region size"
             },
+            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
         }
     }
 }

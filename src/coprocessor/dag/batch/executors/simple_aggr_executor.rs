@@ -3,51 +3,42 @@
 //! Simple aggregation is an aggregation that do not have `GROUP BY`s. It is more even more simpler
 //! than stream aggregation.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use cop_datatype::{EvalType, FieldTypeAccessor};
 use tipb::executor::Aggregation;
-use tipb::expression::Expr;
-use tipb::expression::FieldType;
+use tipb::expression::{Expr, FieldType};
 
-use super::super::interface::*;
-use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
+use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
+use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
+use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
-use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::Result;
 
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
-    summary_collector: C,
-    context: EvalContext,
-    src: Src,
+pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
+    AggregationExecutor<C, Src, SimpleAggregationImpl>,
+);
 
-    is_ended: bool,
+impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
+    for BatchSimpleAggregationExecutor<C, Src>
+{
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        self.0.schema()
+    }
 
-    /// The states of each aggregate function.
-    aggr_fn_states: Vec<Box<dyn AggrFunctionState>>,
+    #[inline]
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
+    }
 
-    /// The output cardinality of each aggregate function.
-    aggr_fn_output_cardinality: Vec<usize>,
-
-    /// The schema of all aggregate function output columns.
-    ///
-    /// Elements are ordered in the same way as the passed in aggregate functions.
-    ordered_schema: Vec<FieldType>,
-
-    /// The type of all aggregate function output columns.
-    ///
-    /// Elements are ordered in the same way as the passed in aggregate functions.
-    ordered_aggr_fn_output_types: Vec<EvalType>,
-
-    /// All aggregate function expressions.
-    ///
-    /// Elements are ordered in the same way as the passed in aggregate functions.
-    ordered_aggr_fn_input_exprs: Vec<RpnExpression>,
+    #[inline]
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.0.collect_statistics(destination)
+    }
 }
 
 impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
@@ -97,7 +88,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         )
     }
 
-    /// Provides ability to customize `AggrDefinitionParser::parse`. Useful in tests.
+    #[inline]
     fn new_impl(
         summary_collector: C,
         config: Arc<EvalConfig>,
@@ -105,88 +96,61 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
-        let aggr_len = aggr_defs.len();
-        if aggr_len == 0 {
-            return Err(box_err!("There should be at least one aggregate function"));
-        }
+        // Empty states is fine because it will be re-initialized later according to the content
+        // in entities.
+        let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
-        let mut aggr_fn_states = Vec::with_capacity(aggr_len);
-        let mut aggr_fn_output_cardinality = Vec::with_capacity(aggr_len);
-        let mut ordered_schema = Vec::with_capacity(aggr_len * 2);
-        let mut ordered_aggr_fn_input_exprs = Vec::with_capacity(aggr_len * 2);
-
-        let schema = src.schema();
-        let schema_len = schema.len();
-
-        for def in aggr_defs {
-            let aggr_output_len = ordered_schema.len();
-            let aggr_input_len = ordered_aggr_fn_input_exprs.len();
-
-            let aggr_fn = aggr_def_parser.parse(
-                def,
-                &config.tz,
-                schema_len,
-                &mut ordered_schema,
-                &mut ordered_aggr_fn_input_exprs,
-            )?;
-
-            assert!(ordered_schema.len() > aggr_output_len);
-            let this_aggr_output_len = ordered_schema.len() - aggr_output_len;
-
-            // We only support 1 parameter aggregate functions, so let's simply assert it.
-            assert_eq!(ordered_aggr_fn_input_exprs.len(), aggr_input_len + 1);
-
-            aggr_fn_states.push(aggr_fn.create_state());
-            aggr_fn_output_cardinality.push(this_aggr_output_len);
-        }
-
-        let ordered_aggr_fn_output_types = ordered_schema
-            .iter()
-            .map(|ft| {
-                // The unwrap is fine because aggregate function parser should never return an
-                // eval type that we cannot process later. If we made a mistake there, then we
-                // should panic.
-                EvalType::try_from(ft.tp()).unwrap()
-            })
-            .collect();
-
-        Ok(Self {
+        Ok(Self(AggregationExecutor::new(
             summary_collector,
-            context: EvalContext::new(config),
+            aggr_impl,
             src,
-            is_ended: false,
-            aggr_fn_states,
-            aggr_fn_output_cardinality,
-            ordered_schema,
-            ordered_aggr_fn_output_types,
-            ordered_aggr_fn_input_exprs,
-        })
+            config,
+            aggr_defs,
+            aggr_def_parser,
+        )?))
+    }
+}
+
+pub struct SimpleAggregationImpl {
+    states: Vec<Box<dyn AggrFunctionState>>,
+}
+
+impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl {
+    fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
+        let states = entities
+            .each_aggr_fn
+            .iter()
+            .map(|f| f.create_state())
+            .collect();
+        self.states = states;
     }
 
     #[inline]
-    fn process_src_data(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let rows_len = data.rows_len();
-        if rows_len == 0 {
-            return Ok(());
-        }
+    fn process_batch_input(
+        &mut self,
+        entities: &mut Entities<Src>,
+        mut input: LazyBatchColumnVec,
+    ) -> Result<()> {
+        let rows_len = input.rows_len();
 
-        // There are multiple aggregate functions to calculate, so let's do it one by one.
-        for (index, aggr_fn_state) in &mut self.aggr_fn_states.iter_mut().enumerate() {
-            // First, evaluates the expression to get the data to aggregate.
-            let eval_output = self.ordered_aggr_fn_input_exprs[index].eval(
-                &mut self.context,
+        assert_eq!(self.states.len(), entities.each_aggr_exprs.len());
+
+        for idx in 0..self.states.len() {
+            let aggr_state = &mut self.states[idx];
+            let aggr_expr = &entities.each_aggr_exprs[idx];
+            let aggr_fn_input = aggr_expr.eval(
+                &mut entities.context,
                 rows_len,
-                self.src.schema(),
-                &mut data,
+                entities.src.schema(),
+                &mut input,
             )?;
 
-            // Next, feed the evaluation result to the aggregate function.
-            match eval_output {
+            match aggr_fn_input {
                 RpnStackNode::Scalar { value, .. } => {
                     match_template_evaluable! {
                         TT, match value {
                             ScalarValue::TT(scalar_value) => {
-                                aggr_fn_state.update_repeat(&mut self.context, scalar_value, rows_len)?;
+                                aggr_state.update_repeat(&mut entities.context, scalar_value, rows_len)?;
                             },
                         }
                     }
@@ -195,7 +159,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
                     match_template_evaluable! {
                         TT, match &*value {
                             VectorValue::TT(vector_value) => {
-                                aggr_fn_state.update_vector(&mut self.context, vector_value)?;
+                                aggr_state.update_vector(&mut entities.context, vector_value)?;
                             },
                         }
                     }
@@ -206,116 +170,19 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         Ok(())
     }
 
-    // Don't inline this function to reduce hot code size.
-    #[inline(never)]
-    fn aggregate_results(&mut self) -> Result<LazyBatchColumnVec> {
-        // Construct empty columns. All columns are decoded.
-        let mut output_columns: Vec<_> = self
-            .ordered_aggr_fn_output_types
-            .iter()
-            .map(|eval_type| VectorValue::with_capacity(1, *eval_type))
-            .collect();
-
-        let mut output_offset = 0;
-        for (index, aggr_fn_state) in &mut self.aggr_fn_states.iter_mut().enumerate() {
-            let output_cardinality = self.aggr_fn_output_cardinality[index];
-            assert!(output_cardinality > 0);
-            aggr_fn_state.push_result(
-                &mut self.context,
-                &mut output_columns[output_offset..output_offset + output_cardinality],
-            )?;
-            output_offset += output_cardinality;
-        }
-
-        // Check whether data is actually outputted when there is no error. If not,
-        // we should panic.
-        let ret = LazyBatchColumnVec::from(output_columns);
-        assert_eq!(ret.rows_len(), 1);
-        ret.assert_columns_equal_length();
-
-        Ok(ret)
+    #[inline]
+    fn groups_len(&self) -> usize {
+        1
     }
 
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
-        // Use max batch size from the beginning because aggregation executor always scans all data
-        let src_result = self
-            .src
-            .next_batch(crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE);
-
-        self.context.warnings = src_result.warnings;
-
-        // When there are errors in the underlying executor, there must be no aggregate output.
-        // Thus we even don't need to update the aggregate function state and can return directly.
-        let src_is_drained = src_result.is_drained?;
-
-        // Consume all data from the underlying executor. We directly return when there are errors
-        // for the same reason as above.
-        self.process_src_data(src_result.data)?;
-
-        // Aggregate a result if source executor is drained, otherwise just return nothing.
-        if src_is_drained {
-            Ok(Some(self.aggregate_results()?))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSimpleAggregationExecutor<C, Src>
-{
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        self.ordered_schema.as_slice()
-    }
-
-    #[inline]
-    fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
-        assert!(!self.is_ended);
-
-        let timer = self.summary_collector.on_start_iterate();
-        let result = self.handle_next_batch();
-
-        let ret = match result {
-            Err(e) => {
-                // When there are error, we can just return empty data.
-                self.is_ended = true;
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
-                    warnings: self.context.take_warnings(),
-                    is_drained: Err(e),
-                }
-            }
-            Ok(None) => {
-                // When there is no error and is not drained, we also return empty data.
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
-                    warnings: self.context.take_warnings(),
-                    is_drained: Ok(false),
-                }
-            }
-            Ok(Some(data)) => {
-                // When there is no error and aggregate finished, we return it as data.
-                self.is_ended = true;
-                BatchExecuteResult {
-                    data,
-                    warnings: self.context.take_warnings(),
-                    is_drained: Ok(true),
-                }
-            }
-        };
-
-        self.summary_collector
-            .on_finish_iterate(timer, ret.data.rows_len());
-        ret
-    }
-
-    #[inline]
-    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
-        self.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
+    fn iterate_each_group_for_aggregation(
+        &mut self,
+        entities: &mut Entities<Src>,
+        mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
+    ) -> Result<Vec<LazyBatchColumn>> {
+        iteratee(entities, &self.states)?;
+        Ok(Vec::new())
     }
 }
 
@@ -327,70 +194,10 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
-    use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
-
-    /// Builds an executor that will return these data:
-    ///
-    /// == Schema ==
-    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
-    /// == Call #1 ==
-    /// NULL         1.0         abc         1
-    /// 7.0          2.0         NULL        NULL
-    /// NULL         NULL        ""          NULL
-    /// NULL         4.5         HelloWorld  NULL
-    /// == Call #2 ==
-    /// == Call #3 ==
-    /// 1.5          4.5         aaaaa       5
-    /// (drained)
-    fn make_src_executor_using_fixture() -> MockExecutor {
-        MockExecutor::new(
-            vec![
-                FieldTypeTp::Double.into(), // this column is not used
-                FieldTypeTp::Double.into(),
-                FieldTypeTp::VarString.into(),
-                FieldTypeTp::LongLong.into(), // this column is not used
-            ],
-            vec![
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
-                        VectorValue::Real(vec![
-                            Real::new(1.0).ok(),
-                            Real::new(2.0).ok(),
-                            None,
-                            Real::new(4.5).ok(),
-                        ]),
-                        VectorValue::Bytes(vec![
-                            Some(b"abc".to_vec()),
-                            None,
-                            Some(vec![]),
-                            Some(b"HelloWorld".to_vec()),
-                        ]),
-                        VectorValue::Int(vec![Some(1), None, None, None]),
-                    ]),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
-                },
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
-                },
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![Some(5)]),
-                    ]),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
-                },
-            ],
-        )
-    }
+    use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+    use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 
     #[test]
     fn test_it_works_unit() {
@@ -431,7 +238,7 @@ mod tests {
                 _ctx: &mut EvalContext,
                 target: &mut [VectorValue],
             ) -> Result<()> {
-                target[0].push(Some(self.len as i64));
+                target[0].push_int(Some(self.len as i64));
                 Ok(())
             }
         }
@@ -509,7 +316,7 @@ mod tests {
         // - Bar(col_1)
         // As a result, there should be 12 output columns.
 
-        let src_exec = make_src_executor_using_fixture();
+        let src_exec = make_src_executor_1();
 
         // As a unit test, let's use the most simple way to build the executor. No complex parsers
         // involved.
@@ -648,7 +455,7 @@ mod tests {
         // - AVG(col_0)
         // As a result, there should be 10 output columns.
 
-        let src_exec = make_src_executor_using_fixture();
+        let src_exec = make_src_executor_1();
         let aggr_definitions = vec![
             ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::constant_int(1))
