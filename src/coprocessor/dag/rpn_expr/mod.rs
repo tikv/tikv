@@ -4,9 +4,9 @@
 pub mod function;
 pub mod types;
 
-mod impl_arithmetic;
-mod impl_compare;
-mod impl_op;
+pub mod impl_arithmetic;
+pub mod impl_compare;
+pub mod impl_op;
 
 pub use self::function::RpnFunction;
 pub use self::types::{RpnExpression, RpnExpressionBuilder};

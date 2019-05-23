@@ -23,6 +23,8 @@
 //!     EvalType::Double => { panic!("{}", EvalType::Double); },
 //! }
 //! ```
+//!
+//! Wildcard match arm is also supported (but there will be no substitution).
 
 #[macro_use]
 extern crate quote;
@@ -71,6 +73,7 @@ struct MatchTemplate {
     substitutes_ident: Punctuated<Ident, Token![,]>,
     match_exp: Box<Expr>,
     match_arm: Arm,
+    wildcard_match_arm: Option<Arm>,
 }
 
 impl Parse for MatchTemplate {
@@ -83,16 +86,32 @@ impl Parse for MatchTemplate {
             Punctuated::<Ident, Token![,]>::parse_terminated(&substitutes_content)?;
         input.parse::<Token![,]>()?;
         let m: ExprMatch = input.parse()?;
-        assert_eq!(m.arms.len(), 1, "Expect one match arm");
-        let mut arm = m.arms.into_iter().next().unwrap();
+        assert!(!m.arms.is_empty(), "Expect at least 1 match arm");
+        assert!(m.arms.len() <= 2, "Expect at most 2 match arm");
+        let mut arms = m.arms.into_iter();
+
+        let mut arm = arms.next().unwrap();
         assert!(arm.guard.is_none(), "Expect no match arm guard");
         assert_eq!(arm.pats.len(), 1, "Expect one match arm pattern");
         arm.comma = None;
+
+        let mut wildcard_arm = None;
+        if let Some(arm) = arms.next() {
+            assert!(arm.guard.is_none(), "Expect no match arm guard");
+            assert_eq!(arm.pats.len(), 1, "Expect one match arm pattern");
+            if let Pat::Wild(_) = arm.pats[0] {
+                wildcard_arm = Some(arm);
+            } else {
+                panic!("Expect wildcard arm");
+            }
+        }
+
         Ok(Self {
             token_ident,
             substitutes_ident,
             match_exp: m.expr,
             match_arm: arm,
+            wildcard_match_arm: wildcard_arm,
         })
     }
 }
@@ -104,6 +123,7 @@ impl MatchTemplate {
             substitutes_ident,
             match_exp,
             match_arm,
+            wildcard_match_arm,
         } = self;
         let match_arms = substitutes_ident.into_iter().map(|ident| {
             MatchArmIdentFolder {
@@ -115,6 +135,7 @@ impl MatchTemplate {
         quote! {
             match #match_exp {
                 #(#match_arms,)*
+                #wildcard_match_arm
             }
         }
     }
@@ -144,6 +165,30 @@ mod tests {
                 EvalType::Int => { panic!("{}", EvalType::Int); },
                 EvalType::Real => { panic!("{}", EvalType::Real); },
                 EvalType::Double => { panic!("{}", EvalType::Double); },
+            }
+        "#;
+        let expect_output_stream: TokenStream = expect_output.parse().unwrap();
+
+        let mt: MatchTemplate = syn::parse_str(input).unwrap();
+        let output = mt.expand();
+        assert_eq!(output.to_string(), expect_output_stream.to_string());
+    }
+
+    #[test]
+    fn test_wildcard() {
+        let input = r#"
+            TT = [Foo, Bar],
+            match v {
+                VectorValue::TT => EvalType::TT,
+                _ => unreachable!(),
+            }
+        "#;
+
+        let expect_output = r#"
+            match v {
+                VectorValue::Foo => EvalType::Foo,
+                VectorValue::Bar => EvalType::Bar,
+                _ => unreachable!(),
             }
         "#;
         let expect_output_stream: TokenStream = expect_output.parse().unwrap();
