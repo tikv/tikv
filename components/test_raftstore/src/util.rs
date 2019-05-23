@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
-use rand::Rng;
+use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -226,6 +226,12 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_read_index_cmd() -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::ReadIndex);
+    cmd
+}
+
 pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
@@ -376,7 +382,7 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     is_write = cmd.has_admin_request();
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
-            CmdType::Get | CmdType::Snap => is_read = true,
+            CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
                 is_write = true
             }
@@ -413,6 +419,23 @@ pub fn read_on_peer<T: Simulator>(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.call_command(request, timeout)
+}
+
+pub fn read_index_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
         read_quorum,
     );
     request.mut_header().set_peer(peer);
@@ -510,7 +533,7 @@ pub fn create_test_engine(
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            Engines::new(engine, raft_engine)
+            Engines::new(engine, raft_engine, cache.is_some())
         }
     };
     (engines, path)

@@ -413,7 +413,8 @@
 
 ## Options for `Titan`.
 [rocksdb.titan]
-## Enables `Titan`
+## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
+## enabled, it can't fall back. Forced fallback may result in data loss.
 ## default: false
 # enabled = false
 
@@ -651,8 +652,8 @@
 # optimize-filters-for-hits = false
 
 [raftdb]
-# max-background-jobs = 2
-# max-sub-compactions = 1
+# max-background-jobs = 4
+# max-sub-compactions = 2
 # max-open-files = 40960
 # max-manifest-file-size = "20MB"
 # create-if-missing = true
@@ -710,3 +711,18 @@
 
 ## Stream channel window size, stream will be blocked on channel full.
 # stream-channel-window = 128
+
+[pessimistic-txn]
+## Enable pessimistic transaction
+# enabled = true
+
+## Time to wait in milliseconds before responding to TiDB when pessimistic
+## transactions # encounter locks
+# wait-for-lock-timeout = 1000
+
+## Time to delay in milliseconds before responding to TiDB when other transactions
+## release locks that pessimistic transactions are waiting for(0 to disable).
+# wake-up-delay-duration = 1
+#
+## Interval in milliseconds to check the membership change of deadlock detector.
+# monitor-membership-interval 3000

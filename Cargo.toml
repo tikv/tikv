@@ -5,6 +5,9 @@ authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
 keywords = ["KV", "distributed-systems", "raft"]
+homepage = "https://tikv.org"
+repository = "https://github.com/tikv/tikv/"
+readme = "README.md"
 edition = "2018"
 publish = false
 
@@ -15,6 +18,7 @@ jemalloc = ["tikv_alloc/jemalloc"]
 portable = ["engine/portable"]
 sse = ["engine/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
+profiling = ["profiler/profiling"]
 no-fail = ["fail/no_fail"]
 
 [lib]
@@ -65,7 +69,8 @@ slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global
 slog-term = "2.4"
 slog_derive = "0.1"
 byteorder = "1.2"
-rand = "0.3"
+rand = "0.6.5"
+rand_xorshift = "0.1.1"
 quick-error = "1.2.2"
 tempdir = "0.3"
 time = "0.1"
@@ -77,7 +82,7 @@ protobuf = "~2.0"
 nix = "0.11"
 utime = "0.2"
 chrono = "0.4"
-chrono-tz = "0.5"
+chrono-tz = "0.5.1"
 lazy_static = "0.2.1"
 backtrace = "0.2.3"
 clap = "2.32"
@@ -94,7 +99,7 @@ tokio-executor = "0.1"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
-zipf = "0.2.0"
+zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
@@ -115,10 +120,15 @@ hyper = { version = "0.12", default-features = false, features = ["runtime"] }
 tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
+ordered-float = "1.0"
+profiler = { path = "components/profiler" }
+match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
-panic_hook = { path = "components/panic_hook" }
+cop_codegen = { path = "components/cop_codegen" }
+tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# TODO: use master branch after the next version is released.
+kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.0" }
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
@@ -135,7 +145,13 @@ features = ["nightly", "push", "process"]
 version = "0.1.4"
 default-features = false
 
+# TODO: remove this when slog is compatible with the log 0.4
+[replace]
+"log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
+"log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
+
 [dev-dependencies]
+panic_hook = { path = "components/panic_hook" }
 test_util = { path = "components/test_util" }
 test_raftstore = { path = "components/test_raftstore" }
 test_storage = { path = "components/test_storage" }
@@ -162,9 +178,12 @@ members = [
   "components/test_coprocessor",
   "components/test_util",
   "components/tikv_alloc",
+  "components/match_template",
   "components/codec",
   "components/panic_hook",
   "components/cop_datatype",
+  "components/cop_codegen",
+  "components/tipb_helper",
   "components/log_wrappers",
   "components/tikv_util",
 ]
@@ -173,6 +192,7 @@ members = [
 opt-level = 0  # Controls the --opt-level the compiler builds with
 debug = true   # Controls whether the compiler passes `-g`
 codegen-units = 4
+panic = 'abort'
 
 # The release profile, used for `cargo build --release`
 [profile.release]
@@ -181,6 +201,7 @@ opt-level = 3
 debug = true
 # TODO: remove this once rust-lang/rust#50199 and rust-lang/rust#53833 are resolved.
 codegen-units = 1
+panic = 'abort'
 
 # The benchmark profile is identical to release, except that lto = false
 [profile.bench]

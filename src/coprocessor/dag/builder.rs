@@ -36,15 +36,45 @@ impl DAGBuilder {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
                     let descriptor = ed.get_tbl_scan();
-                    BatchTableScanExecutor::check_supported(&descriptor)?;
+                    BatchTableScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchTableScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeIndexScan => {
                     let descriptor = ed.get_idx_scan();
-                    BatchIndexScanExecutor::check_supported(&descriptor)?;
+                    BatchIndexScanExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchIndexScanExecutor: {}", e))
+                    })?;
                 }
                 ExecType::TypeSelection => {
                     let descriptor = ed.get_selection();
-                    BatchSelectionExecutor::check_supported(&descriptor)?;
+                    BatchSelectionExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
+                    })?;
+                }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    let descriptor = ed.get_aggregation();
+                    BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
+                        Error::Other(box_err!(
+                            "Unable to use BatchSimpleAggregationExecutor: {}",
+                            e
+                        ))
+                    })?;
+                }
+                ExecType::TypeAggregation => {
+                    let descriptor = ed.get_aggregation();
+                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
+                        BatchSlowHashAggregationExecutor::check_supported(&descriptor).map_err(
+                            |e| {
+                                Error::Other(box_err!(
+                                    "Unable to use BatchSlowHashAggregationExecutor: {}",
+                                    e
+                                ))
+                            },
+                        )?;
+                    }
                 }
                 ExecType::TypeLimit => {}
                 _ => {
@@ -124,6 +154,49 @@ impl DAGBuilder {
                         ed.take_selection().take_conditions().into_vec(),
                     )?)
                 }
+                ExecType::TypeAggregation | ExecType::TypeStreamAgg
+                    if ed.get_aggregation().get_group_by().is_empty() =>
+                {
+                    COPR_EXECUTOR_COUNT
+                        .with_label_values(&["simple_aggregation"])
+                        .inc();
+
+                    Box::new(BatchSimpleAggregationExecutor::new(
+                        C::new(summary_slot_index),
+                        config.clone(),
+                        executor,
+                        ed.mut_aggregation().take_agg_func().into_vec(),
+                    )?)
+                }
+                ExecType::TypeAggregation => {
+                    if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation())
+                        .is_ok()
+                    {
+                        COPR_EXECUTOR_COUNT
+                            .with_label_values(&["fast_hash_aggregation"])
+                            .inc();
+
+                        Box::new(BatchFastHashAggregationExecutor::new(
+                            C::new(summary_slot_index),
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_group_by().into_vec(),
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?)
+                    } else {
+                        COPR_EXECUTOR_COUNT
+                            .with_label_values(&["slow_hash_aggregation"])
+                            .inc();
+
+                        Box::new(BatchSlowHashAggregationExecutor::new(
+                            C::new(summary_slot_index),
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_group_by().into_vec(),
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?)
+                    }
+                }
                 ExecType::TypeLimit => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();
 
@@ -160,31 +233,46 @@ impl DAGBuilder {
         let first = exec_descriptors
             .next()
             .ok_or_else(|| Error::Other(box_err!("has no executor")))?;
+
         let mut src = Self::build_normal_first_executor::<_, C>(first, store, ranges, collect)?;
+        let mut summary_slot_index = 0;
+
         for mut exec in exec_descriptors {
+            summary_slot_index += 1;
+
             let curr: Box<dyn Executor + Send> = match exec.get_tp() {
                 ExecType::TypeTableScan | ExecType::TypeIndexScan => {
                     return Err(box_err!("got too much *scan exec, should be only one"));
                 }
                 ExecType::TypeSelection => Box::new(SelectionExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_selection(),
                     Arc::clone(&ctx),
                     src,
                 )?),
                 ExecType::TypeAggregation => Box::new(HashAggExecutor::new(
+                    C::new(summary_slot_index),
                     exec.take_aggregation(),
                     Arc::clone(&ctx),
                     src,
                 )?),
                 ExecType::TypeStreamAgg => Box::new(StreamAggExecutor::new(
+                    C::new(summary_slot_index),
                     Arc::clone(&ctx),
                     src,
                     exec.take_aggregation(),
                 )?),
-                ExecType::TypeTopN => {
-                    Box::new(TopNExecutor::new(exec.take_topN(), Arc::clone(&ctx), src)?)
-                }
-                ExecType::TypeLimit => Box::new(LimitExecutor::new(exec.take_limit(), src)),
+                ExecType::TypeTopN => Box::new(TopNExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_topN(),
+                    Arc::clone(&ctx),
+                    src,
+                )?),
+                ExecType::TypeLimit => Box::new(LimitExecutor::new(
+                    C::new(summary_slot_index),
+                    exec.take_limit(),
+                    src,
+                )),
             };
             src = curr;
         }
@@ -357,7 +445,7 @@ impl DAGBuilder {
             let build_batch_result =
                 super::builder::DAGBuilder::check_build_batch(req.get_executors());
             if let Err(e) = build_batch_result {
-                info!("Coprocessor request cannot be batched"; "reason" => %e);
+                info!("Coprocessor request cannot be batched"; "start_ts" => req.get_start_ts(), "reason" => %e);
             } else {
                 is_batch = true;
             }
