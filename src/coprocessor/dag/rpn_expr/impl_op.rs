@@ -106,7 +106,7 @@ impl RpnFnRealIsTrue {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Real>,
     ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v != 0f64) as i64)))
+        Ok(Some(arg.map_or(0, |v| (v.into_inner() != 0f64) as i64)))
     }
 }
 
@@ -151,7 +151,7 @@ impl RpnFnRealIsFalse {
         _payload: RpnFnCallPayload<'_>,
         arg: &Option<Real>,
     ) -> Result<Option<i64>> {
-        Ok(Some(arg.map_or(0, |v| (v == 0f64) as i64)))
+        Ok(Some(arg.map_or(0, |v| (v.into_inner() == 0f64) as i64)))
     }
 }
 
