@@ -279,6 +279,13 @@ impl PartialEq for Duration {
     }
 }
 
+impl std::hash::Hash for Duration {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.neg.hash(state);
+        self.dur.hash(state);
+    }
+}
+
 impl PartialOrd for Duration {
     fn partial_cmp(&self, dur: &Duration) -> Option<Ordering> {
         Some(match (self.neg, dur.neg) {
