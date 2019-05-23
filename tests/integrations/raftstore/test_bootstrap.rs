@@ -11,7 +11,6 @@ use kvproto::raft_serverpb::RegionLocalState;
 use engine::rocks;
 use engine::Engines;
 use engine::*;
-use std::sync::atomic::AtomicPtr;
 use test_raftstore::*;
 use tikv::import::SSTImporter;
 use tikv::raftstore::coprocessor::CoprocessorHost;

@@ -121,7 +121,13 @@ impl Simulator for ServerCluster {
         }
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let engine_snapshot = Arc::new(RwLock::new(None));
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            Arc::clone(&engine_snapshot),
+            store_meta.clone(),
+            router.clone(),
+        );
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router);
 
@@ -214,6 +220,7 @@ impl Simulator for ServerCluster {
 
         node.start(
             engines.clone(),
+            engine_snapshot,
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,

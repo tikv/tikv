@@ -204,9 +204,16 @@ impl Simulator for NodeCluster {
         };
 
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
-        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+        let engine_snapshot = Arc::new(RwLock::new(None));
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            Arc::clone(&engine_snapshot),
+            store_meta.clone(),
+            router.clone(),
+        );
         node.start(
             engines.clone(),
+            engine_snapshot,
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
