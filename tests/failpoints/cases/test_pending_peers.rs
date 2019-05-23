@@ -50,6 +50,7 @@ fn test_pending_snapshot() {
 
     let handle_snapshot_fp = "apply_on_handle_snapshot_1_1";
     let handle_snapshot_finish_fp = "apply_on_handle_snapshot_finish_1_1";
+    fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.

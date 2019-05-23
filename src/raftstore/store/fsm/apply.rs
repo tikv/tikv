@@ -374,10 +374,11 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
-    pub fn write_to_db(&mut self) {
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(need_sync);
             self.engines
                 .kv
                 .write_opt(self.kv_wb(), &write_opts)
@@ -399,6 +400,7 @@ impl ApplyContext {
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
+        need_sync
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -435,11 +437,11 @@ impl ApplyContext {
         self.kv_wb.as_mut().unwrap()
     }
 
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         // Write to engine
@@ -447,7 +449,7 @@ impl ApplyContext {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        self.write_to_db();
+        let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             for res in self.apply_res.drain(..) {
@@ -469,6 +471,7 @@ impl ApplyContext {
             self.committed_count
         );
         self.committed_count = 0;
+        is_synced
     }
 }
 
@@ -637,6 +640,8 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
+    /// The latest synced apply index.
+    last_sync_apply_index: u64,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -649,6 +654,7 @@ impl ApplyDelegate {
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
+            last_sync_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -2569,28 +2575,35 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    #[allow(unused_mut)]
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        if apply_ctx.timer.is_none() {
-            apply_ctx.timer = Some(SlowTimer::new());
-        }
-        if apply_ctx.kv_wb.is_none() {
-            apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
-        }
-        self.delegate
-            .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
-        fail_point!(
-            "apply_on_handle_snapshot_1_1",
-            self.delegate.id == 1 && self.delegate.region_id() == 1,
-            |_| unimplemented!()
-        );
+        let mut need_sync =
+            self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
+        (|| {
+            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        })();
+        if need_sync {
+            if apply_ctx.timer.is_none() {
+                apply_ctx.timer = Some(SlowTimer::new());
+            }
+            if apply_ctx.kv_wb.is_none() {
+                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+            self.delegate
+                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            fail_point!(
+                "apply_on_handle_snapshot_1_1",
+                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                |_| unimplemented!()
+            );
 
-        // Because apply states are written to raft engine, so we have to
-        // force sync to make sure there is no lost update after restart.
-        apply_ctx.sync_log_hint = true;
-        apply_ctx.flush();
+            apply_ctx.sync_log_hint = true;
+            apply_ctx.flush();
+            self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
+        }
 
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
@@ -2741,8 +2754,13 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
-    fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
-        self.apply_ctx.flush();
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        let is_synced = self.apply_ctx.flush();
+        if is_synced {
+            for fsm in fsms {
+                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+            }
+        }
     }
 }
 
@@ -3143,6 +3161,10 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(
+                delegate.apply_state.get_applied_index(),
+                delegate.last_sync_apply_index
+            );
         });
 
         router.schedule_task(2, Msg::destroy(2));
