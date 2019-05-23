@@ -151,7 +151,7 @@ fn test_serde_custom_tikv_config() {
         merge_check_tick_interval: ReadableDuration::secs(11),
         use_delete_range: true,
         cleanup_import_sst_interval: ReadableDuration::minutes(12),
-        release_engine_snapshot_interval: ReadableDuration::minutes(1),
+        release_engine_snapshot_interval: ReadableDuration::secs(1),
         region_max_size: ReadableSize(0),
         region_split_size: ReadableSize(0),
         local_read_batch_size: 33,
