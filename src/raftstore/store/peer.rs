@@ -387,7 +387,8 @@ impl Peer {
         Ok(peer)
     }
 
-    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Register self to apply_scheduler so that the peer is then usable.
+    /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));

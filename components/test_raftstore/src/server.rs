@@ -140,7 +140,7 @@ impl Simulator for ServerCluster {
             None,
             None,
         )?;
-        self.storages.insert(node_id, raft_engine.clone());
+        self.storages.insert(node_id, raft_engine);
 
         // Create import service.
         let importer = {

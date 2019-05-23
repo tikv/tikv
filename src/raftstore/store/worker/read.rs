@@ -295,17 +295,12 @@ impl<C: ProposalRouter> LocalReader<C> {
                             .borrow_mut()
                             .insert(region_id, Some(delegate));
                         return;
-                    } else {
-                        // Remove delegate for updating it by next cmd execution.
-                        self.delegates.borrow_mut().remove(&region_id);
-                        break;
                     }
+                    break;
                 }
                 // It can not handle the request, forwards to raftstore.
                 Ok(None) => {
                     if self.delegates.borrow().get(&region_id).is_some() {
-                        // Remove delegate for updating it by next cmd execution.
-                        self.delegates.borrow_mut().remove(&region_id);
                         break;
                     }
                     let meta = self.store_meta.lock().unwrap();
@@ -314,8 +309,6 @@ impl<C: ProposalRouter> LocalReader<C> {
                             self.delegates.borrow_mut().insert(region_id, Some(reader));
                         }
                         None => {
-                            // Cleanup, the region may be removed.
-                            self.delegates.borrow_mut().remove(&region_id);
                             self.metrics.borrow_mut().rejected_by_no_region += 1;
                             debug!("rejected by no region"; "region_id" => region_id);
                             break;
@@ -336,6 +329,8 @@ impl<C: ProposalRouter> LocalReader<C> {
                 }
             }
         }
+        // Remove delegate for updating it by next cmd execution.
+        self.delegates.borrow_mut().remove(&region_id);
         // Forward to raftstore.
         self.redirect(cmd);
     }
