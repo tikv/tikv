@@ -26,8 +26,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 
-// 5 mins
-const TXN_DETECT_INFO_TTL: u64 = 300000;
+// 2 mins
+const TXN_DETECT_INFO_TTL: u64 = 120000;
 
 #[derive(Default)]
 struct DetectTable {
