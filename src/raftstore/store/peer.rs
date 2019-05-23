@@ -2328,17 +2328,17 @@ impl ReadExecutor {
             return;
         }
 
-        loop {
-            if let Some(snapshot) = self.engine_snapshot.read().unwrap().as_ref() {
-                self.snapshot = Some(snapshot.clone());
-                break;
-            }
+        if let Some(snapshot) = self.engine_snapshot.read().unwrap().as_ref() {
+            self.snapshot = Some(snapshot.clone());
+        } else {
             let mut option_snapshot = self.engine_snapshot.write().unwrap();
-            if option_snapshot.is_none() {
-                let snapshot = Snapshot::new(self.engine.clone()).into_sync();
-                *option_snapshot = Some(snapshot.clone());
-                self.snapshot = Some(snapshot);
-                break;
+            match option_snapshot.as_mut() {
+                Some(snapshot) => self.snapshot = Some(snapshot.clone()),
+                None => {
+                    let snapshot = Snapshot::new(self.engine.clone()).into_sync();
+                    *option_snapshot = Some(snapshot.clone());
+                    self.snapshot = Some(snapshot);
+                }
             }
         }
 
