@@ -6,7 +6,7 @@ mod expr_eval;
 #[cfg(test)]
 pub mod test_util;
 
-pub use self::expr::RpnExpression;
+pub use self::expr::{RpnExpression, RpnExpressionNode};
 pub use self::expr_builder::RpnExpressionBuilder;
 pub use self::expr_eval::RpnStackNode;
 

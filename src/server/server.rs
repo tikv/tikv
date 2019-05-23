@@ -247,9 +247,9 @@ mod tests {
     use crate::raftstore::store::transport::Transport;
     use crate::raftstore::store::*;
     use crate::raftstore::Result as RaftStoreResult;
-    use crate::server::readpool;
     use crate::storage::TestStorageBuilder;
 
+    use crate::coprocessor::readpool_impl;
     use kvproto::raft_cmdpb::RaftCmdRequest;
     use kvproto::raft_serverpb::RaftMessage;
     use tikv_util::security::SecurityConfig;
@@ -332,8 +332,8 @@ mod tests {
         let cfg = Arc::new(cfg);
         let security_mgr = Arc::new(SecurityManager::new(&SecurityConfig::default()).unwrap());
 
-        let cop_read_pool = readpool::Builder::build_for_test();
-        let cop = coprocessor::Endpoint::new(&cfg, storage.get_engine(), cop_read_pool);
+        let cop_read_pool = readpool_impl::build_read_pool_for_test(storage.get_engine());
+        let cop = coprocessor::Endpoint::new(&cfg, cop_read_pool);
 
         let addr = Arc::new(Mutex::new(None));
         let mut server = Server::new(

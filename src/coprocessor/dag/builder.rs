@@ -63,6 +63,19 @@ impl DAGBuilder {
                         ))
                     })?;
                 }
+                ExecType::TypeAggregation => {
+                    let descriptor = ed.get_aggregation();
+                    if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
+                        BatchSlowHashAggregationExecutor::check_supported(&descriptor).map_err(
+                            |e| {
+                                Error::Other(box_err!(
+                                    "Unable to use BatchSlowHashAggregationExecutor: {}",
+                                    e
+                                ))
+                            },
+                        )?;
+                    }
+                }
                 ExecType::TypeLimit => {}
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
@@ -162,6 +175,35 @@ impl DAGBuilder {
                         )?
                         .with_summary_collector(C::new(summary_slot_index)),
                     )
+                }
+                ExecType::TypeAggregation => {
+                    if BatchFastHashAggregationExecutor::check_supported(&ed.get_aggregation())
+                        .is_ok()
+                    {
+                        COPR_EXECUTOR_COUNT
+                            .with_label_values(&["fast_hash_aggregation"])
+                            .inc();
+
+                        Box::new(BatchFastHashAggregationExecutor::new(
+                            C::new(summary_slot_index),
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_group_by().into_vec(),
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?)
+                    } else {
+                        COPR_EXECUTOR_COUNT
+                            .with_label_values(&["slow_hash_aggregation"])
+                            .inc();
+
+                        Box::new(BatchSlowHashAggregationExecutor::new(
+                            C::new(summary_slot_index),
+                            config.clone(),
+                            executor,
+                            ed.mut_aggregation().take_group_by().into_vec(),
+                            ed.mut_aggregation().take_agg_func().into_vec(),
+                        )?)
+                    }
                 }
                 ExecType::TypeLimit => {
                     COPR_EXECUTOR_COUNT.with_label_values(&["limit"]).inc();

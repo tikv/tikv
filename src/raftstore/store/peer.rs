@@ -34,7 +34,7 @@ use crate::raftstore::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
-use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
+use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
@@ -387,19 +387,11 @@ impl Peer {
         Ok(peer)
     }
 
-    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        if let Err(e) = ctx.local_reader.schedule(ReadTask::register(self)) {
-            info!(
-                "failed to schedule local reader, are we shutting down?";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-        }
 
         ctx.coprocessor_host.on_region_changed(
             self.region(),
@@ -530,7 +522,7 @@ impl Peer {
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
-        local_reader: &Scheduler<ReadTask>,
+        reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -542,7 +534,7 @@ impl Peer {
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
         // becoming a leader.
-        self.maybe_update_read_progress(local_reader, progress);
+        self.maybe_update_read_progress(reader, progress);
 
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
@@ -851,9 +843,8 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    let progress = ReadProgress::term(self.term());
-                    self.maybe_update_read_progress(&ctx.local_reader, progress);
-                    self.maybe_renew_leader_lease(&ctx.local_reader, monotonic_raw_now());
+                    let progress_term = ReadProgress::term(self.term());
+                    self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
@@ -1124,6 +1115,9 @@ impl Peer {
 
         if apply_snap_result.is_some() {
             self.activate(ctx);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            meta.readers
+                .insert(self.region_id, ReadDelegate::from_peer(self));
         }
 
         apply_snap_result
@@ -1158,7 +1152,7 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+                        self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }
                 }
@@ -1293,7 +1287,7 @@ impl Peer {
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
-            self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+            self.maybe_renew_leader_lease(propose_time, ctx, None);
         }
     }
 
@@ -1347,7 +1341,9 @@ impl Peer {
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.maybe_update_read_progress(&ctx.local_reader, progress);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
         }
         has_ready
     }
@@ -1359,12 +1355,16 @@ impl Peer {
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease(&mut self, reader: &Scheduler<ReadTask>, ts: Timespec) {
+    fn maybe_renew_leader_lease<T, C>(
+        &mut self,
+        ts: Timespec,
+        ctx: &mut PollContext<T, C>,
+        progress: Option<ReadProgress>,
+    ) {
         // A nonleader peer should never has leader lease.
-        if !self.is_leader() {
-            return;
-        }
-        if self.is_splitting() {
+        let read_progress = if !self.is_leader() {
+            None
+        } else if self.is_splitting() {
             // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1373,9 +1373,8 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
-        }
-        if self.is_merging() {
+            None
+        } else if self.is_merging() {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
             // if commit merge runs slow on sibling peers.
@@ -1384,39 +1383,39 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
+            None
+        } else {
+            self.leader_lease.renew(ts);
+            let term = self.term();
+            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
+                Some(ReadProgress::leader_lease(remote_lease))
+            } else {
+                None
+            }
+        };
+        if let Some(progress) = progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
         }
-        self.leader_lease.renew(ts);
-        let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-            let progress = ReadProgress::leader_lease(remote_lease);
+        if let Some(progress) = read_progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
     }
 
-    fn maybe_update_read_progress(
-        &self,
-        local_reader: &Scheduler<ReadTask>,
-        progress: ReadProgress,
-    ) {
+    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
         if self.pending_remove {
             return;
         }
-        let update = ReadTask::update(self.region_id, progress);
         debug!(
             "update read progress";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "update" => %update,
+            "progress" => ?progress,
         );
-        if let Err(e) = local_reader.schedule(update) {
-            info!(
-                "failed to update read progress, are we shutting down?";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-        }
+        reader.update(progress);
     }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
