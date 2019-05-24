@@ -121,7 +121,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         for idx in 0..self.states.len() {
             let aggr_state = &mut self.states[idx];
             let aggr_expr = &entities.each_aggr_exprs[idx];
-            let aggr_fn_input = aggr_expr.eval(
+            let aggr_fn_input = aggr_expr.prepare_and_eval(
                 &mut entities.context,
                 rows_len,
                 entities.src.schema(),
@@ -323,7 +323,6 @@ mod tests {
                 &self,
                 aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
                 _schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
@@ -561,7 +560,6 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
                 _schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,

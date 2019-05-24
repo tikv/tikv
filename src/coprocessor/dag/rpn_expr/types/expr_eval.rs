@@ -8,6 +8,7 @@ use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -113,35 +114,43 @@ impl<'a> RpnStackNode<'a> {
 }
 
 impl RpnExpression {
+    /// Decodes referenced column in the expression. Must be called over the same input before
+    /// calling `eval()` or `eval_as_mysql_bools()`.
+    pub fn prepare(
+        &self,
+        tz: &Tz,
+        schema: &[FieldType],
+        columns: &mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        for node in self.as_ref() {
+            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
+                columns[*offset].ensure_decoded(tz, &schema[*offset])?;
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluates the expression into a vector.
     ///
-    /// If referred columns are not decoded, they will be decoded according to the given schema.
+    /// In case of referring encoded column, call `prepare()` first.
     ///
     /// # Panics
     ///
     /// Panics if the expression is not valid.
     ///
     /// Panics when referenced column does not have equal length as specified in `rows`.
+    ///
+    /// Panics when referenced column is not decoded.
     pub fn eval<'a>(
         &'a self,
         context: &mut EvalContext,
         rows: usize,
         schema: &'a [FieldType],
-        columns: &'a mut LazyBatchColumnVec,
+        columns: &'a LazyBatchColumnVec,
     ) -> Result<RpnStackNode<'a>> {
         assert!(rows > 0);
 
         let mut stack = Vec::with_capacity(self.len());
-
-        // We iterate two times. The first time we decode all referred columns. The second time
-        // we evaluate. This is to make Rust's borrow checker happy because there will be
-        // mutable reference during the first iteration and we can't keep these references.
-
-        for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
-            }
-        }
 
         for node in self.as_ref() {
             match node {
@@ -193,19 +202,35 @@ impl RpnExpression {
         Ok(stack.into_iter().next().unwrap())
     }
 
+    /// Convenient method of `prepare()` and `eval()`.
+    pub fn prepare_and_eval<'a>(
+        &'a self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &'a [FieldType],
+        columns: &'a mut LazyBatchColumnVec,
+    ) -> Result<RpnStackNode<'a>> {
+        self.prepare(&context.cfg.tz, schema, columns)?;
+        self.eval(context, rows, schema, columns)
+    }
+
     /// Evaluates the expression into a boolean vector.
+    ///
+    /// In case of referring encoded column, call `prepare()` first.
     ///
     /// # Panics
     ///
-    /// Panics if referenced columns are not decoded.
+    /// Panics if the expression is not valid.
     ///
     /// Panics if the boolean vector output buffer is not large enough to contain all values.
+    ///
+    /// Panics when referenced column is not decoded.
     pub fn eval_as_mysql_bools(
         &self,
         context: &mut EvalContext,
         rows: usize,
         schema: &[FieldType],
-        columns: &mut LazyBatchColumnVec,
+        columns: &LazyBatchColumnVec,
         outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
     ) -> Result<()> {
         use crate::coprocessor::codec::data_type::AsMySQLBool;
@@ -225,6 +250,19 @@ impl RpnExpression {
             }
         }
         Ok(())
+    }
+
+    /// Convenient method of `prepare()` and `eval_as_mysql_bools()`.
+    pub fn prepare_and_eval_as_mysql_bools(
+        &self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &[FieldType],
+        columns: &mut LazyBatchColumnVec,
+        outputs: &mut [bool],
+    ) -> Result<()> {
+        self.prepare(&context.cfg.tz, schema, columns)?;
+        self.eval_as_mysql_bools(context, rows, schema, columns, outputs)
     }
 }
 
@@ -253,7 +291,7 @@ mod tests {
         let exp = RpnExpressionBuilder::new().push_constant(1.5f64).build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 10, &[], &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 10, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_scalar());
         assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
@@ -295,7 +333,7 @@ mod tests {
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(1).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
+        let result = exp.prepare_and_eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -307,7 +345,7 @@ mod tests {
         let mut c = columns.clone();
         let exp = RpnExpressionBuilder::new().push_column_ref(0).build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 5, &schema, &mut c);
+        let result = exp.prepare_and_eval(&mut ctx, 5, &schema, &mut c);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -327,7 +365,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // smaller row number
-            let _ = exp.eval(&mut ctx, 4, &schema, &mut c);
+            let _ = exp.prepare_and_eval(&mut ctx, 4, &schema, &mut c);
         });
         assert!(hooked_eval.is_err());
 
@@ -336,7 +374,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let hooked_eval = ::panic_hook::recover_safe(|| {
             // larger row number
-            let _ = exp.eval(&mut ctx, 6, &schema, &mut c);
+            let _ = exp.prepare_and_eval(&mut ctx, 6, &schema, &mut c);
         });
         assert!(hooked_eval.is_err());
     }
@@ -359,7 +397,7 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 4, &[], &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 4, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -393,7 +431,7 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 3, &[], &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -439,7 +477,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -491,7 +529,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -527,7 +565,7 @@ mod tests {
             .build();
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
-        let result = exp.eval(&mut ctx, 3, &[], &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -575,7 +613,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -623,7 +661,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::Double)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -683,7 +721,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -738,7 +776,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -784,7 +822,7 @@ mod tests {
             .push_fn_call(FnFoo, FieldTypeTp::LongLong)
             .build();
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -911,7 +949,7 @@ mod tests {
         //      => [25.0, 3.8, 146.0]
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(
@@ -948,7 +986,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.prepare_and_eval(&mut ctx, 3, &[], &mut columns);
         });
         assert!(hooked_eval.is_err());
     }
@@ -982,7 +1020,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.prepare_and_eval(&mut ctx, 3, &[], &mut columns);
         });
         assert!(hooked_eval.is_err());
     }
@@ -1014,7 +1052,7 @@ mod tests {
         let mut ctx = EvalContext::default();
         let mut columns = LazyBatchColumnVec::empty();
         let hooked_eval = ::panic_hook::recover_safe(|| {
-            let _ = exp.eval(&mut ctx, 3, &[], &mut columns);
+            let _ = exp.prepare_and_eval(&mut ctx, 3, &[], &mut columns);
         });
         assert!(hooked_eval.is_err());
     }
@@ -1208,7 +1246,7 @@ mod tests {
         let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         let mut ctx = EvalContext::default();
-        let result = exp.eval(&mut ctx, 3, schema, &mut columns);
+        let result = exp.prepare_and_eval(&mut ctx, 3, schema, &mut columns);
         let val = result.unwrap();
         assert!(val.is_vector());
         assert_eq!(

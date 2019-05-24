@@ -33,7 +33,6 @@ pub trait AggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize, // TODO: Remove
         schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
@@ -68,20 +67,12 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
         schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp()).unwrap();
-        parser.parse(
-            aggr_def,
-            time_zone,
-            max_columns,
-            schema,
-            out_schema,
-            out_exp,
-        )
+        parser.parse(aggr_def, time_zone, schema, out_schema, out_exp)
     }
 }
 

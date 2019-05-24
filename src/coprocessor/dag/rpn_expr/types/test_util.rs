@@ -95,7 +95,7 @@ impl RpnFnScalarEvaluator {
             .build();
 
         let mut columns = LazyBatchColumnVec::empty();
-        let ret = expr.eval(&mut context, 1, &[], &mut columns)?;
+        let ret = expr.prepare_and_eval(&mut context, 1, &[], &mut columns)?;
         match ret {
             // Only used in tests, so clone is fine.
             RpnStackNode::Scalar { value, .. } => Ok(T::borrow_scalar_value(value).clone()),

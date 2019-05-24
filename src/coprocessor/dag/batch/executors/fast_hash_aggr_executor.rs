@@ -218,7 +218,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_row.clear();
 
-        let group_by_result = self.group_by_exp.eval(
+        let group_by_result = self.group_by_exp.prepare_and_eval(
             &mut entities.context,
             input.rows_len(),
             entities.src.schema(),
@@ -410,7 +410,9 @@ mod tests {
 
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
-            r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+            r.data[4]
+                .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+                .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.data[4]
@@ -475,7 +477,6 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
                 _schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,

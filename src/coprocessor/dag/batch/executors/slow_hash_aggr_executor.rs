@@ -203,8 +203,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             group_by_keys_offsets.push(SmallVec::new());
         }
         for group_by_exp in &self.group_by_exps {
-            let group_by_result =
-                group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
+            let group_by_result = group_by_exp.prepare_and_eval(
+                &mut entities.context,
+                rows_len,
+                src_schema,
+                &mut input,
+            )?;
             // Unwrap is fine because we have verified the group by expression before.
             let group_column = group_by_result.vector_value().unwrap();
             let field_type = group_by_result.field_type();
@@ -365,12 +369,16 @@ mod tests {
         assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
 
         // Let's check the two group by column first.
-        r.data[3].decode(&Tz::utc(), &exec.schema()[3]).unwrap();
+        r.data[3]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[3])
+            .unwrap();
         assert_eq!(
             r.data[3].decoded().as_int_slice(),
             &[Some(5), None, None, Some(1)]
         );
-        r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+        r.data[4]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+            .unwrap();
         assert_eq!(
             r.data[4].decoded().as_real_slice(),
             &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]

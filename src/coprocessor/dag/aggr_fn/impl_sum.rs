@@ -24,7 +24,6 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
         schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
@@ -39,7 +38,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, max_columns)?;
+        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, schema.len())?;
         // The rewrite should always success.
         super::util::rewrite_exp_for_sum_avg(schema, &mut exp).unwrap();
 
