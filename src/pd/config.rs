@@ -54,7 +54,7 @@ impl Config {
             return Err("please specify pd.endpoints.".into());
         }
 
-        if self.retry_log_every <= 0 {
+        if self.retry_log_every == 0 {
             return Err("pd.retry_log_every cannot be <=0".into());
         }
 
