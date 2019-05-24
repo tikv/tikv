@@ -92,11 +92,11 @@ impl VectorValue {
         }
     }
 
-    pub fn swap(&mut self, from_row: usize, to_row: usize) {
+    pub fn swap(&mut self, a: usize, b: usize) {
         match_template_evaluable! {
             TT, match self {
                 VectorValue::TT(v) => {
-                    v.swap(to_row,from_row)
+                    v.swap(a,b)
                 }
             }
         }
@@ -151,12 +151,11 @@ impl VectorValue {
                 VectorValue::TT(ref lh) => match right {
                     VectorValue::TT(ref rh) => {
                         match (lh.get(left_idx).unwrap(), rh.get(right_idx).unwrap()) {
-                            (None, None) =>Ordering::Equal,
+                            (None, None) => Ordering::Equal,
                             (None, _) => Ordering::Greater,
                             (_, None) => Ordering::Less,
-                            (Some(l), Some(r)) => {
-                            l.cmp(&r)
-                            }
+                            (Some(l), Some(r)) => l.cmp(&r),
+                            
                         }
                     }
                     other => panic!("Cannot compare {} with {}", other.eval_type(), self.eval_type())

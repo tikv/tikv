@@ -75,10 +75,9 @@ impl LazyBatchColumnVec {
         self.assert_columns_equal_length();
     }
 
-    pub fn swap(&mut self, from_row: usize, to_row: usize) {
-        let len = self.columns_len();
-        for i in 0..len {
-            self.columns[i].swap(from_row, to_row);
+    pub fn swap(&mut self, row_a: usize, row_b: usize) {
+        for column in &mut self.columns {
+            column.swap(row_a, row_b);
         }
     }
 

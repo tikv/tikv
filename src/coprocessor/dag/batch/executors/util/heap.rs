@@ -11,10 +11,11 @@ use crate::coprocessor::dag::expr::Result;
 
 const HEAP_MAX_CAPACITY: usize = 1024;
 
+/// SortRow wrapping a logical row will be used in the TopNHeap.
 pub struct SortRow {
     table: Arc<RefCell<LazyBatchColumnVec>>,
     idx: usize,
-    //(col_id,desc)
+    // (col_id, desc)
     order_cols: Arc<Vec<(usize, bool)>>,
 }
 
@@ -113,9 +114,7 @@ impl TopNHeap {
         } else {
             // swap top value with row when heap is full and current row is less than top data
             let top_data = self.rows.peek_mut().unwrap();
-            let order = row.cmp(&top_data);
-
-            if Ordering::Less == order {
+            if row < top_data {
                 top_data.table.borrow_mut().swap(top_data.idx, row.idx);
             }
         }
