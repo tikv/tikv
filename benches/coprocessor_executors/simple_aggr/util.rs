@@ -8,7 +8,6 @@ use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSimpleAggregationExecutor;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::StreamAggExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
@@ -45,7 +44,6 @@ impl SimpleAggrBencher for NormalBencher {
             meta.mut_agg_func().push(aggr_expr.clone());
             let src = fb.clone().build_normal_fixture_executor();
             StreamAggExecutor::new(
-                ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
                 black_box(meta),
@@ -73,7 +71,6 @@ impl SimpleAggrBencher for BatchBencher {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             BatchSimpleAggregationExecutor::new(
-                ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
                 black_box(vec![aggr_expr.clone()]),

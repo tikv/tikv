@@ -14,7 +14,6 @@ use tipb::schema::ColumnInfo;
 use test_coprocessor::*;
 use tikv::coprocessor::dag::batch::executors::BatchIndexScanExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::{Executor, IndexScanExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 use tikv::coprocessor::RequestHandler;
@@ -32,7 +31,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
     for NormalIndexScanExecutorBuilder<T>
 {
     type T = T;
-    type E = IndexScanExecutor<ExecSummaryCollectorDisabled, T>;
+    type E = IndexScanExecutor<T>;
     type P = IndexScanParam;
 
     fn build(
@@ -45,7 +44,6 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         req.set_columns(RepeatedField::from_slice(columns));
 
         let mut executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
             black_box(req),
             black_box(ranges.to_vec()),
             black_box(ToTxnStore::<Self::T>::to_store(store)),
@@ -66,7 +64,7 @@ pub struct BatchIndexScanExecutorBuilder<T: TxnStore + 'static> {
 
 impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScanExecutorBuilder<T> {
     type T = T;
-    type E = BatchIndexScanExecutor<ExecSummaryCollectorDisabled, T>;
+    type E = BatchIndexScanExecutor<T>;
     type P = IndexScanParam;
 
     fn build(
@@ -76,7 +74,6 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchIndexScan
         unique: bool,
     ) -> Self::E {
         let mut executor = BatchIndexScanExecutor::new(
-            ExecSummaryCollectorDisabled,
             black_box(ToTxnStore::<Self::T>::to_store(store)),
             black_box(Arc::new(EvalConfig::default())),
             black_box(columns.to_vec()),

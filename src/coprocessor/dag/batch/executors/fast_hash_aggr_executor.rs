@@ -14,7 +14,6 @@ use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
@@ -30,13 +29,11 @@ macro_rules! match_template_hashable {
 
 /// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
 /// group by column.
-pub struct BatchFastHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, FastHashAggregationImpl>,
+pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, FastHashAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchFastHashAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -53,7 +50,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -62,7 +59,6 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDi
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_by_exp,
@@ -73,7 +69,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDi
     }
 }
 
-impl BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -105,9 +101,8 @@ impl BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn Batc
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
     pub fn new(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp_defs: Vec<Expr>,
@@ -120,7 +115,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
             src.schema().len(),
         )?;
         Self::new_impl(
-            summary_collector,
             config,
             src,
             group_by_exp,
@@ -131,7 +125,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp: RpnExpression,
@@ -158,7 +151,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
         };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -300,7 +292,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 }
 
-fn calc_groups_each_row<T: Evaluable>(
+fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(
     rows: &[Option<T>],
     aggr_fns: &[Box<dyn AggrFunction>],
     group: &mut HashMap<Option<T>, usize>,

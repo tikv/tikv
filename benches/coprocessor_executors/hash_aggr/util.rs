@@ -10,7 +10,6 @@ use tipb::expression::Expr;
 use tikv::coprocessor::dag::batch::executors::BatchFastHashAggregationExecutor;
 use tikv::coprocessor::dag::batch::executors::BatchSlowHashAggregationExecutor;
 use tikv::coprocessor::dag::batch::interface::*;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::{Executor, HashAggExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 
@@ -60,7 +59,6 @@ impl HashAggrBencher for NormalBencher {
             meta.set_group_by(group_by_expr.to_vec().into());
             let src = fb.clone().build_normal_fixture_executor();
             let ex = HashAggExecutor::new(
-                ExecSummaryCollectorDisabled,
                 black_box(meta),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
@@ -96,7 +94,6 @@ impl HashAggrBencher for BatchBencher {
             let src = fb.clone().build_batch_fixture_executor();
             if group_by_expr.len() == 1 {
                 let ex = BatchFastHashAggregationExecutor::new(
-                    ExecSummaryCollectorDisabled,
                     black_box(Arc::new(EvalConfig::default())),
                     black_box(Box::new(src)),
                     black_box(group_by_expr.to_vec()),
@@ -106,7 +103,6 @@ impl HashAggrBencher for BatchBencher {
                 Box::new(ex) as Box<dyn BatchExecutor>
             } else if group_by_expr.len() > 1 {
                 let ex = BatchSlowHashAggregationExecutor::new(
-                    ExecSummaryCollectorDisabled,
                     black_box(Arc::new(EvalConfig::default())),
                     black_box(Box::new(src)),
                     black_box(group_by_expr.to_vec()),

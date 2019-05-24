@@ -14,7 +14,6 @@ use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
@@ -24,13 +23,11 @@ use crate::coprocessor::Result;
 ///
 /// FIXME: It is not correct to just store the serialized data as the group key.
 /// See pingcap/tidb#10467.
-pub struct BatchSlowHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SlowHashAggregationImpl>,
+pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SlowHashAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSlowHashAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -47,7 +44,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -56,7 +53,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_by_exps,
@@ -67,7 +63,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
     }
 }
 
-impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -88,9 +84,8 @@ impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn Batc
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     pub fn new(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp_defs: Vec<Expr>,
@@ -105,7 +100,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
         }
 
         Self::new_impl(
-            summary_collector,
             config,
             src,
             group_by_exps,
@@ -116,7 +110,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exps: Vec<RpnExpression>,
@@ -127,15 +120,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
             states: Vec::with_capacity(1024),
             groups: HashMap::default(),
             group_by_exps,
-            group_keys_buffer: Vec::with_capacity(1024),
-            group_keys_buffer_offset: Vec::with_capacity(128),
             states_offset_each_row: Vec::with_capacity(
                 crate::coprocessor::dag::batch_handler::BATCH_MAX_SIZE,
             ),
         };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -149,21 +139,6 @@ pub struct SlowHashAggregationImpl {
     states: Vec<Box<dyn AggrFunctionState>>,
     groups: HashMap<Vec<u8>, GroupInfo>,
     group_by_exps: Vec<RpnExpression>,
-
-    /// Suppose that we have the following group columns:
-    ///
-    /// ```ignore
-    /// Col1    Col2
-    /// Aaa     D
-    /// Bb      Eeeee
-    /// Cccc    Ff
-    /// ```
-    ///
-    /// `group_keys_buffer` will be `[AaaBbCcccDEeeeeFf   ]`
-    /// `group_keys_offset` will be `[0, 3,5,  9,10, 15,17]`
-    group_keys_buffer: Vec<u8>,
-    group_keys_buffer_offset: Vec<usize>,
-
     states_offset_each_row: Vec<usize>,
 }
 
@@ -214,54 +189,36 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         mut input: LazyBatchColumnVec,
     ) -> Result<()> {
         let rows_len = input.rows_len();
-        let group_by_exps_len = self.group_by_exps.len();
 
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_row.clear();
-        self.group_keys_buffer.clear();
-        self.group_keys_buffer_offset.clear();
 
         let src_schema = entities.src.schema();
 
+        // TODO: Eliminate these allocations using an allocator.
+        let mut group_by_keys = Vec::with_capacity(rows_len);
+        let mut group_by_keys_offsets = Vec::with_capacity(rows_len);
+        for _ in 0..rows_len {
+            group_by_keys.push(Vec::with_capacity(32));
+            group_by_keys_offsets.push(SmallVec::new());
+        }
         for group_by_exp in &self.group_by_exps {
             let group_by_result =
                 group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
+            // Unwrap is fine because we have verified the group by expression before.
+            let group_column = group_by_result.vector_value().unwrap();
+            let field_type = group_by_result.field_type();
             for row_index in 0..rows_len {
-                // Unwrap is fine because we have verified the group by expression before.
-                let group_column = group_by_result.vector_value().unwrap();
-                self.group_keys_buffer_offset
-                    .push(self.group_keys_buffer.len());
-                group_column.encode(
-                    row_index,
-                    group_by_result.field_type(),
-                    &mut self.group_keys_buffer,
-                )?;
+                group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
+                group_column.encode(row_index, field_type, &mut group_by_keys[row_index])?;
             }
         }
-
         // One extra offset, to be used as the end offset.
-        self.group_keys_buffer_offset
-            .push(self.group_keys_buffer.len());
-
         for row_index in 0..rows_len {
-            // The group key of row i (i start from 0) is the combination of slots
-            // [i, i + row_len, i + row_len * 2, ...] in `group_keys_buffer`, where slots are
-            // indexed by `group_keys_buffer_offset`.
+            group_by_keys_offsets[row_index].push(group_by_keys[row_index].len() as u32);
+        }
 
-            // TODO: We still need to allocate `rows_len` group key each time.
-            // TODO: We don't need to construct `group_key_offsets` when group_key exists in
-            // hash map.
-            let mut group_key = Vec::with_capacity(32);
-            let mut group_key_offsets = SmallVec::new();
-            for group_col_index in 0..group_by_exps_len {
-                let slot_index = row_index + group_col_index * rows_len;
-                let offset_begin = self.group_keys_buffer_offset[slot_index];
-                let offset_end = self.group_keys_buffer_offset[slot_index + 1];
-                group_key_offsets.push(group_key.len() as u32);
-                group_key.extend_from_slice(&self.group_keys_buffer[offset_begin..offset_end]);
-            }
-            group_key_offsets.push(group_key.len() as u32);
-
+        for (group_key, group_key_offsets) in group_by_keys.into_iter().zip(group_by_keys_offsets) {
             match self.groups.entry(group_key) {
                 Entry::Vacant(entry) => {
                     let offset = self.states.len();
@@ -338,16 +295,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 mod tests {
     use super::*;
 
-    use cop_codegen::AggrFunction;
     use cop_datatype::FieldTypeTp;
+    use tipb::expression::ScalarFuncSig;
 
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
-    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
-    use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
     use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
-    use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-    use tipb::expression::ScalarFuncSig;
+    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
     #[test]
     fn test_it_works_integration() {
@@ -400,35 +355,38 @@ mod tests {
         assert!(!r.is_drained.unwrap());
 
         let mut r = exec.next_batch(1);
-        println!("{:?}", r.data);
-        /*
-        // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
-        assert_eq!(r.data.rows_len(), 3);
-        assert_eq!(r.data.columns_len(), 5); // 4 result column, 1 group by column
+        // col_3, col_0 + 1 can result in:
+        // 1,     NULL
+        // NULL,  8
+        // NULL,  NULL
+        // 5,     2.5
+        // Thus there are 4 groups.
+        assert_eq!(r.data.rows_len(), 4);
+        assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
 
-        // Let's check group by column first, but note that the row order is not defined.
-        // Group by column is decoded in fast hash agg, but not decoded in slow hash agg. So
-        // decode it anyway.
+        // Let's check the two group by column first.
+        r.data[3].decode(&Tz::utc(), &exec.schema()[3]).unwrap();
+        assert_eq!(
+            r.data[3].decoded().as_int_slice(),
+            &[Some(5), None, None, Some(1)]
+        );
         r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
         assert_eq!(
             r.data[4].decoded().as_real_slice(),
-            &[None, Real::new(9.0).ok(), Real::new(6.0).ok()]
+            &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]
         );
+
         assert_eq!(
             r.data[0].decoded().as_int_slice(),
-            &[Some(3), Some(1), Some(1)]
+            &[Some(1), Some(1), Some(2), Some(1)]
         );
         assert_eq!(
             r.data[1].decoded().as_int_slice(),
-            &[Some(2), Some(1), Some(1)]
+            &[Some(1), Some(1), Some(0), Some(0)]
         );
         assert_eq!(
-            r.data[2].decoded().as_int_slice(),
-            &[Some(0), Some(1), Some(1)]
+            r.data[2].decoded().as_real_slice(),
+            &[Real::new(6.5).ok(), Real::new(12.0).ok(), None, None]
         );
-        assert_eq!(
-            r.data[3].decoded().as_real_slice(),
-            &[None, Real::new(7.0).ok(), Real::new(1.5).ok()]
-        );*/
     }
 }

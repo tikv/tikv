@@ -66,6 +66,15 @@ fn plus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunct
     }
 }
 
+fn minus_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => Box::new(RpnFnArithmetic::<IntIntMinus>::new()),
+        (false, true) => Box::new(RpnFnArithmetic::<IntUintMinus>::new()),
+        (true, false) => Box::new(RpnFnArithmetic::<UintIntMinus>::new()),
+        (true, true) => Box::new(RpnFnArithmetic::<UintUintMinus>::new()),
+    }
+}
+
 fn mod_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> Box<dyn RpnFunction> {
     match (lhs_is_unsigned, rhs_is_unsigned) {
         (false, false) => Box::new(RpnFnArithmetic::<IntIntMod>::new()),
@@ -146,6 +155,9 @@ fn map_pb_sig_to_rpn_func(value: ScalarFuncSig, children: &[Expr]) -> Result<Box
         ScalarFuncSig::PlusInt => map_int_sig(value, children, plus_mapper)?,
         ScalarFuncSig::PlusReal => Box::new(RpnFnArithmetic::<RealPlus>::new()),
         ScalarFuncSig::PlusDecimal => Box::new(RpnFnArithmetic::<DecimalPlus>::new()),
+        ScalarFuncSig::MinusInt => map_int_sig(value, children, minus_mapper)?,
+        ScalarFuncSig::MinusReal => Box::new(RpnFnArithmetic::<RealMinus>::new()),
+        ScalarFuncSig::MinusDecimal => Box::new(RpnFnArithmetic::<DecimalMinus>::new()),
         ScalarFuncSig::ModReal => Box::new(RpnFnArithmetic::<RealMod>::new()),
         ScalarFuncSig::ModDecimal => Box::new(RpnFnArithmetic::<DecimalMod>::new()),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,

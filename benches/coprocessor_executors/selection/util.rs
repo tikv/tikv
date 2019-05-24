@@ -8,7 +8,6 @@ use tipb::executor::Selection;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSelectionExecutor;
-use tikv::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use tikv::coprocessor::dag::executor::SelectionExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
@@ -44,7 +43,6 @@ impl SelectionBencher for NormalBencher {
             meta.set_conditions(exprs.to_vec().into());
             let src = fb.clone().build_normal_fixture_executor();
             SelectionExecutor::new(
-                ExecSummaryCollectorDisabled,
                 black_box(meta),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
@@ -71,7 +69,6 @@ impl SelectionBencher for BatchBencher {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             BatchSelectionExecutor::new(
-                ExecSummaryCollectorDisabled,
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
                 black_box(exprs.to_vec()),
