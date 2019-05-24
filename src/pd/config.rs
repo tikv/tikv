@@ -54,6 +54,10 @@ impl Config {
             return Err("please specify pd.endpoints.".into());
         }
 
+        if self.retry_log_every > 0 {
+            return Err("pd.retry_log_every cannot be <=0".into());
+        }
+
         if self.retry_max_count < -1 {
             return Err("pd.retry_max_count cannot be < -1".into());
         }
