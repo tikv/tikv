@@ -683,6 +683,7 @@ mod tests {
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+                invalid: Arc::new(AtomicBool::new(false)),
             };
             meta.readers.insert(1, read_delegate);
         }
