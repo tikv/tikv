@@ -103,7 +103,6 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
         );
 
         let mut addr = SocketAddr::from_str(&cfg.addr)?;
-        info!("listening on addr"; "addr" => addr);
         let ip = format!("{}", addr.ip());
         let channel_args = ChannelBuilder::new(Arc::clone(&env))
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
@@ -138,6 +137,8 @@ impl<T: RaftStoreRouter, S: StoreAddrResolver + 'static> Server<T, S> {
                 Either::Left(sb)
             }
         };
+
+        info!("listening on addr"; "addr" => addr);
 
         let raft_client = Arc::new(RwLock::new(RaftClient::new(
             Arc::clone(&env),
