@@ -188,7 +188,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
 
         for i in 0..self.columns_len_without_handle {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].push_raw(val);
+            columns[i].mut_raw().push(val);
             key_payload = remaining;
         }
 

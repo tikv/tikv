@@ -472,15 +472,15 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);
@@ -718,15 +718,15 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);

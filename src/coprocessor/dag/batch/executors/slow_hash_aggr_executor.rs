@@ -319,7 +319,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_index in 0..group_by_exps_len {
                 let offset_begin = group_info.group_key_offsets[group_index] as usize;
                 let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
-                group_by_columns[group_index].push_raw(&group_key[offset_begin..offset_end]);
+                group_by_columns[group_index]
+                    .mut_raw()
+                    .push(&group_key[offset_begin..offset_end]);
             }
         }
 

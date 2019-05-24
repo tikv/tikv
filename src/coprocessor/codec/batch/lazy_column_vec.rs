@@ -48,7 +48,6 @@ impl LazyBatchColumnVec {
     }
 
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns.
-    #[inline]
     #[cfg(test)]
     pub fn with_raw_columns(columns_count: usize) -> Self {
         let mut columns = Vec::with_capacity(columns_count);
@@ -59,27 +58,10 @@ impl LazyBatchColumnVec {
         Self { columns }
     }
 
-    /// Moves all elements of `other` into `Self`, leaving `other` empty.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `other` and `Self` does not have same column schemas.
-    #[inline]
-    pub fn append(&mut self, other: &mut Self) {
-        let len = self.columns_len();
-        assert_eq!(len, other.columns_len());
-        for i in 0..len {
-            self.columns[i].append(&mut other[i]);
-        }
-
-        self.assert_columns_equal_length();
-    }
-
     /// Ensures that a column at specified `column_index` is decoded and returns a reference
     /// to the decoded column.
     ///
     /// If the column is already decoded, this function does nothing.
-    #[inline]
     pub fn ensure_column_decoded(
         &mut self,
         column_index: usize,
@@ -125,14 +107,12 @@ impl LazyBatchColumnVec {
         }
     }
 
-    /// Retains only the rows specified by the predicate, which accepts index only.
+    /// Retain the elements according to a boolean array.
     ///
-    /// In other words, remove all rows such that `f(row_index)` returns `false`.
-    #[inline]
-    pub fn retain_rows_by_index<F>(&mut self, mut f: F)
-    where
-        F: FnMut(usize) -> bool,
-    {
+    /// # Panics
+    ///
+    /// Panics if `retain_arr` is not long enough.
+    pub fn retain_rows_by_array(&mut self, retain_arr: &[bool]) {
         if self.rows_len() == 0 {
             return;
         }
@@ -142,7 +122,7 @@ impl LazyBatchColumnVec {
         // We retain column by column to be efficient.
         for col in &mut self.columns {
             assert_eq!(col.len(), current_rows_len);
-            col.retain_by_index(&mut f);
+            col.retain_by_array(retain_arr);
         }
 
         self.assert_columns_equal_length();
@@ -239,7 +219,7 @@ mod tests {
         for (col_index, raw_datum) in raw_row_slice.iter().enumerate() {
             let lazy_col = &mut columns.columns[col_index];
             assert!(lazy_col.is_raw());
-            lazy_col.push_raw(raw_datum);
+            lazy_col.mut_raw().push(raw_datum);
         }
 
         columns.assert_columns_equal_length();
@@ -337,17 +317,20 @@ mod tests {
     }
 
     #[test]
-    fn test_retain_rows_by_index() {
+    fn test_retain_rows_by_array() {
         use cop_datatype::FieldTypeTp;
 
         let schema = [FieldTypeTp::Long.into(), FieldTypeTp::Double.into()];
         let mut columns = LazyBatchColumnVec::with_raw_columns(2);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
-        columns.retain_rows_by_index(|_| true);
+        columns.retain_rows_by_array(&[]);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
-        columns.retain_rows_by_index(|_| false);
+        columns.retain_rows_by_array(&[true]);
+        assert_eq!(columns.rows_len(), 0);
+        assert_eq!(columns.columns_len(), 2);
+        columns.retain_rows_by_array(&[false]);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
 
@@ -358,8 +341,7 @@ mod tests {
         push_raw_row_from_datums(&mut columns, &[Datum::U64(11), Datum::F64(7.5)], true);
         push_raw_row_from_datums(&mut columns, &[Datum::Null, Datum::F64(13.1)], true);
 
-        let retain_map = &[true, true, false, false, true, false];
-        columns.retain_rows_by_index(|idx| retain_map[idx]);
+        columns.retain_rows_by_array(&[true, true, false, false, true, false]);
 
         assert_eq!(columns.rows_len(), 3);
         assert_eq!(columns.columns_len(), 2);
@@ -421,8 +403,7 @@ mod tests {
             );
         }
 
-        let retain_map = &[true, false, true, false, false, true, true];
-        columns.retain_rows_by_index(|idx| retain_map[idx]);
+        columns.retain_rows_by_array(&[true, false, true, false, false, true, true]);
 
         assert_eq!(columns.rows_len(), 4);
         assert_eq!(columns.columns_len(), 2);
@@ -454,7 +435,7 @@ mod tests {
             );
         }
 
-        columns.retain_rows_by_index(|_| true);
+        columns.retain_rows_by_array(&[true, true, true, true]);
 
         assert_eq!(columns.rows_len(), 4);
         assert_eq!(columns.columns_len(), 2);
@@ -486,7 +467,7 @@ mod tests {
             );
         }
 
-        columns.retain_rows_by_index(|_| false);
+        columns.retain_rows_by_array(&[false, false, false, false]);
 
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
@@ -538,7 +519,7 @@ mod tests {
             .ensure_column_decoded(0, &Tz::utc(), &schema[0])
             .unwrap();
 
-        columns.retain_rows_by_index(|_| true);
+        columns.retain_rows_by_array(&[true, true, true]);
 
         assert_eq!(columns.rows_len(), 3);
         assert_eq!(columns.columns_len(), 2);
@@ -561,8 +542,7 @@ mod tests {
             );
         }
 
-        let retain_map = &[true, false, true];
-        columns.retain_rows_by_index(|idx| retain_map[idx]);
+        columns.retain_rows_by_array(&[true, false, true]);
 
         assert_eq!(columns.rows_len(), 2);
         assert_eq!(columns.columns_len(), 2);
@@ -585,7 +565,7 @@ mod tests {
             );
         }
 
-        columns.retain_rows_by_index(|_| false);
+        columns.retain_rows_by_array(&[false, false]);
 
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);

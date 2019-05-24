@@ -251,7 +251,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 if let Some(index) = some_index {
                     let index = *index;
                     if !self.is_column_filled[index] {
-                        columns[index].push_raw(val);
+                        columns[index].mut_raw().push(val);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     } else {
@@ -293,7 +293,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     ));
                 };
 
-                columns[i].push_raw(default_value);
+                columns[i].mut_raw().push(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
                 self.is_column_filled[i] = false;

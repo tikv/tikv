@@ -103,9 +103,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
 
             // TODO: When there are many conditions, it would be better to filter column each time.
 
-            src_result
-                .data
-                .retain_rows_by_index(|idx| base_retain_map[idx]);
+            src_result.data.retain_rows_by_array(&base_retain_map);
         }
 
         // Only append warnings when there is no error during filtering because we clear the data

@@ -177,7 +177,7 @@ impl FixtureBuilder {
                 for datum in datums {
                     let mut v = vec![];
                     DatumEncoder::encode(&mut v, &[datum], false).unwrap();
-                    c.push_raw(v);
+                    c.mut_raw().push(v);
                 }
                 c
             })
@@ -249,9 +249,11 @@ impl BatchExecutor for BatchFixtureExecutor {
         for col in &mut self.columns {
             let mut column = LazyBatchColumn::raw_with_capacity(scan_rows);
             if col.len() > scan_rows {
-                column.mut_raw().extend(col.mut_raw().drain(..scan_rows));
+                column.mut_raw().extend_n(col.raw(), scan_rows);
+                col.mut_raw().shift(scan_rows);
             } else {
-                column.mut_raw().append(col.mut_raw());
+                column.mut_raw().extend(col.raw());
+                col.mut_raw().clear();
             }
             columns.push(column);
         }

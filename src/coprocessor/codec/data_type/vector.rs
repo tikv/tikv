@@ -107,20 +107,19 @@ impl VectorValue {
         }
     }
 
-    /// Retains only the elements specified by the predicate, which accepts index only.
+    /// Retain the elements according to a boolean array.
     ///
-    /// In other words, remove all rows such that `f(element_index)` returns `false`.
-    #[inline]
-    pub fn retain_by_index<F>(&mut self, mut f: F)
-    where
-        F: FnMut(usize) -> bool,
-    {
+    /// # Panics
+    ///
+    /// Panics if `retain_arr` is not long enough.
+    pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
+        assert!(self.len() <= retain_arr.len());
         match_template_evaluable! {
             TT, match self {
                 VectorValue::TT(v) => {
                     let mut idx = 0;
                     v.retain(|_| {
-                        let r = f(idx);
+                        let r = retain_arr[idx];
                         idx += 1;
                         r
                     });
@@ -779,14 +778,17 @@ mod tests {
     }
 
     #[test]
-    fn test_retain_by_index() {
+    fn test_retain_by_array() {
         let mut column = VectorValue::with_capacity(3, EvalType::Real);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
-        column.retain_by_index(|_| true);
+        column.retain_by_array(&[]);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
-        column.retain_by_index(|_| false);
+        column.retain_by_array(&[true]);
+        assert_eq!(column.len(), 0);
+        assert_eq!(column.capacity(), 3);
+        column.retain_by_array(&[false]);
         assert_eq!(column.len(), 0);
         assert_eq!(column.capacity(), 3);
 
@@ -797,8 +799,7 @@ mod tests {
         column.push_real(Real::new(5.0).ok());
         column.push_real(None);
 
-        let retain_map = &[true, true, false, false, true, false];
-        column.retain_by_index(|idx| retain_map[idx]);
+        column.retain_by_array(&[true, true, false, false, true, false]);
 
         assert_eq!(column.len(), 3);
         assert!(column.capacity() > 3);
@@ -826,8 +827,7 @@ mod tests {
             ]
         );
 
-        let retain_map = &[true, false, true, false, false, true, true];
-        column.retain_by_index(|idx| retain_map[idx]);
+        column.retain_by_array(&[true, false, true, false, false, true, true]);
 
         assert_eq!(column.len(), 4);
         assert_eq!(
@@ -835,14 +835,14 @@ mod tests {
             &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
         );
 
-        column.retain_by_index(|_| true);
+        column.retain_by_array(&[true, true, true, true]);
         assert_eq!(column.len(), 4);
         assert_eq!(
             column.as_real_slice(),
             &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
         );
 
-        column.retain_by_index(|_| false);
+        column.retain_by_array(&[false, false, false, false]);
         assert_eq!(column.len(), 0);
         assert_eq!(column.as_real_slice(), &[]);
 
@@ -1009,7 +1009,7 @@ mod benches {
         b.iter(|| {
             let should_retain = test::black_box(&should_retain);
             let mut c = test::black_box(&column).clone();
-            c.retain_by_index(|idx| should_retain[idx]);
+            c.retain_by_array(should_retain.as_slice());
             test::black_box(c);
         });
     }
