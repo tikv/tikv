@@ -2,8 +2,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crossbeam::TrySendError;
