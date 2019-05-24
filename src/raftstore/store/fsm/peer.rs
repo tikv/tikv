@@ -49,7 +49,7 @@ use crate::raftstore::store::peer_storage::{ApplySnapResult, InvokeContext};
 use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::KeysInfoFormatter;
 use crate::raftstore::store::worker::{
-    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadTask, RegionTask, SplitCheckTask,
+    CleanupSSTTask, ConsistencyCheckTask, RaftlogGcTask, ReadDelegate, RegionTask, SplitCheckTask,
 };
 use crate::raftstore::store::{
     util, CasualMessage, Config, PeerMsg, PeerTicks, RaftCommand, SignificantMsg, SnapKey,
@@ -1262,18 +1262,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
-        if self
-            .ctx
-            .local_reader
-            .schedule(ReadTask::destroy(region_id))
-            .is_err()
-        {
-            info!(
-                "unable to destroy read delegate, are we shutting down?";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-        }
+        meta.readers.remove(&region_id);
         self.ctx
             .apply_router
             .schedule_task(region_id, ApplyTask::destroy(region_id));
@@ -1327,12 +1316,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         }
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.set_region(
-                &self.ctx.coprocessor_host,
-                &self.ctx.local_reader,
-                cp.region,
-                &mut self.fsm.peer,
-            );
+            meta.set_region(&self.ctx.coprocessor_host, cp.region, &mut self.fsm.peer);
         }
 
         let peer_id = cp.peer.get_id();
@@ -1428,12 +1412,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         let mut guard = self.ctx.store_meta.lock().unwrap();
         let meta: &mut StoreMeta = &mut *guard;
         let region_id = derived.get_id();
-        meta.set_region(
-            &self.ctx.coprocessor_host,
-            &self.ctx.local_reader,
-            derived,
-            &mut self.fsm.peer,
-        );
+        meta.set_region(&self.ctx.coprocessor_host, derived, &mut self.fsm.peer);
         self.fsm.peer.post_split();
         let is_leader = self.fsm.peer.is_leader();
         if is_leader {
@@ -1537,6 +1516,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
 
             new_peer.peer.activate(self.ctx);
             meta.regions.insert(new_region_id, new_region);
+            meta.readers
+                .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
             if last_region_id == new_region_id {
                 // To prevent from big region, the right region needs run split
                 // check again after split.
@@ -1743,7 +1724,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
                 &self.ctx.coprocessor_host,
-                &self.ctx.local_reader,
                 region.clone(),
                 &mut self.fsm.peer,
             );
@@ -1833,12 +1813,8 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
-        meta.set_region(
-            &self.ctx.coprocessor_host,
-            &self.ctx.local_reader,
-            region,
-            &mut self.fsm.peer,
-        );
+        assert!(meta.readers.remove(&source.get_id()).is_some());
+        meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
@@ -1889,12 +1865,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             if let Some(r) = region {
-                meta.set_region(
-                    &self.ctx.coprocessor_host,
-                    &self.ctx.local_reader,
-                    r,
-                    &mut self.fsm.peer,
-                );
+                meta.set_region(&self.ctx.coprocessor_host, r, &mut self.fsm.peer);
             }
             let region = self.fsm.peer.region();
             let region_id = region.get_id();

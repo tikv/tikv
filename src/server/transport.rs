@@ -11,7 +11,7 @@ use super::resolve::StoreAddrResolver;
 use super::snap::Task as SnapTask;
 use crate::raftstore::store::fsm::RaftRouter;
 use crate::raftstore::store::{
-    Callback, CasualMessage, PeerMsg, RaftCommand, ReadTask, SignificantMsg, StoreMsg, Transport,
+    Callback, CasualMessage, LocalReader, PeerMsg, RaftCommand, SignificantMsg, StoreMsg, Transport,
 };
 use crate::raftstore::{DiscardReason, Error as RaftStoreError, Result as RaftStoreResult};
 use crate::server::raft_client::RaftClient;
@@ -95,15 +95,15 @@ impl RaftStoreRouter for RaftStoreBlackHole {
 #[derive(Clone)]
 pub struct ServerRaftStoreRouter {
     router: RaftRouter,
-    local_reader_ch: Scheduler<ReadTask>,
+    local_reader: LocalReader<RaftRouter>,
 }
 
 impl ServerRaftStoreRouter {
     /// Creates a new router.
-    pub fn new(router: RaftRouter, local_reader_ch: Scheduler<ReadTask>) -> ServerRaftStoreRouter {
+    pub fn new(router: RaftRouter, local_reader: LocalReader<RaftRouter>) -> ServerRaftStoreRouter {
         ServerRaftStoreRouter {
             router,
-            local_reader_ch,
+            local_reader,
         }
     }
 
@@ -135,10 +135,9 @@ impl RaftStoreRouter for ServerRaftStoreRouter {
 
     fn send_command(&self, req: RaftCmdRequest, cb: Callback) -> RaftStoreResult<()> {
         let cmd = RaftCommand::new(req, cb);
-        if ReadTask::acceptable(&cmd.request) {
-            self.local_reader_ch
-                .schedule(ReadTask::read(cmd))
-                .map_err(|e| box_err!(e))
+        if LocalReader::<RaftRouter>::acceptable(&cmd.request) {
+            self.local_reader.execute_raft_command(cmd);
+            Ok(())
         } else {
             let region_id = cmd.request.get_header().get_region_id();
             self.router
