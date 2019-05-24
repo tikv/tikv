@@ -56,7 +56,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {}", e.description());
     }
-    info!(
+    debug!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
     );
@@ -432,6 +432,7 @@ fn pre_start(cfg: &TiKvConfig) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
+    warn!("beginning system configuration check:");
     if let Err(e) = tikv_util::config::check_max_open_fds(
         RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
     ) {
@@ -440,7 +441,7 @@ fn check_system_config(config: &TiKvConfig) {
 
     for e in tikv_util::config::check_kernel() {
         warn!(
-            "check-kernel";
+            "check: kernel";
             "err" => %e
         );
     }
@@ -448,14 +449,16 @@ fn check_system_config(config: &TiKvConfig) {
     // Check RocksDB data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.storage.data_dir) {
         warn!(
-            "rocksdb check data dir";
+            "check: rocksdb-data-dir";
+            "path" => &config.storage.data_dir,
             "err" => %e
         );
     }
     // Check raft data dir
     if let Err(e) = tikv_util::config::check_data_dir(&config.raft_store.raftdb_path) {
         warn!(
-            "raft check data dir";
+            "check: raftdb-path";
+            "path" => &config.raft_store.raftdb_path,
             "err" => %e
         );
     }

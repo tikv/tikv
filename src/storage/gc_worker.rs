@@ -718,10 +718,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// Polls safe point and does GC in a loop, again and again, until interrupted by invoking
     /// `GCManagerHandle::stop`.
     fn run(&mut self) {
-        info!("gc-manager is started");
+        debug!("gc-manager is started");
         self.run_impl().unwrap_err();
         set_status_metrics(GCManagerState::None);
-        info!("gc-manager is stopped");
+        debug!("gc-manager is stopped");
     }
 
     fn run_impl(&mut self) -> GCManagerResult<()> {
@@ -746,10 +746,10 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     /// of `safe_point`. TiKV won't do any GC automatically until the first time `safe_point` was
     /// updated to a greater value than initial value.
     fn initialize(&mut self) -> GCManagerResult<()> {
-        info!("gc-manager is initializing");
+        debug!("gc-manager is initializing");
         self.safe_point = 0;
         self.try_update_safe_point();
-        info!("gc-manager started"; "safe_point" => self.safe_point);
+        debug!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
 

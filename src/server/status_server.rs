@@ -26,10 +26,10 @@ impl StatusServer {
             .pool_size(status_thread_pool_size)
             .name_prefix("status-server-")
             .after_start(|| {
-                info!("Status server started");
+                debug!("Status server started");
             })
             .before_stop(|| {
-                info!("stopping status server");
+                debug!("stopping status server");
             })
             .build();
         let (tx, rx) = futures::sync::oneshot::channel::<()>();

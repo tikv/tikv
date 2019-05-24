@@ -256,7 +256,7 @@ impl<E: Engine> Scheduler<E> {
     ) -> Self {
         // Add 2 logs records how long is need to initialize TASKS_SLOTS_NUM * 2048000 `Mutex`es.
         // In a 3.5G Hz machine it needs 1.3s, which is a notable duration during start-up.
-        info!("Scheduler::new is called to initialize the transaction scheduler");
+        debug!("Scheduler::new is called to initialize the transaction scheduler");
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
             task_contexts.push(Mutex::new(Default::default()));
@@ -278,7 +278,7 @@ impl<E: Engine> Scheduler<E> {
             detector_scheduler,
         });
 
-        info!("Scheduler::new is finished, the transaction scheduler is initialized");
+        debug!("Scheduler::new is finished, the transaction scheduler is initialized");
         Scheduler {
             engine: Some(engine),
             inner,

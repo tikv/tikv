@@ -323,7 +323,7 @@ impl PdClient for RpcClient {
                 )) as PdFuture<_>;
             }
 
-            info!("heartbeat sender is refreshed");
+            debug!("heartbeat sender is refreshed");
             let sender = inner.hb_sender.as_mut().left().unwrap().take().unwrap();
             let (tx, rx) = mpsc::unbounded();
             tx.unbounded_send(req).unwrap();
