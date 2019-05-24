@@ -79,6 +79,17 @@ impl LazyBatchColumn {
         LazyBatchColumn::Decoded(VectorValue::with_capacity(capacity, eval_tp))
     }
 
+    /// Create a new `LazyBatchColumn` with specified capacity and schema from the current schema.
+    #[inline]
+    pub fn schema_with_capacity(&self, capacity: usize) -> Self {
+        match self {
+            LazyBatchColumn::Raw(_) => Self::raw_with_capacity(capacity),
+            LazyBatchColumn::Decoded(ref v) => {
+                Self::decoded_with_capacity_and_tp(capacity, v.eval_type())
+            }
+        }
+    }
+
     #[inline]
     pub fn is_raw(&self) -> bool {
         match self {
@@ -141,13 +152,6 @@ impl LazyBatchColumn {
             LazyBatchColumn::Raw(ref mut v) => v.truncate(len),
             LazyBatchColumn::Decoded(ref mut v) => v.truncate(len),
         };
-    }
-
-    pub fn swap(&mut self, from_row: usize, to_row: usize) {
-        match self {
-            LazyBatchColumn::Raw(ref mut v) => v.swap(to_row, from_row), //swep memory
-            LazyBatchColumn::Decoded(ref mut v) => v.swap(from_row, to_row),
-        }
     }
 
     #[inline]
@@ -247,6 +251,19 @@ impl LazyBatchColumn {
             },
             LazyBatchColumn::Decoded(ref mut dest) => match other {
                 LazyBatchColumn::Decoded(ref mut src) => dest.append(src),
+                _ => panic!("Cannot append raw LazyBatchColumn into decoded LazyBatchColumn"),
+            },
+        }
+    }
+
+    pub fn push_row(&mut self, other: &Self, row_id: usize) {
+        match self {
+            LazyBatchColumn::Raw(ref mut dest) => match other {
+                LazyBatchColumn::Raw(ref src) => dest.push(src[row_id].clone()),
+                _ => panic!("Cannot append decoded LazyBatchColumn into raw LazyBatchColumn"),
+            },
+            LazyBatchColumn::Decoded(ref mut dest) => match other {
+                LazyBatchColumn::Decoded(ref src) => dest.push_row(src, row_id),
                 _ => panic!("Cannot append raw LazyBatchColumn into decoded LazyBatchColumn"),
             },
         }

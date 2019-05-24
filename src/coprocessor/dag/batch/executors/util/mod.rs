@@ -2,7 +2,7 @@
 
 pub mod aggr_executor;
 pub mod hash_aggr_helper;
-// TODO fix me(shirly)
+// TODO remove it(shirly)
 #[cfg(test)]
 pub mod heap;
 #[cfg(test)]

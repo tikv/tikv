@@ -47,6 +47,16 @@ impl LazyBatchColumnVec {
         }
     }
 
+    /// Creates a new empty `LazyBatchColumnVec` with capacity from the current schema.
+    #[inline]
+    pub fn schema_with_capacity(&self, rows: usize) -> Self {
+        let mut columns = Vec::with_capacity(self.columns.len());
+        for col in &self.columns {
+            columns.push(col.schema_with_capacity(rows));
+        }
+        Self { columns }
+    }
+
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns.
     #[inline]
     #[cfg(test)]
@@ -75,10 +85,15 @@ impl LazyBatchColumnVec {
         self.assert_columns_equal_length();
     }
 
-    pub fn swap(&mut self, row_a: usize, row_b: usize) {
-        for column in &mut self.columns {
-            column.swap(row_a, row_b);
+    #[inline]
+    pub fn push_row(&mut self, other: &Self, row_id: usize) {
+        let len = self.columns_len();
+        assert_eq!(len, other.columns_len());
+        for i in 0..len {
+            self.columns[i].push_row(&other[i], row_id);
         }
+
+        self.assert_columns_equal_length();
     }
 
     /// Ensures that a column at specified `column_index` is decoded and returns a reference

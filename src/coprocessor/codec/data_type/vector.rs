@@ -92,16 +92,6 @@ impl VectorValue {
         }
     }
 
-    pub fn swap(&mut self, a: usize, b: usize) {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(v) => {
-                    v.swap(a,b)
-                }
-            }
-        }
-    }
-
     /// Clears the column, removing all datums.
     #[inline]
     pub fn clear(&mut self) {
@@ -155,7 +145,7 @@ impl VectorValue {
                             (None, _) => Ordering::Greater,
                             (_, None) => Ordering::Less,
                             (Some(l), Some(r)) => l.cmp(&r),
-                            
+
                         }
                     }
                     other => panic!("Cannot compare {} with {}", other.eval_type(), self.eval_type())
@@ -176,6 +166,21 @@ impl VectorValue {
                 VectorValue::TT(self_vec) => match other {
                     VectorValue::TT(other_vec) => {
                         self_vec.append(other_vec);
+                    }
+                    other => panic!("Cannot append {} to {} vector", other.eval_type(), self.eval_type())
+                },
+            }
+        }
+    }
+
+    #[inline]
+    pub fn push_row(&mut self, other: &VectorValue, row_id: usize) {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(self_vec) => match other {
+                    VectorValue::TT(other_vec) => {
+                        #[allow(clippy::clone_on_copy)]
+                        self_vec.push(other_vec[row_id].clone());
                     }
                     other => panic!("Cannot append {} to {} vector", other.eval_type(), self.eval_type())
                 },
