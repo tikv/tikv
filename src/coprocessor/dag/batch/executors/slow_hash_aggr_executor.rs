@@ -293,6 +293,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
+    fn groups_len(&self) -> usize {
+        self.groups.len()
+    }
+
+    #[inline]
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
@@ -326,5 +331,104 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         }
 
         Ok(group_by_columns)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_codegen::AggrFunction;
+    use cop_datatype::FieldTypeTp;
+
+    use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
+    use tipb::expression::ScalarFuncSig;
+
+    #[test]
+    fn test_it_works_integration() {
+        use tipb::expression::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a hash aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - AVG(col_0 + 5.0)
+        // And group by:
+        // - col_3
+        // - col_0 + 1
+
+        let group_by_exps = vec![
+            RpnExpressionBuilder::new().push_column_ref(3).build(),
+            RpnExpressionBuilder::new()
+                .push_column_ref(0)
+                .push_constant(1.0)
+                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .build(),
+        ];
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::PlusReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::Double))
+                        .push_child(ExprDefBuilder::constant_real(5.0)),
+                )
+                .build(),
+        ];
+
+        let src_exec = make_src_executor_1();
+        let mut exec = BatchSlowHashAggregationExecutor::new_for_test(
+            src_exec,
+            group_by_exps,
+            aggr_definitions,
+            AllAggrDefinitionParser,
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let mut r = exec.next_batch(1);
+        println!("{:?}", r.data);
+        /*
+        // col_0 + col_1 can result in [NULL, 9.0, 6.0], thus there will be three groups.
+        assert_eq!(r.data.rows_len(), 3);
+        assert_eq!(r.data.columns_len(), 5); // 4 result column, 1 group by column
+
+        // Let's check group by column first, but note that the row order is not defined.
+        // Group by column is decoded in fast hash agg, but not decoded in slow hash agg. So
+        // decode it anyway.
+        r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[None, Real::new(9.0).ok(), Real::new(6.0).ok()]
+        );
+        assert_eq!(
+            r.data[0].decoded().as_int_slice(),
+            &[Some(3), Some(1), Some(1)]
+        );
+        assert_eq!(
+            r.data[1].decoded().as_int_slice(),
+            &[Some(2), Some(1), Some(1)]
+        );
+        assert_eq!(
+            r.data[2].decoded().as_int_slice(),
+            &[Some(0), Some(1), Some(1)]
+        );
+        assert_eq!(
+            r.data[3].decoded().as_real_slice(),
+            &[None, Real::new(7.0).ok(), Real::new(1.5).ok()]
+        );*/
     }
 }
