@@ -3,27 +3,29 @@
 #![cfg_attr(test, feature(test))]
 #![feature(core_intrinsics)]
 #![feature(ptr_offset_from)]
+#![feature(underscore_const_names)]
 
 #[macro_use]
-extern crate quick_error;
+extern crate static_assertions;
+#[macro_use]
+extern crate failure;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-mod buffer;
-mod byte;
+pub mod buffer;
+pub mod byte;
 mod convert;
 mod error;
-mod number;
+pub mod number;
 
 pub mod prelude {
     pub use super::buffer::{BufferReader, BufferWriter};
-    pub use super::byte::MemComparableByteCodec;
-    pub use super::number::{BufferNumberDecoder, BufferNumberEncoder};
+    pub use super::byte::{
+        CompactByteDecoder, CompactByteEncoder, MemComparableByteDecoder, MemComparableByteEncoder,
+    };
+    pub use super::number::{NumberDecoder, NumberEncoder};
 }
 
-pub use self::buffer::{BufferReader, BufferWriter};
-pub use self::byte::MemComparableByteCodec;
 pub use self::error::{Error, Result};
-pub use self::number::NumberCodec;

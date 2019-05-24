@@ -8,12 +8,12 @@ use std::vec::IntoIter;
 use tipb::executor::TopN;
 use tipb::expression::ByItem;
 
-use crate::coprocessor::codec::datum::Datum;
-use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
-use crate::coprocessor::Result;
-
 use super::topn_heap::TopNHeap;
 use super::{Executor, ExecutorMetrics, ExprColumnRefVisitor, Row};
+use crate::coprocessor::codec::datum::Datum;
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
+use crate::coprocessor::Result;
 
 struct OrderBy {
     items: Arc<Vec<ByItem>>,
@@ -59,7 +59,7 @@ impl TopNExecutor {
         mut meta: TopN,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<TopNExecutor> {
+    ) -> Result<Self> {
         let order_by = meta.take_order_by().into_vec();
 
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
@@ -115,10 +115,7 @@ impl Executor for TopNExecutor {
             self.fetch_all()?;
         }
         let iter = self.iter.as_mut().unwrap();
-        match iter.next() {
-            Some(sort_row) => Ok(Some(sort_row)),
-            None => Ok(None),
-        }
+        Ok(iter.next())
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -133,6 +130,14 @@ impl Executor for TopNExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             if let Some(mut topn_warnings) = self.eval_warnings.take() {
@@ -142,10 +147,6 @@ impl Executor for TopNExecutor {
         } else {
             self.eval_warnings.take()
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
     }
 }
 

@@ -412,6 +412,8 @@ fn test_snapshot_with_append<T: Simulator>(cluster: &mut Cluster<T>) {
     pd_client.disable_default_operator();
     cluster.run();
 
+    // In case of removing leader, let's transfer leader to some node first.
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     pd_client.must_remove_peer(1, new_peer(4, 4));
 
     let (tx, rx) = mpsc::channel();

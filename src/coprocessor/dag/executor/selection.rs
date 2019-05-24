@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tipb::executor::Selection;
 
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::Result;
 
@@ -23,7 +24,7 @@ impl SelectionExecutor {
         mut meta: Selection,
         eval_cfg: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<SelectionExecutor> {
+    ) -> Result<Self> {
         let conditions = meta.take_conditions().into_vec();
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&conditions)?;
@@ -66,6 +67,14 @@ impl Executor for SelectionExecutor {
         }
     }
 
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.src.collect_execution_summaries(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.src.get_len_of_columns()
+    }
+
     fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
         if let Some(mut warnings) = self.src.take_eval_warnings() {
             warnings.merge(&mut self.ctx.take_warnings());
@@ -73,10 +82,6 @@ impl Executor for SelectionExecutor {
         } else {
             Some(self.ctx.take_warnings())
         }
-    }
-
-    fn get_len_of_columns(&self) -> usize {
-        self.src.get_len_of_columns()
     }
 }
 

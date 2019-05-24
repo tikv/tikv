@@ -13,8 +13,8 @@ use engine::{Engines, Peekable};
 use kvproto::metapb;
 use kvproto::pdpb::PeerStats;
 use kvproto::raft_cmdpb::{
-    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, Request, Response,
-    TransferLeaderRequest, TransferLeaderResponse,
+    self, AdminCmdType, AdminResponse, CmdType, RaftCmdRequest, RaftCmdResponse, ReadIndexResponse,
+    Request, Response, TransferLeaderRequest, TransferLeaderResponse,
 };
 use kvproto::raft_serverpb::{
     MergeState, PeerState, RaftApplyState, RaftMessage, RaftSnapshotData,
@@ -31,10 +31,10 @@ use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
-use crate::raftstore::store::worker::{ReadProgress, ReadTask, RegionTask};
+use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
 use crate::raftstore::store::{keys, Callback, Config, ReadResponse, RegionSnapshot};
 use crate::raftstore::{Error, Result};
 use tikv_util::collections::HashMap;
@@ -56,6 +56,7 @@ struct ReadIndexRequest {
     id: u64,
     cmds: MustConsumeVec<(RaftCmdRequest, Callback)>,
     renew_lease_time: Timespec,
+    read_index: Option<u64>,
 }
 
 impl ReadIndexRequest {
@@ -86,6 +87,27 @@ impl ReadIndexQueue {
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
+        }
+    }
+
+    /// update the read index of the requests that before the specified id.
+    fn advance(&mut self, id: &[u8], read_index: u64) {
+        if let Some(i) = self.reads.iter().position(|x| x.binary_id() == id) {
+            for pos in 0..=i {
+                let req = &mut self.reads[pos];
+                let index = req.read_index.get_or_insert(read_index);
+                if *index > read_index {
+                    *index = read_index;
+                }
+            }
+            if self.ready_cnt < i + 1 {
+                self.ready_cnt = i + 1;
+            }
+        } else {
+            error!(
+                "cannot find corresponding read from pending reads";
+                "id"=>?id, "read-index" =>read_index,
+            );
         }
     }
 
@@ -192,30 +214,10 @@ pub struct PeerStat {
     pub written_keys: u64,
 }
 
-pub struct RecentAddedPeer {
-    pub reject_duration_as_secs: u64,
-    pub id: u64,
-    pub added_time: Instant,
-}
-
-impl RecentAddedPeer {
-    pub fn new(reject_duration_as_secs: u64) -> RecentAddedPeer {
-        RecentAddedPeer {
-            reject_duration_as_secs,
-            id: Default::default(),
-            added_time: Instant::now(),
-        }
-    }
-
-    pub fn update(&mut self, id: u64, now: Instant) {
-        self.id = id;
-        self.added_time = now;
-    }
-
-    pub fn contains(&self, id: u64) -> bool {
-        self.id == id
-            && duration_to_sec(self.added_time.elapsed()) < self.reject_duration_as_secs as f64
-    }
+#[derive(Default, Debug, Clone, Copy)]
+pub struct CheckTickResult {
+    leader: bool,
+    up_to_date: bool,
 }
 
 /// A struct that stores the state to wait for `PrepareMerge` apply result.
@@ -254,6 +256,8 @@ pub struct Peer {
     leader_lease: Lease,
     pending_reads: ReadIndexQueue,
 
+    /// If it fails to send messages to leader.
+    pub leader_unreachable: bool,
     /// Whether this peer is destroyed asynchronously.
     pub pending_remove: bool,
     /// If a snapshot is being applied asynchronously, messages should not be sent.
@@ -262,7 +266,9 @@ pub struct Peer {
     /// Record the instants of peers being added into the configuration.
     /// Remove them after they are not pending any more.
     pub peers_start_pending_time: Vec<(u64, Instant)>,
-    pub recent_added_peer: RecentAddedPeer,
+    /// A inaccurate cache about which peer is marked as down.
+    down_peer_ids: Vec<u64>,
+    pub recent_conf_change_time: Instant,
 
     /// An inaccurate difference in region size since last reset.
     /// It is used to decide whether split check is needed.
@@ -350,14 +356,14 @@ impl Peer {
             peer_cache: RefCell::new(HashMap::default()),
             peer_heartbeats: HashMap::default(),
             peers_start_pending_time: vec![],
-            recent_added_peer: RecentAddedPeer::new(
-                cfg.raft_reject_transfer_leader_duration.as_secs(),
-            ),
+            down_peer_ids: vec![],
+            recent_conf_change_time: Instant::now(),
             size_diff_hint: 0,
             delete_keys_hint: 0,
             approximate_size: None,
             approximate_keys: None,
             compaction_declined_bytes: 0,
+            leader_unreachable: false,
             pending_remove: false,
             pending_merge_state: None,
             last_committed_prepare_merge_idx: 0,
@@ -387,19 +393,11 @@ impl Peer {
         Ok(peer)
     }
 
-    /// Register self to apply_scheduler and read_scheduler so that the peer is then usable.
+    /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
     pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
-        if let Err(e) = ctx.local_reader.schedule(ReadTask::register(self)) {
-            info!(
-                "failed to schedule local reader, are we shutting down?";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-        }
 
         ctx.coprocessor_host.on_region_changed(
             self.region(),
@@ -523,6 +521,60 @@ impl Peer {
         self.get_store().region()
     }
 
+    /// Check whether the peer can be hibernated.
+    ///
+    /// This should be used with `check_after_tick` to get a correct conclusion.
+    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+        let mut res = CheckTickResult::default();
+        if !self.is_leader() {
+            return res;
+        }
+        res.leader = true;
+        if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
+            return res;
+        }
+        let status = self.raft_group.status_ref();
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        for (id, pr) in status.progress.unwrap().iter() {
+            // Only recent active peer is considerred, so that an isolated follower
+            // won't cause a waste of leader's resource.
+            if *id == self.peer.get_id() || !pr.recent_active {
+                continue;
+            }
+            // Keep replicating data to active followers.
+            if pr.matched != last_index {
+                return res;
+            }
+        }
+        // Unapplied entries can change the configuration of the group.
+        res.up_to_date = self.get_store().applied_index() == last_index;
+        res
+    }
+
+    pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
+        if res.leader {
+            res.up_to_date && self.is_leader() && self.raft_group.raft.pending_read_count() == 0
+        } else {
+            // If follower keeps receiving data from leader, then it's safe to stop
+            // ticking, as leader will make sure it has the latest logs.
+            // Checking term to make sure campaign has finished and the leader starts
+            // doing its job, it's not required but a safe options.
+            state != GroupState::Chaos
+                && self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+        }
+    }
+
+    /// Pings if followers are still connected.
+    ///
+    /// Leader needs to know exact progress of followers, and
+    /// followers just need to know whether leader is still alive.
+    pub fn ping(&mut self) {
+        if self.is_leader() {
+            self.raft_group.ping();
+        }
+    }
+
     /// Set the region of a peer.
     ///
     /// This will update the region of the peer, caller must ensure the region
@@ -530,7 +582,7 @@ impl Peer {
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
-        local_reader: &Scheduler<ReadTask>,
+        reader: &mut ReadDelegate,
         region: metapb::Region,
     ) {
         if self.region().get_region_epoch().get_version() < region.get_region_epoch().get_version()
@@ -542,7 +594,7 @@ impl Peer {
         let progress = ReadProgress::region(region);
         // Always update read delegate's region to avoid stale region info after a follower
         // becoming a leader.
-        self.maybe_update_read_progress(local_reader, progress);
+        self.maybe_update_read_progress(reader, progress);
 
         if !self.pending_remove {
             host.on_region_changed(self.region(), RegionChangeEvent::Update, self.get_role());
@@ -555,8 +607,8 @@ impl Peer {
     }
 
     #[inline]
-    pub fn get_raft_status(&self) -> raft::Status {
-        self.raft_group.status()
+    pub fn get_raft_status(&self) -> raft::StatusRef<'_> {
+        self.raft_group.status_ref()
     }
 
     #[inline]
@@ -683,6 +735,7 @@ impl Peer {
     pub fn check_peers(&mut self) {
         if !self.is_leader() {
             self.peer_heartbeats.clear();
+            self.peers_start_pending_time.clear();
             return;
         }
 
@@ -700,8 +753,9 @@ impl Peer {
     }
 
     /// Collects all down peers.
-    pub fn collect_down_peers(&self, max_duration: Duration) -> Vec<PeerStats> {
+    pub fn collect_down_peers(&mut self, max_duration: Duration) -> Vec<PeerStats> {
         let mut down_peers = Vec::new();
+        let mut down_peer_ids = Vec::new();
         for p in self.region().get_peers() {
             if p.get_id() == self.peer.get_id() {
                 continue;
@@ -712,19 +766,25 @@ impl Peer {
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(instant.elapsed().as_secs());
                     down_peers.push(stats);
+                    down_peer_ids.push(p.get_id());
                 }
             }
         }
+        self.down_peer_ids = down_peer_ids;
         down_peers
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
     pub fn collect_pending_peers(&mut self) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
         let truncated_idx = self.get_store().truncated_index();
 
-        let progresses = status.progress.iter().chain(&status.learner_progress);
+        if status.progress.is_none() {
+            return pending_peers;
+        }
+
+        let progresses = status.progress.unwrap().iter();
         for (&id, progress) in progresses {
             if id == self.peer.get_id() {
                 continue;
@@ -752,13 +812,16 @@ impl Peer {
         pending_peers
     }
 
-    /// Returns `true` if any new peer catches up with the leader in replicating logs.
-    /// And updates `peers_start_pending_time` if needed.
+    /// Returns `true` if any peer recover from connectivity problem.
+    ///
+    /// A peer can become pending or down if it has not responded for a
+    /// long time. If it becomes normal again, PD need to be notified.
     pub fn any_new_peer_catch_up(&mut self, peer_id: u64) -> bool {
-        if self.peers_start_pending_time.is_empty() {
+        if self.peers_start_pending_time.is_empty() && self.down_peer_ids.is_empty() {
             return false;
         }
         if !self.is_leader() {
+            self.down_peer_ids = vec![];
             self.peers_start_pending_time = vec![];
             return false;
         }
@@ -780,6 +843,9 @@ impl Peer {
                     return true;
                 }
             }
+        }
+        if self.down_peer_ids.contains(&peer_id) {
+            return true;
         }
         false
     }
@@ -837,16 +903,14 @@ impl Peer {
                     // It is recommended to update the lease expiring time right after
                     // this peer becomes leader because it's more convenient to do it here and
                     // it has no impact on the correctness.
-                    let progress = ReadProgress::term(self.term());
-                    self.maybe_update_read_progress(&ctx.local_reader, progress);
-                    self.maybe_renew_leader_lease(&ctx.local_reader, monotonic_raw_now());
+                    let progress_term = ReadProgress::term(self.term());
+                    self.maybe_renew_leader_lease(monotonic_raw_now(), ctx, Some(progress_term));
                     debug!(
                         "becomes leader with lease";
                         "region_id" => self.region_id,
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
-                    self.heartbeat_pd(ctx)
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -908,9 +972,12 @@ impl Peer {
         Some(region_proposal)
     }
 
-    pub fn handle_raft_ready_append<T: Transport, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    pub fn handle_raft_ready_append<T: Transport, C>(
+        &mut self,
+        ctx: &mut PollContext<T, C>,
+    ) -> Option<(Ready, InvokeContext)> {
         if self.pending_remove {
-            return;
+            return None;
         }
         if self.mut_store().check_applying_snap() {
             // If we continue to handle all the messages, it may cause too many messages because
@@ -921,7 +988,7 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
+            return None;
         }
 
         if !self.pending_messages.is_empty() {
@@ -948,7 +1015,7 @@ impl Peer {
                     "apply_index" => self.get_store().applied_index(),
                     "last_applying_index" => self.last_applying_idx,
                 );
-                return;
+                return None;
             }
 
             let mut snap_data = RaftSnapshotData::new();
@@ -990,7 +1057,7 @@ impl Peer {
                         "last_applying_index" => self.last_applying_idx,
                         "overlap_region" => ?r,
                     );
-                    return;
+                    return None;
                 }
             }
         }
@@ -1006,7 +1073,7 @@ impl Peer {
             .raft_group
             .has_ready_since(Some(self.last_applying_idx))
         {
-            return;
+            return None;
         }
 
         debug!(
@@ -1048,7 +1115,7 @@ impl Peer {
             }
         };
 
-        ctx.ready_res.push((ready, invoke_ctx));
+        Some((ready, invoke_ctx))
     }
 
     pub fn post_raft_ready_append<T: Transport, C>(
@@ -1108,6 +1175,9 @@ impl Peer {
 
         if apply_snap_result.is_some() {
             self.activate(ctx);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            meta.readers
+                .insert(self.region_id, ReadDelegate::from_peer(self));
         }
 
         apply_snap_result
@@ -1142,7 +1212,7 @@ impl Peer {
                 if lease_to_be_updated {
                     let propose_time = self.find_propose_time(entry.get_index(), entry.get_term());
                     if let Some(propose_time) = propose_time {
-                        self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+                        self.maybe_renew_leader_lease(propose_time, ctx, None);
                         lease_to_be_updated = false;
                     }
                 }
@@ -1196,22 +1266,69 @@ impl Peer {
         self.proposals.gc();
     }
 
+    /// Responses to the ready read index request on the replica, the replica is not a leader.
+    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+        if self.pending_reads.ready_cnt > 0 {
+            for _ in 0..self.pending_reads.ready_cnt {
+                let (read_index, is_read_index_request) = {
+                    let read = self.pending_reads.reads.front().unwrap();
+                    if read.cmds.len() == 1
+                        && read.cmds[0].0.get_requests().len() == 1
+                        && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex
+                    {
+                        (read.read_index, true)
+                    } else {
+                        (read.read_index, false)
+                    }
+                };
+
+                let mut read = self.pending_reads.reads.pop_front().unwrap();
+                if !is_read_index_request {
+                    let term = self.term();
+                    // Only read index request is valid.
+                    for (_, cb) in read.cmds.drain(..) {
+                        apply::notify_stale_req(term, cb);
+                    }
+                    continue;
+                }
+                for (req, cb) in read.cmds.drain(..) {
+                    cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+                }
+                self.pending_reads.ready_cnt -= 1;
+            }
+        }
+    }
+
     fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
+        // The follower may lost `ReadIndexResp`, so the pending_reads does not
+        // guarantee the orders are consistent with read_states. `advance` will
+        // update the `read_index` of read request that before this successful
+        // `ready`.
+        if !self.is_leader() && !ready.read_states.is_empty() {
+            for state in &ready.read_states {
+                self.pending_reads
+                    .advance(state.request_ctx.as_slice(), state.index);
+                self.post_pending_read_index_on_replica(ctx);
+            }
+            return;
+        }
+
         if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true));
+                    cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
                 propose_time = Some(read.renew_lease_time);
             }
         } else {
             for state in &ready.read_states {
-                let read = &self.pending_reads.reads[self.pending_reads.ready_cnt];
+                let read = &mut self.pending_reads.reads[self.pending_reads.ready_cnt];
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
                 self.pending_reads.ready_cnt += 1;
+                read.read_index = Some(state.index);
                 propose_time = Some(read.renew_lease_time);
             }
         }
@@ -1230,7 +1347,7 @@ impl Peer {
             if self.leader_lease.inspect(Some(propose_time)) == LeaseState::Suspect {
                 return;
             }
-            self.maybe_renew_leader_lease(&ctx.local_reader, propose_time);
+            self.maybe_renew_leader_lease(propose_time, ctx, None);
         }
     }
 
@@ -1266,22 +1383,27 @@ impl Peer {
         if self.has_pending_snapshot() && self.ready_to_handle_pending_snap() {
             has_ready = true;
         }
-
-        if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
-            for _ in 0..self.pending_reads.ready_cnt {
-                let mut read = self.pending_reads.reads.pop_front().unwrap();
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true));
+        if !self.is_leader() {
+            self.post_pending_read_index_on_replica(ctx)
+        } else {
+            if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
+                for _ in 0..self.pending_reads.ready_cnt {
+                    let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    for (req, cb) in read.cmds.drain(..) {
+                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                    }
                 }
+                self.pending_reads.ready_cnt = 0;
             }
-            self.pending_reads.ready_cnt = 0;
         }
         self.pending_reads.gc();
 
         // Only leaders need to update applied_index_term.
         if progress_to_be_updated && self.is_leader() {
             let progress = ReadProgress::applied_index_term(applied_index_term);
-            self.maybe_update_read_progress(&ctx.local_reader, progress);
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
         }
         has_ready
     }
@@ -1293,12 +1415,16 @@ impl Peer {
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease(&mut self, reader: &Scheduler<ReadTask>, ts: Timespec) {
+    fn maybe_renew_leader_lease<T, C>(
+        &mut self,
+        ts: Timespec,
+        ctx: &mut PollContext<T, C>,
+        progress: Option<ReadProgress>,
+    ) {
         // A nonleader peer should never has leader lease.
-        if !self.is_leader() {
-            return;
-        }
-        if self.is_splitting() {
+        let read_progress = if !self.is_leader() {
+            None
+        } else if self.is_splitting() {
             // A splitting leader should not renew its lease.
             // Because we split regions asynchronous, the leader may read stale results
             // if splitting runs slow on the leader.
@@ -1307,9 +1433,8 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
-        }
-        if self.is_merging() {
+            None
+        } else if self.is_merging() {
             // A merging leader should not renew its lease.
             // Because we merge regions asynchronous, the leader may read stale results
             // if commit merge runs slow on sibling peers.
@@ -1318,39 +1443,39 @@ impl Peer {
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
-            return;
+            None
+        } else {
+            self.leader_lease.renew(ts);
+            let term = self.term();
+            if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
+                Some(ReadProgress::leader_lease(remote_lease))
+            } else {
+                None
+            }
+        };
+        if let Some(progress) = progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
+            self.maybe_update_read_progress(reader, progress);
         }
-        self.leader_lease.renew(ts);
-        let term = self.term();
-        if let Some(remote_lease) = self.leader_lease.maybe_new_remote_lease(term) {
-            let progress = ReadProgress::leader_lease(remote_lease);
+        if let Some(progress) = read_progress {
+            let mut meta = ctx.store_meta.lock().unwrap();
+            let reader = meta.readers.get_mut(&self.region_id).unwrap();
             self.maybe_update_read_progress(reader, progress);
         }
     }
 
-    fn maybe_update_read_progress(
-        &self,
-        local_reader: &Scheduler<ReadTask>,
-        progress: ReadProgress,
-    ) {
+    fn maybe_update_read_progress(&self, reader: &mut ReadDelegate, progress: ReadProgress) {
         if self.pending_remove {
             return;
         }
-        let update = ReadTask::update(self.region_id, progress);
         debug!(
             "update read progress";
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
-            "update" => %update,
+            "progress" => ?progress,
         );
-        if let Err(e) = local_reader.schedule(update) {
-            info!(
-                "failed to update read progress, are we shutting down?";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "err" => ?e,
-            );
-        }
+        reader.update(progress);
     }
 
     pub fn maybe_campaign(&mut self, parent_is_leader: bool) -> bool {
@@ -1515,39 +1640,29 @@ impl Peer {
             return Err(box_err!("ignore remove leader"));
         }
 
-        let mut status = self.raft_group.status();
-        let total = status.progress.len();
+        let status = self.raft_group.status_ref();
+        let total = status.progress.unwrap().voters().len();
         if total == 1 {
             // It's always safe if there is only one node in the cluster.
             return Ok(());
         }
+        let mut progress = status.progress.unwrap().clone();
 
         match change_type {
             ConfChangeType::AddNode => {
-                if let Some(mut progress) = status.learner_progress.remove(&peer.get_id()) {
-                    // For promote learner to voter.
-                    progress.is_learner = false;
-                    status.progress.insert(peer.get_id(), progress);
-                } else {
-                    status.progress.insert(peer.get_id(), Progress::default());
+                if let Err(raft::Error::NotExists(_, _)) = progress.promote_learner(peer.get_id()) {
+                    let _ = progress.insert_voter(peer.get_id(), Progress::default());
                 }
             }
             ConfChangeType::RemoveNode => {
-                if peer.get_is_learner() {
-                    // If the node is a learner, we can return directly.
-                    return Ok(());
-                }
-                if status.progress.remove(&peer.get_id()).is_none() {
-                    // It's always safe to remove a unexisting node.
-                    return Ok(());
-                }
+                progress.remove(peer.get_id());
             }
             ConfChangeType::AddLearnerNode => {
                 return Ok(());
             }
         }
-        let healthy = self.count_healthy_node(status.progress.values());
-        let quorum_after_change = raft::quorum(status.progress.len());
+        let healthy = self.count_healthy_node(progress.voters().values());
+        let quorum_after_change = raft::quorum(progress.voters().len());
         if healthy >= quorum_after_change {
             return Ok(());
         }
@@ -1592,20 +1707,25 @@ impl Peer {
         peer: &metapb::Peer,
     ) -> bool {
         let peer_id = peer.get_id();
-        let status = self.raft_group.status();
+        let status = self.raft_group.status_ref();
+        let progress = status.progress.unwrap();
 
-        if !status.progress.contains_key(&peer_id) {
+        if !progress.voters().contains_key(&peer_id) {
             return false;
         }
 
-        for progress in status.progress.values() {
+        for progress in progress.voters().values() {
             if progress.state == ProgressState::Snapshot {
                 return false;
             }
         }
-        if self.recent_added_peer.contains(peer_id) {
+
+        // Checks if safe to transfer leader.
+        if duration_to_sec(self.recent_conf_change_time.elapsed())
+            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        {
             debug!(
-                "reject transfer leader due to the peer was added recently";
+                "reject transfer leader due to the region was config changed recently";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "peer" => ?peer,
@@ -1614,12 +1734,12 @@ impl Peer {
         }
 
         let last_index = self.get_store().last_index();
-        last_index <= status.progress[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
+        last_index <= progress.voters()[&peer_id].matched + ctx.cfg.leader_transfer_max_log_lag
     }
 
     fn read_local<T, C>(&mut self, ctx: &mut PollContext<T, C>, req: RaftCmdRequest, cb: Callback) {
         ctx.raft_metrics.propose.local_read += 1;
-        cb.invoke_read(self.handle_read(ctx, req, false))
+        cb.invoke_read(self.handle_read(ctx, req, false, None))
     }
 
     fn pre_read_index(&self) -> Result<()> {
@@ -1670,11 +1790,26 @@ impl Peer {
         poll_ctx.raft_metrics.propose.read_index += 1;
 
         let renew_lease_time = monotonic_raw_now();
-        if let Some(read) = self.pending_reads.reads.back_mut() {
-            if read.renew_lease_time + poll_ctx.cfg.raft_store_max_leader_lease() > renew_lease_time
-            {
-                read.cmds.push((req, cb));
-                return false;
+        if self.is_leader() {
+            match self.inspect_lease() {
+                // Here combine the new read request with the previous one even if the lease expired is
+                // ok because in this case, the previous read index must be sent out with a valid
+                // lease instead of a suspect lease. So there must no pending transfer-leader proposals
+                // before or after the previous read index, and the lease can be renewed when get
+                // heartbeat responses.
+                LeaseState::Valid | LeaseState::Expired => {
+                    if let Some(read) = self.pending_reads.reads.back_mut() {
+                        let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
+                        if read.renew_lease_time + max_lease > renew_lease_time {
+                            read.cmds.push((req, cb));
+                            return false;
+                        }
+                    }
+                }
+                // If the current lease is suspect, new read requests can't be appended into
+                // `pending_reads` because if the leader is transfered, the latest read could
+                // be dirty.
+                _ => {}
             }
         }
 
@@ -1691,6 +1826,7 @@ impl Peer {
 
         if pending_read_count == last_pending_read_count
             && ready_read_count == last_ready_read_count
+            && self.is_leader()
         {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
@@ -1703,8 +1839,8 @@ impl Peer {
             id,
             cmds,
             renew_lease_time,
+            read_index: None,
         });
-
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
         if self.leader_lease.inspect(Some(renew_lease_time)) == LeaseState::Suspect {
@@ -1723,14 +1859,9 @@ impl Peer {
     }
 
     pub fn get_min_progress(&self) -> u64 {
-        let status = self.raft_group.status();
-        status
-            .progress
-            .values()
-            .chain(status.learner_progress.values())
-            .map(|pr| pr.matched)
-            .min()
-            .unwrap_or_default()
+        self.raft_group.status_ref().progress.map_or(0, |p| {
+            p.iter().map(|(_, pr)| pr.matched).min().unwrap_or_default()
+        })
     }
 
     fn pre_propose_prepare_merge<T, C>(
@@ -1965,13 +2096,14 @@ impl Peer {
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
         check_epoch: bool,
+        read_index: Option<u64>,
     ) -> ReadResponse {
         let mut resp = ReadExecutor::new(
             ctx.engines.kv.clone(),
             check_epoch,
             false, /* we don't need snapshot time */
         )
-        .execute(&req, self.region());
+        .execute(&req, self.region(), read_index);
 
         cmd_resp::bind_term(&mut resp.response, self.term());
         resp
@@ -2097,7 +2229,9 @@ impl Peer {
                 "target_store_id" => to_store_id,
                 "err" => ?e,
             );
-
+            if to_peer_id == self.leader_id() {
+                self.leader_unreachable = true;
+            }
             // unreachable store
             self.raft_group.report_unreachable(to_peer_id);
             if msg_type == eraftpb::MessageType::MsgSnapshot {
@@ -2146,7 +2280,7 @@ pub trait RequestInspector {
         let mut has_write = false;
         for r in req.get_requests() {
             match r.get_cmd_type() {
-                CmdType::Get | CmdType::Snap => has_read = true,
+                CmdType::Get | CmdType::Snap | CmdType::ReadIndex => has_read = true,
                 CmdType::Delete | CmdType::Put | CmdType::DeleteRange | CmdType::IngestSST => {
                     has_write = true
                 }
@@ -2296,7 +2430,12 @@ impl ReadExecutor {
         Ok(resp)
     }
 
-    pub fn execute(&mut self, msg: &RaftCmdRequest, region: &metapb::Region) -> ReadResponse {
+    pub fn execute(
+        &mut self,
+        msg: &RaftCmdRequest,
+        region: &metapb::Region,
+        read_index: Option<u64>,
+    ) -> ReadResponse {
         if self.check_epoch {
             if let Err(e) = check_region_epoch(msg, region, true) {
                 debug!(
@@ -2334,6 +2473,17 @@ impl ReadExecutor {
                 CmdType::Snap => {
                     need_snapshot = true;
                     raft_cmdpb::Response::new()
+                }
+                CmdType::ReadIndex => {
+                    let mut resp = raft_cmdpb::Response::new();
+                    if let Some(read_index) = read_index {
+                        let mut res = ReadIndexResponse::new();
+                        res.set_read_index(read_index);
+                        resp.set_read_index(res);
+                    } else {
+                        panic!("[region {}] can not get readindex", region.get_id(),);
+                    }
+                    resp
                 }
                 CmdType::Prewrite
                 | CmdType::Put

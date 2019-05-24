@@ -81,7 +81,9 @@ impl InnerExecutor for IndexInnerExecutor {
     }
 }
 
-impl<S: Store> ScanExecutor<S, IndexInnerExecutor> {
+pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
+
+impl<S: Store> IndexScanExecutor<S> {
     pub fn index_scan(
         mut meta: IndexScan,
         key_ranges: Vec<KeyRange>,
@@ -108,8 +110,6 @@ impl<S: Store> ScanExecutor<S, IndexInnerExecutor> {
         Self::new(inner, false, vec![], key_ranges, store, false)
     }
 }
-
-pub type IndexScanExecutor<S> = ScanExecutor<S, IndexInnerExecutor>;
 
 #[cfg(test)]
 pub mod tests {

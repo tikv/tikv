@@ -55,7 +55,9 @@ impl InnerExecutor for TableInnerExecutor {
     }
 }
 
-impl<S: Store> ScanExecutor<S, TableInnerExecutor> {
+pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
+
+impl<S: Store> TableScanExecutor<S> {
     pub fn table_scan(
         mut meta: TableScan,
         key_ranges: Vec<KeyRange>,
@@ -73,8 +75,6 @@ impl<S: Store> ScanExecutor<S, TableInnerExecutor> {
         )
     }
 }
-
-pub type TableScanExecutor<S> = ScanExecutor<S, TableInnerExecutor>;
 
 #[cfg(test)]
 mod tests {
