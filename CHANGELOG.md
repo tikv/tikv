@@ -2,6 +2,52 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [Unreleased]
+
+## [3.0.0-rc.2]
+
++ Engine
+    - Support multiple column families sharing a block cache [#4563](https://github.com/tikv/tikv/pull/4563)
+
++ Server
+    - Remove `TxnScheduler` [#4098](https://github.com/tikv/tikv/pull/4098)
+    - Support pessimistic lock transactions [#4698](https://github.com/tikv/tikv/pull/4698)
+
++ Raftstore
+    - Support hibernate Regions to reduce the consumption of the raftstore CPU [#4591](https://github.com/tikv/tikv/pull/4591)
+    - Fix the issue that the leader does not reply to the `ReadIndex` requests for the learner [#4653](https://github.com/tikv/tikv/pull/4653)
+    - Fix the issue of transferring leader failure in some cases [#4684](https://github.com/tikv/tikv/pull/4684)
+    - Fix the possible dirty read issue in some cases [#4688](https://github.com/tikv/tikv/pull/4688)
+    - Fix the issue that a snapshot lacks data in some cases [#4716](https://github.com/tikv/tikv/pull/4716)
+
++ Coprocessor
+    - Add more RPN functions
+        - `LogicalOr` [#4691](https://github.com/tikv/tikv/pull/4601)
+        - `LTReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `LEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `GTReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `GEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `NEReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `EQReal` [#4602](https://github.com/tikv/tikv/pull/4602)
+        - `IsNull` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - `IsTrue` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - `IsFalse` [#4720](https://github.com/tikv/tikv/pull/4720)
+        - Support comparison arithmetic for `Int` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for `Decimal` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `String` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Time` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Duration` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support comparison arithmetic for  `Json` [#4625](https://github.com/tikv/tikv/pull/4625)
+        - Support plus arithmetic for `Int` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support plus arithmetic for `Real` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support plus arithmetic for `Decimal` [#4733](https://github.com/tikv/tikv/pull/4733)
+        - Support MOD functions for `Int` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support MOD functions for `Real` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support MOD functions for `Decimal` [#4727](https://github.com/tikv/tikv/pull/4727)
+        - Support minus arithmetic for `Int` [#4746](https://github.com/tikv/tikv/pull/4746)
+        - Support minus arithmetic for `Real` [#4746](https://github.com/tikv/tikv/pull/4746)
+        - Support minus arithmetic for `Decimal` [#4746](https://github.com/tikv/tikv/pull/4746)
+
 ## [3.0.0-rc.1]
 + Engine
     - Fix the issue that may cause incorrect statistics on read traffic [#4436](https://github.com/tikv/tikv/pull/4436)
