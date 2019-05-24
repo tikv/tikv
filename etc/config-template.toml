@@ -166,8 +166,7 @@
 ## Default is 300ms.
 # retry-interval = "300ms"
 
-## If the client observes the same error message on retry, it can repeat the message only
-## every `n` times.
+## If the client observes an error, it can can skip reporting it except every `n` times.
 ## Set to 1 to disable this feature.
 ## Default is 10.
 # retry-log-every = 10

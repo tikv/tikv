@@ -40,7 +40,7 @@ impl RpcClient {
         // -1 means the max.
         let retries = match cfg.retry_max_count {
             -1 => std::isize::MAX,
-            v => v,
+            v => v + 1,
         };
         for i in 0..retries {
             match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
