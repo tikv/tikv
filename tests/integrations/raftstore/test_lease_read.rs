@@ -427,9 +427,9 @@ fn test_local_read_cache() {
     let replace_peer = new_peer(leader.get_store_id(), 10000);
     pd_client.must_add_peer(r1.get_id(), replace_peer.clone());
     cluster.must_put(b"k2", b"v2");
-    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(leader.get_store_id()), b"k2", b"v2");
 
     cluster.must_transfer_leader(r1.get_id(), replace_peer);
     cluster.must_put(b"k3", b"v3");
-    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(leader.get_store_id()), b"k3", b"v3");
 }
