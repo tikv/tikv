@@ -99,17 +99,8 @@ pub struct Entities<Src: BatchExecutor> {
     pub all_result_column_types: Vec<EvalType>,
 }
 
-/// A shared executor implementation for simple aggregation, hash aggregation and
-/// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
-pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
-    imp: I,
-    is_ended: bool,
-    entities: Entities<Src>,
-}
-
-impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
+impl<Src: BatchExecutor> Entities<Src> {
     pub fn new(
-        mut imp: I,
         src: Src,
         config: Arc<EvalConfig>,
         aggr_defs: Vec<Expr>,
@@ -156,7 +147,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             })
             .collect();
 
-        let mut entities = Entities {
+        Ok(Entities {
             src,
             context: EvalContext::new(config),
             schema,
@@ -164,7 +155,27 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             each_aggr_cardinality,
             each_aggr_exprs,
             all_result_column_types,
-        };
+        })
+    }
+}
+
+/// A shared executor implementation for simple aggregation, hash aggregation and
+/// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
+pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
+    imp: I,
+    is_ended: bool,
+    entities: Entities<Src>,
+}
+
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
+    pub fn new(
+        mut imp: I,
+        src: Src,
+        config: Arc<EvalConfig>,
+        aggr_defs: Vec<Expr>,
+        aggr_def_parser: impl AggrDefinitionParser,
+    ) -> Result<Self> {
+        let mut entities = Entities::new(src, config, aggr_defs, aggr_def_parser)?;
         imp.prepare_entities(&mut entities);
 
         Ok(Self {

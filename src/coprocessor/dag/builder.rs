@@ -76,6 +76,12 @@ impl DAGBuilder {
                         )?;
                     }
                 }
+                ExecType::TypeStreamAgg => {
+                    println!("{:#?}", exec_descriptors);
+                    let descriptor = ed.get_aggregation();
+                    // TODO
+                    return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));
+                }
                 ExecType::TypeLimit => {}
                 _ => {
                     return Err(box_err!("Unsupported executor {:?}", ed.get_tp()));

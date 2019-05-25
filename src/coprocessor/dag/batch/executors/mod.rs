@@ -6,6 +6,7 @@ mod limit_executor;
 mod selection_executor;
 mod simple_aggr_executor;
 mod slow_hash_aggr_executor;
+mod stream_aggr_executor;
 mod table_scan_executor;
 mod util;
 
