@@ -1,10 +1,9 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-
-#![allow(deprecated)]
-
+use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher, SipHasher as DefaultHasher};
+use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 use std::usize;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
@@ -63,7 +62,7 @@ impl Lock {
 /// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
-    slots: Vec<Latch>,
+    slots: Vec<Mutex<Latch>>,
     size: usize,
 }
 
@@ -72,11 +71,10 @@ impl Latches {
     ///
     /// The size will be rounded up to the power of 2.
     pub fn new(size: usize) -> Latches {
-        let power_of_two_size = usize::next_power_of_two(size);
-        Latches {
-            slots: vec![Latch::new(); power_of_two_size],
-            size: power_of_two_size,
-        }
+        let size = usize::next_power_of_two(size);
+        let mut slots = Vec::with_capacity(size);
+        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
+        Latches { slots, size }
     }
 
     /// Creates a lock which specifies all the required latches for a command.
@@ -96,11 +94,10 @@ impl Latches {
     /// This method will enqueue the command ID into the waiting queues of the latches. A latch is
     /// considered acquired if the command ID is at the front of the queue. Returns true if all the
     /// Latches are acquired, false otherwise.
-    pub fn acquire(&mut self, lock: &mut Lock, who: u64) -> bool {
+    pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for i in &lock.required_slots[lock.owned_count..] {
-            let latch = &mut self.slots[*i];
-
+            let mut latch = self.slots[*i].lock().unwrap();
             let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
@@ -117,7 +114,6 @@ impl Latches {
                 }
             }
         }
-
         lock.owned_count += acquired_count;
         lock.acquired()
     }
@@ -125,13 +121,12 @@ impl Latches {
     /// Releases all latches owned by the `lock` of command with ID `who`, returns the wakeup list.
     ///
     /// Preconditions: the caller must ensure the command is at the front of the latches.
-    pub fn release(&mut self, lock: &Lock, who: u64) -> Vec<u64> {
+    pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
         for i in &lock.required_slots[..lock.owned_count] {
-            let latch = &mut self.slots[*i];
+            let mut latch = self.slots[*i].lock().unwrap();
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
-
             if let Some(wakeup) = latch.waiting.front() {
                 wakeup_list.push(*wakeup);
             }
@@ -156,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_wakeup() {
-        let mut latches = Latches::new(256);
+        let latches = Latches::new(256);
 
         let slots_a: Vec<usize> = vec![1, 3, 5];
         let mut lock_a = Lock::new(slots_a);
@@ -184,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_wakeup_by_multi_cmds() {
-        let mut latches = Latches::new(256);
+        let latches = Latches::new(256);
 
         let slots_a: Vec<usize> = vec![1, 2, 3];
         let slots_b: Vec<usize> = vec![4, 5, 6];

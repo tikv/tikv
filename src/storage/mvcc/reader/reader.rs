@@ -186,8 +186,11 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn check_lock_impl(&self, key: &Key, ts: u64, lock: Lock) -> Result<u64> {
-        if lock.ts > ts || lock.lock_type == LockType::Lock {
-            // ignore lock when lock.ts > ts or lock's type is Lock
+        if lock.ts > ts
+            || lock.lock_type == LockType::Lock
+            || lock.lock_type == LockType::Pessimistic
+        {
+            // ignore lock when lock.ts > ts or lock's type is Lock or Pessimistic
             return Ok(ts);
         }
 
@@ -543,6 +546,28 @@ mod tests {
             self.write(txn.into_modifies());
         }
 
+        fn prewrite_pessimistic_lock(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            let options = Options::default();
+            txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
+            self.write(txn.into_modifies());
+        }
+
+        fn acquire_pessimistic_lock(
+            &mut self,
+            k: Key,
+            pk: &[u8],
+            start_ts: u64,
+            for_update_ts: u64,
+        ) {
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
+            txn.acquire_pessimistic_lock(k, pk, for_update_ts, false, &Options::default())
+                .unwrap();
+            self.write(txn.into_modifies());
+        }
+
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
             let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
@@ -774,13 +799,22 @@ mod tests {
         engine.prewrite(m, k, 35);
         engine.commit(k, 35, 40);
 
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 45, 45);
+        engine.prewrite_pessimistic_lock(m, k, 45);
+        engine.commit(k, 45, 50);
+
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
-        // Let's assume `40_35 PUT` means a commit version with start ts is 35 and commit ts
+        // Let's assume `45_40 PUT` means a commit version with start ts is 35 and commit ts
         // is 40.
-        // Commit versions: [40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
+        // Commit versions: [45_40 PUT, 40_35 PUT, 30_25 PUT, 20_20 Rollback, 10_1 PUT, 5_5 Rollback].
         let key = Key::from_raw(k);
+        let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 45).unwrap().unwrap();
+        assert_eq!(commit_ts, 50);
+        assert_eq!(write_type, WriteType::Put);
+
         let (commit_ts, write_type) = reader.get_txn_commit_info(&key, 35).unwrap().unwrap();
         assert_eq!(commit_ts, 40);
         assert_eq!(write_type, WriteType::Put);
@@ -833,14 +867,19 @@ mod tests {
         engine.commit(k, 10, 11);
 
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
-        engine.prewrite(m, k, 12);
+        engine.acquire_pessimistic_lock(Key::from_raw(k), k, 12, 12);
+        engine.prewrite_pessimistic_lock(m, k, 12);
+        engine.commit(k, 12, 13);
+
+        let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
+        engine.prewrite(m, k, 14);
 
         let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
         // is 2.
-        // Commit versions: [11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
+        // Commit versions: [13_12 PUT, 11_10 PUT, 9_8 DELETE, 7_6 LOCK, 5_5 Rollback, 2_1 PUT].
         let key = Key::from_raw(k);
         let write = reader.get_write(&key, 2).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
@@ -862,6 +901,10 @@ mod tests {
 
         let write = reader.get_write(&key, 13).unwrap().unwrap();
         assert_eq!(write.write_type, WriteType::Put);
-        assert_eq!(write.start_ts, 10);
+        assert_eq!(write.start_ts, 12);
+
+        let write = reader.get_write(&key, 15).unwrap().unwrap();
+        assert_eq!(write.write_type, WriteType::Put);
+        assert_eq!(write.start_ts, 12);
     }
 }

@@ -2,7 +2,9 @@
 
 use super::super::types::Value;
 use super::{Error, Result};
-use crate::storage::{Mutation, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX};
+use crate::storage::{
+    Mutation, PESSIMISTIC_TXN, SHORT_VALUE_MAX_LEN, SHORT_VALUE_PREFIX, TXN_SIZE_PREFIX,
+};
 use byteorder::ReadBytesExt;
 use tikv_util::codec::bytes::{self, BytesEncoder};
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
@@ -12,11 +14,13 @@ pub enum LockType {
     Put,
     Delete,
     Lock,
+    Pessimistic,
 }
 
 const FLAG_PUT: u8 = b'P';
 const FLAG_DELETE: u8 = b'D';
 const FLAG_LOCK: u8 = b'L';
+const FLAG_PESSIMISTIC: u8 = b'S';
 
 impl LockType {
     pub fn from_mutation(mutation: &Mutation) -> LockType {
@@ -32,6 +36,7 @@ impl LockType {
             FLAG_PUT => Some(LockType::Put),
             FLAG_DELETE => Some(LockType::Delete),
             FLAG_LOCK => Some(LockType::Lock),
+            FLAG_PESSIMISTIC => Some(LockType::Pessimistic),
             _ => None,
         }
     }
@@ -41,6 +46,7 @@ impl LockType {
             LockType::Put => FLAG_PUT,
             LockType::Delete => FLAG_DELETE,
             LockType::Lock => FLAG_LOCK,
+            LockType::Pessimistic => FLAG_PESSIMISTIC,
         }
     }
 }
@@ -52,6 +58,7 @@ pub struct Lock {
     pub ts: u64,
     pub ttl: u64,
     pub short_value: Option<Value>,
+    pub is_pessimistic_txn: bool,
     pub txn_size: u64,
 }
 
@@ -62,6 +69,7 @@ impl Lock {
         ts: u64,
         ttl: u64,
         short_value: Option<Value>,
+        is_pessimistic_txn: bool,
         txn_size: u64,
     ) -> Lock {
         Lock {
@@ -70,6 +78,7 @@ impl Lock {
             ts,
             ttl,
             short_value,
+            is_pessimistic_txn,
             txn_size,
         }
     }
@@ -86,6 +95,9 @@ impl Lock {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
             b.extend_from_slice(v);
+        }
+        if self.is_pessimistic_txn {
+            b.push(PESSIMISTIC_TXN);
         }
         if self.txn_size > 0 {
             b.push(TXN_SIZE_PREFIX);
@@ -108,28 +120,29 @@ impl Lock {
         };
 
         if b.is_empty() {
-            return Ok(Lock::new(lock_type, primary, ts, ttl, None, 0));
+            return Ok(Lock::new(lock_type, primary, ts, ttl, None, false, 0));
         }
 
         let mut short_value = None;
+        let mut is_pessimistic_txn: bool = false;
         let mut txn_size: u64 = 0;
         while !b.is_empty() {
-            let flag = b.read_u8()?;
-            if flag == SHORT_VALUE_PREFIX {
-                let len = b.read_u8()?;
-                if b.len() < len as usize {
-                    panic!(
-                        "content len [{}] shorter than short value len [{}], corruption happens",
-                        b.len(),
-                        len,
-                    );
+            match b.read_u8()? {
+                SHORT_VALUE_PREFIX => {
+                    let len = b.read_u8()?;
+                    if b.len() < len as usize {
+                        panic!(
+                            "content len [{}] shorter than short value len [{}]",
+                            b.len(),
+                            len,
+                        );
+                    }
+                    short_value = Some(b[..len as usize].to_vec());
+                    b = &b[len as usize..];
                 }
-                short_value = Some(b[..len as usize].to_vec());
-                b = &b[len as usize..];
-            } else if flag == TXN_SIZE_PREFIX {
-                txn_size = number::decode_u64(&mut b)?;
-            } else {
-                panic!("unknown flag in lock [{:?}]", flag);
+                PESSIMISTIC_TXN => is_pessimistic_txn = true,
+                TXN_SIZE_PREFIX => txn_size = number::decode_u64(&mut b)?,
+                flag => panic!("invalid flag [{:?}] in lock", flag),
             }
         }
         Ok(Lock::new(
@@ -138,6 +151,7 @@ impl Lock {
             ts,
             ttl,
             short_value,
+            is_pessimistic_txn,
             txn_size,
         ))
     }
@@ -194,22 +208,23 @@ mod tests {
     fn test_lock() {
         // Test `Lock::to_bytes()` and `Lock::parse()` works as a pair.
         let mut locks = vec![
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 0),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, false, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
-                0,
+                false,
             ),
-            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, 16),
+            Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, true, 0),
             Lock::new(
                 LockType::Delete,
                 b"pk".to_vec(),
                 1,
                 10,
                 Some(b"short_value".to_vec()),
+                true,
                 16,
             ),
         ];
@@ -228,6 +243,7 @@ mod tests {
             1,
             10,
             Some(b"short_value".to_vec()),
+            false,
             0,
         );
         let v = lock.to_bytes();

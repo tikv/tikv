@@ -6,6 +6,7 @@ use prometheus_static_metric::*;
 make_static_metric! {
     pub label_enum CommandKind {
         prewrite,
+        pessimistic_lock,
         commit,
         cleanup,
         rollback,
