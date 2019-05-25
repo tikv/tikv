@@ -41,6 +41,7 @@ fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinit
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
+        ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
         v => Err(box_err!(
             "Aggregation function expr type {:?} is not supported in batch mode",
             v

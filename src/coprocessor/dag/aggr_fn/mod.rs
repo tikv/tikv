@@ -4,6 +4,7 @@
 
 mod impl_avg;
 mod impl_count;
+mod impl_first;
 mod parser;
 mod summable;
 
