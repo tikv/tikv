@@ -1,6 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![recursion_limit = "200"]
+#![feature(concat_idents)]
+#![feature(proc_macro_hygiene)]
 
 #[macro_use(
     kv,

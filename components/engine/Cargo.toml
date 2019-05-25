@@ -24,6 +24,7 @@ serde = "1.0"
 serde_derive = "1.0"
 toml = "0.4"
 hex = "0.3"
+casey = "0.1.1"
 tikv_util = { path = "../tikv_util" }
 
 [dependencies.prometheus]
