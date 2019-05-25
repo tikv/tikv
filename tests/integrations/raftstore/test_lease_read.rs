@@ -410,6 +410,8 @@ fn test_local_read_cache() {
     configure_for_lease_read(&mut cluster, Some(50), None);
     cluster.pd_client.disable_default_operator();
     cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
@@ -417,18 +419,17 @@ fn test_local_read_cache() {
 
     let r1 = cluster.get_region(b"k1");
     let leader = cluster.leader_of_region(r1.get_id()).unwrap();
-    let new_leader = new_peer(3 - leader.get_id(), 3 - leader.get_id());
+    let new_leader = new_peer(4 - leader.get_id(), 4 - leader.get_id());
     cluster.must_transfer_leader(r1.get_id(), new_leader);
 
-    cluster
-        .pd_client
-        .must_remove_peer(r1.get_id(), leader.clone());
+    // Add the peer back and make sure it catches up latest logs.
+    pd_client.must_remove_peer(r1.get_id(), leader.clone());
     let replace_peer = new_peer(leader.get_store_id(), 10000);
-    cluster
-        .pd_client
-        .must_add_peer(r1.get_id(), replace_peer.clone());
-    cluster.must_transfer_leader(r1.get_id(), replace_peer);
+    pd_client.must_add_peer(r1.get_id(), replace_peer.clone());
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v2");
 
-    cluster.must_put(b"k1", b"v2");
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v2");
+    cluster.must_transfer_leader(r1.get_id(), replace_peer);
+    cluster.must_put(b"k3", b"v3");
+    must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
 }
