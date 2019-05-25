@@ -414,16 +414,19 @@ fn test_local_read_cache() {
     must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
 
     let r1 = cluster.get_region(b"k1");
     let leader = cluster.leader_of_region(r1.get_id()).unwrap();
     let new_leader = new_peer(3 - leader.get_id(), 3 - leader.get_id());
     cluster.must_transfer_leader(r1.get_id(), new_leader);
 
-    cluster.pd_client.must_remove_peer(r1.get_id(), leader);
-    let replace_peer = new_peer(1, 10000);
-    cluster.pd_client.must_add_peer(r1.get_id(), replace_peer);
+    cluster
+        .pd_client
+        .must_remove_peer(r1.get_id(), leader.clone());
+    let replace_peer = new_peer(leader.get_store_id(), 10000);
+    cluster
+        .pd_client
+        .must_add_peer(r1.get_id(), replace_peer.clone());
     cluster.must_transfer_leader(r1.get_id(), replace_peer);
 
     cluster.must_put(b"k1", b"v2");
