@@ -10,7 +10,7 @@ use tipb::expression::{Expr, ExprType};
 use tikv_util::collections::{OrderMap, OrderMapEntry};
 
 use crate::coprocessor::codec::datum::{self, Datum};
-use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext, EvalWarnings, Expression};
 use crate::coprocessor::*;
 
@@ -64,8 +64,7 @@ impl dyn AggrFunc {
     }
 }
 
-struct AggExecutor<C: ExecSummaryCollector> {
-    summary_collector: C,
+struct AggExecutor {
     group_by: Vec<Expression>,
     aggr_func: Vec<AggFuncExpr>,
     executed: bool,
@@ -75,9 +74,8 @@ struct AggExecutor<C: ExecSummaryCollector> {
     first_collect: bool,
 }
 
-impl<C: ExecSummaryCollector> AggExecutor<C> {
+impl AggExecutor {
     fn new(
-        summary_collector: C,
         group_by: Vec<Expr>,
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
@@ -89,7 +87,6 @@ impl<C: ExecSummaryCollector> AggExecutor<C> {
         visitor.batch_visit(&aggr_func)?;
         let ctx = EvalContext::new(eval_config);
         Ok(AggExecutor {
-            summary_collector,
             group_by: Expression::batch_build(&ctx, group_by)?,
             aggr_func: AggFuncExpr::batch_build(&ctx, aggr_func)?,
             executed: false,
@@ -154,22 +151,21 @@ impl<C: ExecSummaryCollector> AggExecutor<C> {
 // HashAggExecutor deals with the aggregate functions.
 // When Next() is called, it reads all the data from src
 // and updates all the values in group_key_aggrs, then returns a result.
-pub struct HashAggExecutor<C: ExecSummaryCollector> {
-    inner: AggExecutor<C>,
+pub struct HashAggExecutor {
+    inner: AggExecutor,
     group_key_aggrs: OrderMap<Vec<u8>, Vec<Box<dyn AggrFunc>>>,
     cursor: usize,
 }
 
-impl<C: ExecSummaryCollector> HashAggExecutor<C> {
+impl HashAggExecutor {
     pub fn new(
-        summary_collector: C,
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
     ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
-        let inner = AggExecutor::new(summary_collector, group_bys, aggs, eval_config, src)?;
+        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         Ok(HashAggExecutor {
             inner,
             group_key_aggrs: OrderMap::new(),
@@ -210,8 +206,10 @@ impl<C: ExecSummaryCollector> HashAggExecutor<C> {
         }
         Ok(())
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl Executor for HashAggExecutor {
+    fn next(&mut self) -> Result<Option<Row>> {
         if !self.inner.executed {
             self.aggregate()?;
             self.inner.executed = true;
@@ -239,19 +237,6 @@ impl<C: ExecSummaryCollector> HashAggExecutor<C> {
             None => Ok(None),
         }
     }
-}
-
-impl<C: ExecSummaryCollector> Executor for HashAggExecutor<C> {
-    fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.inner.summary_collector.on_start_iterate();
-        let ret = self.next_impl();
-        if let Ok(Some(_)) = ret {
-            self.inner.summary_collector.on_finish_iterate(timer, 1)
-        } else {
-            self.inner.summary_collector.on_finish_iterate(timer, 0)
-        }
-        ret
-    }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         self.inner.collect_output_counts(counts);
@@ -274,16 +259,35 @@ impl<C: ExecSummaryCollector> Executor for HashAggExecutor<C> {
     }
 }
 
-impl<C: ExecSummaryCollector> Executor for StreamAggExecutor<C> {
+impl Executor for StreamAggExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.inner.summary_collector.on_start_iterate();
-        let ret = self.next_impl();
-        if let Ok(Some(_)) = ret {
-            self.inner.summary_collector.on_finish_iterate(timer, 1)
-        } else {
-            self.inner.summary_collector.on_finish_iterate(timer, 0)
+        if self.inner.executed {
+            return Ok(None);
         }
-        ret
+
+        while let Some(cols) = self.inner.next()? {
+            self.has_data = true;
+            let new_group = self.meet_new_group(&cols)?;
+            let ret = if new_group {
+                Some(self.get_partial_result()?)
+            } else {
+                None
+            };
+            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
+                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
+            }
+            if new_group {
+                return Ok(ret);
+            }
+        }
+        self.inner.executed = true;
+        // If there is no data in the t, then whether there is 'group by' that can affect the result.
+        // e.g. select count(*) from t. Result is 0.
+        // e.g. select count(*) from t group by c. Result is empty.
+        if !self.has_data && !self.inner.group_by.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.get_partial_result()?))
     }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
@@ -310,8 +314,8 @@ impl<C: ExecSummaryCollector> Executor for StreamAggExecutor<C> {
 // StreamAggExecutor deals with the aggregation functions.
 // It assumes all the input data is sorted by group by key.
 // When next() is called, it finds a group and returns a result for the same group.
-pub struct StreamAggExecutor<C: ExecSummaryCollector> {
-    inner: AggExecutor<C>,
+pub struct StreamAggExecutor {
+    inner: AggExecutor,
     // save partial agg result
     agg_funcs: Vec<Box<dyn AggrFunc>>,
     cur_group_row: Vec<Datum>,
@@ -320,9 +324,8 @@ pub struct StreamAggExecutor<C: ExecSummaryCollector> {
     has_data: bool,
 }
 
-impl<C: ExecSummaryCollector> StreamAggExecutor<C> {
+impl StreamAggExecutor {
     pub fn new(
-        summary_collector: C,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
@@ -330,7 +333,7 @@ impl<C: ExecSummaryCollector> StreamAggExecutor<C> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let group_len = group_bys.len();
-        let inner = AggExecutor::new(summary_collector, group_bys, aggs, eval_config, src)?;
+        let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
         // Get aggregation functions.
         let mut funcs = Vec::with_capacity(inner.aggr_func.len());
         for expr in &inner.aggr_func {
@@ -391,36 +394,6 @@ impl<C: ExecSummaryCollector> StreamAggExecutor<C> {
         self.count += 1;
         Ok(Row::agg(cols, Vec::default()))
     }
-
-    fn next_impl(&mut self) -> Result<Option<Row>> {
-        if self.inner.executed {
-            return Ok(None);
-        }
-
-        while let Some(cols) = self.inner.next()? {
-            self.has_data = true;
-            let new_group = self.meet_new_group(&cols)?;
-            let ret = if new_group {
-                Some(self.get_partial_result()?)
-            } else {
-                None
-            };
-            for (expr, func) in self.inner.aggr_func.iter_mut().zip(&mut self.agg_funcs) {
-                func.update_with_expr(&mut self.inner.ctx, expr, &cols)?;
-            }
-            if new_group {
-                return Ok(ret);
-            }
-        }
-        self.inner.executed = true;
-        // If there is no data in the t, then whether there is 'group by' that can affect the result.
-        // e.g. select count(*) from t. Result is 0.
-        // e.g. select count(*) from t group by c. Result is empty.
-        if !self.has_data && !self.inner.group_by.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(self.get_partial_result()?))
-    }
 }
 
 #[cfg(test)]
@@ -440,7 +413,6 @@ mod tests {
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
-    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::scanner::tests::Data;
     use crate::storage::SnapshotStore;
     use tikv_util::collections::HashMap;
@@ -534,18 +506,11 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -573,18 +538,11 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation.clone(),
@@ -630,18 +588,11 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             Box::new(is_executor),
             aggregation,
@@ -782,13 +733,8 @@ mod tests {
         let aggr_funcs = build_aggr_func(&aggr_funcs);
         aggregation.set_agg_func(RepeatedField::from_vec(aggr_funcs));
         // init the hash aggregation executor
-        let mut aggr_ect = HashAggExecutor::new(
-            ExecSummaryCollectorDisabled,
-            aggregation,
-            Arc::new(EvalConfig::default()),
-            ts_ect,
-        )
-        .unwrap();
+        let mut aggr_ect =
+            HashAggExecutor::new(aggregation, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let expect_row_cnt = 4;
         let mut row_data = Vec::with_capacity(expect_row_cnt);
         while let Some(Row::Agg(row)) = aggr_ect.next().unwrap() {
