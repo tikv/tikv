@@ -59,6 +59,8 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     ) -> Result<()>;
 
     /// Returns the current number of groups.
+    ///
+    /// Note that this number can be inaccurate because it is a hint for the capacity of the vector.
     fn groups_len(&self) -> usize;
 
     /// Iterates aggregate function states for each group.
@@ -73,6 +75,13 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
         entities: &mut Entities<Src>,
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
+
+    /// Returns whether we can aggregate at the moment.
+    ///
+    /// The default value is `is_drained`. Only StreamAgg can aggregate when not drained.
+    fn can_aggregate(&self, is_drained: bool) -> bool {
+        is_drained
+    }
 }
 
 /// Some common data that need to be accessed by both `AggregationExecutor`
@@ -207,8 +216,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 .process_batch_input(&mut self.entities, src_result.data)?;
         }
 
-        // Aggregate results if source executor is drained, otherwise just return nothing.
-        if src_is_drained {
+        // Aggregate results when possible, otherwise just return nothing.
+        if self.imp.can_aggregate(src_is_drained) {
             Ok(Some(self.aggregate()?))
         } else {
             Ok(None)

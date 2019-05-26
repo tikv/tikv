@@ -28,6 +28,27 @@ pub enum ScalarValue {
     Json(Option<super::Json>),
 }
 
+pub enum ScalarValueRef<'a> {
+    Int(&'a Option<super::Int>),
+    Real(&'a Option<super::Real>),
+    Decimal(&'a Option<super::Decimal>),
+    Bytes(&'a Option<super::Bytes>),
+    DateTime(&'a Option<super::DateTime>),
+    Duration(&'a Option<super::Duration>),
+    Json(&'a Option<super::Json>),
+}
+
+impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
+    fn eq(&self, other: &ScalarValue) -> bool {
+        match_template_evaluable! {
+            TT, match (self, other) {
+                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == &v2,
+                _ => false
+            }
+        }
+    }
+}
+
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
@@ -127,5 +148,16 @@ impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
         ScalarValue::Real(Real::new(s).ok())
+    }
+}
+
+impl<'a> From<ScalarValueRef<'a>> for ScalarValue {
+    #[inline]
+    fn from(s: ScalarValueRef<'a>) -> ScalarValue {
+        match_template_evaluable! {
+            TT, match s {
+                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
+            }
+        }
     }
 }

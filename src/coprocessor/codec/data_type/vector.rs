@@ -1,11 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::PartialEq;
 use std::convert::{TryFrom, TryInto};
+use std::ops::Index;
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use super::*;
+use crate::coprocessor::codec::data_type::scalar::ScalarValueRef;
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
@@ -151,6 +154,14 @@ impl VectorValue {
     #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Vector(self)
+    }
+
+    pub fn get_unchecked(&self, index: usize) -> ScalarValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
+            }
+        }
     }
 
     /// Evaluates values into MySQL logic values.
