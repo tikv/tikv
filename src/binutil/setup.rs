@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::borrow::ToOwned;
+use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono;
@@ -34,20 +35,24 @@ pub fn initial_logger(config: &TiKvConfig) {
             .expect("config.log_rotation_timespan is an invalid duration.");
 
     // Collects following targets.
-    const ENABLED_TARGETS: &[&str] = &[
-        "tikv::",
-        "tests::",
-        "benches::",
-        "integrations::",
-        "failpoints::",
-        "raft::",
+    let mut enabled_targets = vec![
+        "tikv::".to_owned(),
+        "raft::".to_owned(),
+        "tests::".to_owned(),
+        "benches::".to_owned(),
+        "integrations::".to_owned(),
+        "failpoints::".to_owned(),
         // Collects logs for test components.
-        "test_",
+        "test_".to_owned(),
     ];
+    // Only for debug purpose, so use environment instead of configuration file.
+    if let Ok(extra_modules) = env::var("TIKV_EXTRA_LOG_TARGETS") {
+        enabled_targets.extend(extra_modules.split(',').map(ToOwned::to_owned));
+    }
     if config.log_file.is_empty() {
         let drainer = logger::term_drainer();
-        let filtered = drainer.filter(|record| {
-            ENABLED_TARGETS
+        let filtered = drainer.filter(move |record| {
+            enabled_targets
                 .iter()
                 .any(|target| record.module().starts_with(target))
         });
@@ -65,8 +70,8 @@ pub fn initial_logger(config: &TiKvConfig) {
                 );
             });
 
-        let filtered = drainer.filter(|record| {
-            ENABLED_TARGETS
+        let filtered = drainer.filter(move |record| {
+            enabled_targets
                 .iter()
                 .any(|target| record.module().starts_with(target))
         });
