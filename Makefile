@@ -88,7 +88,8 @@ unportable_release:
 prof_release:
 	make dist_prof_release
 
-# An optimized build instrumented with failpoints
+# An optimized build instrumented with failpoints.
+# This is used for schrodinger chaos testing.
 fail_release:
 	make dist_fail_release
 
@@ -109,7 +110,8 @@ dist_unportable_release:
 dist_prof_release:
 	ENABLE_FEATURES=mem-profiling make release
 
-# Distributable bins instrumented with failpoints
+# Distributable bins instrumented with failpoints.
+# This is used for schrodinger chaos testing.
 dist_fail_release:
 	FAIL_POINT=1 make release
 
