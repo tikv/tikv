@@ -101,22 +101,14 @@ pub struct Entities<Src: BatchExecutor> {
 
 /// A shared executor implementation for simple aggregation, hash aggregation and
 /// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
-pub struct AggregationExecutor<
-    C: ExecSummaryCollector,
-    Src: BatchExecutor,
-    I: AggregationExecutorImpl<Src>,
-> {
-    summary_collector: C,
+pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>>
-    AggregationExecutor<C, Src, I>
-{
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
     pub fn new(
-        summary_collector: C,
         mut imp: I,
         src: Src,
         config: Arc<EvalConfig>,
@@ -124,8 +116,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let aggr_fn_len = aggr_defs.len();
-        assert!(aggr_fn_len > 0);
-
         let src_schema = src.schema();
         let src_schema_len = src_schema.len();
 
@@ -176,7 +166,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         imp.prepare_entities(&mut entities);
 
         Ok(Self {
-            summary_collector,
             imp,
             is_ended: false,
             entities,
@@ -261,8 +250,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
-    for AggregationExecutor<C, Src, I>
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
+    for AggregationExecutor<Src, I>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -273,10 +262,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch();
 
-        let ret = match result {
+        match result {
             Err(e) => {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
@@ -303,18 +291,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
                     is_drained: Ok(true),
                 }
             }
-        };
-
-        self.summary_collector
-            .on_finish_iterate(timer, ret.data.rows_len());
-        ret
+        }
     }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.entities.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
     }
 }
 

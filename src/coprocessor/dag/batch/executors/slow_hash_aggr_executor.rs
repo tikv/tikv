@@ -14,7 +14,6 @@ use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
@@ -24,13 +23,11 @@ use crate::coprocessor::Result;
 ///
 /// FIXME: It is not correct to just store the serialized data as the group key.
 /// See pingcap/tidb#10467.
-pub struct BatchSlowHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SlowHashAggregationImpl>,
+pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SlowHashAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSlowHashAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -47,7 +44,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -56,7 +53,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_by_exps,
@@ -67,7 +63,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
     }
 }
 
-impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -88,9 +84,8 @@ impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn Batc
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     pub fn new(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp_defs: Vec<Expr>,
@@ -105,7 +100,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
         }
 
         Self::new_impl(
-            summary_collector,
             config,
             src,
             group_by_exps,
@@ -116,7 +110,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exps: Vec<RpnExpression>,
@@ -133,7 +126,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
         };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
