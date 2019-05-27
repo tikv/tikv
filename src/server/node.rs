@@ -262,7 +262,7 @@ where
                 .bootstrap_cluster(self.store.clone(), first_region.clone())
             {
                 Ok(_) => {
-                    debug!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
+                    info!("bootstrap cluster ok"; "cluster_id" => self.cluster_id);
                     fail_point!("node_after_bootstrap_cluster", |_| Err(box_err!(
                         "injected error: node_after_prepare_bootstrap_cluster"
                     )));
@@ -327,7 +327,7 @@ where
     where
         T: Transport + 'static,
     {
-        debug!("start raft store thread"; "store_id" => store_id);
+        info!("start raft store thread"; "store_id" => store_id);
 
         if self.store_handle.is_some() {
             return Err(box_err!("{} is already started", store_id));

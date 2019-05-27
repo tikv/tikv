@@ -432,7 +432,7 @@ fn pre_start(cfg: &TiKvConfig) {
 }
 
 fn check_system_config(config: &TiKvConfig) {
-    warn!("beginning system configuration check:");
+    info!("beginning system configuration check");
     if let Err(e) = tikv_util::config::check_max_open_fds(
         RESERVED_OPEN_FDS + (config.rocksdb.max_open_files + config.raftdb.max_open_files) as u64,
     ) {
