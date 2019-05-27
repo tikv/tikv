@@ -61,6 +61,10 @@ impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
+        if aggr_definitions.is_empty() {
+            return Err(box_err!("Aggregation expression is empty"));
+        }
+
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def)?;
         }
