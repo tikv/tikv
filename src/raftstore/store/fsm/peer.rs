@@ -1366,7 +1366,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.merge_locks.remove(&region_id);
 
         // Destroy read delegates.
-        meta.readers.remove(&region_id);
+        if let Some(reader) = meta.readers.remove(&region_id) {
+            reader.mark_invalid();
+        }
+
         self.ctx
             .apply_router
             .schedule_task(region_id, ApplyTask::destroy(region_id));
@@ -1917,8 +1920,9 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
         meta.region_ranges
             .insert(enc_end_key(&region), region.get_id());
         assert!(meta.regions.remove(&source.get_id()).is_some());
-        assert!(meta.readers.remove(&source.get_id()).is_some());
         meta.set_region(&self.ctx.coprocessor_host, region, &mut self.fsm.peer);
+        let reader = meta.readers.remove(&source.get_id()).unwrap();
+        reader.mark_invalid();
         // make approximate size and keys updated in time.
         // the reason why follower need to update is that there is a issue that after merge
         // and then transfer leader, the new leader may have stale size and keys.
