@@ -910,9 +910,10 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
-                    // If predecessor read index during transferring leader and received quorum's
-                    // heartbeat response, it may waiting for advancing apply to current term to
-                    // apply the read. So broadcast eargerly to avoid unexpected latency.
+                    // If the predecessor reads index during transferring leader and receives
+                    // quorum's heartbeat response after that, it may wait for applying to
+                    // current term to apply the read. So broadcast eargerly to avoid unexpected
+                    // latency.
                     //
                     // TODO: Maybe the predecessor should just drop all the read requests directly?
                     // All the requests need to be redirected in the end anyway and executing
