@@ -80,8 +80,13 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
 
 pub struct BatchStreamAggregationImpl {
     group_by_exps: Vec<RpnExpression>,
+    // used in the `iterate_each_group_for_aggregation` method
     group_by_exps_types: Vec<EvalType>,
+    // Stores all group keys. The last `group_by_exps.len()` elements are the keys of
+    // the current group
     keys: Vec<ScalarValue>,
+    // Stores all group states. The last `each_aggr_fn.len()` elements are the states of
+    // the current group
     states: Vec<Box<dyn AggrFunctionState>>,
 }
 
@@ -168,6 +173,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_len = self.group_by_exps.len();
         let aggr_fn_len = entities.each_aggr_fn.len();
 
+        // Decode columns with mutable input first, so subsequent access to input can be immutable
+        // (and the borrow checker will be happy)
         ensure_columns_decoded(context, &self.group_by_exps, src_schema, &mut input)?;
         ensure_columns_decoded(context, &entities.each_aggr_exprs, src_schema, &mut input)?;
         let group_by_results = eval_exprs(context, &self.group_by_exps, src_schema, &input)?;
@@ -187,7 +194,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                     group_key.clear();
                 }
                 _ => {
-                    // Update the completed group
+                    // Update the complete group
                     if row_index > 0 {
                         update_current_states(
                             context,
@@ -240,7 +247,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let number_of_groups = if src_is_drained {
             AggregationExecutorImpl::<Src>::groups_len(self)
         } else {
-            // not include partial group
+            // don't include the partial group
             AggregationExecutorImpl::<Src>::groups_len(self) - 1
         };
 
@@ -252,6 +259,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             .collect();
         let aggr_fns_len = entities.each_aggr_fn.len();
 
+        // key and state ranges of complete groups
         let keys_range = ..number_of_groups * group_by_exps_len;
         let states_range = ..number_of_groups * aggr_fns_len;
 
@@ -425,13 +433,13 @@ mod tests {
         assert_eq!(r.data.columns_len(), 5);
         assert!(r.is_drained.unwrap());
         // COUNT
-        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(5)]);
         // AVG_COUNT
-        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(4)]);
+        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(5)]);
         // AVG_SUM
         assert_eq!(
             r.data[2].decoded().as_real_slice(),
-            &[Real::new(-16.0).ok()]
+            &[Real::new(-20.0).ok()]
         );
         // col_0
         assert_eq!(
@@ -453,6 +461,7 @@ mod tests {
     /// abc           -5.0
     /// abc           -5.0
     /// == Call #2 ==
+    /// abc           -5.0
     /// == Call #3 ==
     /// abc           -5.0
     /// abc           -5.0
@@ -482,7 +491,10 @@ mod tests {
                     is_drained: Ok(false),
                 },
                 BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![Some(b"abc".to_vec())]),
+                        VectorValue::Real(vec![Real::new(-5.0).ok()]),
+                    ]),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
                 },
