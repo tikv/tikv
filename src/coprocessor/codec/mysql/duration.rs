@@ -8,11 +8,6 @@ use std::{i64, str, u64};
 use tikv_util::codec::number::{self, NumberEncoder};
 use tikv_util::codec::BytesSlice;
 
-use nom::character::complete::{digit1, multispace0, multispace1};
-use nom::{
-    alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag, IResult,
-};
-
 use super::super::{Result, TEN_POW};
 use super::{check_fsp, Decimal};
 
@@ -81,172 +76,182 @@ fn check_second(second: u32) -> Result<u32> {
     }
 }
 
-#[inline]
-fn buf_to_int(buf: &[u8]) -> u32 {
-    buf.iter().fold(0, |acc, c| acc * 10 + u32::from(c - b'0'))
-}
+mod parser {
+    use super::{check_hour, check_minute, check_second, NANO_WIDTH, TEN_POW};
+    use nom::character::complete::{digit1, multispace0, multispace1};
+    use nom::{
+        alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag,
+        IResult,
+    };
 
-/// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
-///
-/// ```compile_fail
-/// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
-/// assert_eq!(read_int(b"12:34"), Ok((b":34", 12)));
-/// assert!(read_int(b"12345678:1").is_err());
-/// ```
-///
-/// NOTE:
-/// The range of MySQL's TIME is `-838:59:59 ~ 838:59:59`, so we can at most read 7 digits
-/// (pattern like `HHHMMSS`)
-fn read_int(input: &[u8]) -> IResult<&[u8], u32> {
-    map_res!(input, digit1, |buf: &[u8]| {
-        if buf.len() <= 7 {
-            Ok(buf_to_int(buf))
-        } else {
-            Err(invalid_type!("invalid time value, more than {} digits", 7))
-        }
-    })
-}
+    #[inline]
+    fn buf_to_int(buf: &[u8]) -> u32 {
+        buf.iter().fold(0, |acc, c| acc * 10 + u32::from(c - b'0'))
+    }
 
-/// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
-/// This function assumes that `fsp` is valid
-///
-/// ```compile_fail
-/// assert_eq!(read_int_with_fsp(b"1234567", 3), Ok(b"", 123400000));
-/// assert_eq!(read_int_with_fsp(b"1234", 6), Ok(b"", 123400000));
-/// ```
-///
-/// NOTE:
-/// 1. The behavior of this function is similar to `read_int` except that it's designed to read the
-/// fractional part of a `TIME`
-/// 2. The fractional part will be align to a 9-digit number which it's easy to round with `fsp`
-///
-/// FIXME: the fraction should not be round, it's incompatible with MySQL.
-fn read_int_with_fsp(input: &[u8], fsp: u8) -> IResult<&[u8], u32> {
-    map!(input, digit1, |buf: &[u8]| -> u32 {
-        let fsp = fsp as usize;
-        let (fraction, len) = if fsp >= buf.len() {
-            (buf_to_int(buf), buf.len())
-        } else {
-            (buf_to_int(&buf[..=fsp]), fsp + 1)
-        };
-        fraction * TEN_POW[NANO_WIDTH as usize - len]
-    })
-}
+    /// Extracts a `u32` from a buffer which matches pattern: `\d+.*`
+    ///
+    /// ```compile_fail
+    /// assert_eq!(read_int(b"123abc"), Ok((b"abc", 123)));
+    /// assert_eq!(read_int(b"12:34"), Ok((b":34", 12)));
+    /// assert!(read_int(b"12345678:1").is_err());
+    /// ```
+    ///
+    /// NOTE:
+    /// The range of MySQL's TIME is `-838:59:59 ~ 838:59:59`, so we can at most read 7 digits
+    /// (pattern like `HHHMMSS`)
+    fn read_int(input: &[u8]) -> IResult<&[u8], u32> {
+        map_res!(input, digit1, |buf: &[u8]| {
+            if buf.len() <= 7 {
+                Ok(buf_to_int(buf))
+            } else {
+                Err(invalid_type!("invalid time value, more than {} digits", 7))
+            }
+        })
+    }
 
-/// Parse the sign of `Duration`, return true if it's negative otherwise false
-///
-/// ```compile_fail
-/// assert_eq!(neg(b"- .123"),  Ok(b".123", true));
-/// assert_eq!(neg(b"-.123"),   Ok(b".123", true));
-/// assert_eq!(neg(b"- 11:21"), Ok(b"11:21", true));
-/// assert_eq!(neg(b"-11:21"),  Ok(b"11:21", true));
-/// assert_eq!(neg(b"11:21"),   Ok(b"11:21", false));
-/// ```
-fn neg(input: &[u8]) -> IResult<&[u8], bool> {
-    do_parse!(
-        input,
-        neg: map!(opt!(complete!(char!('-'))), |flag| flag.is_some())
-            >> preceded!(
-                multispace0,
-                alt!(complete!(peek!(call!(digit1))) | complete!(peek!(tag!("."))))
-            )
-            >> (neg)
-    )
-}
+    /// Extracts a `u32` with length `fsp` from a buffer which matches pattern: `\d+.*`
+    /// This function assumes that `fsp` is valid
+    ///
+    /// ```compile_fail
+    /// assert_eq!(read_int_with_fsp(b"1234567", 3), Ok(b"", 123400000));
+    /// assert_eq!(read_int_with_fsp(b"1234", 6), Ok(b"", 123400000));
+    /// ```
+    ///
+    /// NOTE:
+    /// 1. The behavior of this function is similar to `read_int` except that it's designed to read the
+    /// fractional part of a `TIME`
+    /// 2. The fractional part will be align to a 9-digit number which it's easy to round with `fsp`
+    ///
+    /// FIXME: the fraction should not be round, it's incompatible with MySQL.
+    fn read_int_with_fsp(input: &[u8], fsp: u8) -> IResult<&[u8], u32> {
+        map!(input, digit1, |buf: &[u8]| -> u32 {
+            let fsp = fsp as usize;
+            let (fraction, len) = if fsp >= buf.len() {
+                (buf_to_int(buf), buf.len())
+            } else {
+                (buf_to_int(&buf[..=fsp]), fsp + 1)
+            };
+            fraction * TEN_POW[NANO_WIDTH as usize - len]
+        })
+    }
 
-/// Parse the day/block(format like `HHMMSS`) value of the `Duration`,
-/// further paring will determine the value we got is a `day` value or `block` value.
-///
-/// ```compile_fail
-/// assert_eq!(day(b"1 1:1"), Ok(b"1:1", Some(1)));
-/// assert_eq!(day(b"1234"), Ok(b"", Some(1234)));
-/// assert_eq!(day(b"1234.123"), Ok(b".123", Some(1234)));
-/// assert_eq!(day(b"1:2:3"), Ok(b"1:2:3", None));
-/// assert_eq!(day(b".123"), Ok(b".123", None));
-/// ```
-fn day(input: &[u8]) -> IResult<&[u8], Option<u32>> {
-    opt!(
-        input,
+    /// Parse the sign of `Duration`, return true if it's negative otherwise false
+    ///
+    /// ```compile_fail
+    /// assert_eq!(neg(b"- .123"),  Ok(b".123", true));
+    /// assert_eq!(neg(b"-.123"),   Ok(b".123", true));
+    /// assert_eq!(neg(b"- 11:21"), Ok(b"11:21", true));
+    /// assert_eq!(neg(b"-11:21"),  Ok(b"11:21", true));
+    /// assert_eq!(neg(b"11:21"),   Ok(b"11:21", false));
+    /// ```
+    fn neg(input: &[u8]) -> IResult<&[u8], bool> {
         do_parse!(
-            day: read_int
-                >> alt!(
-                    complete!(preceded!(multispace1, peek!(call!(digit1))))
-                        | complete!(preceded!(
-                            multispace0,
-                            alt!(complete!(peek!(tag!("."))) | complete!(eof!()))
-                        ))
+            input,
+            neg: map!(opt!(complete!(char!('-'))), |flag| flag.is_some())
+                >> preceded!(
+                    multispace0,
+                    alt!(complete!(peek!(call!(digit1))) | complete!(peek!(tag!("."))))
                 )
-                >> (day)
+                >> (neg)
         )
-    )
-}
+    }
 
-/// Parse a separator ':'
-///
-/// ```compile_fail
-/// assert_eq!(separator(b" : "), Ok(b"", true));
-/// assert_eq!(separator(b":"), Ok(b"", true));
-/// assert_eq!(separator(b";"), Ok(b";", false));
-/// ```
-fn separator(input: &[u8]) -> IResult<&[u8], bool> {
-    do_parse!(
-        input,
-        multispace0
-            >> has_separator: map!(opt!(complete!(char!(':'))), |flag| flag.is_some())
-            >> multispace0
-            >> (has_separator)
-    )
-}
+    /// Parse the day/block(format like `HHMMSS`) value of the `Duration`,
+    /// further paring will determine the value we got is a `day` value or `block` value.
+    ///
+    /// ```compile_fail
+    /// assert_eq!(day(b"1 1:1"), Ok(b"1:1", Some(1)));
+    /// assert_eq!(day(b"1234"), Ok(b"", Some(1234)));
+    /// assert_eq!(day(b"1234.123"), Ok(b".123", Some(1234)));
+    /// assert_eq!(day(b"1:2:3"), Ok(b"1:2:3", None));
+    /// assert_eq!(day(b".123"), Ok(b".123", None));
+    /// ```
+    fn day(input: &[u8]) -> IResult<&[u8], Option<u32>> {
+        opt!(
+            input,
+            do_parse!(
+                day: read_int
+                    >> alt!(
+                        complete!(preceded!(multispace1, peek!(call!(digit1))))
+                            | complete!(preceded!(
+                                multispace0,
+                                alt!(complete!(peek!(tag!("."))) | complete!(eof!()))
+                            ))
+                    )
+                    >> (day)
+            )
+        )
+    }
 
-/// Parse format like: `hh:mm` `hh:mm:ss`
-///
-/// ```compile_fail
-/// assert_eq!(hhmmss(b"12:34:56"), Ok(b"", [12, 34, 56]));
-/// assert_eq!(hhmmss(b"12:34"), Ok(b"", [12, 34, None]));
-/// assert_eq!(hhmmss(b"1234"), Ok(b"", [None, None, None]));
-/// ```
-fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
-    do_parse!(
-        input,
-        hour: opt!(map_res!(read_int, check_hour))
-            >> has_mintue: separator
-            >> minute: cond!(has_mintue, map_res!(read_int, check_minute))
-            >> has_second: separator
-            >> second: cond!(has_second, map_res!(read_int, check_second))
-            >> ([hour, minute, second])
-    )
-}
+    /// Parse a separator ':'
+    ///
+    /// ```compile_fail
+    /// assert_eq!(separator(b" : "), Ok(b"", true));
+    /// assert_eq!(separator(b":"), Ok(b"", true));
+    /// assert_eq!(separator(b";"), Ok(b";", false));
+    /// ```
+    fn separator(input: &[u8]) -> IResult<&[u8], bool> {
+        do_parse!(
+            input,
+            multispace0
+                >> has_separator: map!(opt!(complete!(char!(':'))), |flag| flag.is_some())
+                >> multispace0
+                >> (has_separator)
+        )
+    }
 
-/// Parse fractional part.
-///
-/// ```compile_fail
-/// assert_eq!(fraction(" .123", 3), Ok(b"", Some(123)));
-/// assert_eq!(fraction("123", 3), Ok(b"", None));
-/// ```
-fn fraction(input: &[u8], fsp: u8) -> IResult<&[u8], Option<u32>> {
-    do_parse!(
-        input,
-        multispace0
-            >> opt!(complete!(char!('.')))
-            >> fraction: opt!(call!(read_int_with_fsp, fsp))
-            >> multispace0
-            >> (fraction)
-    )
-}
+    /// Parse format like: `hh:mm` `hh:mm:ss`
+    ///
+    /// ```compile_fail
+    /// assert_eq!(hhmmss(b"12:34:56"), Ok(b"", [12, 34, 56]));
+    /// assert_eq!(hhmmss(b"12:34"), Ok(b"", [12, 34, None]));
+    /// assert_eq!(hhmmss(b"1234"), Ok(b"", [None, None, None]));
+    /// ```
+    fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
+        do_parse!(
+            input,
+            hour: opt!(map_res!(read_int, check_hour))
+                >> has_mintue: separator
+                >> minute: cond!(has_mintue, map_res!(read_int, check_minute))
+                >> has_second: separator
+                >> second: cond!(has_second, map_res!(read_int, check_second))
+                >> ([hour, minute, second])
+        )
+    }
 
-/// Parse `Duration`
-fn parse(input: &[u8], fsp: u8) -> IResult<&[u8], (bool, [Option<u32>; 5])> {
-    do_parse!(
-        input,
-        multispace0
-            >> neg: neg
-            >> day: day
-            >> hhmmss: hhmmss
-            >> fraction: call!(fraction, fsp)
-            >> eof!()
-            >> (neg, [day, hhmmss[0], hhmmss[1], hhmmss[2], fraction])
-    )
-}
+    /// Parse fractional part.
+    ///
+    /// ```compile_fail
+    /// assert_eq!(fraction(" .123", 3), Ok(b"", Some(123)));
+    /// assert_eq!(fraction("123", 3), Ok(b"", None));
+    /// ```
+    fn fraction(input: &[u8], fsp: u8) -> IResult<&[u8], Option<u32>> {
+        do_parse!(
+            input,
+            multispace0
+                >> opt!(complete!(char!('.')))
+                >> fraction: opt!(call!(read_int_with_fsp, fsp))
+                >> multispace0
+                >> (fraction)
+        )
+    }
+
+    /// Parse `Duration`
+    pub fn parse(input: &[u8], fsp: u8) -> IResult<&[u8], (bool, [Option<u32>; 5])> {
+        do_parse!(
+            input,
+            multispace0
+                >> neg: neg
+                >> day: day
+                >> hhmmss: hhmmss
+                >> fraction: call!(fraction, fsp)
+                >> eof!()
+                >> (neg, [day, hhmmss[0], hhmmss[1], hhmmss[2], fraction])
+        )
+    }
+
+} /* parser */
 
 /// `Duration` is the type for MySQL `time` type.
 ///
@@ -351,9 +356,10 @@ impl Duration {
 
         let fsp = check_fsp(fsp)?;
 
-        let (mut neg, [mut day, mut hour, mut minute, mut second, fraction]) = parse(input, fsp)
-            .map_err(|_| invalid_type!("invalid time format"))?
-            .1;
+        let (mut neg, [mut day, mut hour, mut minute, mut second, fraction]) =
+            self::parser::parse(input, fsp)
+                .map_err(|_| invalid_type!("invalid time format"))?
+                .1;
 
         if day.is_some() && hour.is_none() {
             let block = day.take().unwrap();
