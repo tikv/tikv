@@ -196,7 +196,7 @@ impl Default for Config {
             store_max_batch_size: 1024,
             store_pool_size: 2,
             future_poll_size: 1,
-            hibernate_regions: true,
+            hibernate_regions: false,
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

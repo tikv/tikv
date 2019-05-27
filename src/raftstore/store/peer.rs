@@ -31,7 +31,7 @@ use crate::pd::{PdTask, INVALID_ID};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::raftstore::store::fsm::store::PollContext;
 use crate::raftstore::store::fsm::{
-    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, Proposal, RegionProposal,
+    apply, Apply, ApplyMetrics, ApplyTask, ApplyTaskRes, GroupState, Proposal, RegionProposal,
 };
 use crate::raftstore::store::keys::{enc_end_key, enc_start_key};
 use crate::raftstore::store::worker::{ReadDelegate, ReadProgress, RegionTask};
@@ -212,6 +212,12 @@ pub struct ConsistencyState {
 pub struct PeerStat {
     pub written_bytes: u64,
     pub written_keys: u64,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct CheckTickResult {
+    leader: bool,
+    up_to_date: bool,
 }
 
 /// A struct that stores the state to wait for `PrepareMerge` apply result.
@@ -513,6 +519,60 @@ impl Peer {
     #[inline]
     pub fn region(&self) -> &metapb::Region {
         self.get_store().region()
+    }
+
+    /// Check whether the peer can be hibernated.
+    ///
+    /// This should be used with `check_after_tick` to get a correct conclusion.
+    pub fn check_before_tick(&self, cfg: &Config) -> CheckTickResult {
+        let mut res = CheckTickResult::default();
+        if !self.is_leader() {
+            return res;
+        }
+        res.leader = true;
+        if self.raft_group.raft.election_elapsed + 1 < cfg.raft_election_timeout_ticks {
+            return res;
+        }
+        let status = self.raft_group.status_ref();
+        let last_index = self.raft_group.raft.raft_log.last_index();
+        for (id, pr) in status.progress.unwrap().iter() {
+            // Only recent active peer is considerred, so that an isolated follower
+            // won't cause a waste of leader's resource.
+            if *id == self.peer.get_id() || !pr.recent_active {
+                continue;
+            }
+            // Keep replicating data to active followers.
+            if pr.matched != last_index {
+                return res;
+            }
+        }
+        // Unapplied entries can change the configuration of the group.
+        res.up_to_date = self.get_store().applied_index() == last_index;
+        res
+    }
+
+    pub fn check_after_tick(&self, state: GroupState, res: CheckTickResult) -> bool {
+        if res.leader {
+            res.up_to_date && self.is_leader() && self.raft_group.raft.pending_read_count() == 0
+        } else {
+            // If follower keeps receiving data from leader, then it's safe to stop
+            // ticking, as leader will make sure it has the latest logs.
+            // Checking term to make sure campaign has finished and the leader starts
+            // doing its job, it's not required but a safe options.
+            state != GroupState::Chaos
+                && self.raft_group.raft.leader_id != raft::INVALID_ID
+                && self.raft_group.raft.raft_log.last_term() == self.raft_group.raft.term
+        }
+    }
+
+    /// Pings if followers are still connected.
+    ///
+    /// Leader needs to know exact progress of followers, and
+    /// followers just need to know whether leader is still alive.
+    pub fn ping(&mut self) {
+        if self.is_leader() {
+            self.raft_group.ping();
+        }
     }
 
     /// Set the region of a peer.
@@ -1210,29 +1270,21 @@ impl Peer {
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
-                let (read_index, is_read_index_request) = {
-                    let read = self.pending_reads.reads.front().unwrap();
-                    if read.cmds.len() == 1
-                        && read.cmds[0].0.get_requests().len() == 1
-                        && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex
-                    {
-                        (read.read_index, true)
-                    } else {
-                        (read.read_index, false)
-                    }
-                };
-
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                let is_read_index_request = read.cmds.len() == 1
+                    && read.cmds[0].0.get_requests().len() == 1
+                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
                 if !is_read_index_request {
                     let term = self.term();
                     // Only read index request is valid.
                     for (_, cb) in read.cmds.drain(..) {
                         apply::notify_stale_req(term, cb);
                     }
-                    continue;
-                }
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+                } else {
+                    for (req, cb) in read.cmds.drain(..) {
+                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                    }
                 }
                 self.pending_reads.ready_cnt -= 1;
             }
