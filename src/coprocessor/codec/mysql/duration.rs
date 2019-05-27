@@ -10,8 +10,7 @@ use tikv_util::codec::BytesSlice;
 
 use nom::character::complete::{digit1, multispace0, multispace1};
 use nom::{
-    alt_complete, call, char, complete, cond_with_error, do_parse, eof, map, map_res, opt, peek,
-    preceded, tag, IResult,
+    alt, call, char, complete, cond, do_parse, eof, map, map_res, opt, peek, preceded, tag, IResult,
 };
 
 use super::super::{Result, TEN_POW};
@@ -28,7 +27,8 @@ const MAX_MINUTES: u32 = 59;
 const MAX_SECONDS: u32 = 59;
 
 /// `MAX_TIME_IN_SECS` is the maximum for mysql time type.
-const MAX_TIME_IN_SECS: u64 = 838 * SECS_PER_HOUR + 59 * SECS_PER_MINUTE + 59;
+const MAX_TIME_IN_SECS: u64 =
+    MAX_HOURS as u64 * SECS_PER_HOUR + MAX_MINUTES as u64 * SECS_PER_MINUTE + MAX_SECONDS as u64;
 
 fn check_dur(dur: &StdDuration) -> Result<()> {
     let secs = dur.as_secs();
@@ -146,7 +146,10 @@ fn neg(input: &[u8]) -> IResult<&[u8], bool> {
     do_parse!(
         input,
         neg: map!(opt!(complete!(char!('-'))), |flag| flag.is_some())
-            >> preceded!(multispace0, alt_complete!(peek!(digit1) | peek!(tag!("."))))
+            >> preceded!(
+                multispace0,
+                alt!(complete!(peek!(call!(digit1))) | complete!(peek!(tag!("."))))
+            )
             >> (neg)
     )
 }
@@ -166,9 +169,12 @@ fn day(input: &[u8]) -> IResult<&[u8], Option<u32>> {
         input,
         do_parse!(
             day: read_int
-                >> alt_complete!(
-                    preceded!(multispace1, peek!(digit1))
-                        | preceded!(multispace0, alt_complete!(peek!(tag!(".")) | eof!()))
+                >> alt!(
+                    complete!(preceded!(multispace1, peek!(call!(digit1))))
+                        | complete!(preceded!(
+                            multispace0,
+                            alt!(complete!(peek!(tag!("."))) | complete!(eof!()))
+                        ))
                 )
                 >> (day)
         )
@@ -204,9 +210,9 @@ fn hhmmss(input: &[u8]) -> IResult<&[u8], [Option<u32>; 3]> {
         input,
         hour: opt!(map_res!(read_int, check_hour))
             >> has_mintue: separator
-            >> minute: cond_with_error!(has_mintue, map_res!(read_int, check_minute))
+            >> minute: cond!(has_mintue, map_res!(read_int, check_minute))
             >> has_second: separator
-            >> second: cond_with_error!(has_second, map_res!(read_int, check_second))
+            >> second: cond!(has_second, map_res!(read_int, check_second))
             >> ([hour, minute, second])
     )
 }
