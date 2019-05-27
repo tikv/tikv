@@ -25,7 +25,7 @@ Thanks for your contributions!
 
 ### Code style
 
-The coding style suggested by the rust community and clippy project. See the [style doc](https://aturon.github.io/README.html) and [clippy](https://github.com/Manishearth/rust-clippy) for details.
+The coding style suggested by the rust community and clippy project. See the [style doc](https://doc.rust-lang.org/1.0.0/style/README.html), [API guidelines](https://rust-lang-nursery.github.io/api-guidelines/) and [clippy](https://github.com/Manishearth/rust-clippy) for details.
 
 Please follow this style to make TiKV easy to review, maintain and develop.
 
