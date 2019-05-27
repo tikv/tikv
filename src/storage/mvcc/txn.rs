@@ -158,6 +158,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
+                    txn_size: options.txn_size,
                 });
             }
             if lock.lock_type != LockType::Pessimistic {
@@ -232,6 +233,7 @@ impl<S: Snapshot> MvccTxn<S> {
             options.lock_ttl,
             None,
             true,
+            options.txn_size,
         );
 
         Ok(())
@@ -287,6 +289,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 options.lock_ttl,
                 value,
                 true,
+                options.txn_size,
             );
         } else {
             // value is long
@@ -300,6 +303,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 options.lock_ttl,
                 None,
                 true,
+                options.txn_size,
             );
         }
 

@@ -216,6 +216,7 @@ mod tests {
                 10,
                 Some(b"short_value".to_vec()),
                 false,
+                0,
             ),
             Lock::new(LockType::Put, b"pk".to_vec(), 1, 10, None, true, 0),
             Lock::new(

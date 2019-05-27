@@ -774,19 +774,27 @@ fn process_write_impl<S: Snapshot>(
             commit_ts,
             resolve_keys,
         } => {
+            let key_hashes = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hashes(&resolve_keys))
+            } else {
+                None
+            };
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
             let rows = resolve_keys.len();
+            let mut is_pessimistic_txn = false;
             // ti-client guarantees the size of resolve_keys will not too large, so no necessary
             // to control the write_size as ResolveLock.
             for key in resolve_keys {
                 if commit_ts > 0 {
-                    txn.commit(key, commit_ts)?;
+                    is_pessimistic_txn = txn.commit(key, commit_ts)?;
                 } else {
-                    txn.rollback(key)?;
+                    is_pessimistic_txn = txn.rollback(key)?;
                 }
             }
+            notify_waiter_mgr(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
-            (ProcessResult::Res, txn.into_modifies(), rows, ctx)
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
