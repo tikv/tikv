@@ -210,34 +210,6 @@ fn test_scan_detail() {
 }
 
 #[test]
-fn test_group_by() {
-    let data = vec![
-        (1, Some("name:0"), 2),
-        (2, Some("name:2"), 3),
-        (4, Some("name:0"), 1),
-        (5, Some("name:1"), 4),
-    ];
-
-    let product = ProductTable::new();
-    let (_, endpoint) = init_with_data(&product, &data);
-    // for dag
-    let req = DAGSelect::from(&product)
-        .group_by(&[&product["name"]])
-        .build();
-    let mut resp = handle_select(&endpoint, req);
-    // should only have name:0, name:2 and name:1
-    let mut row_count = 0;
-    let spliter = DAGChunkSpliter::new(resp.take_chunks().into_vec(), 1);
-    for (row, name) in spliter.zip(&[b"name:0", b"name:2", b"name:1"]) {
-        let expected_encoded = datum::encode_value(&[Datum::Bytes(name.to_vec())]).unwrap();
-        let result_encoded = datum::encode_value(&row).unwrap();
-        assert_eq!(result_encoded, &*expected_encoded);
-        row_count += 1;
-    }
-    assert_eq!(row_count, 3);
-}
-
-#[test]
 fn test_aggr_count() {
     let data = vec![
         (1, Some("name:0"), 2),
