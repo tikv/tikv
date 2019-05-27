@@ -8,17 +8,21 @@ use tipb::expression::{Expr, ExprType, FieldType};
 
 use super::super::function::RpnFunction;
 use super::expr::{RpnExpression, RpnExpressionNode};
-use crate::coprocessor::codec::data_type::ScalarValue;
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
-use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time, MAX_FSP};
+use crate::coprocessor::codec::mysql::MAX_FSP;
 use crate::coprocessor::{Error, Result};
 
 /// Helper to build an `RpnExpression`.
+#[derive(Debug, Clone)]
 pub struct RpnExpressionBuilder(Vec<RpnExpressionNode>);
 
 impl RpnExpressionBuilder {
     /// Checks whether the given expression definition tree is supported.
     pub fn check_expr_tree_supported(c: &Expr) -> Result<()> {
+        // TODO: This logic relies on the correctness of the passed in GROUP BY eval type. However
+        // it can be different from the one we calculated (e.g. pass a column / fn with different
+        // type).
         box_try!(EvalType::try_from(c.get_field_type().tp()));
 
         match c.get_tp() {
@@ -43,6 +47,27 @@ impl RpnExpressionBuilder {
         }
 
         Ok(())
+    }
+
+    /// Gets the result type when expression tree is converted to RPN expression and evaluated.
+    /// The result type will be either scalar or vector.
+    pub fn is_expr_eval_to_scalar(c: &Expr) -> Result<bool> {
+        match c.get_tp() {
+            ExprType::Null
+            | ExprType::Int64
+            | ExprType::Uint64
+            | ExprType::String
+            | ExprType::Bytes
+            | ExprType::Float32
+            | ExprType::Float64
+            | ExprType::MysqlTime
+            | ExprType::MysqlDuration
+            | ExprType::MysqlDecimal
+            | ExprType::MysqlJson => Ok(true),
+            ExprType::ScalarFunc => Ok(false),
+            ExprType::ColumnRef => Ok(false),
+            _ => Err(box_err!("Unsupported expression type {:?}", c.get_tp())),
+        }
     }
 
     /// Builds the RPN expression node list from an expression definition tree.
@@ -324,14 +349,10 @@ fn handle_node_constant(
 
 #[inline]
 fn get_scalar_value_null(eval_type: EvalType) -> ScalarValue {
-    match eval_type {
-        EvalType::Int => ScalarValue::Int(None),
-        EvalType::Real => ScalarValue::Real(None),
-        EvalType::Decimal => ScalarValue::Decimal(None),
-        EvalType::Bytes => ScalarValue::Bytes(None),
-        EvalType::DateTime => ScalarValue::DateTime(None),
-        EvalType::Duration => ScalarValue::Duration(None),
-        EvalType::Json => ScalarValue::Json(None),
+    match_template_evaluable! {
+        TT, match eval_type {
+            EvalType::TT => ScalarValue::TT(None),
+        }
     }
 }
 
@@ -358,7 +379,7 @@ fn extract_scalar_value_bytes(val: Vec<u8>) -> Result<ScalarValue> {
 fn extract_scalar_value_float(val: Vec<u8>) -> Result<ScalarValue> {
     let value = number::decode_f64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode float from the request")))?;
-    Ok(ScalarValue::Real(Some(value)))
+    Ok(ScalarValue::Real(Real::new(value).ok()))
 }
 
 #[inline]
@@ -370,7 +391,7 @@ fn extract_scalar_value_date_time(
     let v = number::decode_u64(&mut val.as_slice())
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     let fsp = field_type.decimal() as i8;
-    let value = Time::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
+    let value = DateTime::from_packed_u64(v, field_type.tp().try_into()?, fsp, time_zone)
         .map_err(|_| Error::Other(box_err!("Unable to decode date time from the request")))?;
     Ok(ScalarValue::DateTime(Some(value)))
 }
@@ -422,7 +443,7 @@ mod tests {
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
             _v: &Option<i64>,
-        ) -> Result<Option<f64>> {
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -436,8 +457,8 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
         ) -> Result<Option<i64>> {
             unreachable!()
         }
@@ -469,10 +490,10 @@ mod tests {
         fn call(
             _ctx: &mut EvalContext,
             _payload: RpnFnCallPayload<'_>,
-            _v1: &Option<f64>,
-            _v2: &Option<f64>,
-            _v3: &Option<f64>,
-        ) -> Result<Option<f64>> {
+            _v1: &Option<Real>,
+            _v2: &Option<Real>,
+            _v3: &Option<Real>,
+        ) -> Result<Option<Real>> {
             unreachable!()
         }
     }
@@ -686,7 +707,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             -1.5
         );
 
@@ -697,7 +719,8 @@ mod tests {
                 .constant_value()
                 .unwrap()
                 .as_real()
-                .unwrap(),
+                .unwrap()
+                .into_inner(),
             100.12
         );
 

@@ -1,16 +1,19 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use prometheus::local::*;
 
 use crate::pd::PdTask;
-use crate::server::readpool::{self, Builder, ReadPool};
+use crate::server::readpool::{self, Builder, Config, ReadPool};
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use tikv_util::collections::HashMap;
 use tikv_util::worker::FutureScheduler;
 
 use super::metrics::*;
+use super::Engine;
 
 pub struct StorageLocalMetrics {
     local_sched_histogram_vec: LocalHistogramVec,
@@ -36,13 +39,31 @@ thread_local! {
     );
 }
 
-pub fn build_read_pool(config: &readpool::Config, pd_sender: FutureScheduler<PdTask>) -> ReadPool {
+pub fn build_read_pool<E: Engine>(
+    config: &readpool::Config,
+    pd_sender: FutureScheduler<PdTask>,
+    engine: E,
+) -> ReadPool {
     let pd_sender2 = pd_sender.clone();
+    let engine = Arc::new(Mutex::new(engine));
 
     Builder::from_config(config)
         .name_prefix("store-read")
         .on_tick(move || tls_flush(&pd_sender))
-        .before_stop(move || tls_flush(&pd_sender2))
+        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+        .before_stop(move || {
+            destroy_tls_engine::<E>();
+            tls_flush(&pd_sender2)
+        })
+        .build()
+}
+
+pub fn build_read_pool_for_test<E: Engine>(engine: E) -> ReadPool {
+    let engine = Arc::new(Mutex::new(engine));
+
+    Builder::from_config(&Config::default_for_test())
+        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+        .before_stop(|| destroy_tls_engine::<E>())
         .build()
 }
 
