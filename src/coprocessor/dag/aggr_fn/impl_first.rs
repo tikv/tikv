@@ -102,39 +102,8 @@ where
     }
 }
 
-// default impl all `Evaluable` for all `AggrFnStateFirst` to make `AggrFnStateFirst`
-// satisfy trait `AggrFunctionState`
-impl<T1, T2> super::AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
-where
-    T1: Evaluable,
-    T2: Evaluable,
-    VectorValue: VectorValueExt<T2>,
-{
-    #[inline]
-    default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T1>) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-
-    #[inline]
-    default fn update_repeat(
-        &mut self,
-        _ctx: &mut EvalContext,
-        _value: &Option<T1>,
-        _repeat_times: usize,
-    ) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-
-    #[inline]
-    default fn update_vector(
-        &mut self,
-        _ctx: &mut EvalContext,
-        _values: &[Option<T1>],
-    ) -> Result<()> {
-        panic!("Unmatched parameter type")
-    }
-}
-
+// Here we manually implement `AggrFunctionStateUpdatePartial` instead of implementing
+// `ConcreteAggrFunctionState` so that `update_repeat` and `update_vector` can be faster.
 impl<T> super::AggrFunctionStateUpdatePartial<T> for AggrFnStateFirst<T>
 where
     T: Evaluable,
@@ -166,6 +135,39 @@ where
             self.update(ctx, v)?;
         }
         Ok(())
+    }
+}
+
+// In order to make `AggrFnStateFirst` satisfy the `AggrFunctionState` trait, we default impl all
+// `AggrFunctionStateUpdatePartial` of `Evaluable` for all `AggrFnStateFirst`.
+impl<T1, T2> super::AggrFunctionStateUpdatePartial<T1> for AggrFnStateFirst<T2>
+where
+    T1: Evaluable,
+    T2: Evaluable,
+    VectorValue: VectorValueExt<T2>,
+{
+    #[inline]
+    default fn update(&mut self, _ctx: &mut EvalContext, _value: &Option<T1>) -> Result<()> {
+        panic!("Unmatched parameter type")
+    }
+
+    #[inline]
+    default fn update_repeat(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _value: &Option<T1>,
+        _repeat_times: usize,
+    ) -> Result<()> {
+        panic!("Unmatched parameter type")
+    }
+
+    #[inline]
+    default fn update_vector(
+        &mut self,
+        _ctx: &mut EvalContext,
+        _values: &[Option<T1>],
+    ) -> Result<()> {
+        panic!("Unmatched parameter type")
     }
 }
 
