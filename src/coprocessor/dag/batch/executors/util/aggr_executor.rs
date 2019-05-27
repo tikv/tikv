@@ -73,6 +73,7 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
 
@@ -218,7 +219,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
 
         // Aggregate results when possible, otherwise just return nothing.
         if self.imp.can_aggregate(src_is_drained) {
-            Ok(Some(self.aggregate()?))
+            Ok(Some(self.aggregate(src_is_drained)?))
         } else {
             Ok(None)
         }
@@ -227,7 +228,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     /// Generates aggregation results.
     ///
     /// This function is ensured to be called at most once.
-    fn aggregate(&mut self) -> Result<LazyBatchColumnVec> {
+    fn aggregate(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
         let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self
             .entities
@@ -239,6 +240,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         // Aggregate results for each group
         let group_by_columns = self.imp.iterate_each_group_for_aggregation(
             &mut self.entities,
+            src_is_drained,
             |entities, states| {
                 assert_eq!(states.len(), entities.each_aggr_cardinality.len());
 

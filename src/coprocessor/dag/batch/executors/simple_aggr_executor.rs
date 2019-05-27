@@ -162,6 +162,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
+        _src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
         iteratee(entities, &self.states)?;

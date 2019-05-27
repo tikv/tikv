@@ -4,7 +4,6 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use cop_datatype::{EvalType, FieldTypeAccessor};
-use tikv_util::collections::HashMap;
 use tipb::executor::Aggregation;
 use tipb::expression::{Expr, FieldType};
 
@@ -17,8 +16,6 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
-
-use smallvec::SmallVec;
 
 pub struct BatchStreamAggregationExecutor<Src: BatchExecutor>(
     AggregationExecutor<Src, BatchStreamAggregationImpl>,
@@ -83,6 +80,7 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
 
 pub struct BatchStreamAggregationImpl {
     group_by_exps: Vec<RpnExpression>,
+    group_by_exps_types: Vec<EvalType>,
     keys: Vec<ScalarValue>,
     states: Vec<Box<dyn AggrFunctionState>>,
 }
@@ -119,8 +117,19 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         aggr_defs: Vec<Expr>,
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
+        let group_by_exps_types = group_by_exps
+            .iter()
+            .map(|exp| {
+                // The unwrap is fine because aggregate function parser should never return an
+                // eval type that we cannot process later. If we made a mistake there, then we
+                // should panic.
+                EvalType::try_from(exp.ret_field_type(src.schema()).tp()).unwrap()
+            })
+            .collect();
+
         let aggr_impl = BatchStreamAggregationImpl {
             group_by_exps,
+            group_by_exps_types,
             keys: Vec::new(),
             states: Vec::new(),
         };
@@ -190,7 +199,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                                     match_template_evaluable! {
                                         TT, match value {
                                             ScalarValue::TT(scalar_value) => {
-                                                state.update_repeat(context, scalar_value, rows_len)?;
+                                                state.update_repeat(context, scalar_value, row_index - start_row)?;
                                             },
                                         }
                                     }
@@ -199,7 +208,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                                     match_template_evaluable! {
                                         TT, match &**value {
                                             VectorValue::TT(vector_value) => {
-                                                state.update_vector(context, vector_value)?;
+                                                state.update_vector(context, &vector_value[start_row..row_index])?;
                                             },
                                         }
                                     }
@@ -221,6 +230,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(())
     }
 
+    /// Note that the partial group is in count.
     #[inline]
     fn groups_len(&self) -> usize {
         self.keys
@@ -233,35 +243,46 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
     fn iterate_each_group_for_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
-        //        let number_of_groups = self.groups.len();
-        //        let group_by_exps_len = self.group_by_exps.len();
-        //        let mut group_by_columns: Vec<_> = self
-        //            .group_by_exps
-        //            .iter()
-        //            .map(|_| LazyBatchColumn::raw_with_capacity(number_of_groups))
-        //            .collect();
-        //        let aggr_fns_len = entities.each_aggr_fn.len();
-        //
-        //        let groups = std::mem::replace(&mut self.groups, HashMap::default());
-        //        for (group_key, group_info) in groups {
-        //            iteratee(
-        //                entities,
-        //                &self.states
-        //                    [group_info.states_start_offset..group_info.states_start_offset + aggr_fns_len],
-        //            )?;
-        //
-        //            // Extract group column from group key for each group
-        //            for group_index in 0..group_by_exps_len {
-        //                let offset_begin = group_info.group_key_offsets[group_index] as usize;
-        //                let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
-        //                group_by_columns[group_index].push_raw(&group_key[offset_begin..offset_end]);
-        //            }
-        //        }
-        //
-        //        Ok(group_by_columns)
-        unimplemented!()
+        let number_of_groups = if src_is_drained {
+            AggregationExecutorImpl::<Src>::groups_len(self)
+        } else {
+            // not include partial group
+            AggregationExecutorImpl::<Src>::groups_len(self) - 1
+        };
+
+        let group_by_exps_len = self.group_by_exps.len();
+        let mut group_by_columns: Vec<_> = self
+            .group_by_exps_types
+            .iter()
+            .map(|tp| LazyBatchColumn::decoded_with_capacity_and_tp(number_of_groups, *tp))
+            .collect();
+        let aggr_fns_len = entities.each_aggr_fn.len();
+
+        let keys_range = ..number_of_groups * group_by_exps_len;
+        let states_range = ..number_of_groups * aggr_fns_len;
+
+        for states in self.states[states_range].chunks_exact(aggr_fns_len) {
+            iteratee(entities, states)?;
+        }
+
+        for (key, group_index) in self
+            .keys
+            .drain(keys_range)
+            .zip((0..group_by_exps_len).cycle())
+        {
+            match_template_evaluable! {
+                TT, match key {
+                    ScalarValue::TT(key) => {
+                        group_by_columns[group_index].mut_decoded().push(key);
+                    }
+                }
+            }
+        }
+
+        Ok(group_by_columns)
     }
 }
 

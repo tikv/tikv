@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp::PartialEq;
 use std::convert::{TryFrom, TryInto};
-use std::ops::Index;
 
 use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
@@ -156,14 +154,6 @@ impl VectorValue {
         VectorLikeValueRef::Vector(self)
     }
 
-    pub fn get_unchecked(&self, index: usize) -> ScalarValueRef<'_> {
-        match_template_evaluable! {
-            TT, match self {
-                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
-            }
-        }
-    }
-
     /// Evaluates values into MySQL logic values.
     ///
     /// The caller must provide an output buffer which is large enough for holding values.
@@ -184,6 +174,15 @@ impl VectorValue {
             }
         }
         Ok(())
+    }
+
+    #[inline]
+    pub fn get_unchecked(&self, index: usize) -> ScalarValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
+            }
+        }
     }
 
     /// Pushes a value into the column by decoding the datum and converting to current
