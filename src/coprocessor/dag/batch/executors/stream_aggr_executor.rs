@@ -66,7 +66,7 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
             if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(box_err!("Group by expression is not a column"));
+                return Err(box_err!("Group by expression cannot be a scalar"));
             }
         }
 
@@ -173,8 +173,9 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let group_by_results = eval_exprs(context, &self.group_by_exps, src_schema, &input)?;
         let aggr_expr_results = eval_exprs(context, &entities.each_aggr_exprs, src_schema, &input)?;
 
+        // Stores input references, clone them when needed
         let mut group_key = Vec::with_capacity(group_by_len);
-        let mut group_start_row = None;
+        let mut group_start_row = 0;
         for row_index in 0..rows_len {
             for group_by_result in &group_by_results {
                 // Unwrap is fine because we have verified the group by expression before.
@@ -186,39 +187,20 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                     group_key.clear();
                 }
                 _ => {
-                    if let Some(current_states) = self.states.rchunks_exact_mut(aggr_fn_len).next()
-                    {
-                        // if there is a group from the last batch, group_start_row will be None
-                        let start_row = group_start_row.unwrap_or(0);
-                        // update states
-                        for (state, aggr_fn_input) in
-                            current_states.iter_mut().zip(&aggr_expr_results)
-                        {
-                            match aggr_fn_input {
-                                RpnStackNode::Scalar { value, .. } => {
-                                    match_template_evaluable! {
-                                        TT, match value {
-                                            ScalarValue::TT(scalar_value) => {
-                                                state.update_repeat(context, scalar_value, row_index - start_row)?;
-                                            },
-                                        }
-                                    }
-                                }
-                                RpnStackNode::Vector { value, .. } => {
-                                    match_template_evaluable! {
-                                        TT, match &**value {
-                                            VectorValue::TT(vector_value) => {
-                                                state.update_vector(context, &vector_value[start_row..row_index])?;
-                                            },
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    // Update the completed group
+                    if row_index > 0 {
+                        update_current_states(
+                            context,
+                            &mut self.states,
+                            aggr_fn_len,
+                            &aggr_expr_results,
+                            group_start_row,
+                            row_index,
+                        )?;
                     }
 
-                    // new group
-                    group_start_row = Some(row_index);
+                    // create a new group
+                    group_start_row = row_index;
                     self.keys.extend(group_key.drain(..).map(Into::into));
                     for aggr_fn in &entities.each_aggr_fn {
                         self.states.push(aggr_fn.create_state());
@@ -226,6 +208,15 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
                 }
             }
         }
+        // Update the current group with the remaining data
+        update_current_states(
+            context,
+            &mut self.states,
+            aggr_fn_len,
+            &aggr_expr_results,
+            group_start_row,
+            rows_len,
+        )?;
 
         Ok(())
     }
@@ -267,6 +258,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         for states in self.states[states_range].chunks_exact(aggr_fns_len) {
             iteratee(entities, states)?;
         }
+        self.states.drain(states_range);
 
         for (key, group_index) in self
             .keys
@@ -283,6 +275,10 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         }
 
         Ok(group_by_columns)
+    }
+
+    fn can_aggregate(&self, is_drained: bool) -> bool {
+        is_drained || self.keys.len() > self.group_by_exps.len()
     }
 }
 
@@ -306,6 +302,199 @@ fn eval_exprs<'a, 'b>(
 ) -> Result<Vec<RpnStackNode<'b>>> {
     exprs
         .iter()
-        .map(|expr| expr.eval_unchecked(context, input.len(), schema, &input))
+        .map(|expr| expr.eval_unchecked(context, input.rows_len(), schema, &input))
         .collect()
+}
+
+fn update_current_states(
+    context: &mut EvalContext,
+    states: &mut [Box<dyn AggrFunctionState>],
+    aggr_fn_len: usize,
+    aggr_expr_results: &[RpnStackNode],
+    start_row: usize,
+    end_row: usize,
+) -> Result<()> {
+    if let Some(current_states) = states.rchunks_exact_mut(aggr_fn_len).next() {
+        for (state, aggr_fn_input) in current_states.iter_mut().zip(aggr_expr_results) {
+            match aggr_fn_input {
+                RpnStackNode::Scalar { value, .. } => {
+                    match_template_evaluable! {
+                        TT, match value {
+                            ScalarValue::TT(scalar_value) => {
+                                state.update_repeat(context, scalar_value, end_row - start_row)?;
+                            },
+                        }
+                    }
+                }
+                RpnStackNode::Vector { value, .. } => {
+                    match_template_evaluable! {
+                        TT, match &**value {
+                            VectorValue::TT(vector_value) => {
+                                state.update_vector(context, &vector_value[start_row..end_row])?;
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use cop_datatype::FieldTypeTp;
+    use tipb::expression::ScalarFuncSig;
+
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::expr::EvalWarnings;
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
+
+    #[test]
+    fn test_it_works_integration() {
+        use tipb::expression::ExprType;
+        use tipb_helper::ExprDefBuilder;
+
+        // This test creates a stream aggregation executor with the following aggregate functions:
+        // - COUNT(1)
+        // - AVG(col_1 + 1.0)
+        // And group by:
+        // - col_0
+        // - col_1 + 2.0
+
+        let group_by_exps = vec![
+            RpnExpressionBuilder::new().push_column_ref(0).build(),
+            RpnExpressionBuilder::new()
+                .push_column_ref(1)
+                .push_constant(2.0)
+                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .build(),
+        ];
+
+        let aggr_definitions = vec![
+            ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::Double)
+                .push_child(
+                    ExprDefBuilder::scalar_func(ScalarFuncSig::PlusReal, FieldTypeTp::Double)
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::Double))
+                        .push_child(ExprDefBuilder::constant_real(1.0)),
+                )
+                .build(),
+        ];
+
+        let src_exec = make_src_executor();
+        let mut exec = BatchStreamAggregationExecutor::new_for_test(
+            src_exec,
+            group_by_exps,
+            aggr_definitions,
+            AllAggrDefinitionParser,
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 2);
+        assert_eq!(r.data.columns_len(), 5);
+        assert!(!r.is_drained.unwrap());
+        // COUNT
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(1), Some(2)]);
+        // AVG_COUNT
+        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(0), Some(2)]);
+        // AVG_SUM
+        assert_eq!(
+            r.data[2].decoded().as_real_slice(),
+            &[None, Real::new(5.0).ok()]
+        );
+        // col_0
+        assert_eq!(r.data[3].decoded().as_bytes_slice(), &[None, None]);
+        // col_1
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[None, Real::new(3.5).ok()]
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 1);
+        assert_eq!(r.data.columns_len(), 5);
+        assert!(r.is_drained.unwrap());
+        // COUNT
+        assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(4)]);
+        // AVG_COUNT
+        assert_eq!(r.data[1].decoded().as_int_slice(), &[Some(4)]);
+        // AVG_SUM
+        assert_eq!(
+            r.data[2].decoded().as_real_slice(),
+            &[Real::new(-16.0).ok()]
+        );
+        // col_0
+        assert_eq!(
+            r.data[3].decoded().as_bytes_slice(),
+            &[Some(b"abc".to_vec())]
+        );
+        // col_1
+        assert_eq!(r.data[4].decoded().as_real_slice(), &[Real::new(-3.0).ok()]);
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0(Bytes)   Col1(Real)
+    /// == Call #1 ==
+    /// NULL          NULL
+    /// NULL          1.5
+    /// NULL          1.5
+    /// abc           -5.0
+    /// abc           -5.0
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// abc           -5.0
+    /// abc           -5.0
+    /// (drained)
+    pub fn make_src_executor() -> MockExecutor {
+        MockExecutor::new(
+            vec![FieldTypeTp::VarString.into(), FieldTypeTp::Double.into()],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![
+                            None,
+                            None,
+                            None,
+                            Some(b"abc".to_vec()),
+                            Some(b"abc".to_vec()),
+                        ]),
+                        VectorValue::Real(vec![
+                            None,
+                            Real::new(1.5).ok(),
+                            Real::new(1.5).ok(),
+                            Real::new(-5.0).ok(),
+                            Real::new(-5.0).ok(),
+                        ]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Bytes(vec![Some(b"abc".to_vec()), Some(b"abc".to_vec())]),
+                        VectorValue::Real(vec![Real::new(-5.0).ok(), Real::new(-5.0).ok()]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
+    }
 }

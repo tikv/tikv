@@ -109,8 +109,17 @@ pub struct Entities<Src: BatchExecutor> {
     pub all_result_column_types: Vec<EvalType>,
 }
 
-impl<Src: BatchExecutor> Entities<Src> {
+/// A shared executor implementation for simple aggregation, hash aggregation and
+/// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
+pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
+    imp: I,
+    is_ended: bool,
+    entities: Entities<Src>,
+}
+
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
     pub fn new(
+        mut imp: I,
         src: Src,
         config: Arc<EvalConfig>,
         aggr_defs: Vec<Expr>,
@@ -157,7 +166,7 @@ impl<Src: BatchExecutor> Entities<Src> {
             })
             .collect();
 
-        Ok(Entities {
+        let mut entities = Entities {
             src,
             context: EvalContext::new(config),
             schema,
@@ -165,27 +174,7 @@ impl<Src: BatchExecutor> Entities<Src> {
             each_aggr_cardinality,
             each_aggr_exprs,
             all_result_column_types,
-        })
-    }
-}
-
-/// A shared executor implementation for simple aggregation, hash aggregation and
-/// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
-pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
-    imp: I,
-    is_ended: bool,
-    entities: Entities<Src>,
-}
-
-impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
-    pub fn new(
-        mut imp: I,
-        src: Src,
-        config: Arc<EvalConfig>,
-        aggr_defs: Vec<Expr>,
-        aggr_def_parser: impl AggrDefinitionParser,
-    ) -> Result<Self> {
-        let mut entities = Entities::new(src, config, aggr_defs, aggr_def_parser)?;
+        };
         imp.prepare_entities(&mut entities);
 
         Ok(Self {
@@ -196,7 +185,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     }
 
     #[inline]
-    fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
+    fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
         let src_result = self
@@ -217,11 +206,11 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 .process_batch_input(&mut self.entities, src_result.data)?;
         }
 
-        // Aggregate results when possible, otherwise just return nothing.
+        // Aggregate results if source executor is drained, otherwise just return nothing.
         if self.imp.can_aggregate(src_is_drained) {
-            Ok(Some(self.aggregate(src_is_drained)?))
+            Ok((Some(self.aggregate(src_is_drained)?), src_is_drained))
         } else {
-            Ok(None)
+            Ok((None, src_is_drained))
         }
     }
 
@@ -298,21 +287,22 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
                     is_drained: Err(e),
                 }
             }
-            Ok(None) => {
-                // When there is no error and is not drained, we also return empty data.
+            Ok((None, src_is_drained)) => {
+                self.is_ended = src_is_drained;
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::empty(),
                     warnings: self.entities.context.take_warnings(),
-                    is_drained: Ok(false),
+                    is_drained: Ok(src_is_drained),
                 }
             }
-            Ok(Some(data)) => {
-                // When there is no error and aggregate finished, we return it as data.
-                self.is_ended = true;
+            Ok((Some(data), src_is_drained)) => {
+                // When there is no error and there are some aggregation results,
+                // we return them as data.
+                self.is_ended = src_is_drained;
                 BatchExecuteResult {
                     data,
                     warnings: self.entities.context.take_warnings(),
-                    is_drained: Ok(true),
+                    is_drained: Ok(src_is_drained),
                 }
             }
         }
