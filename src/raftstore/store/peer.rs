@@ -1270,29 +1270,21 @@ impl Peer {
     fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
-                let (read_index, is_read_index_request) = {
-                    let read = self.pending_reads.reads.front().unwrap();
-                    if read.cmds.len() == 1
-                        && read.cmds[0].0.get_requests().len() == 1
-                        && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex
-                    {
-                        (read.read_index, true)
-                    } else {
-                        (read.read_index, false)
-                    }
-                };
-
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                let is_read_index_request = read.cmds.len() == 1
+                    && read.cmds[0].0.get_requests().len() == 1
+                    && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
+
                 if !is_read_index_request {
                     let term = self.term();
                     // Only read index request is valid.
                     for (_, cb) in read.cmds.drain(..) {
                         apply::notify_stale_req(term, cb);
                     }
-                    continue;
-                }
-                for (req, cb) in read.cmds.drain(..) {
-                    cb.invoke_read(self.handle_read(ctx, req, true, read_index));
+                } else {
+                    for (req, cb) in read.cmds.drain(..) {
+                        cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
+                    }
                 }
                 self.pending_reads.ready_cnt -= 1;
             }
@@ -1807,7 +1799,7 @@ impl Peer {
                     }
                 }
                 // If the current lease is suspect, new read requests can't be appended into
-                // `pending_reads` because if the leader is transfered, the latest read could
+                // `pending_reads` because if the leader is transferred, the latest read could
                 // be dirty.
                 _ => {}
             }
