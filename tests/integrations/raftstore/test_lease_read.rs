@@ -419,7 +419,7 @@ fn test_local_read_cache() {
 
     let r1 = cluster.get_region(b"k1");
     let leader = cluster.leader_of_region(r1.get_id()).unwrap();
-    let new_leader = new_peer(4 - leader.get_id(), 4 - leader.get_id());
+    let new_leader = new_peer((leader.get_id() + 1) % 3 + 1, (leader.get_id() + 1) % 3 + 1);
     cluster.must_transfer_leader(r1.get_id(), new_leader);
 
     // Add the peer back and make sure it catches up latest logs.
