@@ -321,7 +321,7 @@ fn update_current_states(
     context: &mut EvalContext,
     states: &mut [Box<dyn AggrFunctionState>],
     aggr_fn_len: usize,
-    aggr_expr_results: &[RpnStackNode],
+    aggr_expr_results: &[RpnStackNode<'_>],
     start_row: usize,
     end_row: usize,
 ) -> Result<()> {

@@ -153,6 +153,7 @@ impl From<f64> for ScalarValue {
 
 impl<'a> From<ScalarValueRef<'a>> for ScalarValue {
     #[inline]
+    #[allow(clippy::clone_on_copy)]
     fn from(s: ScalarValueRef<'a>) -> ScalarValue {
         match_template_evaluable! {
             TT, match s {
