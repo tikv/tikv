@@ -119,7 +119,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         assert!(aggr_fn_len > 0);
 
         let src_schema = src.schema();
-        let src_schema_len = src_schema.len();
 
         let mut schema = Vec::with_capacity(aggr_fn_len * 2);
         let mut each_aggr_fn = Vec::with_capacity(aggr_fn_len);
@@ -133,7 +132,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             let aggr_fn = aggr_def_parser.parse(
                 aggr_def,
                 &config.tz,
-                src_schema_len,
+                src_schema,
                 &mut schema,
                 &mut each_aggr_exprs,
             )?;
