@@ -136,9 +136,6 @@ test:
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
 
-bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
-
 unset-override:
 	@# unset first in case of any previous overrides
 	@if rustup override list | grep `pwd` > /dev/null; then rustup override unset; fi

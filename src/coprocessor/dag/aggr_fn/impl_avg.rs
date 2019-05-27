@@ -14,7 +14,7 @@ use crate::coprocessor::{Error, Result};
 /// The parser for AVG aggregate function.
 pub struct AggrFnDefinitionParserAvg;
 
-impl super::parser::Parser for AggrFnDefinitionParserAvg {
+impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         use cop_datatype::FieldTypeAccessor;
         use std::convert::TryFrom;
@@ -140,7 +140,6 @@ where
     VectorValue: VectorValueExt<T>,
 {
     type ParameterType = T;
-    type ResultTargetType = [VectorValue];
 
     #[inline]
     fn update_concrete(&mut self, ctx: &mut EvalContext, value: &Option<T>) -> Result<()> {
@@ -155,11 +154,7 @@ where
     }
 
     #[inline]
-    fn push_result_concrete(
-        &self,
-        _ctx: &mut EvalContext,
-        target: &mut [VectorValue],
-    ) -> Result<()> {
+    fn push_result(&self, _ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
         // Note: The result of `AVG()` is returned as `(count, sum)`.
         assert_eq!(target.len(), 2);
         target[0].push_int(Some(self.count as Int));
@@ -180,7 +175,7 @@ mod tests {
     #[test]
     fn test_update() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnAvg::<f64>::new();
+        let function = AggrFnAvg::<Real>::new();
         let mut state = function.create_state();
 
         let mut result = [
@@ -197,16 +192,19 @@ mod tests {
         assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0)]);
         assert_eq!(result[1].as_real_slice(), &[None, None]);
 
-        state.update(&mut ctx, &Some(5.0)).unwrap();
+        state.update(&mut ctx, &Real::new(5.0).ok()).unwrap();
         state.update(&mut ctx, &Option::<Real>::None).unwrap();
-        state.update(&mut ctx, &Some(10.0)).unwrap();
+        state.update(&mut ctx, &Real::new(10.0).ok()).unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
         assert_eq!(result[0].as_int_slice(), &[Some(0), Some(0), Some(2)]);
-        assert_eq!(result[1].as_real_slice(), &[None, None, Some(15.0)]);
+        assert_eq!(
+            result[1].as_real_slice(),
+            &[None, None, Real::new(15.0).ok()]
+        );
 
         state
-            .update_vector(&mut ctx, &[Some(0.0), Some(-4.5), None])
+            .update_vector(&mut ctx, &[Real::new(0.0).ok(), Real::new(-4.5).ok(), None])
             .unwrap();
 
         state.push_result(&mut ctx, &mut result[..]).unwrap();
@@ -216,7 +214,7 @@ mod tests {
         );
         assert_eq!(
             result[1].as_real_slice(),
-            &[None, None, Some(15.0), Some(10.5)]
+            &[None, None, Real::new(15.0).ok(), Real::new(10.5).ok()]
         );
     }
 }
