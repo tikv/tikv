@@ -270,10 +270,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let keys_range = ..number_of_groups * group_by_exps_len;
         let states_range = ..number_of_groups * aggr_fns_len;
 
-        for states in self.states[states_range].chunks_exact(aggr_fns_len) {
-            iteratee(entities, states)?;
+        if aggr_fns_len > 0 {
+            for states in self.states[states_range].chunks_exact(aggr_fns_len) {
+                iteratee(entities, states)?;
+            }
+            self.states.drain(states_range);
         }
-        self.states.drain(states_range);
 
         for (key, group_index) in self
             .keys
@@ -329,6 +331,10 @@ fn update_current_states(
     start_row: usize,
     end_row: usize,
 ) -> Result<()> {
+    if aggr_fn_len == 0 {
+        return Ok(());
+    }
+
     if let Some(current_states) = states.rchunks_exact_mut(aggr_fn_len).next() {
         for (state, aggr_fn_input) in current_states.iter_mut().zip(aggr_expr_results) {
             match aggr_fn_input {
