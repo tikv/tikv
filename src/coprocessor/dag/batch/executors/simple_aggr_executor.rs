@@ -13,18 +13,15 @@ use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::Result;
 
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SimpleAggregationImpl>,
+pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SimpleAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSimpleAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,7 +38,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -49,7 +46,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             aggr_defs,
@@ -59,7 +55,7 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
     }
 }
 
-impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -72,25 +68,13 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor<C, Src> {
-    pub fn new(
-        summary_collector: C,
-        config: Arc<EvalConfig>,
-        src: Src,
-        aggr_defs: Vec<Expr>,
-    ) -> Result<Self> {
-        Self::new_impl(
-            summary_collector,
-            config,
-            src,
-            aggr_defs,
-            AllAggrDefinitionParser,
-        )
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, aggr_defs: Vec<Expr>) -> Result<Self> {
+        Self::new_impl(config, src, aggr_defs, AllAggrDefinitionParser)
     }
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         aggr_defs: Vec<Expr>,
@@ -101,7 +85,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -194,70 +177,10 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::mysql::Tz;
+    use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
     use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-
-    /// Builds an executor that will return these data:
-    ///
-    /// == Schema ==
-    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
-    /// == Call #1 ==
-    /// NULL         1.0         abc         1
-    /// 7.0          2.0         NULL        NULL
-    /// NULL         NULL        ""          NULL
-    /// NULL         4.5         HelloWorld  NULL
-    /// == Call #2 ==
-    /// == Call #3 ==
-    /// 1.5          4.5         aaaaa       5
-    /// (drained)
-    fn make_src_executor_using_fixture() -> MockExecutor {
-        MockExecutor::new(
-            vec![
-                FieldTypeTp::Double.into(), // this column is not used
-                FieldTypeTp::Double.into(),
-                FieldTypeTp::VarString.into(),
-                FieldTypeTp::LongLong.into(), // this column is not used
-            ],
-            vec![
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
-                        VectorValue::Real(vec![
-                            Real::new(1.0).ok(),
-                            Real::new(2.0).ok(),
-                            None,
-                            Real::new(4.5).ok(),
-                        ]),
-                        VectorValue::Bytes(vec![
-                            Some(b"abc".to_vec()),
-                            None,
-                            Some(vec![]),
-                            Some(b"HelloWorld".to_vec()),
-                        ]),
-                        VectorValue::Int(vec![Some(1), None, None, None]),
-                    ]),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
-                },
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(false),
-                },
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::from(vec![
-                        VectorValue::Real(vec![Real::new(1.5).ok()]),
-                        VectorValue::Real(vec![Real::new(4.5).ok()]),
-                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
-                        VectorValue::Int(vec![Some(5)]),
-                    ]),
-                    warnings: EvalWarnings::default(),
-                    is_drained: Ok(true),
-                },
-            ],
-        )
-    }
 
     #[test]
     fn test_it_works_unit() {
@@ -376,7 +299,7 @@ mod tests {
         // - Bar(col_1)
         // As a result, there should be 12 output columns.
 
-        let src_exec = make_src_executor_using_fixture();
+        let src_exec = make_src_executor_1();
 
         // As a unit test, let's use the most simple way to build the executor. No complex parsers
         // involved.
@@ -515,7 +438,7 @@ mod tests {
         // - AVG(col_0)
         // As a result, there should be 10 output columns.
 
-        let src_exec = make_src_executor_using_fixture();
+        let src_exec = make_src_executor_1();
         let aggr_definitions = vec![
             ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::constant_int(1))

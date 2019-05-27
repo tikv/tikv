@@ -101,22 +101,14 @@ pub struct Entities<Src: BatchExecutor> {
 
 /// A shared executor implementation for simple aggregation, hash aggregation and
 /// stream aggregation. Implementation differences are further given via `AggregationExecutorImpl`.
-pub struct AggregationExecutor<
-    C: ExecSummaryCollector,
-    Src: BatchExecutor,
-    I: AggregationExecutorImpl<Src>,
-> {
-    summary_collector: C,
+pub struct AggregationExecutor<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> {
     imp: I,
     is_ended: bool,
     entities: Entities<Src>,
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>>
-    AggregationExecutor<C, Src, I>
-{
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Src, I> {
     pub fn new(
-        summary_collector: C,
         mut imp: I,
         src: Src,
         config: Arc<EvalConfig>,
@@ -176,7 +168,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
         imp.prepare_entities(&mut entities);
 
         Ok(Self {
-            summary_collector,
             imp,
             is_ended: false,
             entities,
@@ -261,8 +252,8 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
-    for AggregationExecutor<C, Src, I>
+impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
+    for AggregationExecutor<Src, I>
 {
     #[inline]
     fn schema(&self) -> &[FieldType] {
@@ -273,10 +264,9 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 
-        let timer = self.summary_collector.on_start_iterate();
         let result = self.handle_next_batch();
 
-        let ret = match result {
+        match result {
             Err(e) => {
                 // When there are error, we can just return empty data.
                 self.is_ended = true;
@@ -303,17 +293,110 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor, I: AggregationExecutorImpl<Src
                     is_drained: Ok(true),
                 }
             }
-        };
-
-        self.summary_collector
-            .on_finish_iterate(timer, ret.data.rows_len());
-        ret
+        }
     }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.entities.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
+    }
+}
+
+/// Shared test facilities for different aggregation executors.
+#[cfg(test)]
+pub mod tests {
+    use cop_codegen::AggrFunction;
+    use cop_datatype::FieldTypeTp;
+
+    use crate::coprocessor::codec::batch::LazyBatchColumnVec;
+    use crate::coprocessor::codec::data_type::*;
+    use crate::coprocessor::dag::aggr_fn::*;
+    use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
+    use crate::coprocessor::dag::batch::interface::*;
+    use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
+    use crate::coprocessor::Result;
+
+    #[derive(Debug, AggrFunction)]
+    #[aggr_function(state = AggrFnUnreachableState)]
+    pub struct AggrFnUnreachable;
+
+    #[derive(Debug)]
+    pub struct AggrFnUnreachableState;
+
+    impl ConcreteAggrFunctionState for AggrFnUnreachableState {
+        type ParameterType = Real;
+
+        fn update_concrete(
+            &mut self,
+            _ctx: &mut EvalContext,
+            _value: &Option<Self::ParameterType>,
+        ) -> Result<()> {
+            unreachable!()
+        }
+
+        fn push_result(&self, _ctx: &mut EvalContext, _target: &mut [VectorValue]) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    /// Builds an executor that will return these data:
+    ///
+    /// == Schema ==
+    /// Col0(Real)   Col1(Real)  Col2(Bytes) Col3(Int)
+    /// == Call #1 ==
+    /// NULL         1.0         abc         1
+    /// 7.0          2.0         NULL        NULL
+    /// NULL         NULL        ""          NULL
+    /// NULL         4.5         HelloWorld  NULL
+    /// == Call #2 ==
+    /// == Call #3 ==
+    /// 1.5          4.5         aaaaa       5
+    /// (drained)
+    pub fn make_src_executor_1() -> MockExecutor {
+        MockExecutor::new(
+            vec![
+                FieldTypeTp::Double.into(), // this column is not used
+                FieldTypeTp::Double.into(),
+                FieldTypeTp::VarString.into(),
+                FieldTypeTp::LongLong.into(), // this column is not used
+            ],
+            vec![
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![None, Real::new(7.0).ok(), None, None]),
+                        VectorValue::Real(vec![
+                            Real::new(1.0).ok(),
+                            Real::new(2.0).ok(),
+                            None,
+                            Real::new(4.5).ok(),
+                        ]),
+                        VectorValue::Bytes(vec![
+                            Some(b"abc".to_vec()),
+                            None,
+                            Some(vec![]),
+                            Some(b"HelloWorld".to_vec()),
+                        ]),
+                        VectorValue::Int(vec![Some(1), None, None, None]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::empty(),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(false),
+                },
+                BatchExecuteResult {
+                    data: LazyBatchColumnVec::from(vec![
+                        VectorValue::Real(vec![Real::new(1.5).ok()]),
+                        VectorValue::Real(vec![Real::new(4.5).ok()]),
+                        VectorValue::Bytes(vec![Some(b"aaaaa".to_vec())]),
+                        VectorValue::Int(vec![Some(5)]),
+                    ]),
+                    warnings: EvalWarnings::default(),
+                    is_drained: Ok(true),
+                },
+            ],
+        )
     }
 }

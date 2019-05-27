@@ -30,9 +30,11 @@ use crate::raftstore::store::fsm::metrics::*;
 use crate::raftstore::store::fsm::peer::{
     maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate,
 };
+#[cfg(not(feature = "no-fail"))]
+use crate::raftstore::store::fsm::ApplyTaskRes;
 use crate::raftstore::store::fsm::{
     batch, create_apply_batch_system, ApplyBatchSystem, ApplyPollerBuilder, ApplyRouter, ApplyTask,
-    ApplyTaskRes, BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
+    BasicMailbox, BatchRouter, BatchSystem, HandlerBuilder,
 };
 use crate::raftstore::store::fsm::{ApplyNotifier, Fsm, PollHandler, RegionProposal};
 use crate::raftstore::store::keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
@@ -43,8 +45,8 @@ use crate::raftstore::store::transport::Transport;
 use crate::raftstore::store::util::is_initial_msg;
 use crate::raftstore::store::worker::{
     CleanupSSTRunner, CleanupSSTTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-    ConsistencyCheckTask, LocalReader, RaftlogGcRunner, RaftlogGcTask, ReadTask, RegionRunner,
-    RegionTask, SplitCheckRunner, SplitCheckTask,
+    ConsistencyCheckTask, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RegionRunner, RegionTask,
+    SplitCheckRunner, SplitCheckTask,
 };
 use crate::raftstore::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
@@ -65,7 +67,7 @@ type Key = Vec<u8>;
 
 const KV_WB_SHRINK_SIZE: usize = 256 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 1024 * 1024;
-const PENDING_VOTES_CAP: usize = 20;
+pub const PENDING_VOTES_CAP: usize = 20;
 const UNREACHABLE_BACKOFF: Duration = Duration::from_secs(10);
 
 pub struct StoreInfo {
@@ -74,10 +76,14 @@ pub struct StoreInfo {
 }
 
 pub struct StoreMeta {
+    /// store id
+    pub store_id: Option<u64>,
     /// region_end_key -> region_id
     pub region_ranges: BTreeMap<Vec<u8>, u64>,
     /// region_id -> region
     pub regions: HashMap<u64, Region>,
+    /// region_id -> reader
+    pub readers: HashMap<u64, ReadDelegate>,
     /// `MsgRequestPreVote` or `MsgRequestVote` messages from newly split Regions shouldn't be dropped if there is no
     /// such Region in this store now. So the messages are recorded temporarily and will be handled later.
     pub pending_votes: RingQueue<RaftMessage>,
@@ -97,10 +103,12 @@ pub struct StoreMeta {
 }
 
 impl StoreMeta {
-    fn new(vote_capacity: usize) -> StoreMeta {
+    pub fn new(vote_capacity: usize) -> StoreMeta {
         StoreMeta {
+            store_id: None,
             region_ranges: BTreeMap::default(),
             regions: HashMap::default(),
+            readers: HashMap::default(),
             pending_votes: RingQueue::with_capacity(vote_capacity),
             pending_snapshot_regions: Vec::default(),
             pending_merge_targets: HashMap::default(),
@@ -113,7 +121,6 @@ impl StoreMeta {
     pub fn set_region(
         &mut self,
         host: &CoprocessorHost,
-        reader: &Scheduler<ReadTask>,
         region: Region,
         peer: &mut crate::raftstore::store::Peer,
     ) {
@@ -122,6 +129,7 @@ impl StoreMeta {
             // TODO: may not be a good idea to panic when holding a lock.
             panic!("{} region corrupted", peer.tag);
         }
+        let reader = self.readers.get_mut(&region.get_id()).unwrap();
         peer.set_region(host, reader, region);
     }
 }
@@ -186,7 +194,6 @@ pub struct PollContext<T, C: 'static> {
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     pub cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
-    pub local_reader: Scheduler<ReadTask>,
     pub region_scheduler: Scheduler<RegionTask>,
     pub apply_router: ApplyRouter,
     pub router: RaftRouter,
@@ -669,7 +676,6 @@ pub struct RaftPollerBuilder<T, C> {
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_sst_scheduler: Scheduler<CleanupSSTTask>,
-    local_reader: Scheduler<ReadTask>,
     pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter,
     pub router: RaftRouter,
@@ -866,7 +872,6 @@ where
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             cleanup_sst_scheduler: self.cleanup_sst_scheduler.clone(),
-            local_reader: self.local_reader.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -913,7 +918,6 @@ struct Workers {
     consistency_check_worker: Worker<ConsistencyCheckTask>,
     split_check_worker: Worker<SplitCheckTask>,
     cleanup_sst_worker: Worker<CleanupSSTTask>,
-    local_reader: Worker<ReadTask>,
     region_worker: Worker<RegionTask>,
     compact_worker: Worker<CompactTask>,
     coprocessor_host: Arc<CoprocessorHost>,
@@ -942,7 +946,7 @@ impl RaftBatchSystem {
         pd_client: Arc<C>,
         mgr: SnapManager,
         pd_worker: FutureWorker<PdTask>,
-        local_reader: Worker<ReadTask>,
+        store_meta: Arc<Mutex<StoreMeta>>,
         mut coprocessor_host: CoprocessorHost,
         importer: Arc<SSTImporter>,
     ) -> Result<()> {
@@ -961,7 +965,6 @@ impl RaftBatchSystem {
             raftlog_gc_worker: Worker::new("raft-gc-worker"),
             compact_worker: Worker::new("compact-worker"),
             pd_worker,
-            local_reader,
             consistency_check_worker: Worker::new("consistency-check"),
             cleanup_sst_worker: Worker::new("cleanup-sst"),
             coprocessor_host: Arc::new(coprocessor_host),
@@ -983,14 +986,13 @@ impl RaftBatchSystem {
             consistency_check_scheduler: workers.consistency_check_worker.scheduler(),
             cleanup_sst_scheduler: workers.cleanup_sst_worker.scheduler(),
             apply_router: self.apply_router.clone(),
-            local_reader: workers.local_reader.scheduler(),
             trans,
             pd_client,
             coprocessor_host: workers.coprocessor_host.clone(),
             importer,
             snap_mgr: mgr,
             global_stat: GlobalStoreStat::default(),
-            store_meta: Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP))),
+            store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
         };
@@ -1022,6 +1024,15 @@ impl RaftBatchSystem {
         self.apply_system
             .schedule_all(region_peers.iter().map(|pair| pair.1.get_peer()));
 
+        {
+            let mut meta = builder.store_meta.lock().unwrap();
+            for (_, peer_fsm) in &region_peers {
+                let peer = peer_fsm.get_peer();
+                meta.readers
+                    .insert(peer_fsm.region_id(), ReadDelegate::from_peer(peer));
+            }
+        }
+
         let router = Mutex::new(self.router.clone());
         pd_client.handle_reconnect(move || {
             router
@@ -1029,8 +1040,6 @@ impl RaftBatchSystem {
                 .unwrap()
                 .broadcast_normal(|| PeerMsg::HeartbeatPd);
         });
-
-        let reader = LocalReader::new(&builder, region_peers.iter().map(|pair| pair.1.get_peer()));
 
         let tag = format!("raftstore-{}", store.get_id());
         self.system.spawn(tag, builder);
@@ -1053,15 +1062,12 @@ impl RaftBatchSystem {
 
         self.apply_system
             .spawn("apply".to_owned(), apply_poller_builder);
-        let timer = LocalReader::new_timer();
-        box_try!(workers.local_reader.start_with_timer(reader, timer));
 
         let split_check_runner = SplitCheckRunner::new(
             Arc::clone(&engines.kv),
             self.router.clone(),
             Arc::clone(&workers.coprocessor_host),
         );
-
         box_try!(workers.split_check_worker.start(split_check_runner));
 
         let region_runner = RegionRunner::new(
@@ -1124,7 +1130,6 @@ impl RaftBatchSystem {
         handles.push(workers.pd_worker.stop());
         handles.push(workers.consistency_check_worker.stop());
         handles.push(workers.cleanup_sst_worker.stop());
-        handles.push(workers.local_reader.stop());
         self.apply_system.shutdown();
         self.system.shutdown();
         for h in handles {
