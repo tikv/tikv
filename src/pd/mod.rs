@@ -105,7 +105,7 @@ pub trait PdClient: Send + Sync {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store>;
 
     /// Gets all stores information.
-    fn get_all_stores(&self, _exlcude_tombstone: bool) -> Result<Vec<metapb::Store>> {
+    fn get_all_stores(&self, _exclude_tombstone: bool) -> Result<Vec<metapb::Store>> {
         unimplemented!();
     }
 
