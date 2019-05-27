@@ -19,6 +19,9 @@
 //!
 //! Please refer to `Endpoint` for more details.
 
+#[macro_use]
+mod macros;
+
 mod checksum;
 pub mod codec;
 pub mod dag;

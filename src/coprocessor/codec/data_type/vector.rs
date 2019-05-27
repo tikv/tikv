@@ -27,49 +27,13 @@ pub enum VectorValue {
     Json(Vec<Option<Json>>),
 }
 
-macro_rules! match_self {
-    (ref $self:ident, $var:ident, $expr:expr) => {{
-        match_self!(INTERNAL ref, $self, $var, $expr)
-    }};
-    (ref mut $self:ident, $var:ident, $expr:expr) => {{
-        match_self!(INTERNAL ref|mut, $self, $var, $expr)
-    }};
-    (INTERNAL $($ref:tt)|+, $self:ident, $var:ident, $expr:expr) => {{
-        match $self {
-            VectorValue::Int($($ref)+ $var) => $expr,
-            VectorValue::Real($($ref)+ $var) => $expr,
-            VectorValue::Decimal($($ref)+ $var) => $expr,
-            VectorValue::Bytes($($ref)+ $var) => $expr,
-            VectorValue::DateTime($($ref)+ $var) => $expr,
-            VectorValue::Duration($($ref)+ $var) => $expr,
-            VectorValue::Json($($ref)+ $var) => $expr,
-        }
-    }};
-}
-
 impl Clone for VectorValue {
     #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
-        match self {
-            VectorValue::Int(ref vec) => VectorValue::Int(tikv_util::vec_clone_with_capacity(vec)),
-            VectorValue::Real(ref vec) => {
-                VectorValue::Real(tikv_util::vec_clone_with_capacity(vec))
-            }
-            VectorValue::Decimal(ref vec) => {
-                VectorValue::Decimal(tikv_util::vec_clone_with_capacity(vec))
-            }
-            VectorValue::Bytes(ref vec) => {
-                VectorValue::Bytes(tikv_util::vec_clone_with_capacity(vec))
-            }
-            VectorValue::DateTime(ref vec) => {
-                VectorValue::DateTime(tikv_util::vec_clone_with_capacity(vec))
-            }
-            VectorValue::Duration(ref vec) => {
-                VectorValue::Duration(tikv_util::vec_clone_with_capacity(vec))
-            }
-            VectorValue::Json(ref vec) => {
-                VectorValue::Json(tikv_util::vec_clone_with_capacity(vec))
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(vec) => VectorValue::TT(tikv_util::vec_clone_with_capacity(vec)),
             }
         }
     }
@@ -80,35 +44,31 @@ impl VectorValue {
     /// to `capacity`.
     #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
-        match eval_tp {
-            EvalType::Int => VectorValue::Int(Vec::with_capacity(capacity)),
-            EvalType::Real => VectorValue::Real(Vec::with_capacity(capacity)),
-            EvalType::Decimal => VectorValue::Decimal(Vec::with_capacity(capacity)),
-            EvalType::Bytes => VectorValue::Bytes(Vec::with_capacity(capacity)),
-            EvalType::DateTime => VectorValue::DateTime(Vec::with_capacity(capacity)),
-            EvalType::Duration => VectorValue::Duration(Vec::with_capacity(capacity)),
-            EvalType::Json => VectorValue::Json(Vec::with_capacity(capacity)),
+        match_template_evaluable! {
+            TT, match eval_tp {
+                EvalType::TT => VectorValue::TT(Vec::with_capacity(capacity)),
+            }
         }
     }
 
     /// Returns the `EvalType` used to construct current column.
     #[inline]
     pub fn eval_type(&self) -> EvalType {
-        match self {
-            VectorValue::Int(_) => EvalType::Int,
-            VectorValue::Real(_) => EvalType::Real,
-            VectorValue::Decimal(_) => EvalType::Decimal,
-            VectorValue::Bytes(_) => EvalType::Bytes,
-            VectorValue::DateTime(_) => EvalType::DateTime,
-            VectorValue::Duration(_) => EvalType::Duration,
-            VectorValue::Json(_) => EvalType::Json,
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(_) => EvalType::TT,
+            }
         }
     }
 
     /// Returns the number of datums contained in this column.
     #[inline]
     pub fn len(&self) -> usize {
-        match_self!(ref self, v, v.len())
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => v.len(),
+            }
+        }
     }
 
     /// Returns whether this column is empty.
@@ -124,7 +84,11 @@ impl VectorValue {
     /// If `len` is greater than the column's current length, this has no effect.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        match_self!(ref mut self, v, v.truncate(len));
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => v.truncate(len),
+            }
+        }
     }
 
     /// Clears the column, removing all datums.
@@ -136,7 +100,11 @@ impl VectorValue {
     /// Returns the number of elements this column can hold without reallocating.
     #[inline]
     pub fn capacity(&self) -> usize {
-        match_self!(ref self, v, v.capacity())
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => v.capacity(),
+            }
+        }
     }
 
     /// Retains only the elements specified by the predicate, which accepts index only.
@@ -147,14 +115,18 @@ impl VectorValue {
     where
         F: FnMut(usize) -> bool,
     {
-        match_self!(ref mut self, v, {
-            let mut idx = 0;
-            v.retain(|_| {
-                let r = f(idx);
-                idx += 1;
-                r
-            });
-        });
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => {
+                    let mut idx = 0;
+                    v.retain(|_| {
+                        let r = f(idx);
+                        idx += 1;
+                        r
+                    });
+                },
+            }
+        }
     }
 
     /// Moves all the elements of `other` into `Self`, leaving `other` empty.
@@ -164,49 +136,15 @@ impl VectorValue {
     /// Panics if `other` does not have the same `EvalType` as `Self`.
     #[inline]
     pub fn append(&mut self, other: &mut VectorValue) {
-        match self {
-            VectorValue::Int(ref mut self_vec) => match other {
-                VectorValue::Int(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Int vector", other.eval_type()),
-            },
-            VectorValue::Real(ref mut self_vec) => match other {
-                VectorValue::Real(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Real vector", other.eval_type()),
-            },
-            VectorValue::Decimal(ref mut self_vec) => match other {
-                VectorValue::Decimal(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Decimal vector", other.eval_type()),
-            },
-            VectorValue::Bytes(ref mut self_vec) => match other {
-                VectorValue::Bytes(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Bytes vector", other.eval_type()),
-            },
-            VectorValue::DateTime(ref mut self_vec) => match other {
-                VectorValue::DateTime(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to DateTime vector", other.eval_type()),
-            },
-            VectorValue::Duration(ref mut self_vec) => match other {
-                VectorValue::Duration(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Duration vector", other.eval_type()),
-            },
-            VectorValue::Json(ref mut self_vec) => match other {
-                VectorValue::Json(ref mut other_vec) => {
-                    self_vec.append(other_vec);
-                }
-                other => panic!("Cannot append {} to Json vector", other.eval_type()),
-            },
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(self_vec) => match other {
+                    VectorValue::TT(other_vec) => {
+                        self_vec.append(other_vec);
+                    }
+                    other => panic!("Cannot append {} to {} vector", other.eval_type(), self.eval_type())
+                },
+            }
         }
     }
 
@@ -224,12 +162,16 @@ impl VectorValue {
         outputs: &mut [bool],
     ) -> crate::coprocessor::Result<()> {
         assert!(outputs.len() >= self.len());
-        match_self!(ref self, v, {
-            let l = self.len();
-            for i in 0..l {
-                outputs[i] = v[i].as_mysql_bool(context)?;
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => {
+                    let l = self.len();
+                    for i in 0..l {
+                        outputs[i] = v[i].as_mysql_bool(context)?;
+                    }
+                },
             }
-        });
+        }
         Ok(())
     }
 
@@ -364,7 +306,7 @@ impl VectorValue {
                     if tp == FieldTypeTp::Float {
                         v = (v as f32) as f64;
                     }
-                    vec.push(Some(v));
+                    vec.push(Real::new(v).ok()); // NaN to None
                 }
                 flag => {
                     return Err(Error::InvalidDataType(format!(
@@ -552,7 +494,7 @@ impl VectorValue {
                     }
                     Some(val) => {
                         output.push(datum::FLOAT_FLAG);
-                        output.encode_f64(val)?;
+                        output.encode_f64(val.into_inner())?;
                     }
                 }
                 Ok(())
@@ -633,7 +575,7 @@ macro_rules! impl_as_slice {
             #[inline]
             pub fn $name(&self) -> &[Option<$ty>] {
                 match self {
-                    VectorValue::$ty(ref vec) => vec.as_slice(),
+                    VectorValue::$ty(vec) => vec.as_slice(),
                     other => panic!(
                         "Cannot call `{}` over a {} column",
                         stringify!($name),
@@ -777,11 +719,11 @@ mod tests {
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
-        column.push_real(Some(1.0));
+        column.push_real(Real::new(1.0).ok());
         assert_eq!(column.len(), 1);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0)]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok()]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -789,15 +731,18 @@ mod tests {
         assert_eq!(column.len(), 2);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
-        column.push_real(Some(4.5));
+        column.push_real(Real::new(4.5).ok());
         assert_eq!(column.len(), 3);
         assert_eq!(column.capacity(), 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[Real::new(1.0).ok(), None, Real::new(4.5).ok()]
+        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -805,7 +750,10 @@ mod tests {
         assert_eq!(column.len(), 4);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None, Some(4.5), None]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[Real::new(1.0).ok(), None, Real::new(4.5).ok(), None]
+        );
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -813,7 +761,7 @@ mod tests {
         assert_eq!(column.len(), 2);
         assert!(column.capacity() > 3);
         assert!(!column.is_empty());
-        assert_eq!(column.as_real_slice(), &[Some(1.0), None]);
+        assert_eq!(column.as_real_slice(), &[Real::new(1.0).ok(), None]);
         assert_eq!(column.clone().capacity(), column.capacity());
         assert_eq!(column.clone().as_real_slice(), column.as_real_slice());
 
@@ -843,10 +791,10 @@ mod tests {
         assert_eq!(column.capacity(), 3);
 
         column.push_real(None);
-        column.push_real(Some(2.0));
-        column.push_real(Some(1.0));
+        column.push_real(Real::new(2.0).ok());
+        column.push_real(Real::new(1.0).ok());
         column.push_real(None);
-        column.push_real(Some(5.0));
+        column.push_real(Real::new(5.0).ok());
         column.push_real(None);
 
         let retain_map = &[true, true, false, false, true, false];
@@ -854,36 +802,53 @@ mod tests {
 
         assert_eq!(column.len(), 3);
         assert!(column.capacity() > 3);
-        assert_eq!(column.as_real_slice(), &[None, Some(2.0), Some(5.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(2.0).ok(), Real::new(5.0).ok()]
+        );
 
         column.push_real(None);
-        column.push_real(Some(1.5));
+        column.push_real(Real::new(1.5).ok());
         column.push_real(None);
-        column.push_real(Some(4.0));
+        column.push_real(Real::new(4.0).ok());
 
         assert_eq!(column.len(), 7);
         assert_eq!(
             column.as_real_slice(),
-            &[None, Some(2.0), Some(5.0), None, Some(1.5), None, Some(4.0)]
+            &[
+                None,
+                Real::new(2.0).ok(),
+                Real::new(5.0).ok(),
+                None,
+                Real::new(1.5).ok(),
+                None,
+                Real::new(4.0).ok()
+            ]
         );
 
         let retain_map = &[true, false, true, false, false, true, true];
         column.retain_by_index(|idx| retain_map[idx]);
 
         assert_eq!(column.len(), 4);
-        assert_eq!(column.as_real_slice(), &[None, Some(5.0), None, Some(4.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
+        );
 
         column.retain_by_index(|_| true);
         assert_eq!(column.len(), 4);
-        assert_eq!(column.as_real_slice(), &[None, Some(5.0), None, Some(4.0)]);
+        assert_eq!(
+            column.as_real_slice(),
+            &[None, Real::new(5.0).ok(), None, Real::new(4.0).ok()]
+        );
 
         column.retain_by_index(|_| false);
         assert_eq!(column.len(), 0);
         assert_eq!(column.as_real_slice(), &[]);
 
         column.push_real(None);
-        column.push_real(Some(1.5));
-        assert_eq!(column.as_real_slice(), &[None, Some(1.5)]);
+        column.push_real(Real::new(1.5).ok());
+        assert_eq!(column.as_real_slice(), &[None, Real::new(1.5).ok()]);
     }
 
     #[test]
@@ -897,28 +862,28 @@ mod tests {
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
 
-        column2.push_real(Some(1.0));
+        column2.push_real(Real::new(1.0).ok());
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
         assert_eq!(column1.capacity(), 0);
         assert_eq!(column1.as_real_slice(), &[]);
         assert_eq!(column2.len(), 1);
         assert_eq!(column2.capacity(), 3);
-        assert_eq!(column2.as_real_slice(), &[Some(1.0)]);
+        assert_eq!(column2.as_real_slice(), &[Real::new(1.0).ok()]);
 
         column1.push_real(None);
         column1.push_real(None);
         column1.append(&mut column2);
         assert_eq!(column1.len(), 3);
         assert!(column1.capacity() > 0);
-        assert_eq!(column1.as_real_slice(), &[None, None, Some(1.0)]);
+        assert_eq!(column1.as_real_slice(), &[None, None, Real::new(1.0).ok()]);
         assert_eq!(column2.len(), 0);
         assert_eq!(column2.capacity(), 3);
         assert_eq!(column2.as_real_slice(), &[]);
 
-        column1.push_real(Some(1.1));
-        column2.push_real(Some(3.5));
-        column2.push_real(Some(4.1));
+        column1.push_real(Real::new(1.1).ok());
+        column2.push_real(Real::new(3.5).ok());
+        column2.push_real(Real::new(4.1).ok());
         column2.truncate(1);
         column2.append(&mut column1);
         assert_eq!(column1.len(), 0);
@@ -928,13 +893,19 @@ mod tests {
         assert!(column2.capacity() > 3);
         assert_eq!(
             column2.as_real_slice(),
-            &[Some(3.5), None, None, Some(1.0), Some(1.1)]
+            &[
+                Real::new(3.5).ok(),
+                None,
+                None,
+                Real::new(1.0).ok(),
+                Real::new(1.1).ok()
+            ]
         );
     }
 
     #[test]
     fn test_from() {
-        let slice: &[_] = &[None, Some(1.0)];
+        let slice: &[_] = &[None, Real::new(1.0).ok()];
         let vec = slice.to_vec();
         let column = VectorValue::from(vec);
         assert_eq!(column.len(), 2);

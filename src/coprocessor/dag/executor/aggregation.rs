@@ -80,7 +80,7 @@ impl AggExecutor {
         aggr_func: Vec<Expr>,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<AggExecutor> {
+    ) -> Result<Self> {
         // collect all cols used in aggregation
         let mut visitor = ExprColumnRefVisitor::new(src.get_len_of_columns());
         visitor.batch_visit(&group_by)?;
@@ -162,7 +162,7 @@ impl HashAggExecutor {
         mut meta: Aggregation,
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
-    ) -> Result<HashAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let inner = AggExecutor::new(group_bys, aggs, eval_config, src)?;
@@ -246,16 +246,16 @@ impl Executor for HashAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
@@ -298,16 +298,16 @@ impl Executor for StreamAggExecutor {
         self.inner.collect_metrics_into(metrics)
     }
 
-    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
-        self.inner.take_eval_warnings()
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
     }
 
     fn get_len_of_columns(&self) -> usize {
         self.inner.get_len_of_columns()
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.inner.collect_execution_summaries(target);
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
     }
 }
 
@@ -329,7 +329,7 @@ impl StreamAggExecutor {
         eval_config: Arc<EvalConfig>,
         src: Box<dyn Executor + Send>,
         mut meta: Aggregation,
-    ) -> Result<StreamAggExecutor> {
+    ) -> Result<Self> {
         let group_bys = meta.take_group_by().into_vec();
         let aggs = meta.take_agg_func().into_vec();
         let group_len = group_bys.len();
@@ -413,7 +413,6 @@ mod tests {
     use crate::coprocessor::codec::datum::{self, Datum};
     use crate::coprocessor::codec::mysql::decimal::Decimal;
     use crate::coprocessor::codec::table;
-    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::coprocessor::dag::scanner::tests::Data;
     use crate::storage::SnapshotStore;
     use tikv_util::collections::HashMap;
@@ -507,15 +506,9 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -545,15 +538,9 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),
@@ -601,15 +588,9 @@ mod tests {
         let mut wrapper = IndexTestWrapper::new(unique, idx_data);
         let (snapshot, start_ts) = wrapper.store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        let is_executor = IndexScanExecutor::index_scan(
-            ExecSummaryCollectorDisabled,
-            wrapper.scan,
-            wrapper.ranges,
-            store,
-            unique,
-            true,
-        )
-        .unwrap();
+        let is_executor =
+            IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
+                .unwrap();
         // init the stream aggregation executor
         let mut agg_ect = StreamAggExecutor::new(
             Arc::new(EvalConfig::default()),

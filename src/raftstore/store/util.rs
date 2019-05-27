@@ -427,10 +427,7 @@ impl Lease {
             term,
         };
         // Clone the remote.
-        let remote_clone = RemoteLease {
-            expired_time: Arc::clone(&remote.expired_time),
-            term,
-        };
+        let remote_clone = remote.clone();
         self.remote = Some(remote);
         Some(remote_clone)
     }
@@ -450,6 +447,7 @@ impl fmt::Debug for Lease {
 /// A remote lease, it can only be derived by `Lease`. It will be sent
 /// to the local read thread, so name it remote. If Lease expires, the remote must
 /// expire too.
+#[derive(Clone)]
 pub struct RemoteLease {
     expired_time: Arc<AtomicU64>,
     term: u64,
