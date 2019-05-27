@@ -486,10 +486,10 @@ mod tests {
         assert_eq!(r.data.columns_len(), 2);
         assert!(!r.is_drained.unwrap());
         // col_0
-        assert_eq!(r.data[3].decoded().as_bytes_slice(), &[None, None]);
+        assert_eq!(r.data[0].decoded().as_bytes_slice(), &[None, None]);
         // col_1
         assert_eq!(
-            r.data[4].decoded().as_real_slice(),
+            r.data[1].decoded().as_real_slice(),
             &[None, Real::new(1.5).ok()]
         );
 
@@ -503,11 +503,11 @@ mod tests {
         assert!(r.is_drained.unwrap());
         // col_0
         assert_eq!(
-            r.data[3].decoded().as_bytes_slice(),
+            r.data[0].decoded().as_bytes_slice(),
             &[Some(b"abc".to_vec())]
         );
         // col_1
-        assert_eq!(r.data[4].decoded().as_real_slice(), &[Real::new(-5.0).ok()]);
+        assert_eq!(r.data[1].decoded().as_real_slice(), &[Real::new(-5.0).ok()]);
     }
 
     /// Builds an executor that will return these data:
