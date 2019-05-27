@@ -31,7 +31,7 @@ pub struct DAGBuilder;
 impl DAGBuilder {
     /// Given a list of executor descriptors and checks whether all executor descriptors can
     /// be used to build batch executors.
-    pub fn check_build_batch(exec_descriptors: &[executor::Executor]) -> Result<()> {
+    pub fn check_build_batch(exec_descriptors: &[executor::Executor], start_ts: u64) -> Result<()> {
         for ed in exec_descriptors {
             match ed.get_tp() {
                 ExecType::TypeTableScan => {
@@ -56,6 +56,12 @@ impl DAGBuilder {
                     if ed.get_aggregation().get_group_by().is_empty() =>
                 {
                     let descriptor = ed.get_aggregation();
+                    if descriptor.get_agg_func().is_empty() {
+                        panic!(
+                            "received 0 aggr fn (SimpleAggr), start_ts = {}, descriptors = {:?}",
+                            start_ts, exec_descriptors
+                        );
+                    }
                     BatchSimpleAggregationExecutor::check_supported(&descriptor).map_err(|e| {
                         Error::Other(box_err!(
                             "Unable to use BatchSimpleAggregationExecutor: {}",
@@ -65,6 +71,12 @@ impl DAGBuilder {
                 }
                 ExecType::TypeAggregation => {
                     let descriptor = ed.get_aggregation();
+                    if descriptor.get_agg_func().is_empty() {
+                        panic!(
+                            "received 0 aggr fn (HashAggr), start_ts = {}, descriptors = {:?}",
+                            start_ts, exec_descriptors
+                        );
+                    }
                     if BatchFastHashAggregationExecutor::check_supported(&descriptor).is_err() {
                         BatchSlowHashAggregationExecutor::check_supported(&descriptor).map_err(
                             |e| {
@@ -443,8 +455,10 @@ impl DAGBuilder {
 
         let mut is_batch = false;
         if enable_batch_if_possible && !is_streaming {
-            let build_batch_result =
-                super::builder::DAGBuilder::check_build_batch(req.get_executors());
+            let build_batch_result = super::builder::DAGBuilder::check_build_batch(
+                req.get_executors(),
+                req.get_start_ts(),
+            );
             if let Err(e) = build_batch_result {
                 info!("Coprocessor request cannot be batched"; "start_ts" => req.get_start_ts(), "reason" => %e);
             } else {
