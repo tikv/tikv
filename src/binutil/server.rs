@@ -410,7 +410,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 ///
 /// # Logs
 ///
-/// The presense of these environment variables that affect the database
+/// The presence of these environment variables that affect the database
 /// behavior is logged.
 ///
 /// - `GRPC_POLL_STRATEGY`
