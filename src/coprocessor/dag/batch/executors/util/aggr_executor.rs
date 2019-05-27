@@ -126,8 +126,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Result<Self> {
         let aggr_fn_len = aggr_defs.len();
-        assert!(aggr_fn_len > 0);
-
         let src_schema = src.schema();
         let src_schema_len = src_schema.len();
 

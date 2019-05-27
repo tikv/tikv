@@ -534,4 +534,72 @@ mod tests {
             assert!(r.is_drained.unwrap());
         }
     }
+
+    /// Only have GROUP BY columns but no Aggregate Functions.
+    ///
+    /// E.g. SELECT 1 FROM t GROUP BY x
+    #[test]
+    fn test_no_aggr_fn() {
+        let group_by_exp = RpnExpressionBuilder::new().push_column_ref(0).build();
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp.clone(),
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp.clone()],
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 3);
+            assert_eq!(r.data.columns_len(), 1); // 0 result column, 1 group by column
+            r.data[0].decode(&Tz::utc(), &exec.schema()[0]).unwrap();
+            let mut sort_column: Vec<(usize, _)> = r.data[0]
+                .decoded()
+                .as_real_slice()
+                .iter()
+                .map(|v| {
+                    use std::hash::{Hash, Hasher};
+                    let mut s = std::collections::hash_map::DefaultHasher::new();
+                    v.hash(&mut s);
+                    s.finish()
+                })
+                .enumerate()
+                .collect();
+            sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[0].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[Real::new(1.5).ok(), None, Real::new(7.0).ok()]
+            );
+        }
+    }
 }
