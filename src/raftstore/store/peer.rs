@@ -2380,15 +2380,18 @@ impl ReadExecutor {
             return;
         }
 
-        if let Some(snapshot) = self.engine_snapshot.read().unwrap().as_ref() {
+        let engine_snapshot = self.engine_snapshot.read().unwrap();
+        if let Some(snapshot) = engine_snapshot.as_ref() {
             self.snapshot = Some(snapshot.clone());
+            drop(engine_snapshot);
         } else {
-            let mut option_snapshot = self.engine_snapshot.write().unwrap();
-            match option_snapshot.as_mut() {
+            drop(engine_snapshot);
+            let mut engine_snapshot = self.engine_snapshot.write().unwrap();
+            match engine_snapshot.as_mut() {
                 Some(snapshot) => self.snapshot = Some(snapshot.clone()),
                 None => {
                     let snapshot = Snapshot::new(self.engine.clone()).into_sync();
-                    *option_snapshot = Some(snapshot.clone());
+                    *engine_snapshot = Some(snapshot.clone());
                     self.snapshot = Some(snapshot);
                 }
             }
