@@ -2107,6 +2107,9 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        if peer_id == 0 {
+            return None;
+        }
         fail_point!("stale_peer_cache_2", peer_id == 2, |_| None);
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
@@ -2151,6 +2154,9 @@ impl Peer {
         send_msg.set_region_epoch(self.region().get_region_epoch().clone());
 
         let from_peer = self.peer.clone();
+        if msg.get_to() == 0 {
+            panic!("{:?}", msg);
+        }
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
