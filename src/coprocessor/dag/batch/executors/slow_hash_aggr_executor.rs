@@ -77,6 +77,10 @@ impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
         }
 
         let aggr_definitions = descriptor.get_agg_func();
+        if aggr_definitions.is_empty() {
+            return Err(box_err!("Aggregation expression is empty"));
+        }
+
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def)?;
         }
