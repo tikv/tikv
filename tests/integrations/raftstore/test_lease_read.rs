@@ -404,6 +404,8 @@ fn test_read_index_when_transfer_leader() {
     drop(cluster);
 }
 
+/// FIXME: #4776
+#[ignore]
 #[test]
 fn test_local_read_cache() {
     let mut cluster = new_node_cluster(0, 3);
