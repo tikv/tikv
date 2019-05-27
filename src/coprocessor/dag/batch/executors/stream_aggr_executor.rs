@@ -71,9 +71,6 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
         }
 
         let aggr_definitions = descriptor.get_agg_func();
-        if aggr_definitions.is_empty() {
-            return Err(box_err!("Aggregation expression is empty"));
-        }
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def)?;
         }
@@ -451,6 +448,53 @@ mod tests {
         );
         // col_1
         assert_eq!(r.data[4].decoded().as_real_slice(), &[Real::new(-3.0).ok()]);
+    }
+
+    /// Only have GROUP BY columns but no Aggregate Functions.
+    ///
+    /// E.g. SELECT 1 FROM t GROUP BY x
+    #[test]
+    fn test_no_fn() {
+        let group_by_exps = vec![
+            RpnExpressionBuilder::new().push_column_ref(0).build(),
+            RpnExpressionBuilder::new().push_column_ref(1).build(),
+        ];
+
+        let src_exec = make_src_executor();
+        let mut exec = BatchStreamAggregationExecutor::new_for_test(
+            src_exec,
+            group_by_exps,
+            vec![],
+            AllAggrDefinitionParser,
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 2);
+        assert_eq!(r.data.columns_len(), 2);
+        assert!(!r.is_drained.unwrap());
+        // col_0
+        assert_eq!(r.data[3].decoded().as_bytes_slice(), &[None, None]);
+        // col_1
+        assert_eq!(
+            r.data[4].decoded().as_real_slice(),
+            &[None, Real::new(1.5).ok()]
+        );
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 0);
+        assert!(!r.is_drained.unwrap());
+
+        let r = exec.next_batch(1);
+        assert_eq!(r.data.rows_len(), 1);
+        assert_eq!(r.data.columns_len(), 2);
+        assert!(r.is_drained.unwrap());
+        // col_0
+        assert_eq!(
+            r.data[3].decoded().as_bytes_slice(),
+            &[Some(b"abc".to_vec())]
+        );
+        // col_1
+        assert_eq!(r.data[4].decoded().as_real_slice(), &[Real::new(-5.0).ok()]);
     }
 
     /// Builds an executor that will return these data:
