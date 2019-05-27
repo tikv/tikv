@@ -255,12 +255,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_each_group_for_partial_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
-        _src_is_drained: bool,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let number_of_groups = self.groups.len();
         let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self

@@ -77,7 +77,8 @@ impl DAGBuilder {
                     }
                 }
                 ExecType::TypeStreamAgg => {
-                    // FIXME: we'd better check whether the source executor is in order
+                    // Note: We won't check whether the source of stream aggregation is in order.
+                    //       It is undefined behavior if the source is unordered.
                     let descriptor = ed.get_aggregation();
                     BatchStreamAggregationExecutor::check_supported(&descriptor).map_err(|e| {
                         Error::Other(box_err!(

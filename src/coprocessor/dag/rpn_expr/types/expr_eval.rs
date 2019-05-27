@@ -8,6 +8,7 @@ use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -132,7 +133,7 @@ impl RpnExpression {
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
-        self.ensure_columns_decoded(context, schema, columns)?;
+        self.ensure_columns_decoded(&context.cfg.tz, schema, columns)?;
         self.eval_unchecked(context, rows, schema, columns)
     }
 
@@ -140,7 +141,7 @@ impl RpnExpression {
     ///
     /// # Panics
     ///
-    /// Panics if referenced columns are not decoded.
+    /// Panics if the expression is not valid.
     ///
     /// Panics if the boolean vector output buffer is not large enough to contain all values.
     pub fn eval_as_mysql_bools(
@@ -170,20 +171,35 @@ impl RpnExpression {
         Ok(())
     }
 
+    /// Decodes all referred columns which are not decoded. Then we ensure
+    /// all referred columns are decoded.
     pub fn ensure_columns_decoded<'a>(
         &'a self,
-        context: &mut EvalContext,
+        tz: &Tz,
         schema: &'a [FieldType],
         columns: &'a mut LazyBatchColumnVec,
     ) -> Result<()> {
         for node in self.as_ref() {
             if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
+                columns.ensure_column_decoded(*offset, tz, &schema[*offset])?;
             }
         }
         Ok(())
     }
 
+    /// Evaluates the expression into a vector.
+    ///
+    /// It differs from `eval` in that `eval_unchecked` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_unchecked` doesn't decode columns,
+    /// it will panic if referred columns are not decoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if referred columns are not decoded.
+    ///
+    /// Panics when referenced column does not have equal length as specified in `rows`.
     pub fn eval_unchecked<'a>(
         &'a self,
         context: &mut EvalContext,

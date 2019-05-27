@@ -9,6 +9,7 @@ use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::codec::data_type::*;
+use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
@@ -80,13 +81,13 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
 
 pub struct BatchStreamAggregationImpl {
     group_by_exps: Vec<RpnExpression>,
-    // used in the `iterate_each_group_for_aggregation` method
+    /// used in the `iterate_each_group_for_aggregation` method
     group_by_exps_types: Vec<EvalType>,
-    // Stores all group keys. The last `group_by_exps.len()` elements are the keys of
-    // the current group
+    /// Stores all group keys for the current result partial.
+    /// The last `group_by_exps.len()` elements are the keys of the last group.
     keys: Vec<ScalarValue>,
-    // Stores all group states. The last `each_aggr_fn.len()` elements are the states of
-    // the current group
+    /// Stores all group states for the current result partial.
+    /// The last `each_aggr_fn.len()` elements are the states of the last group.
     states: Vec<Box<dyn AggrFunctionState>>,
 }
 
@@ -175,23 +176,28 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
 
         // Decode columns with mutable input first, so subsequent access to input can be immutable
         // (and the borrow checker will be happy)
-        ensure_columns_decoded(context, &self.group_by_exps, src_schema, &mut input)?;
-        ensure_columns_decoded(context, &entities.each_aggr_exprs, src_schema, &mut input)?;
+        ensure_columns_decoded(&context.cfg.tz, &self.group_by_exps, src_schema, &mut input)?;
+        ensure_columns_decoded(
+            &context.cfg.tz,
+            &entities.each_aggr_exprs,
+            src_schema,
+            &mut input,
+        )?;
         let group_by_results = eval_exprs(context, &self.group_by_exps, src_schema, &input)?;
         let aggr_expr_results = eval_exprs(context, &entities.each_aggr_exprs, src_schema, &input)?;
 
         // Stores input references, clone them when needed
-        let mut group_key = Vec::with_capacity(group_by_len);
+        let mut group_key_ref = Vec::with_capacity(group_by_len);
         let mut group_start_row = 0;
         for row_index in 0..rows_len {
             for group_by_result in &group_by_results {
                 // Unwrap is fine because we have verified the group by expression before.
                 let group_column = group_by_result.vector_value().unwrap();
-                group_key.push(group_column.get_unchecked(row_index));
+                group_key_ref.push(group_column.get_scalar_ref(row_index));
             }
             match self.keys.rchunks_exact(group_by_len).next() {
-                Some(current_key) if &group_key[..] == current_key => {
-                    group_key.clear();
+                Some(current_key) if &group_key_ref[..] == current_key => {
+                    group_key_ref.clear();
                 }
                 _ => {
                     // Update the complete group
@@ -208,7 +214,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
 
                     // create a new group
                     group_start_row = row_index;
-                    self.keys.extend(group_key.drain(..).map(Into::into));
+                    self.keys
+                        .extend(group_key_ref.drain(..).map(ScalarValueRef::to_owned));
                     for aggr_fn in &entities.each_aggr_fn {
                         self.states.push(aggr_fn.create_state());
                     }
@@ -238,7 +245,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_each_group_for_partial_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
         src_is_drained: bool,
@@ -259,7 +266,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             .collect();
         let aggr_fns_len = entities.each_aggr_fn.len();
 
-        // key and state ranges of complete groups
+        // key and state ranges of all available groups
         let keys_range = ..number_of_groups * group_by_exps_len;
         let states_range = ..number_of_groups * aggr_fns_len;
 
@@ -285,19 +292,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(group_by_columns)
     }
 
-    fn can_aggregate(&self, is_drained: bool) -> bool {
-        is_drained || self.keys.len() > self.group_by_exps.len()
+    fn is_partial_results_ready(&self, is_drained: bool) -> bool {
+        is_drained || AggregationExecutorImpl::<Src>::groups_len(self) >= 2
     }
 }
 
 fn ensure_columns_decoded(
-    context: &mut EvalContext,
+    tz: &Tz,
     exprs: &[RpnExpression],
     schema: &[FieldType],
     input: &mut LazyBatchColumnVec,
 ) -> Result<()> {
     for expr in exprs {
-        expr.ensure_columns_decoded(context, schema, input)?;
+        expr.ensure_columns_decoded(tz, schema, input)?;
     }
     Ok(())
 }

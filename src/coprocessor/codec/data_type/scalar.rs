@@ -28,6 +28,7 @@ pub enum ScalarValue {
     Json(Option<super::Json>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScalarValueRef<'a> {
     Int(&'a Option<super::Int>),
     Real(&'a Option<super::Real>),
@@ -36,6 +37,18 @@ pub enum ScalarValueRef<'a> {
     DateTime(&'a Option<super::DateTime>),
     Duration(&'a Option<super::Duration>),
     Json(&'a Option<super::Json>),
+}
+
+impl<'a> ScalarValueRef<'a> {
+    #[inline]
+    #[allow(clippy::clone_on_copy)]
+    pub fn to_owned(self) -> ScalarValue {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
+            }
+        }
+    }
 }
 
 impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
@@ -148,17 +161,5 @@ impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
         ScalarValue::Real(Real::new(s).ok())
-    }
-}
-
-impl<'a> From<ScalarValueRef<'a>> for ScalarValue {
-    #[inline]
-    #[allow(clippy::clone_on_copy)]
-    fn from(s: ScalarValueRef<'a>) -> ScalarValue {
-        match_template_evaluable! {
-            TT, match s {
-                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
-            }
-        }
     }
 }

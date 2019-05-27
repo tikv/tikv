@@ -176,8 +176,13 @@ impl VectorValue {
         Ok(())
     }
 
+    /// Returns a `ScalarValueRef` to the element at the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if index is out of range.
     #[inline]
-    pub fn get_unchecked(&self, index: usize) -> ScalarValueRef<'_> {
+    pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
         match_template_evaluable! {
             TT, match self {
                 VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),

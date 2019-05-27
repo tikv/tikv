@@ -70,7 +70,10 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     ///
     /// Implementors may return the content of each group as extra columns in the return value
     /// if there are group by columns.
-    fn iterate_each_group_for_aggregation(
+    ///
+    /// Implementors should not iterate the same group multiple times for the same partial
+    /// input data.
+    fn iterate_each_group_for_partial_aggregation(
         &mut self,
         entities: &mut Entities<Src>,
         src_is_drained: bool,
@@ -79,9 +82,9 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
 
     /// Returns whether we can aggregate at the moment.
     ///
-    /// The default value is `is_drained`. Only StreamAgg can aggregate when not drained.
-    fn can_aggregate(&self, is_drained: bool) -> bool {
-        is_drained
+    /// The default value is `src_is_drained`. Only StreamAgg can aggregate when not drained.
+    fn is_partial_results_ready(&self, src_is_drained: bool) -> bool {
+        src_is_drained
     }
 }
 
@@ -204,18 +207,18 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 .process_batch_input(&mut self.entities, src_result.data)?;
         }
 
-        // Aggregate results if source executor is drained, otherwise just return nothing.
-        if self.imp.can_aggregate(src_is_drained) {
-            Ok((Some(self.aggregate(src_is_drained)?), src_is_drained))
+        if self.imp.is_partial_results_ready(src_is_drained) {
+            Ok((
+                Some(self.aggregate_partial_results(src_is_drained)?),
+                src_is_drained,
+            ))
         } else {
             Ok((None, src_is_drained))
         }
     }
 
-    /// Generates aggregation results.
-    ///
-    /// This function is ensured to be called at most once.
-    fn aggregate(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
+    /// Generates aggregation results of complete groups.
+    fn aggregate_partial_results(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
         let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self
             .entities
@@ -225,7 +228,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             .collect();
 
         // Aggregate results for each group
-        let group_by_columns = self.imp.iterate_each_group_for_aggregation(
+        let group_by_columns = self.imp.iterate_each_group_for_partial_aggregation(
             &mut self.entities,
             src_is_drained,
             |entities, states| {
@@ -285,18 +288,9 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
                     is_drained: Err(e),
                 }
             }
-            Ok((None, src_is_drained)) => {
+            Ok((data, src_is_drained)) => {
                 self.is_ended = src_is_drained;
-                BatchExecuteResult {
-                    data: LazyBatchColumnVec::empty(),
-                    warnings: self.entities.context.take_warnings(),
-                    is_drained: Ok(src_is_drained),
-                }
-            }
-            Ok((Some(data), src_is_drained)) => {
-                // When there is no error and there are some aggregation results,
-                // we return them as data.
-                self.is_ended = src_is_drained;
+                let data = data.unwrap_or_else(LazyBatchColumnVec::empty);
                 BatchExecuteResult {
                     data,
                     warnings: self.entities.context.take_warnings(),
