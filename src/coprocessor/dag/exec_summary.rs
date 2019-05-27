@@ -94,3 +94,11 @@ impl ExecSummaryCollector for ExecSummaryCollectorDisabled {
     #[inline]
     fn collect_into(&mut self, _target: &mut [ExecSummary]) {}
 }
+
+/// Combines an `ExecSummaryCollector` with another type. This inner type `T`
+/// typically `Executor`/`BatchExecutor`, such that `WithSummaryCollector<C, T>`
+/// would implement the same trait and collects the statistics into `C`.
+pub struct WithSummaryCollector<C: ExecSummaryCollector, T> {
+    pub(super) summary_collector: C,
+    pub(super) inner: T,
+}
