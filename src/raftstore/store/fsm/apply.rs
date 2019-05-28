@@ -374,6 +374,7 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
+    /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
         let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
@@ -437,6 +438,8 @@ impl ApplyContext {
         self.kv_wb.as_mut().unwrap()
     }
 
+    /// Flush all pending writes to engines.
+    /// If it returns true, all pending writes are persisted in engines.
     pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
@@ -2602,6 +2605,8 @@ impl ApplyFsm {
             );
 
             apply_ctx.flush();
+            // For now, it's more like last_flush_apply_index.
+            // TODO: Update it only when `flush()` returns true.
             self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
         }
 
