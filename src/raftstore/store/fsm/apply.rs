@@ -3013,6 +3013,29 @@ mod tests {
         validate_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     }
 
+    // Make sure msgs are handled in the same batch.
+    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg>) {
+        let (notify1, wait1) = mpsc::channel();
+        let (notify2, wait2) = mpsc::channel();
+        router.schedule_task(
+            region_id,
+            Msg::Validate(
+                region_id,
+                Box::new(move |_| {
+                    notify1.send(()).unwrap();
+                    wait2.recv().unwrap();
+                }),
+            ),
+        );
+        wait1.recv().unwrap();
+
+        for msg in msgs {
+            router.schedule_task(region_id, msg);
+        }
+
+        notify2.send(()).unwrap();
+    }
+
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -3137,12 +3160,16 @@ mod tests {
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
-        router.schedule_task(
-            2,
-            Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-        );
+        // Make sure Apply and Snapshot are in the same batch.
         let (tx, _) = mpsc::sync_channel(0);
-        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
+        batch_messages(
+            &router,
+            2,
+            vec![
+                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+                Msg::Snapshot(GenSnapTask::new(2, tx)),
+            ],
+        );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
