@@ -107,7 +107,7 @@ impl VectorValue {
         }
     }
 
-    /// Retain the elements according to a boolean array.
+    /// Retains the elements according to a boolean array.
     ///
     /// # Panics
     ///

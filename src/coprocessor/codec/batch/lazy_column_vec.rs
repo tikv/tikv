@@ -83,7 +83,7 @@ impl LazyBatchColumnVec {
         }
     }
 
-    /// Retain the elements according to a boolean array.
+    /// Retains the elements according to a boolean array.
     ///
     /// # Panics
     ///
@@ -220,8 +220,6 @@ mod tests {
         push_raw_row(columns, raw_row);
     }
 
-    // TODO: Move to VectorValue
-    /*
     #[test]
     fn test_ensure_column_decoded() {
         use cop_datatype::FieldTypeTp;
@@ -250,7 +248,8 @@ mod tests {
             // Decode Column Index 2
             assert!(!columns[2].is_decoded());
             {
-                let col = columns[2].ensure_decoded(&Tz::utc(), &schema[2]).unwrap();
+                columns[2].ensure_decoded(&Tz::utc(), &schema[2]).unwrap();
+                let col = columns[2].decoded();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Bytes);
                 assert_eq!(col.as_bytes_slice(), &[None, Some(vec![0u8, 2u8])]);
@@ -258,7 +257,8 @@ mod tests {
             // Decode a decoded column
             assert!(columns[2].is_decoded());
             {
-                let col = columns[2].ensure_decoded(&Tz::utc(), &schema[2]).unwrap();
+                columns[2].ensure_decoded(&Tz::utc(), &schema[2]).unwrap();
+                let col = columns[2].decoded();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Bytes);
                 assert_eq!(col.as_bytes_slice(), &[None, Some(vec![0u8, 2u8])]);
@@ -268,7 +268,8 @@ mod tests {
             // Decode Column Index 0
             assert!(!columns[0].is_decoded());
             {
-                let col = columns[0].ensure_decoded(&Tz::utc(), &schema[0]).unwrap();
+                columns[0].ensure_decoded(&Tz::utc(), &schema[0]).unwrap();
+                let col = columns[0].decoded();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Int);
                 assert_eq!(col.as_int_slice(), &[Some(1), None]);
@@ -278,7 +279,8 @@ mod tests {
             // Decode Column Index 1
             assert!(!columns[1].is_decoded());
             {
-                let col = columns[1].ensure_decoded(&Tz::utc(), &schema[1]).unwrap();
+                columns[1].ensure_decoded(&Tz::utc(), &schema[1]).unwrap();
+                let col = columns[1].decoded();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Real);
                 assert_eq!(col.as_real_slice(), &[Real::new(1.0).ok(), None]);
@@ -286,7 +288,6 @@ mod tests {
             assert!(columns[1].is_decoded());
         }
     }
-    */
 
     #[test]
     fn test_retain_rows_by_array() {
