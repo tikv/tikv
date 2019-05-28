@@ -107,14 +107,14 @@ pub struct PendingCmdQueue {
 }
 
 impl PendingCmdQueue {
-    fn pop_normal(&mut self, term: u64) -> Option<PendingCmd> {
+    fn pop_normal(&mut self, index: u64, term: u64) -> Option<PendingCmd> {
         self.normals.pop_front().and_then(|cmd| {
             if self.normals.capacity() > SHRINK_PENDING_CMD_QUEUE_CAP
                 && self.normals.len() < SHRINK_PENDING_CMD_QUEUE_CAP
             {
                 self.normals.shrink_to_fit();
             }
-            if cmd.term > term {
+            if (cmd.term, cmd.index) > (term, index) {
                 self.normals.push_front(cmd);
                 return None;
             }
@@ -784,14 +784,17 @@ impl ApplyDelegate {
             return self.process_raft_cmd(apply_ctx, index, term, cmd);
         }
 
-        // when a peer become leader, it will send an empty entry.
         let mut state = self.apply_state.clone();
         state.set_applied_index(index);
         self.apply_state = state;
         self.applied_index_term = term;
         assert!(term > 0);
-        while let Some(mut cmd) = self.pending_cmds.pop_normal(term - 1) {
-            // apprently, all the callbacks whose term is less than entry's term are stale.
+
+        // 1. When a peer become leader, it will send an empty entry.
+        // 2. When a leader tries to read index during transferring leader,
+        //    it will also propose an empty entry. But that entry will not contain
+        //    any associated callback. So no need to clear callback.
+        while let Some(mut cmd) = self.pending_cmds.pop_normal(std::u64::MAX, term - 1) {
             apply_ctx
                 .cbs
                 .last_mut()
@@ -842,13 +845,21 @@ impl ApplyDelegate {
             }
             return None;
         }
-        while let Some(mut head) = self.pending_cmds.pop_normal(term) {
-            if head.index == index && head.term == term {
-                return Some(head.cb.take().unwrap());
+        while let Some(mut head) = self.pending_cmds.pop_normal(index, term) {
+            if head.term == term {
+                if head.index == index {
+                    return Some(head.cb.take().unwrap());
+                } else {
+                    panic!(
+                        "{} unexpected callback at term {}, found index {}, expected {}",
+                        self.tag, term, head.index, index
+                    );
+                }
+            } else {
+                // Because of the lack of original RaftCmdRequest, we skip calling
+                // coprocessor here.
+                notify_stale_command(region_id, peer_id, self.term, head);
             }
-            // Because of the lack of original RaftCmdRequest, we skip calling
-            // coprocessor here.
-            notify_stale_command(region_id, peer_id, self.term, head);
         }
         None
     }
