@@ -94,6 +94,7 @@ impl<S: Snapshot> MvccTxn<S> {
         ttl: u64,
         short_value: Option<Value>,
         is_pessimistic_txn: bool,
+        txn_size: u64,
     ) {
         let lock = Lock::new(
             lock_type,
@@ -102,6 +103,7 @@ impl<S: Snapshot> MvccTxn<S> {
             ttl,
             short_value,
             is_pessimistic_txn,
+            txn_size,
         )
         .to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
@@ -151,15 +153,32 @@ impl<S: Snapshot> MvccTxn<S> {
         ttl: u64,
         value: Option<Value>,
         is_pessimistic_txn: bool,
+        txn_size: u64,
     ) {
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(key, lock_type, primary, ttl, value, is_pessimistic_txn);
+            self.lock_key(
+                key,
+                lock_type,
+                primary,
+                ttl,
+                value,
+                is_pessimistic_txn,
+                txn_size,
+            );
         } else {
             // value is long
             let ts = self.start_ts;
             self.put_value(key.clone(), ts, value.unwrap());
 
-            self.lock_key(key, lock_type, primary, ttl, None, is_pessimistic_txn);
+            self.lock_key(
+                key,
+                lock_type,
+                primary,
+                ttl,
+                None,
+                is_pessimistic_txn,
+                txn_size,
+            );
         }
     }
 
@@ -195,6 +214,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     primary: lock.primary,
                     ts: lock.ts,
                     ttl: lock.ttl,
+                    txn_size: options.txn_size,
                 });
             }
             if lock.lock_type != LockType::Pessimistic {
@@ -265,6 +285,7 @@ impl<S: Snapshot> MvccTxn<S> {
             options.lock_ttl,
             None,
             true,
+            options.txn_size,
         );
 
         Ok(())
@@ -319,6 +340,7 @@ impl<S: Snapshot> MvccTxn<S> {
             options.lock_ttl,
             value,
             true,
+            options.txn_size,
         );
         Ok(())
     }
@@ -365,6 +387,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         primary: lock.primary,
                         ts: lock.ts,
                         ttl: lock.ttl,
+                        txn_size: lock.txn_size,
                     });
                 }
                 // TODO: remove it in future
@@ -387,6 +410,7 @@ impl<S: Snapshot> MvccTxn<S> {
             options.lock_ttl,
             value,
             false,
+            options.txn_size,
         );
         Ok(())
     }
