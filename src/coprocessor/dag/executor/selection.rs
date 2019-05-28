@@ -41,16 +41,27 @@ impl SelectionExecutor {
 
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
-        'next: while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
+        'next: while let Some(mut row) = self.src.next()? {
+            let mut cols = match &mut row {
+                Row::Origin(orig) => {
+                    orig.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?
+                }
+                Row::Agg(agg) => {
+                    let mut cols = vec![];
+                    std::mem::swap(&mut agg.value, &mut cols);
+                    cols
+                }
+            };
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
                 if !val.into_bool(&mut self.ctx)?.unwrap_or(false) {
                     continue 'next;
                 }
             }
-            return Ok(Some(Row::Origin(row)));
+            if let Row::Agg(agg) = &mut row {
+                std::mem::swap(&mut agg.value, &mut cols);
+            }
+            return Ok(Some(row));
         }
         Ok(None)
     }

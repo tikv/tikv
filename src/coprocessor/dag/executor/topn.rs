@@ -93,15 +93,20 @@ impl TopNExecutor {
         let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
-            let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
-            let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
+            let ob_values = match &row {
+                Row::Origin(orig) => {
+                    let cols =
+                        orig.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
+                    self.order_by.eval(&mut ctx.borrow_mut(), &cols)?
+                }
+                Row::Agg(agg) => self.order_by.eval(&mut ctx.borrow_mut(), &agg.value)?,
+            };
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
         }
         let sort_rows = heap.into_sorted_vec()?;
         let data: Vec<Row> = sort_rows
             .into_iter()
-            .map(|sort_row| Row::Origin(sort_row.data))
+            .map(|sort_row| sort_row.data)
             .collect();
         self.iter = Some(data.into_iter());
         self.eval_warnings = Some(ctx.borrow_mut().take_warnings());
@@ -161,7 +166,7 @@ pub mod tests {
 
     use crate::coprocessor::codec::table::RowColsDict;
     use crate::coprocessor::codec::Datum;
-    use crate::coprocessor::dag::executor::OriginCols;
+    use crate::coprocessor::dag::executor::Row;
     use tikv_util::codec::number::NumberEncoder;
     use tikv_util::collections::HashMap;
 
@@ -278,7 +283,7 @@ pub mod tests {
             let row_data = RowColsDict::new(HashMap::default(), data.into_bytes());
             topn_heap
                 .try_add_row(
-                    OriginCols::new(i64::from(handle), row_data, Arc::new(Vec::default())),
+                    Row::origin(i64::from(handle), row_data, Arc::new(Vec::default())),
                     ob_values,
                     Arc::clone(&order_cols),
                 )
@@ -288,7 +293,10 @@ pub mod tests {
         assert_eq!(result.len(), exp.len());
         for (row, (handle, _, name, count)) in result.iter().zip(exp) {
             let exp_key: Vec<Datum> = vec![name, count];
-            assert_eq!(row.data.handle, handle);
+            match &row.data {
+                Row::Origin(orig) => assert_eq!(orig.handle, handle),
+                _ => unreachable!(),
+            };
             assert_eq!(row.key, exp_key);
         }
     }
@@ -306,7 +314,7 @@ pub mod tests {
         let row_data = RowColsDict::new(HashMap::default(), b"name:1".to_vec());
         topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data, Arc::new(Vec::default())),
+                Row::origin(0 as i64, row_data, Arc::new(Vec::default())),
                 ob_values1,
                 Arc::clone(&order_cols),
             )
@@ -316,7 +324,7 @@ pub mod tests {
         let row_data2 = RowColsDict::new(HashMap::default(), b"name:2".to_vec());
         topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data2, Default::default()),
+                Row::origin(0 as i64, row_data2, Default::default()),
                 ob_values2,
                 Arc::clone(&order_cols),
             )
@@ -327,7 +335,7 @@ pub mod tests {
 
         assert!(topn_heap
             .try_add_row(
-                OriginCols::new(0 as i64, row_data3, Arc::default()),
+                Row::origin(0 as i64, row_data3, Arc::default()),
                 bad_key1,
                 Arc::clone(&order_cols)
             )
