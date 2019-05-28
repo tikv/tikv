@@ -752,18 +752,6 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
-    pub fn region_term(&self, region_id: u64, store_id: u64) -> u64 {
-        let status_cmd = new_region_detail_cmd();
-        let peer = new_peer(store_id, 0);
-        let req = new_status_request(region_id, peer, status_cmd);
-        let resp = self.call_command(req, Duration::from_secs(5));
-        assert!(resp.is_ok(), "{:?}", resp);
-
-        let resp = resp.unwrap();
-        assert!(!resp.get_header().has_error(), "{:?}", resp);
-        resp.get_header().get_current_term()
-    }
-
     pub fn region_detail(&self, region_id: u64, store_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(store_id, 0);

@@ -39,6 +39,8 @@ fn test_pending_peers() {
     assert!(pending_peers.is_empty());
 }
 
+// Tests if raftstore and apply worker write truncated_state concurrently could lead to
+// dirty write.
 #[test]
 fn test_pending_snapshot() {
     let _guard = crate::setup();
@@ -93,9 +95,9 @@ fn test_pending_snapshot() {
     cluster.clear_send_filters();
     let start = Instant::now();
     loop {
-        let term2 = cluster.region_term(1, 2);
-        let term1 = cluster.truncated_state(1, 1).get_term();
-        if term2 == term1 || start.elapsed() > election_timeout * 10 {
+        if cluster.pd_client.get_pending_peers().get(&1).is_none()
+            || start.elapsed() > election_timeout * 10
+        {
             break;
         }
         sleep_ms(50);
