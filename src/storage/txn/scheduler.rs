@@ -524,6 +524,9 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
             let keys: Vec<&Key> = keys.iter().map(|x| &x.0).collect();
             latches.gen_lock(&keys)
         }
+        Command::ResolveLockLite {
+            ref resolve_keys, ..
+        } => latches.gen_lock(resolve_keys),
         Command::Commit { ref keys, .. } | Command::Rollback { ref keys, .. } => {
             latches.gen_lock(keys)
         }
@@ -606,8 +609,14 @@ mod tests {
                 scan_key: None,
                 key_locks: vec![(
                     Key::from_raw(b"k"),
-                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, false),
+                    mvcc::Lock::new(mvcc::LockType::Put, b"k".to_vec(), 10, 20, None, false, 0),
                 )],
+            },
+            Command::ResolveLockLite {
+                ctx: Context::new(),
+                start_ts: 10,
+                commit_ts: 0,
+                resolve_keys: vec![Key::from_raw(b"k")],
             },
         ];
 
