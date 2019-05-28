@@ -836,6 +836,7 @@ mod tests {
                     primary: vec![],
                     ts: 1,
                     ttl: 2,
+                    txn_size: 0,
                 });
             kv.push((key, Err(value)));
         }

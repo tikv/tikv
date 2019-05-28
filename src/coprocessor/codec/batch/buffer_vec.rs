@@ -24,20 +24,14 @@ impl std::fmt::Debug for BufferVec {
         use hex::ToHex;
 
         write!(f, "[")?;
-        let len = self.len();
-        if len > 0 {
-            for i in 0..len - 1 {
-                if self[i].is_empty() {
-                    write!(f, "null")?;
-                } else {
-                    self[i].as_ref().write_hex_upper(f)?;
-                }
+        for (i, item) in self.iter().enumerate() {
+            if i != 0 {
                 write!(f, ", ")?;
             }
-            if self[len - 1].is_empty() {
+            if item.is_empty() {
                 write!(f, "null")?;
             } else {
-                self[len - 1].as_ref().write_hex_upper(f)?;
+                item.write_hex_upper(f)?;
             }
         }
         write!(f, "]")
@@ -104,10 +98,8 @@ impl BufferVec {
     /// Removes the last buffer if there is any.
     #[inline]
     pub fn pop(&mut self) {
-        let len = self.len();
-        if len > 0 {
-            self.data.truncate(self.offsets[len - 1]);
-            self.offsets.pop();
+        if let Some(offset) = self.offsets.pop() {
+            self.data.truncate(offset);
         }
     }
 
@@ -115,7 +107,6 @@ impl BufferVec {
     ///
     /// If `n` >= current length, all buffers will be removed.
     pub fn shift(&mut self, n: usize) {
-        let len = self.len();
         if n == 0 {
             return;
         }
@@ -128,42 +119,24 @@ impl BufferVec {
         //                   >|      |<     : n_len        = 2
         //
         // 1. Move valid data and offset forward
-        // data:   [, CACCAA, XX, XX]   XX is the outdated data
-        // offset: [3,3     , XX, XX]
+        // data:   [, CACCAA]
+        // offset: [3,3     ]
         //
         // 2. Update offset
-        // data:   [, CACCAA, XX, XX]
-        // offset: [0,0     , XX, XX]
-        //
-        // 3. Shrink
         // data:   [, CACCAA]
         // offset: [0,0     ]
 
+        let len = self.len();
         if n < len {
-            unsafe {
-                let data_offset = self.offsets[n];
-                let data_len = self.data.len() - data_offset;
-                let n_len = len - n;
-                // 1
-                std::ptr::copy(
-                    self.data.as_ptr().add(data_offset),
-                    self.data.as_mut_ptr(),
-                    data_len,
-                );
-                std::ptr::copy(
-                    self.offsets.as_ptr().add(n),
-                    self.offsets.as_mut_ptr(),
-                    n_len,
-                );
-                // 2
-                for i in 0..n_len {
-                    self.offsets[i] -= data_offset;
-                }
-                assert_eq!(self.offsets[0], 0);
-                // 3
-                self.data.set_len(data_len);
-                self.offsets.set_len(n_len);
+            let data_offset = self.offsets[n];
+            // 1
+            self.data.drain(..data_offset);
+            self.offsets.drain(..n);
+            // 2
+            for offset in &mut self.offsets {
+                *offset -= data_offset;
             }
+            assert_eq!(self.offsets[0], 0);
         } else {
             self.clear();
         }
@@ -208,8 +181,8 @@ impl BufferVec {
             let base_offset = self.data.len();
             self.data.extend_from_slice(&other.data[..other.offsets[n]]);
             self.offsets.reserve(n);
-            for i in 0..n {
-                self.offsets.push(other.offsets[i] + base_offset);
+            for offset in &other.offsets[..n] {
+                self.offsets.push(*offset + base_offset);
             }
         }
     }
@@ -220,6 +193,7 @@ impl BufferVec {
     ///
     /// Panics if `retain_arr` is not long enough.
     pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
+        // TODO: Optimize to move multiple contiguous slots.
         unsafe {
             let len = self.len();
             assert!(retain_arr.len() >= len);
@@ -267,17 +241,30 @@ impl BufferVec {
     }
 }
 
+impl<A: AsRef<[u8]>> Extend<A> for BufferVec {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = A>,
+    {
+        for i in iter.into_iter() {
+            self.push(i);
+        }
+    }
+}
+
 impl std::ops::Index<usize> for BufferVec {
     type Output = [u8];
 
     #[inline]
     fn index(&self, index: usize) -> &[u8] {
         assert!(index < self.offsets.len());
-        if index < self.offsets.len() - 1 {
-            &self.data[self.offsets[index]..self.offsets[index + 1]]
-        } else {
-            &self.data[self.offsets[index]..]
-        }
+        let start = self.offsets[index];
+        let end = self
+            .offsets
+            .get(index + 1)
+            .copied()
+            .unwrap_or_else(|| self.data.len());
+        &self.data[start..end]
     }
 }
 
@@ -392,7 +379,6 @@ mod tests {
         assert_eq!(v.total_len(), 0);
         assert!(v.is_empty());
         assert_eq!(format!("{:?}", v), "[]");
-        assert!(v.is_empty());
 
         v.pop();
         assert_eq!(v.len(), 0);
@@ -412,7 +398,6 @@ mod tests {
         assert_eq!(v.total_len(), 0);
         assert!(v.is_empty());
         assert_eq!(format!("{:?}", v), "[]");
-        assert!(v.is_empty());
 
         v.push(&[0xCA, 0xB]);
         v.push(&[]);
