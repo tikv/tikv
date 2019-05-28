@@ -116,9 +116,9 @@ impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
     }
 }
 
-impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
-    fn into(self) -> debugpb::BottommostLevelCompaction {
-        match self.0 {
+impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
+    fn from(bottommost: BottommostLevelCompaction) -> debugpb::BottommostLevelCompaction {
+        match bottommost.0 {
             DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
             DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
             DBBottommostLevelCompaction::IfHaveCompactionFilter => {
