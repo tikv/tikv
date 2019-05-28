@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::convert::TryInto;
 use std::str;
 
-use rand::XorShiftRng;
+use rand_xorshift::XorShiftRng;
 
 use tipb::expression::{Expr, ExprType, FieldType, ScalarFuncSig};
 

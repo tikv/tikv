@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tipb::expression::{FieldType, ScalarFuncSig};
+use tipb::expression::{Expr, FieldType, ScalarFuncSig};
 
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue};
@@ -76,7 +76,18 @@ impl RpnFnScalarEvaluator {
             None => EvalContext::default(),
         };
 
-        let func = super::super::map_pb_sig_to_rpn_func(sig).unwrap();
+        // Children expr descriptors are needed to map the signature into the actual function impl.
+        let children_ed: Vec<_> = self
+            .rpn_expr_builder
+            .as_ref()
+            .iter()
+            .map(|expr_node| {
+                let mut ed = Expr::new();
+                ed.set_field_type(expr_node.field_type().unwrap().clone());
+                ed
+            })
+            .collect();
+        let func = super::super::map_pb_sig_to_rpn_func(sig, &children_ed).unwrap();
 
         let expr = self
             .rpn_expr_builder
@@ -89,9 +100,8 @@ impl RpnFnScalarEvaluator {
             // Only used in tests, so clone is fine.
             RpnStackNode::Scalar { value, .. } => Ok(T::borrow_scalar_value(value).clone()),
             RpnStackNode::Vector { value, .. } => {
-                let value = value.as_ref();
                 assert_eq!(value.len(), 1);
-                Ok(T::borrow_vector_value(value)[0].clone())
+                Ok(T::borrow_vector_value(&value)[0].clone())
             }
         }
     }

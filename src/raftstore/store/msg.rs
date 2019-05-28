@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
 use std::fmt;
 use std::time::Instant;
 
@@ -31,8 +30,8 @@ pub struct WriteResponse {
     pub response: RaftCmdResponse,
 }
 
-pub type ReadCallback = Box<dyn FnBox(ReadResponse) + Send>;
-pub type WriteCallback = Box<dyn FnBox(WriteResponse) + Send>;
+pub type ReadCallback = Box<dyn FnOnce(ReadResponse) + Send>;
+pub type WriteCallback = Box<dyn FnOnce(WriteResponse) + Send>;
 
 /// Variants of callbacks for `Msg`.
 ///  - `Read`: a callbak for read only requests including `StatusRequest`,
@@ -70,6 +69,13 @@ impl Callback {
         match self {
             Callback::Read(read) => read(args),
             other => panic!("expect Callback::Read(..), got {:?}", other),
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            Callback::None => true,
+            _ => false,
         }
     }
 }
@@ -144,8 +150,14 @@ pub enum SignificantMsg {
         to_peer_id: u64,
         status: SnapshotStatus,
     },
+    StoreUnreachable {
+        store_id: u64,
+    },
     /// Reports `to_peer_id` is unreachable.
-    Unreachable { region_id: u64, to_peer_id: u64 },
+    Unreachable {
+        region_id: u64,
+        to_peer_id: u64,
+    },
 }
 
 /// Message that will be sent to a peer.
@@ -195,6 +207,8 @@ pub enum CasualMessage {
     },
     /// Clear region size cache.
     ClearRegionSize,
+    /// Indicate a target region is overlapped.
+    RegionOverlapped,
 }
 
 impl fmt::Debug for CasualMessage {
@@ -233,6 +247,7 @@ impl fmt::Debug for CasualMessage {
                 fmt,
                 "clear region size"
             },
+            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
         }
     }
 }
@@ -281,6 +296,8 @@ pub enum PeerMsg {
     Noop,
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage),
+    /// Ask region to report a heartbeat to PD.
+    HeartbeatPd,
 }
 
 impl fmt::Debug for PeerMsg {
@@ -298,6 +315,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
+            PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
         }
     }
 }
@@ -317,6 +335,9 @@ pub enum StoreMsg {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
     },
+    StoreUnreachable {
+        store_id: u64,
+    },
 
     // Compaction finished event
     CompactedEvent(CompactedEvent),
@@ -331,6 +352,9 @@ impl fmt::Debug for StoreMsg {
         match *self {
             StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
             StoreMsg::SnapshotStats => write!(fmt, "Snapshot stats"),
+            StoreMsg::StoreUnreachable { store_id } => {
+                write!(fmt, "Store {}  is unreachable", store_id)
+            }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf),
             StoreMsg::ValidateSSTResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {

@@ -79,6 +79,8 @@ impl RaftStoreRouter for SyncBenchRouter {
     fn casual_send(&self, _: u64, _: CasualMessage) -> Result<()> {
         Ok(())
     }
+
+    fn broadcast_unreachable(&self, _: u64) {}
 }
 
 fn new_engine() -> (TempDir, Arc<DB>) {

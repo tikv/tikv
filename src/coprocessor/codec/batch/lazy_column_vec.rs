@@ -13,7 +13,7 @@ pub struct LazyBatchColumnVec {
     /// Multiple lazy batch columns. Each column is either decoded, or not decoded.
     ///
     /// For decoded columns, they may be in different types. If the column is in
-    /// type `LazyBatchColumn::Encoded`, it means that it is not decoded.
+    /// type `LazyBatchColumn::Raw`, it means that it is not decoded.
     columns: Vec<LazyBatchColumn>,
 }
 
@@ -215,8 +215,9 @@ impl std::ops::DerefMut for LazyBatchColumnVec {
 mod tests {
     use super::*;
 
-    use cop_datatype::{EvalType, FieldTypeAccessor};
+    use cop_datatype::EvalType;
 
+    use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
 
     /// Pushes a raw row. There must be no empty datum.
@@ -268,26 +269,10 @@ mod tests {
 
         for comparable in &[true, false] {
             let schema = [
-                {
-                    // Column 1: Long
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                    ft
-                },
-                {
-                    // Column 2: Double
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                    ft
-                },
-                {
-                    // Column 3: VarChar
-                    let mut ft = FieldType::new();
-                    ft.as_mut_accessor().set_tp(FieldTypeTp::VarChar);
-                    ft
-                },
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Double.into(),
+                FieldTypeTp::VarChar.into(),
             ];
-
             let values = vec![
                 vec![Datum::U64(1), Datum::F64(1.0), Datum::Null],
                 vec![Datum::Null, Datum::Null, Datum::Bytes(vec![0u8, 2u8])],
@@ -345,7 +330,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(col.len(), 2);
                 assert_eq!(col.eval_type(), EvalType::Real);
-                assert_eq!(col.as_real_slice(), &[Some(1.0), None]);
+                assert_eq!(col.as_real_slice(), &[Real::new(1.0).ok(), None]);
             }
             assert!(columns.is_column_decoded(1));
         }
@@ -355,21 +340,7 @@ mod tests {
     fn test_retain_rows_by_index() {
         use cop_datatype::FieldTypeTp;
 
-        let schema = [
-            {
-                // Column 1: Long
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Long);
-                ft
-            },
-            {
-                // Column 2: Double
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
-
+        let schema = [FieldTypeTp::Long.into(), FieldTypeTp::Double.into()];
         let mut columns = LazyBatchColumnVec::with_raw_columns(2);
         assert_eq!(columns.rows_len(), 0);
         assert_eq!(columns.columns_len(), 2);
@@ -408,7 +379,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), None, Some(7.5)]
+                &[Real::new(1.3).ok(), None, Real::new(7.5).ok()]
             );
         }
 
@@ -439,13 +410,13 @@ mod tests {
             assert_eq!(
                 column1.decoded().as_real_slice(),
                 &[
-                    Some(1.3),
+                    Real::new(1.3).ok(),
                     None,
-                    Some(7.5),
-                    Some(101.51),
+                    Real::new(7.5).ok(),
+                    Real::new(101.51).ok(),
                     None,
-                    Some(1.9),
-                    Some(101.51)
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
                 ]
             );
         }
@@ -474,7 +445,12 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), Some(7.5), Some(1.9), Some(101.51)]
+                &[
+                    Real::new(1.3).ok(),
+                    Real::new(7.5).ok(),
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
+                ]
             );
         }
 
@@ -501,7 +477,12 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(1.3), Some(7.5), Some(1.9), Some(101.51)]
+                &[
+                    Real::new(1.3).ok(),
+                    Real::new(7.5).ok(),
+                    Real::new(1.9).ok(),
+                    Real::new(101.51).ok()
+                ]
             );
         }
 
@@ -548,7 +529,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(7.77), None, Some(7.17)]
+                &[Real::new(7.77).ok(), None, Real::new(7.17).ok()]
             );
         }
 
@@ -576,7 +557,7 @@ mod tests {
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
             assert_eq!(
                 column1.decoded().as_real_slice(),
-                &[Some(7.77), None, Some(7.17)]
+                &[Real::new(7.77).ok(), None, Real::new(7.17).ok()]
             );
         }
 
@@ -598,7 +579,10 @@ mod tests {
             column1.decode(&Tz::utc(), &schema[1]).unwrap();
             assert_eq!(column1.decoded().len(), 2);
             assert_eq!(column1.decoded().eval_type(), EvalType::Real);
-            assert_eq!(column1.decoded().as_real_slice(), &[Some(7.77), Some(7.17)]);
+            assert_eq!(
+                column1.decoded().as_real_slice(),
+                &[Real::new(7.77).ok(), Real::new(7.17).ok()]
+            );
         }
 
         columns.retain_rows_by_index(|_| false);

@@ -32,11 +32,13 @@ fn test_overlap_cleanup() {
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
+    cluster.must_transfer_leader(region_id, new_peer(2, 2));
     // This will only pause the bootstrapped region, so the split region
     // can still work as expected.
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));
     cluster.must_put(b"k3", b"v3");
+    assert_snapshot(&cluster.get_snap_dir(2), region_id, true);
     let region1 = cluster.get_region(b"k1");
     cluster.must_split(&region1, b"k2");
     // Wait till the snapshot of split region is applied, whose range is ["", "k2").
@@ -44,18 +46,8 @@ fn test_overlap_cleanup() {
     // Resume the fail point and pause it again. So only the paused snapshot is generated.
     // And the paused snapshot's range is ["", ""), hence overlap.
     fail::cfg(gen_snapshot_fp, "pause").unwrap();
-    // Wait a little bit for the message being sent out.
-    thread::sleep(Duration::from_secs(1));
     // Overlap snapshot should be deleted.
-    let snap_dir = cluster.get_snap_dir(3);
-    for p in fs::read_dir(&snap_dir).unwrap() {
-        let name = p.unwrap().file_name().into_string().unwrap();
-        let mut parts = name.split('_');
-        parts.next();
-        if parts.next().unwrap() == "1" {
-            panic!("snapshot of region 1 should be deleted.");
-        }
-    }
+    assert_snapshot(&cluster.get_snap_dir(3), region_id, false);
     fail::remove(gen_snapshot_fp);
 }
 
@@ -149,6 +141,7 @@ fn test_generate_snapshot() {
     pd_client.disable_default_operator();
 
     cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.stop_node(4);
     cluster.stop_node(5);
     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
@@ -195,5 +188,32 @@ fn must_empty_dir(path: String) {
             "the directory {:?} should be empty, but has entries: {:?}",
             path, entries
         );
+    }
+}
+
+fn assert_snapshot(snap_dir: &str, region_id: u64, exist: bool) {
+    let region_id = format!("{}", region_id);
+    let timer = Instant::now();
+    loop {
+        for p in fs::read_dir(&snap_dir).unwrap() {
+            let name = p.unwrap().file_name().into_string().unwrap();
+            let mut parts = name.split('_');
+            parts.next();
+            if parts.next().unwrap() == region_id && exist {
+                return;
+            }
+        }
+        if !exist {
+            return;
+        }
+
+        if timer.elapsed() < Duration::from_secs(6) {
+            thread::sleep(Duration::from_millis(20));
+        } else {
+            panic!(
+                "assert snapshot [exist: {}, region: {}] fail",
+                exist, region_id
+            );
+        }
     }
 }

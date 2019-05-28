@@ -7,38 +7,33 @@ use tipb::expression::Expr;
 use tipb::expression::FieldType;
 
 use super::super::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::{Error, Result};
+use crate::coprocessor::Result;
 
-pub struct BatchSelectionExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
-    summary_collector: C,
+pub struct BatchSelectionExecutor<Src: BatchExecutor> {
     context: EvalContext,
     src: Src,
 
     conditions: Vec<RpnExpression>,
 }
 
-impl BatchSelectionExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSelectionExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
         let conditions = descriptor.get_conditions();
         for c in conditions {
-            RpnExpressionBuilder::check_expr_tree_supported(c).map_err(|e| {
-                Error::Other(box_err!("Unable to use BatchSelectionExecutor: {}", e))
-            })?;
+            RpnExpressionBuilder::check_expr_tree_supported(c)?;
         }
         Ok(())
     }
 }
 
-impl<Src: BatchExecutor> BatchSelectionExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, conditions: Vec<RpnExpression>) -> Self {
         Self {
-            summary_collector: ExecSummaryCollectorDisabled,
             context: EvalContext::default(),
             src,
             conditions,
@@ -46,13 +41,8 @@ impl<Src: BatchExecutor> BatchSelectionExecutor<ExecSummaryCollectorDisabled, Sr
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src> {
-    pub fn new(
-        summary_collector: C,
-        config: Arc<EvalConfig>,
-        src: Src,
-        conditions_def: Vec<Expr>,
-    ) -> Result<Self> {
+impl<Src: BatchExecutor> BatchSelectionExecutor<Src> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, conditions_def: Vec<Expr>) -> Result<Self> {
         let mut conditions = Vec::with_capacity(conditions_def.len());
         for def in conditions_def {
             conditions.push(RpnExpressionBuilder::build_from_expr_tree(
@@ -63,15 +53,22 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
         }
 
         Ok(Self {
-            summary_collector,
             context: EvalContext::new(config),
             src,
             conditions,
         })
     }
+}
+
+impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
+    #[inline]
+    fn schema(&self) -> &[FieldType] {
+        // The selection executor's schema comes from its child.
+        self.src.schema()
+    }
 
     #[inline]
-    fn handle_next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 
         // When there are errors during the `next_batch()` in the src executor, it means that the
@@ -115,29 +112,10 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSelectionExecutor<C, Src>
         src_result.warnings.merge(&mut self.context.warnings);
         src_result
     }
-}
-
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<C, Src> {
-    #[inline]
-    fn schema(&self) -> &[FieldType] {
-        // The selection executor's schema comes from its child.
-        self.src.schema()
-    }
-
-    #[inline]
-    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let timer = self.summary_collector.on_start_iterate();
-        let result = self.handle_next_batch(scan_rows);
-        self.summary_collector
-            .on_finish_iterate(timer, result.data.rows_len());
-        result
-    }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor);
     }
 }
 
@@ -149,7 +127,7 @@ mod tests {
     use cop_datatype::FieldTypeTp;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::types::RpnFnCallPayload;
@@ -221,7 +199,7 @@ mod tests {
                 BatchExecuteResult {
                     data: LazyBatchColumnVec::from(vec![
                         VectorValue::Int(vec![Some(1), None]),
-                        VectorValue::Real(vec![None, Some(7.0)]),
+                        VectorValue::Real(vec![None, Real::new(7.0).ok()]),
                     ]),
                     warnings: EvalWarnings::default(),
                     is_drained: Ok(false),
@@ -257,7 +235,7 @@ mod tests {
             BatchSelectionExecutor::new_for_test(src_exec, vec![predicate])
         };
 
-        let executor_builders: Vec<Box<dyn std::boxed::FnBox(MockExecutor) -> _>> =
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
             vec![Box::new(exec_no_predicate), Box::new(exec_predicate_true)];
 
         for exec_builder in executor_builders {
@@ -271,7 +249,10 @@ mod tests {
             assert_eq!(r.data.rows_len(), 2);
             assert_eq!(r.data.columns_len(), 2);
             assert_eq!(r.data[0].decoded().as_int_slice(), &[Some(1), None]);
-            assert_eq!(r.data[1].decoded().as_real_slice(), &[None, Some(7.0)]);
+            assert_eq!(
+                r.data[1].decoded().as_real_slice(),
+                &[None, Real::new(7.0).ok()]
+            );
             assert!(!r.is_drained.unwrap());
 
             let r = exec.next_batch(1);
@@ -527,6 +508,8 @@ mod tests {
 
     #[test]
     fn test_predicate_error() {
+        use crate::coprocessor::Error;
+
         /// This function returns error when value is None.
         #[derive(Debug, Clone, Copy, RpnFunction)]
         #[rpn_function(args = 1)]
