@@ -63,7 +63,7 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     /// Note that this number can be inaccurate because it is a hint for the capacity of the vector.
     fn groups_len(&self) -> usize;
 
-    /// Iterates aggregate function states for each group.
+    /// Iterates aggregate function states for each available group.
     ///
     /// Implementors should call `iteratee` for each group with the aggregate function states of
     /// that group as the argument.
@@ -73,7 +73,7 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
     ///
     /// Implementors should not iterate the same group multiple times for the same partial
     /// input data.
-    fn iterate_each_group_for_partial_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
         src_is_drained: bool,
@@ -207,7 +207,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 .process_batch_input(&mut self.entities, src_result.data)?;
         }
 
-        let result = if self.imp.is_partial_results_ready() {
+        // aggregate result is always available when source is drained
+        let result = if src_is_drained || self.imp.is_partial_results_ready() {
             Some(self.aggregate_partial_results(src_is_drained)?)
         } else {
             None
@@ -225,8 +226,8 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
             .map(|eval_type| VectorValue::with_capacity(groups_len, *eval_type))
             .collect();
 
-        // Aggregate results for each group
-        let group_by_columns = self.imp.iterate_each_group_for_partial_aggregation(
+        // Pull aggregate results of each available group
+        let group_by_columns = self.imp.iterate_available_groups(
             &mut self.entities,
             src_is_drained,
             |entities, states| {

@@ -163,7 +163,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     }
 
     #[inline]
-    fn iterate_each_group_for_partial_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
         src_is_drained: bool,
