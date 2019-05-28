@@ -2583,8 +2583,10 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        let mut need_sync = apply_ctx.kv_wb.is_some()
-            && !apply_ctx.kv_wb().is_empty()
+        let mut need_sync = apply_ctx
+            .apply_res
+            .iter()
+            .any(|res| res.region_id == self.delegate.region_id())
             && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
         (|| {
             fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
