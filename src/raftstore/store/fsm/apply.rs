@@ -2580,8 +2580,9 @@ impl ApplyFsm {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-        let mut need_sync =
-            self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
+        let mut need_sync = apply_ctx.kv_wb.is_some()
+            && !apply_ctx.kv_wb().is_empty()
+            && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
         (|| {
             fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
         })();
@@ -2600,7 +2601,6 @@ impl ApplyFsm {
                 |_| unimplemented!()
             );
 
-            apply_ctx.sync_log_hint = true;
             apply_ctx.flush();
             self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
         }
