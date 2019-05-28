@@ -290,6 +290,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
 
         Ok(group_by_columns)
     }
+
+    /// Slow hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

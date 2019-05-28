@@ -294,8 +294,11 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         Ok(group_by_columns)
     }
 
-    fn is_partial_results_ready(&self, is_drained: bool) -> bool {
-        is_drained || AggregationExecutorImpl::<Src>::groups_len(self) >= 2
+    /// We cannot ensure the last group is complete, so we can output partial results
+    /// only if group count >= 2.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        AggregationExecutorImpl::<Src>::groups_len(self) >= 2
     }
 }
 

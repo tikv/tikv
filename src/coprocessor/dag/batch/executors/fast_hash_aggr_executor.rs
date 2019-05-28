@@ -293,6 +293,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
 
         Ok(vec![group_by_column])
     }
+
+    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
+    }
 }
 
 fn calc_groups_each_row<T: Evaluable + Eq + std::hash::Hash>(

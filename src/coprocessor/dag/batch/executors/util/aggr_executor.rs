@@ -80,12 +80,11 @@ pub trait AggregationExecutorImpl<Src: BatchExecutor>: Send {
         iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>>;
 
-    /// Returns whether we can aggregate at the moment.
+    /// Returns whether we can now output partial aggregate results when the source is not drained.
     ///
-    /// The default value is `src_is_drained`. Only StreamAgg can aggregate when not drained.
-    fn is_partial_results_ready(&self, src_is_drained: bool) -> bool {
-        src_is_drained
-    }
+    /// This method is called only when the source is not drained because aggregate result is always
+    /// ready if the source is drained and no error occurs.
+    fn is_partial_results_ready(&self) -> bool;
 }
 
 /// Some common data that need to be accessed by both `AggregationExecutor`
@@ -185,6 +184,7 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
         })
     }
 
+    /// Returns partial results of aggregation if available and whether the source is drained
     #[inline]
     fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
@@ -207,17 +207,15 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
                 .process_batch_input(&mut self.entities, src_result.data)?;
         }
 
-        if self.imp.is_partial_results_ready(src_is_drained) {
-            Ok((
-                Some(self.aggregate_partial_results(src_is_drained)?),
-                src_is_drained,
-            ))
+        let result = if self.imp.is_partial_results_ready() {
+            Some(self.aggregate_partial_results(src_is_drained)?)
         } else {
-            Ok((None, src_is_drained))
-        }
+            None
+        };
+        Ok((result, src_is_drained))
     }
 
-    /// Generates aggregation results of complete groups.
+    /// Generates aggregation results of available groups.
     fn aggregate_partial_results(&mut self, src_is_drained: bool) -> Result<LazyBatchColumnVec> {
         let groups_len = self.imp.groups_len();
         let mut all_result_columns: Vec<_> = self

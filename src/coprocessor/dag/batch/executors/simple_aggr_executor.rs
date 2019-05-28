@@ -173,6 +173,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         iteratee(entities, &self.states)?;
         Ok(Vec::new())
     }
+
+    /// Simple aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
