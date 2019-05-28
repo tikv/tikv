@@ -433,3 +433,52 @@ fn test_local_read_cache() {
     cluster.must_put(b"k3", b"v3");
     must_get_equal(&cluster.get_engine(leader.get_store_id()), b"k3", b"v3");
 }
+
+/// Test latency changes when a leader becomes follower right after it receives
+/// read_index heartbeat response.
+#[test]
+fn test_not_leader_read_lease() {
+    let mut cluster = new_node_cluster(0, 3);
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    // Increase the Raft tick interval to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, Some(50), None);
+    let heartbeat_interval = cluster.cfg.raft_store.raft_heartbeat_interval();
+
+    cluster.run();
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k2", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+
+    // Add a filter to delay heartbeat response until transfer leader begins.
+    cluster.sim.wl().add_recv_filter(
+        1,
+        Box::new(LeadingFilter::new(
+            MessageType::MsgHeartbeatResponse,
+            MessageType::MsgRequestVote,
+        )),
+    );
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(1, 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    ));
+
+    let mut region = cluster.get_region(b"k1");
+    let region_id = region.get_id();
+    let mut req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_get_cmd(b"k2")],
+        true,
+    );
+    req.mut_header().set_peer(new_peer(1, 1));
+    let (cb, rx) = make_cb(&req);
+    cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
+
+    cluster.transfer_leader(region_id, new_peer(3, 3));
+    // Even the leader steps down, it should respond to read index in time.
+    rx.recv_timeout(heartbeat_interval).unwrap();
+}
