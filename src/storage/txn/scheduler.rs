@@ -32,7 +32,7 @@
 //! to the scheduler.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::u64;
+use std::{cmp, u64};
 
 use kvproto::kvrpcpb::CommandPri;
 use prometheus::HistogramTimer;
@@ -195,7 +195,7 @@ impl<E: Engine> Scheduler<E> {
                 .thread_count(worker_pool_size)
                 .build(),
             high_priority_pool: ThreadPoolBuilder::new(thd_name!("sched-high-pri-pool"), factory)
-                .thread_count(std::cmp::max(1, worker_pool_size / 2))
+                .thread_count(cmp::max(1, worker_pool_size / 2))
                 .build(),
             running_write_bytes: 0,
         }
