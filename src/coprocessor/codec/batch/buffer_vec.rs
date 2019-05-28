@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![allow(dead_code)]
-
 use std::iter::*;
 
 /// A vector like container storing multiple buffers. Each buffer is a `[u8]` slice in
