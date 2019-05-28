@@ -313,6 +313,26 @@ fn test_node_callback_when_destroyed() {
     );
 }
 
+/// Test if the callback proposed by read index is cleared correctly.
+#[test]
+fn test_lease_read_callback_destroy() {
+    // Only server cluster can fake sending message successfully in raftstore layer.
+    let mut cluster = new_server_cluster(0, 3);
+    // Increase the Raft tick interval to make this test case running reliably.
+    let election_timeout = configure_for_lease_read(&mut cluster, Some(50), None);
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Isolate the target peer to make transfer leader fail.
+    cluster.add_send_filter(IsolationFilterFactory::new(3));
+    cluster.transfer_leader(1, new_peer(3, 3));
+    thread::sleep(election_timeout * 2);
+    // Trigger ReadIndex on the leader.
+    assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
+    cluster.must_put(b"k2", b"v2");
+}
+
 #[test]
 fn test_read_index_when_transfer_leader() {
     let mut cluster = new_node_cluster(0, 3);
