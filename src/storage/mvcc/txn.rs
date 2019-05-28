@@ -93,7 +93,7 @@ impl<S: Snapshot> MvccTxn<S> {
         primary: Vec<u8>,
         ttl: u64,
         short_value: Option<Value>,
-        is_pessimistic_txn: bool,
+        for_update_ts: u64,
         txn_size: u64,
     ) {
         let lock = Lock::new(
@@ -102,7 +102,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.start_ts,
             ttl,
             short_value,
-            is_pessimistic_txn,
+            for_update_ts,
             txn_size,
         )
         .to_bytes();
@@ -232,7 +232,7 @@ impl<S: Snapshot> MvccTxn<S> {
             primary.to_vec(),
             options.lock_ttl,
             None,
-            true,
+            for_update_ts,
             options.txn_size,
         );
 
@@ -288,7 +288,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 value,
-                true,
+                0,
                 options.txn_size,
             );
         } else {
@@ -302,7 +302,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
-                true,
+                0,
                 options.txn_size,
             );
         }
@@ -384,7 +384,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 value,
-                false,
+                0,
                 options.txn_size,
             );
         } else {
@@ -398,7 +398,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
-                false,
+                0,
                 options.txn_size,
             );
         }
@@ -426,7 +426,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 (
                     lock.lock_type,
                     lock.short_value.take(),
-                    lock.is_pessimistic_txn,
+                    lock.for_update_ts != 0,
                 )
             }
             _ => {
@@ -474,7 +474,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 if lock.short_value.is_none() && lock.lock_type == LockType::Put {
                     self.delete_value(key.clone(), lock.ts);
                 }
-                lock.is_pessimistic_txn
+                lock.for_update_ts != 0
             }
             _ => {
                 return match self.reader.get_txn_commit_info(&key, self.start_ts)? {

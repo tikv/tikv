@@ -710,7 +710,7 @@ fn process_write_impl<S: Snapshot>(
                     txn_to_keys
                         .as_mut()
                         .unwrap()
-                        .entry((current_lock.ts, current_lock.is_pessimistic_txn))
+                        .entry((current_lock.ts, current_lock.for_update_ts != 0))
                         .or_insert(vec![])
                         .push(lock_manager::gen_key_hash(&current_key));
                 }
