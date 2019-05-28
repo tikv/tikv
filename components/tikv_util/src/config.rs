@@ -221,9 +221,9 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
-impl Into<Duration> for ReadableDuration {
-    fn into(self) -> Duration {
-        self.0
+impl From<ReadableDuration> for Duration {
+    fn from(readable: ReadableDuration) -> Duration {
+        readable.0
     }
 }
 
