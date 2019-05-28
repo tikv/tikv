@@ -162,6 +162,20 @@
 ## PD endpoints.
 # endpoints = []
 
+## The interval at which to retry a PD connection initialization.
+## Default is 300ms.
+# retry-interval = "300ms"
+
+## If the client observes an error, it can can skip reporting it except every `n` times.
+## Set to 1 to disable this feature.
+## Default is 10.
+# retry-log-every = 10
+
+## The maximum number of times to retry a PD connection initialization.
+## Set to 0 to disable retry.
+## Default is -1, meaning isize::MAX times.
+# retry-max-count = -1
+
 [raftstore]
 ## Whether to force to flush logs.
 ## Set to `true` (default) for best reliability, which prevents data loss when there is a power
@@ -714,4 +728,15 @@
 
 [pessimistic-txn]
 ## Enable pessimistic transaction
-# enabled = false
+# enabled = true
+
+## Time to wait in milliseconds before responding to TiDB when pessimistic
+## transactions # encounter locks
+# wait-for-lock-timeout = 1000
+
+## Time to delay in milliseconds before responding to TiDB when other transactions
+## release locks that pessimistic transactions are waiting for(0 to disable).
+# wake-up-delay-duration = 1
+#
+## Interval in milliseconds to check the membership change of deadlock detector.
+# monitor-membership-interval 3000

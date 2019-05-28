@@ -7,26 +7,24 @@ use crate::coprocessor::Result;
 
 /// Executor that retrieves rows from the source executor
 /// and only produces part of the rows.
-pub struct BatchLimitExecutor<C: ExecSummaryCollector, Src: BatchExecutor> {
-    summary_collector: C,
+pub struct BatchLimitExecutor<Src: BatchExecutor> {
     src: Src,
     remaining_rows: usize,
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchLimitExecutor<C, Src> {
-    pub fn new(summary_collector: C, src: Src, limit: usize) -> Result<Self> {
+impl<Src: BatchExecutor> BatchLimitExecutor<Src> {
+    pub fn new(src: Src, limit: usize) -> Result<Self> {
         if limit == 0 {
             return Err(box_err!("limit should not be zero"));
         }
         Ok(Self {
-            summary_collector,
             src,
             remaining_rows: limit,
         })
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.src.schema()
@@ -34,8 +32,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
 
     #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
-        let timer = self.summary_collector.on_start_iterate();
-
         let mut result = self.src.next_batch(scan_rows);
         if result.data.rows_len() < self.remaining_rows {
             self.remaining_rows -= result.data.rows_len();
@@ -45,17 +41,12 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor for BatchLimitEx
             result.is_drained = Ok(true);
         }
 
-        self.summary_collector
-            .on_finish_iterate(timer, result.data.rows_len());
-
         result
     }
 
     #[inline]
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         self.src.collect_statistics(destination);
-        self.summary_collector
-            .collect_into(&mut destination.summary_per_executor)
     }
 }
 
@@ -150,8 +141,7 @@ mod tests {
         ];
         for (limit, get_rows) in data {
             let src = MockExecutor::new();
-            let mut executor =
-                BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, limit).unwrap();
+            let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
             let res = executor.next_batch(get_rows);
             if limit <= get_rows {
                 // is drained
@@ -167,7 +157,7 @@ mod tests {
     #[test]
     fn test_limit_remaining() {
         let src = MockExecutor::new();
-        let mut executor = BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, 5).unwrap();
+        let mut executor = BatchLimitExecutor::new(src, 5).unwrap();
         let expect_rows = 3;
         let mut remaining_rows = 5;
         while remaining_rows > 0 {
@@ -180,8 +170,9 @@ mod tests {
     #[test]
     fn test_execution_summary() {
         let src = MockExecutor::new();
-        let mut executor =
-            BatchLimitExecutor::new(ExecSummaryCollectorEnabled::new(1), src, 4).unwrap();
+        let mut executor = BatchLimitExecutor::new(src, 4)
+            .unwrap()
+            .with_summary_collector(ExecSummaryCollectorEnabled::new(1));
         executor.next_batch(1);
         executor.next_batch(2);
         let mut s = BatchExecuteStatistics::new(2, 1);
@@ -204,7 +195,7 @@ mod tests {
     #[test]
     fn test_invalid_limit() {
         let src = MockExecutor::new();
-        assert!(BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, 0).is_err());
+        assert!(BatchLimitExecutor::new(src, 0).is_err());
     }
 
     /// MockErrExecutor is based on MockExecutor, the only difference is
@@ -242,8 +233,7 @@ mod tests {
         ];
         for (limit, get_rows) in data {
             let src = MockErrExecutor::new();
-            let mut executor =
-                BatchLimitExecutor::new(ExecSummaryCollectorDisabled, src, limit).unwrap();
+            let mut executor = BatchLimitExecutor::new(src, limit).unwrap();
             let res = executor.next_batch(get_rows);
             if limit <= get_rows {
                 // error happens after limit rows
