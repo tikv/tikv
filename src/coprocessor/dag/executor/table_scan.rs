@@ -147,7 +147,12 @@ mod tests {
             super::TableScanExecutor::table_scan(wrapper.table_scan, wrapper.ranges, store, true)
                 .unwrap();
 
-        let row = table_scanner.next().unwrap().unwrap().take_origin();
+        let row = table_scanner
+            .next()
+            .unwrap()
+            .unwrap()
+            .take_origin()
+            .unwrap();
         assert_eq!(row.handle, handle as i64);
         assert_eq!(row.data.len(), wrapper.cols.len());
 
@@ -185,7 +190,12 @@ mod tests {
                 .unwrap();
 
         for handle in 0..KEY_NUMBER {
-            let row = table_scanner.next().unwrap().unwrap().take_origin();
+            let row = table_scanner
+                .next()
+                .unwrap()
+                .unwrap()
+                .take_origin()
+                .unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -222,7 +232,12 @@ mod tests {
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
-            let row = table_scanner.next().unwrap().unwrap().take_origin();
+            let row = table_scanner
+                .next()
+                .unwrap()
+                .unwrap()
+                .take_origin()
+                .unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];

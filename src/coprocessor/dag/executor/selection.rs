@@ -42,7 +42,7 @@ impl SelectionExecutor {
 impl Executor for SelectionExecutor {
     fn next(&mut self) -> Result<Option<Row>> {
         'next: while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)?;
             for filter in &self.conditions {
                 let val = filter.eval(&mut self.ctx, &cols)?;
@@ -193,7 +193,7 @@ mod tests {
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row.take_origin());
+            selection_rows.push(row.take_origin().unwrap());
         }
 
         assert_eq!(selection_rows.len(), raw_data.len());
@@ -232,7 +232,7 @@ mod tests {
 
         let mut selection_rows = Vec::with_capacity(raw_data.len());
         while let Some(row) = selection_executor.next().unwrap() {
-            selection_rows.push(row.take_origin());
+            selection_rows.push(row.take_origin().unwrap());
         }
 
         let expect_row_handles = raw_data
