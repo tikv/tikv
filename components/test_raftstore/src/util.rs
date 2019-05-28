@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{thread, u64};
 
 use protobuf;
-use rand::Rng;
+use rand::RngCore;
 use tempdir::TempDir;
 
 use kvproto::metapb::{self, RegionEpoch};
@@ -226,6 +226,12 @@ pub fn new_get_cmd(key: &[u8]) -> Request {
     cmd
 }
 
+pub fn new_read_index_cmd() -> Request {
+    let mut cmd = Request::new();
+    cmd.set_cmd_type(CmdType::ReadIndex);
+    cmd
+}
+
 pub fn new_get_cf_cmd(cf: &str, key: &[u8]) -> Request {
     let mut cmd = Request::new();
     cmd.set_cmd_type(CmdType::Get);
@@ -376,13 +382,11 @@ pub fn make_cb(cmd: &RaftCmdRequest) -> (Callback, mpsc::Receiver<RaftCmdRespons
     is_write = cmd.has_admin_request();
     for req in cmd.get_requests() {
         match req.get_cmd_type() {
-            CmdType::Get | CmdType::Snap => is_read = true,
+            CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
             CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSST => {
                 is_write = true
             }
-            CmdType::Invalid | CmdType::Prewrite | CmdType::ReadIndex => {
-                panic!("Invalid RaftCmdRequest: {:?}", cmd)
-            }
+            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
         }
     }
     assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
@@ -415,6 +419,23 @@ pub fn read_on_peer<T: Simulator>(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![new_get_cmd(key)],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    cluster.call_command(request, timeout)
+}
+
+pub fn read_index_on_peer<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    read_quorum: bool,
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
         read_quorum,
     );
     request.mut_header().set_peer(peer);
@@ -533,6 +554,9 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    // When isolated, follower relies on stale check tick to detect failure leader,
+    // choose a smaller number to make it recover faster.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

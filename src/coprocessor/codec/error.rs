@@ -147,11 +147,11 @@ impl Error {
     }
 }
 
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
+impl From<Error> for select::Error {
+    fn from(error: Error) -> select::Error {
         let mut err = select::Error::new();
-        err.set_code(self.code());
-        err.set_msg(format!("{:?}", self));
+        err.set_code(error.code());
+        err.set_msg(format!("{:?}", error));
         err
     }
 }

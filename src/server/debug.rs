@@ -116,9 +116,9 @@ impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
     }
 }
 
-impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
-    fn into(self) -> debugpb::BottommostLevelCompaction {
-        match self.0 {
+impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
+    fn from(bottommost: BottommostLevelCompaction) -> debugpb::BottommostLevelCompaction {
+        match bottommost.0 {
             DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
             DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
             DBBottommostLevelCompaction::IfHaveCompactionFilter => {
@@ -1171,6 +1171,7 @@ impl MvccInfoIterator {
                 LockType::Put => lock_info.set_field_type(Op::Put),
                 LockType::Delete => lock_info.set_field_type(Op::Del),
                 LockType::Lock => lock_info.set_field_type(Op::Lock),
+                LockType::Pessimistic => lock_info.set_field_type(Op::PessimisticLock),
             }
             lock_info.set_start_ts(lock.ts);
             lock_info.set_primary(lock.primary);
@@ -1724,7 +1725,7 @@ mod tests {
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(tp, value.to_vec(), version, 0, None);
+            let lock = Lock::new(tp, value.to_vec(), version, 0, None, false, 0);
             let value = lock.to_bytes();
             engine
                 .put_cf(lock_cf, key.as_slice(), value.as_slice())
@@ -2082,7 +2083,7 @@ mod tests {
             } else {
                 None
             };
-            let lock = Lock::new(tp, vec![], ts, 0, v);
+            let lock = Lock::new(tp, vec![], ts, 0, v, false, 0);
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
         for (key, start_ts, commit_ts, tp, short_value, expect) in write {

@@ -16,4 +16,4 @@ tikv_alloc = { path = "../tikv_alloc"}
 panic_hook = { path = "../panic_hook" }
 protobuf = "2.0"
 bytes = "0.4.10"
-rand = "0.5"
+rand = "0.6.5"
