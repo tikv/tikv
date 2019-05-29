@@ -58,7 +58,7 @@ use engine::Engines;
 use engine::{Iterable, Mutable, Peekable};
 use tikv_util::collections::{HashMap, HashSet};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
-use tikv_util::time::{duration_to_sec, SlowTimer};
+use tikv_util::time::{duration_to_sec, monotonic_raw_now, SlowTimer};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
@@ -220,6 +220,7 @@ pub struct PollContext<T, C: 'static> {
     pub ready_res: Vec<(Ready, InvokeContext)>,
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
+    pub lease_time: Timespec,
 }
 
 impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
@@ -570,6 +571,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
         self.poll_ctx.sync_log = false;
         self.poll_ctx.has_ready = false;
         self.poll_ctx.need_flush_trans = false;
+        self.poll_ctx.lease_time = monotonic_raw_now();
         if self.pending_proposals.capacity() == 0 {
             self.pending_proposals = Vec::with_capacity(batch_size);
         }
@@ -898,6 +900,7 @@ where
             ready_res: Vec::new(),
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
+            lease_time: monotonic_raw_now(),
         };
         RaftPoller {
             tag: format!("[store {}]", ctx.store.get_id()),

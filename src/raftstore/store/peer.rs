@@ -1550,15 +1550,21 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: None,
                 };
-                self.post_propose(meta, is_conf_change, cb);
+                self.post_propose(ctx, meta, is_conf_change, cb);
                 true
             }
         }
     }
 
-    fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
+    fn post_propose<T, C>(
+        &mut self,
+        poll_ctx: &PollContext<T, C>,
+        mut meta: ProposalMeta,
+        is_conf_change: bool,
+        cb: Callback,
+    ) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(monotonic_raw_now());
+        meta.renew_lease_time = Some(poll_ctx.lease_time);
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
@@ -1846,7 +1852,7 @@ impl Peer {
                     term: self.term(),
                     renew_lease_time: Some(renew_lease_time),
                 };
-                self.post_propose(meta, false, Callback::None);
+                self.post_propose(poll_ctx, meta, false, Callback::None);
             }
         }
 
