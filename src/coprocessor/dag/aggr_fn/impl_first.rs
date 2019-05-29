@@ -18,24 +18,14 @@ pub struct AggrFnDefinitionParserFirst;
 impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::First);
-        if aggr_def.get_children().len() != 1 {
-            return Err(box_err!(
-                "Expect 1 parameter, but got {}",
-                aggr_def.get_children().len()
-            ));
-        }
-
-        // Check whether parameter expression is supported.
-        RpnExpressionBuilder::check_expr_tree_supported(&aggr_def.get_children()[0])?;
-
-        Ok(())
+        super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
     fn parse(
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -52,7 +42,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
-            max_columns,
+            src_schema.len(),
         )?);
 
         match_template_evaluable! {
