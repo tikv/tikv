@@ -71,6 +71,13 @@ impl Callback {
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            Callback::None => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Callback {

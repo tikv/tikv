@@ -93,7 +93,7 @@ impl TopNExecutor {
         let ctx = Arc::new(RefCell::new(self.eval_ctx.take().unwrap()));
         let mut heap = TopNHeap::new(self.limit, Arc::clone(&ctx))?;
         while let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.inflate_cols_with_offsets(&ctx.borrow(), &self.related_cols_offset)?;
             let ob_values = self.order_by.eval(&mut ctx.borrow_mut(), &cols)?;
             heap.try_add_row(row, ob_values, Arc::clone(&self.order_by.items))?;
@@ -400,7 +400,7 @@ pub mod tests {
             TopNExecutor::new(topn, Arc::new(EvalConfig::default()), ts_ect).unwrap();
         let mut topn_rows = Vec::with_capacity(limit as usize);
         while let Some(row) = topn_ect.next().unwrap() {
-            topn_rows.push(row.take_origin());
+            topn_rows.push(row.take_origin().unwrap());
         }
         assert_eq!(topn_rows.len(), limit as usize);
         let expect_row_handles = vec![1, 3, 2, 6];

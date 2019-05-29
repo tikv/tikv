@@ -297,7 +297,7 @@ pub mod tests {
                 .unwrap();
 
         for handle in 0..KEY_NUMBER / 2 {
-            let row = scanner.next().unwrap().unwrap().take_origin();
+            let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -351,7 +351,7 @@ pub mod tests {
             IndexScanExecutor::index_scan(wrapper.scan, wrapper.ranges, store, unique, true)
                 .unwrap();
         for handle in 0..KEY_NUMBER {
-            let row = scanner.next().unwrap().unwrap().take_origin();
+            let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -406,7 +406,7 @@ pub mod tests {
 
         for tid in 0..KEY_NUMBER {
             let handle = KEY_NUMBER - tid - 1;
-            let row = scanner.next().unwrap().unwrap().take_origin();
+            let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), 2);
             let expect_row = &wrapper.data.expect_rows[handle];
@@ -430,7 +430,7 @@ pub mod tests {
                 .unwrap();
 
         for handle in 0..KEY_NUMBER {
-            let row = scanner.next().unwrap().unwrap().take_origin();
+            let row = scanner.next().unwrap().unwrap().take_origin().unwrap();
             assert_eq!(row.handle, handle as i64);
             assert_eq!(row.data.len(), wrapper.cols.len());
             let expect_row = &wrapper.data.expect_rows[handle];
