@@ -419,7 +419,9 @@ mod tests {
 
             // Let's check group by column first. Group by column is decoded in fast hash agg,
             // but not decoded in slow hash agg. So decode it anyway.
-            r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+            r.data[4]
+                .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+                .unwrap();
 
             // The row order is not defined. Let's sort it by the group by column before asserting.
             let mut sort_column: Vec<(usize, _)> = r.data[4]
@@ -586,7 +588,9 @@ mod tests {
             let mut r = exec.next_batch(1);
             assert_eq!(r.data.rows_len(), 3);
             assert_eq!(r.data.columns_len(), 1); // 0 result column, 1 group by column
-            r.data[0].decode(&Tz::utc(), &exec.schema()[0]).unwrap();
+            r.data[0]
+                .ensure_decoded(&Tz::utc(), &exec.schema()[0])
+                .unwrap();
             let mut sort_column: Vec<(usize, _)> = r.data[0]
                 .decoded()
                 .as_real_slice()
