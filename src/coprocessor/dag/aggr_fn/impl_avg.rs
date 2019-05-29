@@ -25,7 +25,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -45,10 +45,11 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
 
         // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, schema.len())?;
-        super::util::rewrite_exp_for_sum_avg(schema, &mut exp).unwrap();
+        let mut exp =
+            RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
+        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
-        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(schema).tp()).unwrap();
+        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(src_schema).tp()).unwrap();
         out_exp.push(exp);
 
         Ok(match rewritten_eval_type {
