@@ -143,6 +143,46 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
+    // If the value is short, lock key and put value.
+    // If not, lock key.
+    fn put_lock(
+        &mut self,
+        key: Key,
+        lock_type: LockType,
+        primary: Vec<u8>,
+        ttl: u64,
+        value: Option<Value>,
+        for_update_ts: u64,
+        txn_size: u64,
+    ) {
+        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
+            self.lock_key(key, lock_type, primary, ttl, value, for_update_ts, txn_size);
+        } else {
+            // value is long
+            let ts = self.start_ts;
+            self.put_value(key.clone(), ts, value.unwrap());
+
+            self.lock_key(key, lock_type, primary, ttl, None, for_update_ts, txn_size);
+        }
+    }
+
+    fn check_data_constraint(
+        &mut self,
+        should_not_exist: bool,
+        write: &Write,
+        key: &Key,
+    ) -> Result<()> {
+        if should_not_exist {
+            if write.write_type == WriteType::Put
+                || (write.write_type != WriteType::Delete
+                    && self.key_exist(&key, write.start_ts - 1)?)
+            {
+                return Err(Error::AlreadyExist { key: key.to_raw()? });
+            }
+        }
+        Ok(())
+    }
+
     pub fn acquire_pessimistic_lock(
         &mut self,
         key: Key,
@@ -214,16 +254,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
 
             // Check data constraint when acquiring pessimistic lock.
-            if should_not_exist {
-                if write.write_type == WriteType::Put
-                    || (write.write_type != WriteType::Delete
-                        && self.key_exist(&key, write.start_ts - 1)?)
-                {
-                    return Err(Error::AlreadyExist {
-                        key: key.into_raw()?,
-                    });
-                }
-            }
+            self.check_data_constraint(should_not_exist, &write, &key)?;
         }
 
         self.lock_key(
@@ -305,33 +336,17 @@ impl<S: Snapshot> MvccTxn<S> {
                 key: key.into_raw()?,
             });
         }
+
         // No need to check data constraint, it's resolved by pessimistic locks.
-        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                value,
-                options.for_update_ts,
-                options.txn_size,
-            );
-        } else {
-            // value is long
-            let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
-
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-                options.for_update_ts,
-                options.txn_size,
-            );
-        }
-
+        self.put_lock(
+            key,
+            lock_type,
+            primary.to_vec(),
+            options.lock_ttl,
+            value,
+            options.for_update_ts,
+            options.txn_size,
+        );
         Ok(())
     }
 
@@ -366,16 +381,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
-                    if should_not_exist {
-                        if write.write_type == WriteType::Put
-                            || (write.write_type != WriteType::Delete
-                                && self.key_exist(&key, write.start_ts - 1)?)
-                        {
-                            return Err(Error::AlreadyExist {
-                                key: key.into_raw()?,
-                            });
-                        }
-                    }
+                    self.check_data_constraint(should_not_exist, &write, &key)?;
                 }
             }
             // ... or locks at any timestamp.
@@ -389,6 +395,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         txn_size: lock.txn_size,
                     });
                 }
+                // TODO: remove it in future
                 if lock.lock_type == LockType::Pessimistic {
                     return Err(Error::LockTypeNotMatch {
                         start_ts: self.start_ts,
@@ -402,32 +409,15 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                value,
-                0,
-                options.txn_size,
-            );
-        } else {
-            // value is long
-            let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
-
-            self.lock_key(
-                key,
-                lock_type,
-                primary.to_vec(),
-                options.lock_ttl,
-                None,
-                0,
-                options.txn_size,
-            );
-        }
-
+        self.put_lock(
+            key,
+            lock_type,
+            primary.to_vec(),
+            options.lock_ttl,
+            value,
+            0,
+            options.txn_size,
+        );
         Ok(())
     }
 
