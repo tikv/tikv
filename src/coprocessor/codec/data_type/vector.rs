@@ -654,7 +654,7 @@ macro_rules! impl_ext {
                     VectorValue::$ty(ref mut vec) => vec.push(v),
                     other => panic!(
                         "Cannot call `{}` over to a {} column",
-                        stringify!($name),
+                        stringify!($push_name),
                         other.eval_type()
                     ),
                 };

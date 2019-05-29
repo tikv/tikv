@@ -109,7 +109,7 @@ fn bench_stream_aggr_count_1_first_group_by_int_col_real_col(
         ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::constant_int(1))
             .build(),
-        ExprDefBuilder::aggr_func(ExprType::First, FieldTypeTp::LongLong)
+        ExprDefBuilder::aggr_func(ExprType::First, FieldTypeTp::Double)
             .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::Double))
             .build(),
     ];
@@ -134,7 +134,7 @@ fn bench_stream_aggr_count_1_first_group_by_int_col_real_col_2_groups(
         ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::constant_int(1))
             .build(),
-        ExprDefBuilder::aggr_func(ExprType::First, FieldTypeTp::LongLong)
+        ExprDefBuilder::aggr_func(ExprType::First, FieldTypeTp::Double)
             .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::Double))
             .build(),
     ];
