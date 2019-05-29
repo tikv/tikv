@@ -35,8 +35,12 @@ impl LazyBatchColumn {
     /// Creates a new `LazyBatchColumn::Raw` with specified capacity.
     #[inline]
     pub fn raw_with_capacity(capacity: usize) -> Self {
-        // 11 = MAX_VAR_INT_LEN(10) + Datum Flag(1)
-        LazyBatchColumn::Raw(BufferVec::with_capacity(capacity, capacity * 11))
+        use codec::number::MAX_VARINT64_LENGTH;
+        // We assume that each element *may* has a size of MAX_VAR_INT_LEN + Datum Flag (1 byte).
+        LazyBatchColumn::Raw(BufferVec::with_capacity(
+            capacity,
+            capacity * (MAX_VARINT64_LENGTH + 1),
+        ))
     }
 
     /// Creates a new `LazyBatchColumn::Decoded` with specified capacity and eval type.
@@ -130,6 +134,11 @@ impl LazyBatchColumn {
         }
     }
 
+    /// Retains the elements according to a boolean array.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `retain_arr` is not long enough.
     #[inline]
     pub fn retain_by_array(&mut self, retain_arr: &[bool]) {
         match self {
