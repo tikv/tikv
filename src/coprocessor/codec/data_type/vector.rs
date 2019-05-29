@@ -6,6 +6,7 @@ use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::FieldType;
 
 use super::*;
+use crate::coprocessor::codec::data_type::scalar::ScalarValueRef;
 use crate::coprocessor::codec::datum;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::codec::{Error, Result};
@@ -173,6 +174,20 @@ impl VectorValue {
             }
         }
         Ok(())
+    }
+
+    /// Returns a `ScalarValueRef` to the element at the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if index is out of range.
+    #[inline]
+    pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                VectorValue::TT(v) => ScalarValueRef::TT(&v[index]),
+            }
+        }
     }
 
     /// Pushes a value into the column by decoding the datum and converting to current
