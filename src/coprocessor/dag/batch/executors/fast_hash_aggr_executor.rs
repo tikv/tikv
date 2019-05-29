@@ -262,11 +262,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
             self.groups.len(),
@@ -289,6 +292,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         }
 
         Ok(vec![group_by_column])
+    }
+
+    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
