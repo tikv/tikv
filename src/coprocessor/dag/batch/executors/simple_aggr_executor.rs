@@ -13,18 +13,15 @@ use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::types::RpnStackNode;
 use crate::coprocessor::Result;
 
-pub struct BatchSimpleAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SimpleAggregationImpl>,
+pub struct BatchSimpleAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SimpleAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSimpleAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSimpleAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -41,7 +38,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -49,7 +46,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             aggr_defs,
@@ -59,12 +55,16 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<ExecSummaryCollectorDisa
     }
 }
 
-impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
+        if aggr_definitions.is_empty() {
+            return Err(box_err!("Aggregation expression is empty"));
+        }
+
         for def in aggr_definitions {
             AllAggrDefinitionParser.check_supported(def)?;
         }
@@ -72,25 +72,13 @@ impl BatchSimpleAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchE
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor<C, Src> {
-    pub fn new(
-        summary_collector: C,
-        config: Arc<EvalConfig>,
-        src: Src,
-        aggr_defs: Vec<Expr>,
-    ) -> Result<Self> {
-        Self::new_impl(
-            summary_collector,
-            config,
-            src,
-            aggr_defs,
-            AllAggrDefinitionParser,
-        )
+impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
+    pub fn new(config: Arc<EvalConfig>, src: Src, aggr_defs: Vec<Expr>) -> Result<Self> {
+        Self::new_impl(config, src, aggr_defs, AllAggrDefinitionParser)
     }
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         aggr_defs: Vec<Expr>,
@@ -101,7 +89,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSimpleAggregationExecutor
         let aggr_impl = SimpleAggregationImpl { states: Vec::new() };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
