@@ -126,6 +126,7 @@ profiler = { path = "components/profiler" }
 match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
+codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
