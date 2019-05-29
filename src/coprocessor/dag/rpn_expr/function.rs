@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use super::types::RpnFnCallPayload;
+use super::types::{RpnFnCallPayload, RpnStackNode};
 use crate::coprocessor::codec::data_type::{Evaluable, ScalarValue, VectorValue};
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
@@ -343,5 +343,132 @@ impl Helper {
             result.push(f(context, payload, &arg0[i], &arg1[i], &arg2[i])?);
         }
         Ok(Ret::into_vector_value(result))
+    }
+}
+
+trait ArgMeta {
+    fn build_and_run<A: Args>(
+        self,
+        rows: usize,
+        context: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+        position: usize,
+        args: A,
+    );
+}
+
+struct Arg<T, Rem: ArgMeta> {
+    remains: Rem,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T: Evaluable, Rem: ArgMeta> ArgMeta for Arg<T, Rem> {
+    fn build_and_run<A: Args>(
+        self,
+        rows: usize,
+        context: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+        position: usize,
+        args: A,
+    ) {
+        match payload.raw_arg_at(position) {
+            RpnStackNode::Scalar { value, .. } => self.remains.build_and_run(
+                rows,
+                context,
+                payload,
+                position + 1,
+                args.add_scalar(T::borrow_scalar_value(value)),
+            ),
+            RpnStackNode::Vector { value, .. } => self.remains.build_and_run(
+                rows,
+                context,
+                payload,
+                position + 1,
+                args.add_vector(T::borrow_vector_value(value)),
+            ),
+        }
+    }
+}
+
+struct TestFunctionRunner;
+
+impl ArgMeta for TestFunctionRunner {
+    fn build_and_run<A: Args>(
+        self,
+        rows: usize,
+        context: &mut EvalContext,
+        payload: RpnFnCallPayload<'_>,
+        position: usize,
+        args: A,
+    ) {
+        let (arg2, args) = args.extract(0);
+        let (arg1, args) = args.extract(0);
+        let (arg0, args) = args.extract(0);
+    }
+}
+
+trait Args {
+    type Type;
+    type Rem: Args;
+
+    fn extract(&self, index: usize) -> (&Option<Self::Type>, &Self::Rem);
+
+    fn add_scalar<T>(self, value: &Option<T>) -> ScalarArg<'_, T, Self>
+    where
+        Self: Sized,
+    {
+        ScalarArg {
+            value,
+            remains: self,
+        }
+    }
+
+    fn add_vector<T>(self, values: &[Option<T>]) -> VectorArg<'_, T, Self>
+    where
+        Self: Sized,
+    {
+        VectorArg {
+            values,
+            remains: self,
+        }
+    }
+}
+
+struct VectorArg<'a, T, A: Args> {
+    values: &'a [Option<T>],
+    remains: A,
+}
+
+impl<'a, T, A: Args> Args for VectorArg<'a, T, A> {
+    type Type = T;
+    type Rem = A;
+
+    fn extract(&self, index: usize) -> (&Option<T>, &A) {
+        (&self.values[index], &self.remains)
+    }
+}
+
+struct ScalarArg<'a, T, A: Args> {
+    value: &'a Option<T>,
+    remains: A,
+}
+
+impl<'a, T, A: Args> Args for ScalarArg<'a, T, A> {
+    type Type = T;
+    type Rem = A;
+
+    fn extract(&self, _index: usize) -> (&Option<T>, &A) {
+        (&self.value, &self.remains)
+    }
+}
+
+struct Null;
+
+impl Args for Null {
+    type Type = ();
+    type Rem = Null;
+
+    fn extract(&self, index: usize) -> (&Option<Self::Type>, &Self::Rem) {
+        unreachable!()
     }
 }
