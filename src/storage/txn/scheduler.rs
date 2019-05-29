@@ -584,7 +584,6 @@ mod tests {
                 keys: vec![(Key::from_raw(b"k"), false)],
                 primary: b"k".to_vec(),
                 start_ts: 10,
-                for_update_ts: 10,
                 options: Options::default(),
             },
             Command::Commit {

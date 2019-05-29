@@ -147,10 +147,10 @@ impl<S: Snapshot> MvccTxn<S> {
         &mut self,
         key: Key,
         primary: &[u8],
-        for_update_ts: u64,
         should_not_exist: bool,
         options: &Options,
     ) -> Result<()> {
+        let for_update_ts = options.for_update_ts;
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
                 return Err(Error::KeyIsLocked {
@@ -255,24 +255,48 @@ impl<S: Snapshot> MvccTxn<S> {
         };
 
         if let Some(lock) = self.reader.load_lock(&key)? {
-            // Abort on lock belonging to other transaction.
             if lock.ts != self.start_ts {
-                return Err(Error::PessimisticLockNotFound {
-                    start_ts: self.start_ts,
-                    key: key.into_raw()?,
-                });
-            }
-            if lock.lock_type != LockType::Pessimistic {
-                // Duplicated command. No need to overwrite the lock and data.
-                MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
-                return Ok(());
+                // Abort on lock belonging to other transaction.
+                if is_pessimistic_lock {
+                    warn!(
+                        "prewrite failed (pessimistic lock not found)";
+                        "start_ts" => self.start_ts,
+                        "key" => %key,
+                        "lock_ts" => lock.ts,
+                    );
+                    return Err(Error::PessimisticLockNotFound {
+                        start_ts: self.start_ts,
+                        key: key.into_raw()?,
+                    });
+                }
+                // It's a non-pessimistic lock conflict. If request's for_update_ts
+                // is greater than lock's for_update_ts, we can overwrite it because
+                // isolation is guaranteed by pessimistic locks, and no other transaction
+                // can read it because the lock is replaced atomicly.
+                // Optimistic lock's for_update_ts is its start_ts.
+                let lock_for_update_ts = if lock.for_update_ts > 0 {
+                    lock.for_update_ts
+                } else {
+                    lock.ts
+                };
+                if options.for_update_ts <= lock_for_update_ts {
+                    // Only if this request is stale, request's for_update_ts will
+                    // be less than lock's for_update_ts.
+                    return Err(Error::Other("stale command".into()));
+                }
+            } else {
+                if lock.lock_type != LockType::Pessimistic {
+                    // Duplicated command. No need to overwrite the lock and data.
+                    MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
+                    return Ok(());
+                }
             }
         } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
             warn!(
                 "prewrite failed (pessimistic lock not found)";
                 "start_ts" => self.start_ts,
-                "key" => %key
+                "key" => %key,
             );
 
             return Err(Error::PessimisticLockNotFound {
@@ -288,7 +312,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 value,
-                0,
+                options.for_update_ts,
                 options.txn_size,
             );
         } else {
@@ -302,7 +326,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
-                0,
+                options.for_update_ts,
                 options.txn_size,
             );
         }
@@ -384,7 +408,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 value,
-                0,
+                self.start_ts,
                 options.txn_size,
             );
         } else {
@@ -398,7 +422,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
-                0,
+                self.start_ts,
                 options.txn_size,
             );
         }
@@ -1207,7 +1231,7 @@ mod tests {
         // Normal
         must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
         must_pessimistic_locked(&engine, k, 1);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 1);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 1, true);
         must_locked(&engine, k, 1);
         must_commit(&engine, k, 1, 2);
         must_unlocked(&engine, k);
@@ -1230,7 +1254,7 @@ mod tests {
         must_prewrite_lock_err(&engine, k, k, 8);
         must_acquire_pessimistic_lock_err(&engine, k, k, 8, 8);
         must_acquire_pessimistic_lock(&engine, k, k, 8, 9);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 8);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 8, 8, true);
         must_commit(&engine, k, 8, 10);
         must_unlocked(&engine, k);
 
@@ -1239,16 +1263,16 @@ mod tests {
         must_pessimistic_locked(&engine, k, 11);
         must_rollback(&engine, k, 11);
         must_acquire_pessimistic_lock_err(&engine, k, k, 11, 11);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
         must_prewrite_lock_err(&engine, k, k, 11);
         must_unlocked(&engine, k);
 
         must_acquire_pessimistic_lock(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 12);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 12, 12, true);
         must_locked(&engine, k, 12);
         must_rollback(&engine, k, 12);
         must_acquire_pessimistic_lock_err(&engine, k, k, 12, 12);
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 12, 12, true);
         must_prewrite_lock_err(&engine, k, k, 12);
         must_unlocked(&engine, k);
 
@@ -1256,9 +1280,9 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
         must_pessimistic_locked(&engine, k, 13);
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
         must_locked(&engine, k, 13);
-        must_pessimistic_prewrite_put(&engine, k, v, k, 13);
+        must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
         must_locked(&engine, k, 13);
         must_commit(&engine, k, 13, 14);
         must_unlocked(&engine, k);
@@ -1267,7 +1291,7 @@ mod tests {
         must_acquire_pessimistic_lock(&engine, k, k, 15, 15);
         must_pessimistic_locked(&engine, k, 15);
         must_get(&engine, k, 16, v);
-        must_pessimistic_prewrite_delete(&engine, k, k, 15);
+        must_pessimistic_prewrite_delete(&engine, k, k, 15, 15, true);
         must_get_err(&engine, k, 16);
         must_commit(&engine, k, 15, 17);
 
@@ -1281,7 +1305,7 @@ mod tests {
         must_unlocked(&engine, k);
 
         // Prewrite non-exist pessimistic lock
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 22, 22, true);
 
         // LockTypeNotMatch
         must_prewrite_put(&engine, k, v, k, 23);
@@ -1298,7 +1322,7 @@ mod tests {
             let for_update_ts = start_ts + 48;
             let commit_ts = start_ts + 50;
             must_acquire_pessimistic_lock(&engine, k, k, *start_ts, for_update_ts);
-            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts);
+            must_pessimistic_prewrite_put(&engine, k, v, k, *start_ts, *start_ts, true);
             must_commit(&engine, k, *start_ts, commit_ts);
         }
 
@@ -1313,5 +1337,33 @@ mod tests {
         must_get_commit_ts(&engine, k, 50, 100);
         must_get_commit_ts(&engine, k, 60, 110);
         must_get_rollback_ts(&engine, k, 70);
+    }
+
+    #[test]
+    fn test_lock_conflict_in_pessimistic_prewrite() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        must_prewrite_put(&engine, k, v, k, 1);
+        must_locked(&engine, k, 1);
+        // request's for_update_ts < lock's for_update_ts
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 1, false);
+        // pessimistic lock conflict
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 2, true);
+        // request's for_update_ts > lock's for_update_ts
+        must_pessimistic_prewrite_put(&engine, k, v, k, 2, 2, false);
+        must_locked(&engine, k, 2);
+        must_rollback(&engine, k, 2);
+
+        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 2, false);
+        must_locked(&engine, k, 1);
+        // request's for_update_ts = lock's for_update_ts
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 2, false);
+        // request's for_update_ts > lock's for_update_ts
+        must_pessimistic_prewrite_put(&engine, k, v, k, 2, 3, false);
+        must_locked(&engine, k, 2);
+        must_rollback(&engine, k, 2);
     }
 }

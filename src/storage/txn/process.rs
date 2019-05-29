@@ -536,9 +536,9 @@ fn process_write_impl<S: Snapshot>(
             let mut locks = vec![];
             let rows = mutations.len();
             for (i, m) in mutations.into_iter().enumerate() {
-                // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
+                // If `options.for_update_ts` is 0, the transaction is optimistic
                 // or else pessimistic.
-                if options.is_pessimistic_lock.is_empty() {
+                if options.for_update_ts == 0 {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -578,7 +578,6 @@ fn process_write_impl<S: Snapshot>(
             keys,
             primary,
             start_ts,
-            for_update_ts,
             options,
             ..
         } => {
@@ -586,13 +585,7 @@ fn process_write_impl<S: Snapshot>(
             let mut locks = vec![];
             let rows = keys.len();
             for (k, should_not_exist) in keys {
-                match txn.acquire_pessimistic_lock(
-                    k,
-                    &primary,
-                    for_update_ts,
-                    should_not_exist,
-                    &options,
-                ) {
+                match txn.acquire_pessimistic_lock(k, &primary, should_not_exist, &options) {
                     Ok(_) => {}
                     e @ Err(MvccError::KeyIsLocked { .. }) => {
                         locks.push(e.map_err(Error::from).map_err(StorageError::from));
