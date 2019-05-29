@@ -38,7 +38,6 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
         // FIRST outputs one column with the same type as its child
         out_schema.push(aggr_def.take_field_type());
 
-        // FIRST doesn't need to cast, so using the expression directly.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
