@@ -126,10 +126,12 @@ impl Row {
         Row::Agg(AggCols { suffix, value })
     }
 
-    pub fn take_origin(self) -> OriginCols {
+    pub fn take_origin(self) -> Result<OriginCols> {
         match self {
-            Row::Origin(row) => row,
-            _ => unreachable!(),
+            Row::Origin(row) => Ok(row),
+            _ => Err(box_err!(
+                "unexpected: aggregation columns cannot take origin"
+            )),
         }
     }
 

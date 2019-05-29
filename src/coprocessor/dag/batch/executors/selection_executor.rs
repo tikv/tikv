@@ -101,7 +101,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
             }
 
             // TODO: When there are many conditions, it would be better to filter column each time.
-
             src_result.data.retain_rows_by_array(&base_retain_map);
         }
 
