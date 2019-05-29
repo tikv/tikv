@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::fmt::{self, Display, Formatter};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -38,6 +39,7 @@ pub struct ReadDelegate {
     last_valid_ts: RefCell<Timespec>,
 
     tag: String,
+    invalid: Arc<AtomicBool>,
 }
 
 impl ReadDelegate {
@@ -53,7 +55,12 @@ impl ReadDelegate {
             leader_lease: None,
             last_valid_ts: RefCell::new(Timespec::new(0, 0)),
             tag: format!("[region {}] {}", region_id, peer_id),
+            invalid: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn mark_invalid(&self) {
+        self.invalid.store(true, Ordering::Release);
     }
 
     pub fn update(&mut self, progress: Progress) {
@@ -237,6 +244,12 @@ impl<C: ProposalRouter> LocalReader<C> {
                 return Ok(None);
             }
         };
+
+        if delegate.invalid.load(Ordering::Acquire) {
+            self.delegates.borrow_mut().remove(&region_id);
+            return Ok(None);
+        }
+
         // Check peer id.
         if let Err(e) = util::check_peer_id(req, delegate.peer_id) {
             self.metrics.borrow_mut().rejected_by_peer_id_mismatch += 1;
@@ -670,6 +683,7 @@ mod tests {
                 applied_index_term: term6 - 1,
                 leader_lease: Some(remote),
                 last_valid_ts: RefCell::new(Timespec::new(0, 0)),
+                invalid: Arc::new(AtomicBool::new(false)),
             };
             meta.readers.insert(1, read_delegate);
         }

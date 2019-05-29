@@ -14,7 +14,6 @@ use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
@@ -30,13 +29,11 @@ macro_rules! match_template_hashable {
 
 /// Fast Hash Aggregation Executor uses hash when comparing group key. It only supports one
 /// group by column.
-pub struct BatchFastHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, FastHashAggregationImpl>,
+pub struct BatchFastHashAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, FastHashAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchFastHashAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchFastHashAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -53,7 +50,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -62,7 +59,6 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDi
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_by_exp,
@@ -73,7 +69,7 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<ExecSummaryCollectorDi
     }
 }
 
-impl BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -105,9 +101,8 @@ impl BatchFastHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn Batc
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
     pub fn new(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp_defs: Vec<Expr>,
@@ -120,7 +115,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
             src.schema().len(),
         )?;
         Self::new_impl(
-            summary_collector,
             config,
             src,
             group_by_exp,
@@ -131,7 +125,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp: RpnExpression,
@@ -158,7 +151,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchFastHashAggregationExecut
         };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -270,11 +262,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
             self.groups.len(),
@@ -297,6 +292,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         }
 
         Ok(vec![group_by_column])
+    }
+
+    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -483,7 +484,7 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _max_columns: usize,
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
@@ -539,6 +540,74 @@ mod tests {
             let r = exec.next_batch(1);
             assert_eq!(r.data.rows_len(), 0);
             assert!(r.is_drained.unwrap());
+        }
+    }
+
+    /// Only have GROUP BY columns but no Aggregate Functions.
+    ///
+    /// E.g. SELECT 1 FROM t GROUP BY x
+    #[test]
+    fn test_no_aggr_fn() {
+        let group_by_exp = RpnExpressionBuilder::new().push_column_ref(0).build();
+
+        let exec_fast = |src_exec| {
+            Box::new(BatchFastHashAggregationExecutor::new_for_test(
+                src_exec,
+                group_by_exp.clone(),
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let exec_slow = |src_exec| {
+            Box::new(BatchSlowHashAggregationExecutor::new_for_test(
+                src_exec,
+                vec![group_by_exp.clone()],
+                vec![],
+                AllAggrDefinitionParser,
+            )) as Box<dyn BatchExecutor>
+        };
+
+        let executor_builders: Vec<Box<dyn FnOnce(MockExecutor) -> _>> =
+            vec![Box::new(exec_fast), Box::new(exec_slow)];
+
+        for exec_builder in executor_builders {
+            let src_exec = make_src_executor_1();
+            let mut exec = exec_builder(src_exec);
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 0);
+            assert!(!r.is_drained.unwrap());
+
+            let mut r = exec.next_batch(1);
+            assert_eq!(r.data.rows_len(), 3);
+            assert_eq!(r.data.columns_len(), 1); // 0 result column, 1 group by column
+            r.data[0].decode(&Tz::utc(), &exec.schema()[0]).unwrap();
+            let mut sort_column: Vec<(usize, _)> = r.data[0]
+                .decoded()
+                .as_real_slice()
+                .iter()
+                .map(|v| {
+                    use std::hash::{Hash, Hasher};
+                    let mut s = std::collections::hash_map::DefaultHasher::new();
+                    v.hash(&mut s);
+                    s.finish()
+                })
+                .enumerate()
+                .collect();
+            sort_column.sort_by(|a, b| a.1.cmp(&b.1));
+            let ordered_column: Vec<_> = sort_column
+                .iter()
+                .map(|(idx, _)| r.data[0].decoded().as_real_slice()[*idx])
+                .collect();
+            assert_eq!(
+                &ordered_column,
+                &[Real::new(1.5).ok(), None, Real::new(7.0).ok()]
+            );
         }
     }
 }
