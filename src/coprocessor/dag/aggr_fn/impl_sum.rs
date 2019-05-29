@@ -24,7 +24,7 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -38,11 +38,12 @@ impl super::parser::AggrDefinitionParser for AggrFnDefinitionParserSum {
 
         // Rewrite expression, inserting CAST if necessary. See `typeInfer4Sum` in TiDB.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, schema.len())?;
+        let mut exp =
+            RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
         // The rewrite should always success.
-        super::util::rewrite_exp_for_sum_avg(schema, &mut exp).unwrap();
+        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
-        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(schema).tp()).unwrap();
+        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(src_schema).tp()).unwrap();
         out_exp.push(exp);
 
         // Choose a type-aware SUM implementation based on the eval type after rewriting exp.

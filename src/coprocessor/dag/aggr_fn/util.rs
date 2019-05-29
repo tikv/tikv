@@ -11,7 +11,7 @@ use crate::coprocessor::dag::rpn_expr::types::RpnExpressionNode;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
 
-/// Checks whether or not there is only one child and the data type is supported.
+/// Checks whether or not there is only one child and the child expression is supported.
 pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
     if aggr_def.get_children().len() != 1 {
         return Err(box_err!(
@@ -33,34 +33,27 @@ pub fn check_aggr_exp_supported_one_child(aggr_def: &Expr) -> Result<()> {
 ///
 /// TODO: This logic should be performed by TiDB.
 pub fn rewrite_exp_for_sum_avg(schema: &[FieldType], exp: &mut RpnExpression) -> Result<()> {
-    let eval_type = box_try!(EvalType::try_from(exp.ret_field_type(schema).tp()));
-    match eval_type {
+    let ret_field_type = exp.ret_field_type(schema);
+    let ret_eval_type = box_try!(EvalType::try_from(ret_field_type.tp()));
+    let new_ret_field_type = match ret_eval_type {
         EvalType::Decimal | EvalType::Real => {
-            // No need to cast.
+            // No need to cast. Return directly without changing anything.
+            return Ok(());
         }
-        EvalType::Int => {
-            let new_field_type = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::NewDecimal)
-                .flen(cop_datatype::MAX_DECIMAL_WIDTH)
-                .build();
-            let func = get_cast_fn(exp.ret_field_type(schema), &new_field_type)?;
-            exp.push(RpnExpressionNode::FnCall {
-                func,
-                field_type: new_field_type,
-            });
-        }
-        _ => {
-            let new_field_type = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::Double)
-                .flen(cop_datatype::MAX_DECIMAL_WIDTH)
-                .decimal(cop_datatype::UNSPECIFIED_LENGTH)
-                .build();
-            let func = get_cast_fn(exp.ret_field_type(schema), &new_field_type)?;
-            exp.push(RpnExpressionNode::FnCall {
-                func,
-                field_type: new_field_type,
-            });
-        }
-    }
+        EvalType::Int => FieldTypeBuilder::new()
+            .tp(FieldTypeTp::NewDecimal)
+            .flen(cop_datatype::MAX_DECIMAL_WIDTH)
+            .build(),
+        _ => FieldTypeBuilder::new()
+            .tp(FieldTypeTp::Double)
+            .flen(cop_datatype::MAX_REAL_WIDTH)
+            .decimal(cop_datatype::UNSPECIFIED_LENGTH)
+            .build(),
+    };
+    let func = get_cast_fn(ret_field_type, &new_ret_field_type)?;
+    exp.push(RpnExpressionNode::FnCall {
+        func,
+        field_type: new_ret_field_type,
+    });
     Ok(())
 }

@@ -25,7 +25,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
         mut aggr_def: Expr,
         time_zone: &Tz,
         // We use the same structure for all data types, so this parameter is not needed.
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -44,7 +44,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
-            schema.len(),
+            src_schema.len(),
         )?);
 
         Ok(Box::new(AggrFnCount))
