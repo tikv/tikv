@@ -7,6 +7,7 @@ mod impl_count;
 mod impl_first;
 mod parser;
 mod summable;
+mod util;
 
 pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
