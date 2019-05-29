@@ -6,6 +6,7 @@ mod impl_avg;
 mod impl_count;
 mod parser;
 mod summable;
+mod util;
 
 pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
