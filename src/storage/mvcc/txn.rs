@@ -256,7 +256,8 @@ impl<S: Snapshot> MvccTxn<S> {
 
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.ts != self.start_ts {
-                // Abort on lock belonging to other transaction.
+                // Abort on lock belonging to other transaction if
+                // prewrites a pessimistic lock.
                 if is_pessimistic_lock {
                     warn!(
                         "prewrite failed (pessimistic lock not found)";
@@ -271,8 +272,8 @@ impl<S: Snapshot> MvccTxn<S> {
                 }
                 // It's a non-pessimistic lock conflict. If request's for_update_ts
                 // is greater than lock's for_update_ts, we can overwrite it because
-                // isolation is guaranteed by pessimistic locks, and no other transaction
-                // can read it because the lock is replaced atomicly.
+                // isolation is guaranteed by pessimistic locks and no other transaction
+                // can read the old data because the lock is replaced atomicly.
                 // Optimistic lock's for_update_ts is its start_ts.
                 let lock_for_update_ts = if lock.for_update_ts > 0 {
                     lock.for_update_ts
