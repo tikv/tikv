@@ -197,6 +197,26 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
+    fn check_non_pessimistic_lock_conflict(&self, for_update_ts: u64, lock: &Lock) -> Result<()> {
+        // If request's for_update_ts is greater than lock's for_update_ts,
+        // we can overwrite it because isolation is guaranteed by pessimistic
+        // locks and no other transaction can read the old data because the lock
+        // is replaced atomicly.
+        //
+        // Optimistic lock's for_update_ts is its start_ts.
+        let lock_for_update_ts = if lock.for_update_ts > 0 {
+            lock.for_update_ts
+        } else {
+            lock.ts
+        };
+        if for_update_ts <= lock_for_update_ts {
+            // Only if this request is stale, request's for_update_ts will
+            // be less than or equal to lock's for_update_ts.
+            return Err(Error::Other("stale command".into()));
+        }
+        Ok(())
+    }
+
     pub fn acquire_pessimistic_lock(
         &mut self,
         key: Key,
@@ -315,21 +335,8 @@ impl<S: Snapshot> MvccTxn<S> {
                         key: key.into_raw()?,
                     });
                 }
-                // It's a non-pessimistic lock conflict. If request's for_update_ts
-                // is greater than lock's for_update_ts, we can overwrite it because
-                // isolation is guaranteed by pessimistic locks and no other transaction
-                // can read the old data because the lock is replaced atomicly.
-                // Optimistic lock's for_update_ts is its start_ts.
-                let lock_for_update_ts = if lock.for_update_ts > 0 {
-                    lock.for_update_ts
-                } else {
-                    lock.ts
-                };
-                if options.for_update_ts <= lock_for_update_ts {
-                    // Only if this request is stale, request's for_update_ts will
-                    // be less than lock's for_update_ts.
-                    return Err(Error::Other("stale command".into()));
-                }
+
+                self.check_non_pessimistic_lock_conflict(options.for_update_ts, &lock)?;
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
@@ -1329,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lock_conflict_in_pessimistic_prewrite() {
+    fn test_non_pessimistic_lock_conflict() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k1";
