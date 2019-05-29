@@ -1558,13 +1558,16 @@ impl Peer {
 
     fn post_propose<T, C>(
         &mut self,
-        poll_ctx: &PollContext<T, C>,
+        poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
         is_conf_change: bool,
         cb: Callback,
     ) {
         // Try to renew leader lease on every consistent read/write request.
-        meta.renew_lease_time = Some(poll_ctx.lease_time);
+        if poll_ctx.lease_time.is_none() {
+            poll_ctx.lease_time = Some(monotonic_raw_now());
+        }
+        meta.renew_lease_time = poll_ctx.lease_time;
 
         if !cb.is_none() {
             let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
