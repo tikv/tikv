@@ -734,7 +734,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
 
         let mut region_proposals = Vec::with_capacity(pending_count);
         let (kv_wb, raft_wb, append_res, sync_log) = {
-            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &self.trans, pending_count);
+            let mut ctx = ReadyContext::new(&mut self.raft_metrics, &mut self.trans, pending_count);
             for region_id in self.pending_raft_groups.drain() {
                 let check_pending_snapshot = if let Some(peer) = self.region_peers.get(&region_id) {
                     peer.check_pending_snapshot(&self.region_ranges, &self.region_peers)
@@ -808,7 +808,7 @@ impl<T: Transport, C: PdClient> Store<T, C> {
                 is_merging = peer.pending_merge_state.is_some();
                 peer.post_raft_ready_append(
                     &mut self.raft_metrics,
-                    &self.trans,
+                    &mut self.trans,
                     &mut ready,
                     invoke_ctx,
                 )

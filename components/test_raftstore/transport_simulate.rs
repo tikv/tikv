@@ -577,6 +577,50 @@ impl Filter<StoreMsg> for DropSnapshotFilter {
     }
 }
 
+/// Filters all `filter_type` packets until seeing the `flush_type`.
+///
+/// The first filtered message will be flushed too.
+pub struct LeadingFilter {
+    filter_type: MessageType,
+    flush_type: MessageType,
+    first_filtered_msg: Mutex<Option<RaftMessage>>,
+}
+
+impl LeadingFilter {
+    pub fn new(filter_type: MessageType, flush_type: MessageType) -> LeadingFilter {
+        LeadingFilter {
+            filter_type,
+            flush_type,
+            first_filtered_msg: Mutex::default(),
+        }
+    }
+}
+
+impl Filter<RaftMessage> for LeadingFilter {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let mut filtered_msg = self.first_filtered_msg.lock().unwrap();
+        let mut to_send = vec![];
+        for msg in msgs.drain(..) {
+            if msg.get_message().get_msg_type() == self.filter_type {
+                if filtered_msg.is_none() {
+                    *filtered_msg = Some(msg);
+                }
+            } else if msg.get_message().get_msg_type() == self.flush_type {
+                to_send.push(filtered_msg.take().unwrap());
+                to_send.push(msg);
+            } else {
+                to_send.push(msg);
+            }
+        }
+        msgs.extend(to_send);
+        check_messages(msgs)
+    }
+
+    fn after(&self, _: Result<()>) -> Result<()> {
+        Ok(())
+    }
+}
+
 /// Filter leading duplicated Snap.
 ///
 /// It will pause the first snapshot and filter out all the snapshot that
