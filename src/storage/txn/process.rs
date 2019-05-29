@@ -535,10 +535,10 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
-            for (i, m) in mutations.into_iter().enumerate() {
-                // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
-                // or else pessimistic.
-                if options.is_pessimistic_lock.is_empty() {
+            // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
+            // or else pessimistic.
+            if options.is_pessimistic_lock.is_empty() {
+                for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -546,7 +546,9 @@ fn process_write_impl<S: Snapshot>(
                         }
                         Err(e) => return Err(Error::from(e)),
                     }
-                } else {
+                }
+            } else {
+                for (i, m) in mutations.into_iter().enumerate() {
                     match txn.pessimistic_prewrite(
                         m,
                         &primary,
