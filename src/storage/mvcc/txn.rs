@@ -244,20 +244,15 @@ impl<S: Snapshot> MvccTxn<S> {
                 });
             }
 
-            if write.start_ts == self.start_ts {
-                // If the `commit_ts` of write is equal to transaction's `start_ts`,
-                // the lock is already rollbacked.
-                if commit_ts == self.start_ts {
-                    assert!(write.write_type == WriteType::Rollback);
-                    return Err(Error::PessimisticLockRollbacked {
-                        start_ts: self.start_ts,
-                        key: key.into_raw()?,
-                    });
-                } else {
-                    // If the `commit_ts` is not equal to `start_ts`,
-                    // the transaction has been commited.
-                    return Err(Error::Committed { commit_ts });
-                }
+            // Handle rollback.
+            // If the start timestamp of write is equal to transaction's start timestamp
+            // as well as commit timestamp, the lock is already rollbacked.
+            if write.start_ts == self.start_ts && commit_ts == self.start_ts {
+                assert!(write.write_type == WriteType::Rollback);
+                return Err(Error::PessimisticLockRollbacked {
+                    start_ts: self.start_ts,
+                    key: key.into_raw()?,
+                });
             }
             // If `commit_ts` we seek is already before `start_ts`, the rollback must not exist.
             if commit_ts > self.start_ts {
