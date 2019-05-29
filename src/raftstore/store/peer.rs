@@ -666,14 +666,14 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics) -> Result<()>
+    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
     {
         for msg in msgs {
             let msg_type = msg.get_msg_type();
-            self.send_raft_message(msg, trans)?;
+            self.send_raft_message(msg, trans);
             match msg_type {
                 MessageType::MsgAppend => metrics.append += 1,
                 MessageType::MsgAppendResponse => metrics.append_resp += 1,
@@ -709,7 +709,6 @@ impl Peer {
                 | MessageType::MsgReadIndexResp => {}
             }
         }
-        Ok(())
     }
 
     /// Steps the raft message.
@@ -911,6 +910,16 @@ impl Peer {
                         "peer_id" => self.peer.get_id(),
                         "lease" => ?self.leader_lease,
                     );
+                    // If the predecessor reads index during transferring leader and receives
+                    // quorum's heartbeat response after that, it may wait for applying to
+                    // current term to apply the read. So broadcast eargerly to avoid unexpected
+                    // latency.
+                    //
+                    // TODO: Maybe the predecessor should just drop all the read requests directly?
+                    // All the requests need to be redirected in the end anyway and executing
+                    // prewrites or commits will be just a waste.
+                    self.last_urgent_proposal_idx = self.raft_group.raft.raft_log.last_index();
+                    self.raft_group.skip_bcast_commit(false);
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -995,15 +1004,7 @@ impl Peer {
             fail_point!("raft_before_follower_send");
             let messages = mem::replace(&mut self.pending_messages, vec![]);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "failed to clear snapshot pending messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, messages, &mut ctx.raft_metrics.message);
         }
 
         if let Some(snap) = self.get_pending_snapshot() {
@@ -1094,16 +1095,7 @@ impl Peer {
             fail_point!("raft_before_leader_send");
             let msgs = ready.messages.drain(..);
             ctx.need_flush_trans = true;
-            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message)
-                .unwrap_or_else(|e| {
-                    // We don't care that the message is sent failed, so here just log this error.
-                    warn!(
-                       "leader failed to send messages";
-                       "region_id" => self.region_id,
-                       "peer_id" => self.peer.get_id(),
-                       "err" => ?e,
-                    );
-                });
+            self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
@@ -1160,15 +1152,7 @@ impl Peer {
                     &mut ctx.trans,
                     ready.messages.drain(..),
                     &mut ctx.raft_metrics.message,
-                )
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "follower failed to send messages";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "err" => ?e,
-                    );
-                });
+                );
                 ctx.need_flush_trans = true;
             }
         }
@@ -1559,8 +1543,11 @@ impl Peer {
     fn post_propose(&mut self, mut meta: ProposalMeta, is_conf_change: bool, cb: Callback) {
         // Try to renew leader lease on every consistent read/write request.
         meta.renew_lease_time = Some(monotonic_raw_now());
-        let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
-        self.apply_proposals.push(p);
+
+        if !cb.is_none() {
+            let p = Proposal::new(is_conf_change, meta.index, meta.term, cb);
+            self.apply_proposals.push(p);
+        }
 
         self.proposals.push(meta);
     }
@@ -1713,8 +1700,11 @@ impl Peer {
         }
 
         // Checks if safe to transfer leader.
-        if duration_to_sec(self.recent_conf_change_time.elapsed())
-            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        // Check `has_pending_conf` is necessary because `recent_conf_change_time` is updated
+        // on applied. TODO: fix the transfer leader issue in Raft.
+        if self.raft_group.raft.has_pending_conf()
+            || duration_to_sec(self.recent_conf_change_time.elapsed())
+                < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
         {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
@@ -2123,6 +2113,10 @@ impl Peer {
     }
 
     pub fn get_peer_from_cache(&self, peer_id: u64) -> Option<metapb::Peer> {
+        if peer_id == 0 {
+            return None;
+        }
+        fail_point!("stale_peer_cache_2", peer_id == 2, |_| None);
         if let Some(peer) = self.peer_cache.borrow().get(&peer_id) {
             return Some(peer.clone());
         }
@@ -2159,11 +2153,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(
-        &mut self,
-        msg: eraftpb::Message,
-        trans: &mut T,
-    ) -> Result<()> {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
         let mut send_msg = RaftMessage::new();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -2173,11 +2163,13 @@ impl Peer {
         let to_peer = match self.get_peer_from_cache(msg.get_to()) {
             Some(p) => p,
             None => {
-                return Err(box_err!(
-                    "failed to look up recipient peer {} in region {}",
-                    msg.get_to(),
-                    self.region_id
-                ));
+                warn!(
+                    "failed to look up recipient peer";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "to_peer" => msg.get_to(),
+                );
+                return;
             }
         };
 
@@ -2231,8 +2223,6 @@ impl Peer {
                     .report_snapshot(to_peer_id, SnapshotStatus::Failure);
             }
         }
-
-        Ok(())
     }
 }
 

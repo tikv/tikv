@@ -14,7 +14,7 @@ pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
-pub use self::scalar::ScalarValue;
+pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
