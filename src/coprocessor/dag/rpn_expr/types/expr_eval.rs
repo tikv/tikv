@@ -8,6 +8,7 @@ use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -129,19 +130,85 @@ impl RpnExpression {
         schema: &'a [FieldType],
         columns: &'a mut LazyBatchColumnVec,
     ) -> Result<RpnStackNode<'a>> {
-        assert!(rows > 0);
-
-        let mut stack = Vec::with_capacity(self.len());
-
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
+        self.ensure_columns_decoded(&context.cfg.tz, schema, columns)?;
+        self.eval_unchecked(context, rows, schema, columns)
+    }
 
-        for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
+    /// Evaluates the expression into a boolean vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if the boolean vector output buffer is not large enough to contain all values.
+    pub fn eval_as_mysql_bools(
+        &self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &[FieldType],
+        columns: &mut LazyBatchColumnVec,
+        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
+    ) -> Result<()> {
+        use crate::coprocessor::codec::data_type::AsMySQLBool;
+
+        assert!(outputs.len() >= rows);
+        let values = self.eval(context, rows, schema, columns)?;
+        match values {
+            RpnStackNode::Scalar { value, .. } => {
+                let b = value.as_mysql_bool(context)?;
+                for i in 0..rows {
+                    outputs[i] = b;
+                }
+            }
+            RpnStackNode::Vector { value, .. } => {
+                assert_eq!(value.len(), rows);
+                value.eval_as_mysql_bools(context, outputs)?;
             }
         }
+        Ok(())
+    }
+
+    /// Decodes all referred columns which are not decoded. Then we ensure
+    /// all referred columns are decoded.
+    pub fn ensure_columns_decoded<'a>(
+        &'a self,
+        tz: &Tz,
+        schema: &'a [FieldType],
+        columns: &'a mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        for node in self.as_ref() {
+            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
+                columns.ensure_column_decoded(*offset, tz, &schema[*offset])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates the expression into a vector.
+    ///
+    /// It differs from `eval` in that `eval_unchecked` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_unchecked` doesn't decode columns,
+    /// it will panic if referred columns are not decoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if referred columns are not decoded.
+    ///
+    /// Panics when referenced column does not have equal length as specified in `rows`.
+    pub fn eval_unchecked<'a>(
+        &'a self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &'a [FieldType],
+        columns: &'a LazyBatchColumnVec,
+    ) -> Result<RpnStackNode<'a>> {
+        assert!(rows > 0);
+        let mut stack = Vec::with_capacity(self.len());
 
         for node in self.as_ref() {
             match node {
@@ -191,40 +258,6 @@ impl RpnExpression {
 
         assert_eq!(stack.len(), 1);
         Ok(stack.into_iter().next().unwrap())
-    }
-
-    /// Evaluates the expression into a boolean vector.
-    ///
-    /// # Panics
-    ///
-    /// Panics if referenced columns are not decoded.
-    ///
-    /// Panics if the boolean vector output buffer is not large enough to contain all values.
-    pub fn eval_as_mysql_bools(
-        &self,
-        context: &mut EvalContext,
-        rows: usize,
-        schema: &[FieldType],
-        columns: &mut LazyBatchColumnVec,
-        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
-    ) -> Result<()> {
-        use crate::coprocessor::codec::data_type::AsMySQLBool;
-
-        assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, schema, columns)?;
-        match values {
-            RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_mysql_bool(context)?;
-                for i in 0..rows {
-                    outputs[i] = b;
-                }
-            }
-            RpnStackNode::Vector { value, .. } => {
-                assert_eq!(value.len(), rows);
-                value.eval_as_mysql_bools(context, outputs)?;
-            }
-        }
-        Ok(())
     }
 }
 
