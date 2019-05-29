@@ -1700,8 +1700,11 @@ impl Peer {
         }
 
         // Checks if safe to transfer leader.
-        if duration_to_sec(self.recent_conf_change_time.elapsed())
-            < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
+        // Check `has_pending_conf` is necessary because `recent_conf_change_time` is updated
+        // on applied. TODO: fix the transfer leader issue in Raft.
+        if self.raft_group.raft.has_pending_conf()
+            || duration_to_sec(self.recent_conf_change_time.elapsed())
+                < ctx.cfg.raft_reject_transfer_leader_duration.as_secs() as f64
         {
             debug!(
                 "reject transfer leader due to the region was config changed recently";
