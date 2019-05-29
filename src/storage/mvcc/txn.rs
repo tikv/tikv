@@ -263,7 +263,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         "prewrite failed (pessimistic lock not found)";
                         "start_ts" => self.start_ts,
                         "key" => %key,
-                        "lock_ts" => lock.ts,
+                        "lock_ts" => lock.ts
                     );
                     return Err(Error::PessimisticLockNotFound {
                         start_ts: self.start_ts,
@@ -297,7 +297,7 @@ impl<S: Snapshot> MvccTxn<S> {
             warn!(
                 "prewrite failed (pessimistic lock not found)";
                 "start_ts" => self.start_ts,
-                "key" => %key,
+                "key" => %key
             );
 
             return Err(Error::PessimisticLockNotFound {
@@ -409,7 +409,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 value,
-                self.start_ts,
+                0,
                 options.txn_size,
             );
         } else {
@@ -423,7 +423,7 @@ impl<S: Snapshot> MvccTxn<S> {
                 primary.to_vec(),
                 options.lock_ttl,
                 None,
-                self.start_ts,
+                0,
                 options.txn_size,
             );
         }
