@@ -22,9 +22,10 @@ use tikv::server::transport::{RaftStoreRouter, ServerRaftStoreRouter};
 use tikv::server::Node;
 use tikv::server::Result as ServerResult;
 use tikv_util::collections::{HashMap, HashSet};
-use tikv_util::worker::{FutureWorker, Worker};
+use tikv_util::worker::FutureWorker;
 
 use super::*;
+use tikv::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
 
 pub struct ChannelTransportCore {
     snap_paths: HashMap<u64, (SnapManager, TempDir)>,
@@ -164,10 +165,6 @@ impl Simulator for NodeCluster {
         assert!(node_id == 0 || !self.nodes.contains_key(&node_id));
         let pd_worker = FutureWorker::new("test-pd-worker");
 
-        // Create localreader.
-        let local_reader = Worker::new("test-local-reader");
-        let local_ch = local_reader.scheduler();
-
         let simulate_trans = SimulateTransport::new(self.trans.clone());
         let mut node = Node::new(
             system,
@@ -206,12 +203,14 @@ impl Simulator for NodeCluster {
             Arc::new(SSTImporter::new(dir).unwrap())
         };
 
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+        let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
         node.start(
             engines.clone(),
             simulate_trans.clone(),
             snap_mgr.clone(),
             pd_worker,
-            local_reader,
+            store_meta,
             coprocessor_host,
             importer,
         )?;
@@ -239,7 +238,7 @@ impl Simulator for NodeCluster {
                 .insert(node_id, (snap_mgr, tmp));
         }
 
-        let router = ServerRaftStoreRouter::new(router.clone(), local_ch);
+        let router = ServerRaftStoreRouter::new(router, local_reader);
         self.trans
             .core
             .lock()

@@ -59,11 +59,11 @@ fn test_node_base_merge() {
     assert_eq!(region.get_id(), right.get_id());
     assert_eq!(region.get_start_key(), left.get_start_key());
     assert_eq!(region.get_end_key(), right.get_end_key());
-    let orgin_epoch = left.get_region_epoch();
+    let origin_epoch = left.get_region_epoch();
     let new_epoch = region.get_region_epoch();
     // PrepareMerge + CommitMerge, so it should be 2.
-    assert_eq!(new_epoch.get_version(), orgin_epoch.get_version() + 2);
-    assert_eq!(new_epoch.get_conf_ver(), orgin_epoch.get_conf_ver());
+    assert_eq!(new_epoch.get_version(), origin_epoch.get_version() + 2);
+    assert_eq!(new_epoch.get_conf_ver(), origin_epoch.get_conf_ver());
     let get = new_request(
         region.get_id(),
         new_epoch.to_owned(),

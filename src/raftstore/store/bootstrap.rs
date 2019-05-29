@@ -117,7 +117,8 @@ mod tests {
                 .unwrap(),
         );
         let region = initial_region(1, 1, 1);
-        let engines = Engines::new(kv_engine, raft_engine);
+        let shared_block_cache = false;
+        let engines = Engines::new(kv_engine, raft_engine, shared_block_cache);
 
         assert!(bootstrap_store(&engines, 1, 1).is_ok());
         assert!(bootstrap_store(&engines, 1, 1).is_err());

@@ -39,6 +39,8 @@ fn test_pending_peers() {
     assert!(pending_peers.is_empty());
 }
 
+// Tests if raftstore and apply worker write truncated_state concurrently could lead to
+// dirty write.
 #[test]
 fn test_pending_snapshot() {
     let _guard = crate::setup();
@@ -50,6 +52,7 @@ fn test_pending_snapshot() {
 
     let handle_snapshot_fp = "apply_on_handle_snapshot_1_1";
     let handle_snapshot_finish_fp = "apply_on_handle_snapshot_finish_1_1";
+    fail::cfg("apply_on_handle_snapshot_sync", "return").unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -92,9 +95,8 @@ fn test_pending_snapshot() {
     cluster.clear_send_filters();
     let start = Instant::now();
     loop {
-        let term = cluster.truncated_state(1, 2).get_term();
-        if term == cluster.truncated_state(1, 1).get_term()
-            || start.elapsed() > election_timeout * 2
+        if cluster.pd_client.get_pending_peers().get(&1).is_none()
+            || start.elapsed() > election_timeout * 10
         {
             break;
         }
@@ -108,5 +110,16 @@ fn test_pending_snapshot() {
     sleep_ms(200);
     let state2 = cluster.truncated_state(1, 1);
     fail::remove(handle_snapshot_finish_fp);
-    assert_eq!(state1, state2);
+    assert!(
+        state1.get_term() <= state2.get_term(),
+        "{:?} {:?}",
+        state1,
+        state2
+    );
+    assert!(
+        state1.get_index() <= state2.get_index(),
+        "{:?} {:?}",
+        state1,
+        state2
+    );
 }

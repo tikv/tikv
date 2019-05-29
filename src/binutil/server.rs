@@ -9,14 +9,18 @@ use crate::fatal;
 use crate::import::{ImportSSTService, SSTImporter};
 use crate::pd::{PdClient, RpcClient};
 use crate::raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor};
-use crate::raftstore::store::{self, fsm};
+use crate::raftstore::store::fsm::store::{StoreMeta, PENDING_VOTES_CAP};
+use crate::raftstore::store::{self, fsm, LocalReader};
 use crate::raftstore::store::{new_compaction_listener, SnapManagerBuilder};
 use crate::server::resolve;
 use crate::server::status_server::StatusServer;
 use crate::server::transport::ServerRaftStoreRouter;
 use crate::server::DEFAULT_CLUSTER_ID;
 use crate::server::{create_raft_storage, Node, Server};
-use crate::storage::{self, AutoGCConfig, DEFAULT_ROCKSDB_SUB_DIR};
+use crate::storage::lock_manager::{
+    Detector, DetectorScheduler, Service as DeadlockService, WaiterManager, WaiterMgrScheduler,
+};
+use crate::storage::{self, AutoGCConfig, RaftKv, DEFAULT_ROCKSDB_SUB_DIR};
 use engine::rocks;
 use engine::rocks::util::metrics_flusher::{MetricsFlusher, DEFAULT_FLUSHER_INTERVAL};
 use engine::rocks::util::security::encrypted_env_from_cipher_file;
@@ -24,14 +28,13 @@ use engine::Engines;
 use fs2::FileExt;
 use std::fs::File;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use std::usize;
 use tikv_util::check_environment_variables;
 use tikv_util::security::SecurityManager;
 use tikv_util::time::Monitor;
-use tikv_util::worker::{Builder, FutureWorker};
+use tikv_util::worker::FutureWorker;
 
 const RESERVED_OPEN_FDS: u64 = 1000;
 
@@ -111,14 +114,6 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     // Initialize raftstore channels.
     let (router, system) = fsm::create_raft_batch_system(&cfg.raft_store);
 
-    // Create Local Reader.
-    let local_reader = Builder::new("local-reader")
-        .batch_size(cfg.raft_store.local_read_batch_size as usize)
-        .create();
-    let local_ch = local_reader.scheduler();
-
-    // Create router.
-    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_ch);
     let compaction_listener = new_compaction_listener(router.clone());
 
     // Create pd client and pd worker
@@ -180,19 +175,51 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let kv_engine = rocks::util::new_engine_opt(db_path.to_str().unwrap(), kv_db_opts, kv_cfs_opts)
         .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine));
+    let engines = Engines::new(Arc::new(kv_engine), Arc::new(raft_engine), cache.is_some());
+    let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_VOTES_CAP)));
+    let local_reader = LocalReader::new(engines.kv.clone(), store_meta.clone(), router.clone());
+    let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
+
+    let engine = RaftKv::new(raft_router.clone());
 
     let storage_read_pool = storage::readpool_impl::build_read_pool(
         &cfg.readpool.storage.build_config(),
         pd_sender.clone(),
+        engine.clone(),
     );
 
+    // Create waiter manager worker and deadlock detector worker if pessimistic-txn is enabled
+    // Make clippy happy
+    let (mut waiter_mgr_worker, mut detector_worker) = if cfg.pessimistic_txn.enabled {
+        (
+            Some(FutureWorker::new("waiter-manager")),
+            Some(FutureWorker::new("deadlock-detector")),
+        )
+    } else {
+        (None, None)
+    };
+    // Make clippy happy
+    let deadlock_service = if cfg.pessimistic_txn.enabled {
+        Some(DeadlockService::new(
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+        ))
+    } else {
+        None
+    };
+
     let storage = create_raft_storage(
-        raft_router.clone(),
+        engine.clone(),
         &cfg.storage,
         storage_read_pool,
         Some(engines.kv.clone()),
         Some(raft_router.clone()),
+        waiter_mgr_worker
+            .as_ref()
+            .map(|worker| WaiterMgrScheduler::new(worker.scheduler())),
+        detector_worker
+            .as_ref()
+            .map(|worker| DetectorScheduler::new(worker.scheduler())),
     )
     .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -218,8 +245,9 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     let cop_read_pool = coprocessor::readpool_impl::build_read_pool(
         &cfg.readpool.coprocessor.build_config(),
         pd_sender.clone(),
+        engine.clone(),
     );
-    let cop = coprocessor::Endpoint::new(&server_cfg, storage.get_engine(), cop_read_pool);
+    let cop = coprocessor::Endpoint::new(&server_cfg, cop_read_pool);
     let mut server = Server::new(
         &server_cfg,
         &security_mgr,
@@ -230,6 +258,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         snap_mgr.clone(),
         Some(engines.clone()),
         Some(import_service),
+        deadlock_service,
     )
     .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
     let trans = server.transport();
@@ -249,7 +278,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
         trans,
         snap_mgr,
         pd_worker,
-        local_reader,
+        store_meta,
         coprocessor_host,
         importer,
     )
@@ -257,7 +286,11 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
     initial_metric(&cfg.metric, Some(node.id()));
 
     // Start auto gc
-    let auto_gc_cfg = AutoGCConfig::new(pd_client, region_info_accessor.clone(), node.id());
+    let auto_gc_cfg = AutoGCConfig::new(
+        Arc::clone(&pd_client),
+        region_info_accessor.clone(),
+        node.id(),
+    );
     if let Err(e) = storage.start_auto_gc(auto_gc_cfg) {
         fatal!("failed to start auto_gc on storage, error: {}", e);
     }
@@ -273,6 +306,32 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             "failed to start metrics flusher";
             "err" => %e
         );
+    }
+
+    // Start waiter manager and deadlock detector
+    if cfg.pessimistic_txn.enabled {
+        let waiter_mgr_runner = WaiterManager::new(
+            DetectorScheduler::new(detector_worker.as_ref().unwrap().scheduler()),
+            cfg.pessimistic_txn.wait_for_lock_timeout,
+            cfg.pessimistic_txn.wake_up_delay_duration,
+        );
+        let detector_runner = Detector::new(
+            node.id(),
+            WaiterMgrScheduler::new(waiter_mgr_worker.as_ref().unwrap().scheduler()),
+            Arc::clone(&security_mgr),
+            pd_client,
+            cfg.pessimistic_txn.monitor_membership_interval,
+        );
+        waiter_mgr_worker
+            .as_mut()
+            .unwrap()
+            .start(waiter_mgr_runner)
+            .unwrap_or_else(|e| fatal!("failed to start waiter manager: {}", e));
+        detector_worker
+            .as_mut()
+            .unwrap()
+            .start(detector_runner)
+            .unwrap_or_else(|e| fatal!("failed to start deadlock detector: {}", e));
     }
 
     // Run server.
@@ -320,6 +379,21 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
             "err" => ?e
         );
     }
+
+    if cfg.pessimistic_txn.enabled {
+        if let Some(Err(e)) = waiter_mgr_worker.unwrap().stop().map(JoinHandle::join) {
+            info!(
+                "ignore failure when stopping waiter manager worker";
+                "err" => ?e
+            );
+        }
+        if let Some(Err(e)) = detector_worker.unwrap().stop().map(JoinHandle::join) {
+            info!(
+                "ignore failure when stopping deadlock detector worker";
+                "err" => ?e
+            );
+        }
+    }
 }
 
 /// Various sanity-checks and logging before running a server.
@@ -328,7 +402,7 @@ fn run_raft_server(pd_client: RpcClient, cfg: &TiKvConfig, security_mgr: Arc<Sec
 ///
 /// # Logs
 ///
-/// The presense of these environment variables that affect the database
+/// The presence of these environment variables that affect the database
 /// behavior is logged.
 ///
 /// - `GRPC_POLL_STRATEGY`

@@ -4,7 +4,8 @@ use std::mem;
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
-use rand::{thread_rng, Rng, ThreadRng};
+use rand::rngs::ThreadRng;
+use rand::{thread_rng, Rng};
 use tipb::analyze::{self, AnalyzeColumnsReq, AnalyzeIndexReq, AnalyzeReq, AnalyzeType};
 use tipb::executor::TableScan;
 
@@ -19,7 +20,6 @@ use crate::coprocessor::*;
 use super::cmsketch::CMSketch;
 use super::fmsketch::FMSketch;
 use super::histogram::Histogram;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 
 // `AnalyzeContext` is used to handle `AnalyzeReq`
 pub struct AnalyzeContext<S: Snapshot> {
@@ -73,7 +73,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
     // it would build a histogram and count-min sketch of index values.
     fn handle_index(
         req: AnalyzeIndexReq,
-        scanner: &mut IndexScanExecutor<ExecSummaryCollectorDisabled, SnapshotStore<S>>,
+        scanner: &mut IndexScanExecutor<SnapshotStore<S>>,
     ) -> Result<Vec<u8>> {
         let mut hist = Histogram::new(req.get_bucket_size() as usize);
         let mut cms = CMSketch::new(
@@ -81,7 +81,7 @@ impl<S: Snapshot> AnalyzeContext<S> {
             req.get_cmsketch_width() as usize,
         );
         while let Some(row) = scanner.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let (bytes, end_offsets) = row.data.get_column_values_and_end_offsets();
             hist.append(bytes);
             if let Some(c) = cms.as_mut() {
@@ -106,7 +106,6 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
             AnalyzeType::TypeIndex => {
                 let req = self.req.take_idx_req();
                 let mut scanner = ScanExecutor::index_scan_with_cols_len(
-                    ExecSummaryCollectorDisabled,
                     i64::from(req.get_num_columns()),
                     mem::replace(&mut self.ranges, Vec::new()),
                     self.snap.take().unwrap(),
@@ -147,7 +146,7 @@ impl<S: Snapshot> RequestHandler for AnalyzeContext<S> {
 }
 
 struct SampleBuilder<S: Snapshot> {
-    data: TableScanExecutor<ExecSummaryCollectorDisabled, SnapshotStore<S>>,
+    data: TableScanExecutor<SnapshotStore<S>>,
     // the number of columns need to be sampled. It equals to cols.len()
     // if cols[0] is not pk handle, or it should be cols.len() - 1.
     col_len: usize,
@@ -179,8 +178,7 @@ impl<S: Snapshot> SampleBuilder<S> {
 
         let mut meta = TableScan::new();
         meta.set_columns(cols_info);
-        let table_scanner =
-            ScanExecutor::table_scan(ExecSummaryCollectorDisabled, meta, ranges, snap, false)?;
+        let table_scanner = ScanExecutor::table_scan(meta, ranges, snap, false)?;
         Ok(Self {
             data: table_scanner,
             col_len,
@@ -208,7 +206,7 @@ impl<S: Snapshot> SampleBuilder<S> {
             self.col_len
         ];
         while let Some(row) = self.data.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             let cols = row.get_binary_cols()?;
             let retrieve_len = cols.len();
             let mut cols_iter = cols.into_iter();

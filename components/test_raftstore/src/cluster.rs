@@ -143,7 +143,7 @@ impl<T: Simulator> Cluster<T> {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             );
-            let engines = Engines::new(engine, raft_engine);
+            let engines = Engines::new(engine, raft_engine, cache.is_some());
             self.dbs.push(engines);
             self.paths.push(dir);
         }
@@ -752,7 +752,7 @@ impl<T: Simulator> Cluster<T> {
             .take_region_epoch()
     }
 
-    pub fn region_detail(&mut self, region_id: u64, store_id: u64) -> RegionDetailResponse {
+    pub fn region_detail(&self, region_id: u64, store_id: u64) -> RegionDetailResponse {
         let status_cmd = new_region_detail_cmd();
         let peer = new_peer(store_id, 0);
         let req = new_status_request(region_id, peer, status_cmd);
