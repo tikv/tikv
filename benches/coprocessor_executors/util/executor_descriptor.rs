@@ -44,3 +44,15 @@ pub fn hash_aggregate(aggr_expr: &Expr, group_bys: &[Expr]) -> PbExecutor {
         .set_group_by(group_bys.to_vec().into());
     exec
 }
+
+/// Builds a stream aggregation executor descriptor.
+pub fn stream_aggregate(aggr_expr: &Expr, group_bys: &[Expr]) -> PbExecutor {
+    let mut exec = PbExecutor::new();
+    exec.set_tp(ExecType::TypeStreamAgg);
+    exec.mut_aggregation()
+        .mut_agg_func()
+        .push(aggr_expr.clone());
+    exec.mut_aggregation()
+        .set_group_by(group_bys.to_vec().into());
+    exec
+}

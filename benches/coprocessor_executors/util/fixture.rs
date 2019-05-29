@@ -45,6 +45,7 @@ impl FixtureBuilder {
         }
     }
 
+    /// Pushes a i64 column that values are sequentially filled by 0 to n.
     pub fn push_column_i64_0_n(mut self) -> Self {
         let mut col = Vec::with_capacity(self.rows);
         for i in 0..self.rows {
@@ -55,6 +56,7 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a i64 column that values are randomly generated in the i64 range.
     pub fn push_column_i64_random(mut self) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
@@ -66,6 +68,7 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a i64 column that values are randomly sampled from the giving values.
     pub fn push_column_i64_sampled(mut self, samples: &[i64]) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
@@ -77,6 +80,35 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a i64 column that values are filled according to the given values in order.
+    ///
+    /// For example, if 3 values `[a, b, c]` are given, then the first 1/3 values in the column are
+    /// `a`, the second 1/3 values are `b` and the last 1/3 values are `c`.
+    pub fn push_column_i64_ordered(mut self, samples: &[i64]) -> Self {
+        let mut col = Vec::with_capacity(self.rows);
+        for i in 0..self.rows {
+            let pos = ((i as f64) / (self.rows as f64) * (samples.len() as f64)).floor() as usize;
+            col.push(Datum::I64(samples[pos]));
+        }
+        self.columns.push(col);
+        self.field_types.push(FieldTypeTp::LongLong.into());
+        self
+    }
+
+    /// Pushes a f64 column that values are sequentially filled by 0 to n.
+    pub fn push_column_f64_0_n(mut self) -> Self {
+        let mut col = Vec::with_capacity(self.rows);
+        for i in 0..self.rows {
+            col.push(Datum::F64(i as f64));
+        }
+        self.columns.push(col);
+        self.field_types.push(FieldTypeTp::Double.into());
+        self
+    }
+
+    /// Pushes a f64 column that values are randomly generated in the f64 range.
+    ///
+    /// Generated values range from -1e50 to 1e50.
     pub fn push_column_f64_random(mut self) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
@@ -88,6 +120,7 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a f64 column that values are randomly sampled from the giving values.
     pub fn push_column_f64_sampled(mut self, samples: &[f64]) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_1);
         let mut col = Vec::with_capacity(self.rows);
@@ -99,6 +132,35 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a f64 column that values are filled according to the given values in order.
+    ///
+    /// For example, if 3 values `[a, b, c]` are given, then the first 1/3 values in the column are
+    /// `a`, the second 1/3 values are `b` and the last 1/3 values are `c`.
+    pub fn push_column_f64_ordered(mut self, samples: &[f64]) -> Self {
+        let mut col = Vec::with_capacity(self.rows);
+        for i in 0..self.rows {
+            let pos = ((i as f64) / (self.rows as f64) * (samples.len() as f64)).floor() as usize;
+            col.push(Datum::F64(samples[pos]));
+        }
+        self.columns.push(col);
+        self.field_types.push(FieldTypeTp::Double.into());
+        self
+    }
+
+    /// Pushes a decimal column that values are sequentially filled by 0 to n.
+    pub fn push_column_decimal_0_n(mut self) -> Self {
+        let mut col = Vec::with_capacity(self.rows);
+        for i in 0..self.rows {
+            col.push(Datum::Dec(Decimal::from(i as i64)));
+        }
+        self.columns.push(col);
+        self.field_types.push(FieldTypeTp::NewDecimal.into());
+        self
+    }
+
+    /// Pushes a decimal column that values are randomly generated.
+    ///
+    /// Generated decimals have 1 to 30 integer digits and 1 to 20 fractional digits.
     pub fn push_column_decimal_random(mut self) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_2);
         let mut col = Vec::with_capacity(self.rows);
@@ -121,6 +183,7 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a decimal column that values are randomly sampled from the giving values.
     pub fn push_column_decimal_sampled(mut self, samples: &[&str]) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_2);
         let mut col = Vec::with_capacity(self.rows);
@@ -133,6 +196,24 @@ impl FixtureBuilder {
         self
     }
 
+    /// Pushes a decimal column that values are filled according to the given values in order.
+    ///
+    /// For example, if 3 values `[a, b, c]` are given, then the first 1/3 values in the column are
+    /// `a`, the second 1/3 values are `b` and the last 1/3 values are `c`.
+    pub fn push_column_decimal_ordered(mut self, samples: &[&str]) -> Self {
+        let mut col = Vec::with_capacity(self.rows);
+        for i in 0..self.rows {
+            let pos = ((i as f64) / (self.rows as f64) * (samples.len() as f64)).floor() as usize;
+            let dec_str = samples[pos];
+            col.push(Datum::Dec(Decimal::from_str(dec_str).unwrap()));
+        }
+        self.columns.push(col);
+        self.field_types.push(FieldTypeTp::NewDecimal.into());
+        self
+    }
+
+    /// Pushes a bytes column that values are randomly generated and each value has the same length
+    /// as specified.
     pub fn push_column_bytes_random_fixed_len(mut self, len: usize) -> Self {
         let mut rng: XorShiftRng = SeedableRng::seed_from_u64(SEED_3);
         let mut col = Vec::with_capacity(self.rows);

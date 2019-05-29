@@ -172,6 +172,45 @@ fn bench_select_count_1_group_by_int_col_group_many(b: &mut criterion::Bencher, 
     bench_select_count_1_group_by_int_col_impl(table, store, b, input);
 }
 
+fn bench_select_count_1_group_by_int_col_stream_impl(
+    table: Table,
+    store: Store<RocksEngine>,
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let executors = &[
+        table_scan(&[table["foo"].as_column_info()]),
+        stream_aggregate(
+            &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            &[ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build()],
+        ),
+    ];
+
+    input
+        .bencher
+        .bench(b, executors, &[table.get_record_range_all()], &store);
+}
+
+// SELECT COUNT(1) FROM Table GROUP BY int_col (2 groups, stream aggregation)
+fn bench_select_count_1_group_by_int_col_group_few_stream(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
+    bench_select_count_1_group_by_int_col_stream_impl(table, store, b, input);
+}
+
+// SELECT COUNT(1) FROM Table GROUP BY int_col (n groups, n = row_count, stream aggregation)
+fn bench_select_count_1_group_by_int_col_group_many_stream(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
+    bench_select_count_1_group_by_int_col_stream_impl(table, store, b, input);
+}
+
 fn bench_select_count_1_group_by_fn_impl(
     table: Table,
     store: Store<RocksEngine>,
@@ -249,6 +288,48 @@ fn bench_select_count_1_group_by_2_col_group_many(b: &mut criterion::Bencher, in
     bench_select_count_1_group_by_2_col_impl(table, store, b, input);
 }
 
+fn bench_select_count_1_group_by_2_col_stream_impl(
+    table: Table,
+    store: Store<RocksEngine>,
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let executors = &[
+        table_scan(&[table["foo"].as_column_info()]),
+        stream_aggregate(
+            &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            &[
+                ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong).build(),
+                ExprDefBuilder::scalar_func(ScalarFuncSig::PlusInt, FieldTypeTp::LongLong)
+                    .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                    .push_child(ExprDefBuilder::constant_int(1))
+                    .build(),
+            ],
+        ),
+    ];
+
+    input
+        .bencher
+        .bench(b, executors, &[table.get_record_range_all()], &store);
+}
+
+// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (2 groups, stream aggregation)
+fn bench_select_count_1_group_by_2_col_group_few_stream(b: &mut criterion::Bencher, input: &Input) {
+    let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
+    bench_select_count_1_group_by_2_col_stream_impl(table, store, b, input);
+}
+
+// SELECT COUNT(1) FROM Table GROUP BY int_col, int_col + 1 (n groups, n = row_count, stream aggregation)
+fn bench_select_count_1_group_by_2_col_group_many_stream(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let (table, store) = self::fixture::table_with_int_column_n_groups(input.rows);
+    bench_select_count_1_group_by_2_col_stream_impl(table, store, b, input);
+}
+
 // SELECT COUNT(1) FROM Table WHERE id > X GROUP BY int_col (2 groups, selectivity = 5%)
 fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l(
     b: &mut criterion::Bencher,
@@ -267,6 +348,37 @@ fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l(
                 .build(),
         ]),
         hash_aggregate(
+            &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::constant_int(1))
+                .build(),
+            &[ExprDefBuilder::column_ref(1, FieldTypeTp::LongLong).build()],
+        ),
+    ];
+
+    input
+        .bencher
+        .bench(b, executors, &[table.get_record_range_all()], &store);
+}
+
+// SELECT COUNT(1) FROM Table WHERE id > X GROUP BY int_col
+// (2 groups, selectivity = 5%, stream aggregation)
+fn bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l_stream(
+    b: &mut criterion::Bencher,
+    input: &Input,
+) {
+    let (table, store) = self::fixture::table_with_int_column_two_groups_ordered(input.rows);
+
+    let executors = &[
+        table_scan(&[table["id"].as_column_info(), table["foo"].as_column_info()]),
+        selection(&[
+            ExprDefBuilder::scalar_func(ScalarFuncSig::GTInt, FieldTypeTp::LongLong)
+                .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+                .push_child(ExprDefBuilder::constant_int(
+                    (input.rows as f64 * 0.05) as i64,
+                ))
+                .build(),
+        ]),
+        stream_aggregate(
             &ExprDefBuilder::aggr_func(ExprType::Count, FieldTypeTp::LongLong)
                 .push_child(ExprDefBuilder::constant_int(1))
                 .build(),
@@ -334,16 +446,28 @@ pub fn bench(c: &mut criterion::Criterion) {
             bench_select_count_1_where_fn_sel_m,
         ),
         BenchCase::new(
-            "select_count_1_group_by_fn_group_few",
-            bench_select_count_1_group_by_fn_group_few,
+            "select_count_1_group_by_int_col_group_few",
+            bench_select_count_1_group_by_int_col_group_few,
+        ),
+        BenchCase::new(
+            "select_count_1_group_by_int_col_group_few_stream",
+            bench_select_count_1_group_by_int_col_group_few_stream,
         ),
         BenchCase::new(
             "select_count_1_group_by_2_col_group_few",
             bench_select_count_1_group_by_2_col_group_few,
         ),
         BenchCase::new(
+            "select_count_1_group_by_2_col_group_few_stream",
+            bench_select_count_1_group_by_2_col_group_few_stream,
+        ),
+        BenchCase::new(
             "select_count_1_where_fn_group_by_int_col_group_few_sel_l",
             bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l,
+        ),
+        BenchCase::new(
+            "select_count_1_where_fn_group_by_int_col_group_few_sel_l_stream",
+            bench_select_count_1_where_fn_group_by_int_col_group_few_sel_l_stream,
         ),
     ];
     if crate::util::bench_level() >= 1 {
@@ -360,12 +484,16 @@ pub fn bench(c: &mut criterion::Criterion) {
                 bench_select_count_1_where_fn_sel_h,
             ),
             BenchCase::new(
-                "select_count_1_group_by_int_col_group_few",
-                bench_select_count_1_group_by_int_col_group_few,
+                "select_count_1_group_by_fn_group_few",
+                bench_select_count_1_group_by_fn_group_few,
             ),
             BenchCase::new(
                 "select_count_1_group_by_int_col_group_many",
                 bench_select_count_1_group_by_int_col_group_many,
+            ),
+            BenchCase::new(
+                "select_count_1_group_by_int_col_group_many_stream",
+                bench_select_count_1_group_by_int_col_group_many_stream,
             ),
             BenchCase::new(
                 "select_count_1_group_by_fn_group_many",
@@ -374,6 +502,10 @@ pub fn bench(c: &mut criterion::Criterion) {
             BenchCase::new(
                 "select_count_1_group_by_2_col_group_many",
                 bench_select_count_1_group_by_2_col_group_many,
+            ),
+            BenchCase::new(
+                "select_count_1_group_by_2_col_group_many_stream",
+                bench_select_count_1_group_by_2_col_group_many_stream,
             ),
         ];
         cases.append(&mut additional_cases);

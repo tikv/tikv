@@ -22,6 +22,25 @@ pub fn table_with_int_column_two_groups(rows: usize) -> (Table, Store<RocksEngin
     (table, store)
 }
 
+pub fn table_with_int_column_two_groups_ordered(rows: usize) -> (Table, Store<RocksEngine>) {
+    let id = ColumnBuilder::new()
+        .col_type(TYPE_LONG)
+        .primary_key(true)
+        .build();
+    let foo = ColumnBuilder::new().col_type(TYPE_LONG).build();
+    let table = TableBuilder::new()
+        .add_col("id", id)
+        .add_col("foo", foo)
+        .build();
+
+    let store = crate::util::FixtureBuilder::new(rows)
+        .push_column_i64_0_n()
+        .push_column_i64_ordered(&[0x123456, 0xCCCC])
+        .build_store(&table, &["id", "foo"]);
+
+    (table, store)
+}
+
 pub fn table_with_int_column_n_groups(rows: usize) -> (Table, Store<RocksEngine>) {
     let id = ColumnBuilder::new()
         .col_type(TYPE_LONG)

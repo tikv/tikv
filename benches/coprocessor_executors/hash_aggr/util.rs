@@ -24,7 +24,7 @@ pub trait HashAggrBencher {
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
-        aggr_expr: &Expr,
+        aggr_expr: &[Expr],
     );
 
     fn box_clone(&self) -> Box<dyn HashAggrBencher>;
@@ -51,11 +51,11 @@ impl HashAggrBencher for NormalBencher {
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
-        aggr_expr: &Expr,
+        aggr_expr: &[Expr],
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let mut meta = Aggregation::new();
-            meta.mut_agg_func().push(aggr_expr.clone());
+            meta.set_agg_func(aggr_expr.to_vec().into());
             meta.set_group_by(group_by_expr.to_vec().into());
             let src = fb.clone().build_normal_fixture_executor();
             let ex = HashAggExecutor::new(
@@ -88,30 +88,31 @@ impl HashAggrBencher for BatchBencher {
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
         group_by_expr: &[Expr],
-        aggr_expr: &Expr,
+        aggr_expr: &[Expr],
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            if group_by_expr.len() == 1 {
+            let mut meta = Aggregation::new();
+            meta.set_agg_func(aggr_expr.to_vec().into());
+            meta.set_group_by(group_by_expr.to_vec().into());
+            if BatchFastHashAggregationExecutor::check_supported(&meta).is_ok() {
                 let ex = BatchFastHashAggregationExecutor::new(
                     black_box(Arc::new(EvalConfig::default())),
                     black_box(Box::new(src)),
                     black_box(group_by_expr.to_vec()),
-                    black_box(vec![aggr_expr.clone()]),
-                )
-                .unwrap();
-                Box::new(ex) as Box<dyn BatchExecutor>
-            } else if group_by_expr.len() > 1 {
-                let ex = BatchSlowHashAggregationExecutor::new(
-                    black_box(Arc::new(EvalConfig::default())),
-                    black_box(Box::new(src)),
-                    black_box(group_by_expr.to_vec()),
-                    black_box(vec![aggr_expr.clone()]),
+                    black_box(aggr_expr.to_vec()),
                 )
                 .unwrap();
                 Box::new(ex) as Box<dyn BatchExecutor>
             } else {
-                unreachable!()
+                let ex = BatchSlowHashAggregationExecutor::new(
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                    black_box(group_by_expr.to_vec()),
+                    black_box(aggr_expr.to_vec()),
+                )
+                .unwrap();
+                Box::new(ex) as Box<dyn BatchExecutor>
             }
         })
         .bench(b);

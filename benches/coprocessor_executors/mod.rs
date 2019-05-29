@@ -8,6 +8,7 @@ mod index_scan;
 mod integrated;
 mod selection;
 mod simple_aggr;
+mod stream_aggr;
 mod table_scan;
 mod util;
 
@@ -22,6 +23,7 @@ fn main() {
     selection::bench(&mut c);
     simple_aggr::bench(&mut c);
     hash_aggr::bench(&mut c);
+    stream_aggr::bench(&mut c);
     integrated::bench(&mut c);
 
     c.final_summary();
