@@ -218,7 +218,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         // 1. Calculate which group each src row belongs to.
         self.states_offset_each_row.clear();
 
-        let group_by_result = self.group_by_exp.prepare_and_eval(
+        let group_by_result = self.group_by_exp.eval(
             &mut entities.context,
             input.rows_len(),
             entities.src.schema(),
@@ -262,11 +262,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let aggr_fns_len = entities.each_aggr_fn.len();
         let mut group_by_column = LazyBatchColumn::decoded_with_capacity_and_tp(
             self.groups.len(),
@@ -289,6 +292,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         }
 
         Ok(vec![group_by_column])
+    }
+
+    /// Fast hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -477,7 +486,7 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _schema: &[FieldType],
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {

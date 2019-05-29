@@ -125,7 +125,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         for idx in 0..self.states.len() {
             let aggr_state = &mut self.states[idx];
             let aggr_expr = &entities.each_aggr_exprs[idx];
-            let aggr_fn_input = aggr_expr.prepare_and_eval(
+            let aggr_fn_input = aggr_expr.eval(
                 &mut entities.context,
                 rows_len,
                 entities.src.schema(),
@@ -163,13 +163,21 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
         iteratee(entities, &self.states)?;
         Ok(Vec::new())
+    }
+
+    /// Simple aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -327,7 +335,7 @@ mod tests {
                 &self,
                 aggr_def: Expr,
                 _time_zone: &Tz,
-                _schema: &[FieldType],
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {
@@ -564,7 +572,7 @@ mod tests {
                 &self,
                 _aggr_def: Expr,
                 _time_zone: &Tz,
-                _schema: &[FieldType],
+                _src_schema: &[FieldType],
                 out_schema: &mut Vec<FieldType>,
                 out_exp: &mut Vec<RpnExpression>,
             ) -> Result<Box<dyn AggrFunction>> {

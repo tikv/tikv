@@ -203,12 +203,8 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             group_by_keys_offsets.push(SmallVec::new());
         }
         for group_by_exp in &self.group_by_exps {
-            let group_by_result = group_by_exp.prepare_and_eval(
-                &mut entities.context,
-                rows_len,
-                src_schema,
-                &mut input,
-            )?;
+            let group_by_result =
+                group_by_exp.eval(&mut entities.context, rows_len, src_schema, &mut input)?;
             // Unwrap is fine because we have verified the group by expression before.
             let group_column = group_by_result.vector_value().unwrap();
             let field_type = group_by_result.field_type();
@@ -259,11 +255,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let number_of_groups = self.groups.len();
         let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self
@@ -292,6 +291,12 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         }
 
         Ok(group_by_columns)
+    }
+
+    /// Slow hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 

@@ -7,7 +7,7 @@ use crate::coprocessor::dag::aggr_fn::AggrFunction;
 use crate::coprocessor::dag::rpn_expr::RpnExpression;
 use crate::coprocessor::{Error, Result};
 
-/// Parse a specific aggregate function definition from ProtoBuf.
+/// Parse a specific aggregate function definition from protobuf.
 ///
 /// All aggregate function implementations should include an impl for this trait as well as
 /// add a match arm in `map_pb_sig_to_aggr_func_parser` so that the aggregate function can be
@@ -33,10 +33,23 @@ pub trait AggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>>;
+}
+
+#[inline]
+fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinitionParser>> {
+    match value {
+        ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
+        ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
+        ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
+        v => Err(box_err!(
+            "Aggregation function expr type {:?} is not supported in batch mode",
+            v
+        )),
+    }
 }
 
 /// Parse all aggregate function definition from protobuf.
@@ -67,24 +80,11 @@ impl AggrDefinitionParser for AllAggrDefinitionParser {
         &self,
         aggr_def: Expr,
         time_zone: &Tz,
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
         let parser = map_pb_sig_to_aggr_func_parser(aggr_def.get_tp()).unwrap();
-        parser.parse(aggr_def, time_zone, schema, out_schema, out_exp)
-    }
-}
-
-#[inline]
-fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinitionParser>> {
-    match value {
-        ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
-        ExprType::Sum => Ok(Box::new(super::impl_sum::AggrFnDefinitionParserSum)),
-        ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
-        v => Err(box_err!(
-            "Aggregation function expr type {:?} is not supported in batch mode",
-            v
-        )),
+        parser.parse(aggr_def, time_zone, src_schema, out_schema, out_exp)
     }
 }

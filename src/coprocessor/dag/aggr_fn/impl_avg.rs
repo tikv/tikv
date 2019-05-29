@@ -25,7 +25,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        schema: &[FieldType],
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
@@ -43,12 +43,13 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         );
         out_schema.push(aggr_def.take_field_type());
 
-        // The process below is very much like `AggrFnDefinitionParserAvg::parse()`.
+        // Rewrite expression to insert CAST() if needed.
         let child = aggr_def.take_children().into_iter().next().unwrap();
-        let mut exp = RpnExpressionBuilder::build_from_expr_tree(child, time_zone, schema.len())?;
-        super::util::rewrite_exp_for_sum_avg(schema, &mut exp).unwrap();
+        let mut exp =
+            RpnExpressionBuilder::build_from_expr_tree(child, time_zone, src_schema.len())?;
+        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
 
-        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(schema).tp()).unwrap();
+        let rewritten_eval_type = EvalType::try_from(exp.ret_field_type(src_schema).tp()).unwrap();
         out_exp.push(exp);
 
         Ok(match rewritten_eval_type {
@@ -146,6 +147,12 @@ mod tests {
     use super::super::AggrFunction;
     use super::*;
 
+    use cop_datatype::FieldTypeAccessor;
+    use tipb_helper::ExprDefBuilder;
+
+    use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
+    use crate::coprocessor::dag::aggr_fn::parser::AggrDefinitionParser;
+
     #[test]
     fn test_update() {
         let mut ctx = EvalContext::default();
@@ -189,6 +196,57 @@ mod tests {
         assert_eq!(
             result[1].as_real_slice(),
             &[None, None, Real::new(15.0).ok(), Real::new(10.5).ok()]
+        );
+    }
+
+    /// AVG(IntColumn) should produce (Int, Decimal).
+    #[test]
+    fn test_integration() {
+        let expr = ExprDefBuilder::aggr_func(ExprType::Avg, FieldTypeTp::NewDecimal)
+            .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
+            .build();
+        AggrFnDefinitionParserAvg.check_supported(&expr).unwrap();
+
+        let src_schema = [FieldTypeTp::LongLong.into()];
+        let mut columns = LazyBatchColumnVec::from(vec![{
+            let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(0, EvalType::Int);
+            col.mut_decoded().push_int(Some(1));
+            col.mut_decoded().push_int(None);
+            col.mut_decoded().push_int(Some(42));
+            col.mut_decoded().push_int(None);
+            col
+        }]);
+
+        let mut schema = vec![];
+        let mut exp = vec![];
+
+        let aggr_fn = AggrFnDefinitionParserAvg
+            .parse(expr, &Tz::utc(), &src_schema, &mut schema, &mut exp)
+            .unwrap();
+        assert_eq!(schema.len(), 2);
+        assert_eq!(schema[0].tp(), FieldTypeTp::LongLong);
+        assert_eq!(schema[1].tp(), FieldTypeTp::NewDecimal);
+
+        assert_eq!(exp.len(), 1);
+
+        let mut state = aggr_fn.create_state();
+        let mut ctx = EvalContext::default();
+
+        let exp_result = exp[0].eval(&mut ctx, 4, &src_schema, &mut columns).unwrap();
+        assert!(exp_result.is_vector());
+        let slice: &[Option<Decimal>] = exp_result.vector_value().unwrap().as_ref();
+        state.update_vector(&mut ctx, slice).unwrap();
+
+        let mut aggr_result = [
+            VectorValue::with_capacity(0, EvalType::Int),
+            VectorValue::with_capacity(0, EvalType::Decimal),
+        ];
+        state.push_result(&mut ctx, &mut aggr_result).unwrap();
+
+        assert_eq!(aggr_result[0].as_int_slice(), &[Some(2)]);
+        assert_eq!(
+            aggr_result[1].as_decimal_slice(),
+            &[Some(Decimal::from(43u64))]
         );
     }
 }
