@@ -538,11 +538,17 @@ pub mod tests {
         assert_ne!(lock.lock_type, LockType::Pessimistic);
     }
 
-    pub fn must_pessimistic_locked<E: Engine>(engine: &E, key: &[u8], start_ts: u64) {
+    pub fn must_pessimistic_locked<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let mut reader = MvccReader::new(snapshot, None, true, None, None, IsolationLevel::SI);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts);
+        assert_eq!(lock.for_update_ts, for_update_ts);
         assert_eq!(lock.lock_type, LockType::Pessimistic);
     }
 

@@ -224,7 +224,13 @@ impl<S: Snapshot> MvccTxn<S> {
                     pessimistic: false,
                 });
             }
-            MVCC_DUPLICATE_CMD_COUNTER_VEC.pessimistic_lock.inc();
+            if for_update_ts > lock.for_update_ts {
+                self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
+            } else {
+                MVCC_DUPLICATE_CMD_COUNTER_VEC
+                    .acquire_pessimistic_lock
+                    .inc();
+            }
             return Ok(());
         }
 
@@ -234,7 +240,9 @@ impl<S: Snapshot> MvccTxn<S> {
             // whose commit timestamp is larger than current `for_update_ts`, the
             // transaction should retry to get the latest data.
             if commit_ts > for_update_ts {
-                MVCC_CONFLICT_COUNTER.pessimistic_lock_conflict.inc();
+                MVCC_CONFLICT_COUNTER
+                    .acquire_pessimistic_lock_conflict
+                    .inc();
                 return Err(Error::WriteConflict {
                     start_ts: self.start_ts,
                     conflict_start_ts: write.start_ts,
@@ -1210,7 +1218,7 @@ mod tests {
 
         // Normal
         must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
-        must_pessimistic_locked(&engine, k, 1);
+        must_pessimistic_locked(&engine, k, 1, 1);
         must_pessimistic_prewrite_put(&engine, k, v, k, 1, 1, true);
         must_locked(&engine, k, 1);
         must_commit(&engine, k, 1, 2);
@@ -1240,7 +1248,7 @@ mod tests {
 
         // Rollback
         must_acquire_pessimistic_lock(&engine, k, k, 11, 11);
-        must_pessimistic_locked(&engine, k, 11);
+        must_pessimistic_locked(&engine, k, 11, 11);
         must_rollback(&engine, k, 11);
         must_acquire_pessimistic_lock_err(&engine, k, k, 11, 11);
         must_pessimistic_prewrite_put_err(&engine, k, v, k, 11, 11, true);
@@ -1258,7 +1266,7 @@ mod tests {
 
         // Duplicated
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
-        must_pessimistic_locked(&engine, k, 13);
+        must_pessimistic_locked(&engine, k, 13, 13);
         must_acquire_pessimistic_lock(&engine, k, k, 13, 13);
         must_pessimistic_prewrite_put(&engine, k, v, k, 13, 13, true);
         must_locked(&engine, k, 13);
@@ -1269,7 +1277,7 @@ mod tests {
 
         // Pessimistic lock doesn't block reads.
         must_acquire_pessimistic_lock(&engine, k, k, 15, 15);
-        must_pessimistic_locked(&engine, k, 15);
+        must_pessimistic_locked(&engine, k, 15, 15);
         must_get(&engine, k, 16, v);
         must_pessimistic_prewrite_delete(&engine, k, k, 15, 15, true);
         must_get_err(&engine, k, 16);
@@ -1293,7 +1301,7 @@ mod tests {
         must_acquire_pessimistic_lock_err(&engine, k, k, 23, 23);
         must_rollback(&engine, k, 23);
         must_acquire_pessimistic_lock(&engine, k, k, 24, 24);
-        must_pessimistic_locked(&engine, k, 24);
+        must_pessimistic_locked(&engine, k, 24, 24);
         must_commit_err(&engine, k, 24, 25);
         must_rollback(&engine, k, 24);
 
@@ -1356,7 +1364,7 @@ mod tests {
 
         // Normal
         must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
-        must_pessimistic_locked(&engine, k, 1);
+        must_pessimistic_locked(&engine, k, 1, 1);
         must_pessimistic_rollback(&engine, k, 1, 1);
         must_unlocked(&engine, k);
 
@@ -1365,9 +1373,9 @@ mod tests {
 
         // Succeed if for_update_ts is different.
         must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
-        must_pessimistic_locked(&engine, k, 2);
+        must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 2);
-        must_pessimistic_locked(&engine, k, 2);
+        must_pessimistic_locked(&engine, k, 2, 3);
         must_pessimistic_rollback(&engine, k, 2, 3);
         must_unlocked(&engine, k);
 
@@ -1377,4 +1385,19 @@ mod tests {
         must_pessimistic_rollback(&engine, k, 3, 3);
         must_locked(&engine, k, 3);
     }
+
+    #[test]
+    fn test_overwrite_pessimistic_lock() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+
+        must_acquire_pessimistic_lock(&engine, k, k, 1, 2);
+        must_pessimistic_locked(&engine, k, 1, 2);
+        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
+        must_pessimistic_locked(&engine, k, 1, 2);
+        must_acquire_pessimistic_lock(&engine, k, k, 1, 3);
+        must_pessimistic_locked(&engine, k, 1, 3);
+    }
+
 }
