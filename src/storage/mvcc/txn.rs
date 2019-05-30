@@ -535,6 +535,16 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(is_pessimistic_txn)
     }
 
+    pub fn pessimistic_rollback(&mut self, key: Key, for_update_ts: u64) -> Result<()> {
+        if let Some(lock) = self.reader.load_lock(&key)? {
+            if lock.ts == self.start_ts && lock.for_update_ts == for_update_ts {
+                assert!(lock.lock_type == LockType::Pessimistic);
+                self.unlock_key(key);
+            }
+        }
+        Ok(())
+    }
+
     fn collapse_prev_rollback(&mut self, key: Key) -> Result<()> {
         if let Some((commit_ts, write)) = self.reader.seek_write(&key, self.start_ts)? {
             if write.write_type == WriteType::Rollback {
@@ -1356,5 +1366,36 @@ mod tests {
         must_pessimistic_prewrite_put(&engine, k, v, k, 2, 3, false);
         must_locked(&engine, k, 2);
         must_rollback(&engine, k, 2);
+    }
+
+    #[test]
+    fn test_pessimistic_rollback() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+
+        let k = b"k1";
+        let v = b"v1";
+
+        // Normal
+        must_acquire_pessimistic_lock(&engine, k, k, 1, 1);
+        must_pessimistic_locked(&engine, k, 1);
+        must_pessimistic_rollback(&engine, k, 1, 1);
+        must_unlocked(&engine, k);
+
+        // Succeed if the lock doesn't exist.
+        must_pessimistic_rollback(&engine, k, 2, 2);
+
+        // Succeed if for_update_ts is different.
+        must_acquire_pessimistic_lock(&engine, k, k, 2, 3);
+        must_pessimistic_locked(&engine, k, 2);
+        must_pessimistic_rollback(&engine, k, 2, 2);
+        must_pessimistic_locked(&engine, k, 2);
+        must_pessimistic_rollback(&engine, k, 2, 3);
+        must_unlocked(&engine, k);
+
+        // Succeed if rollbacks a non-pessimistic lock.
+        must_prewrite_put(&engine, k, v, k, 3);
+        must_locked(&engine, k, 3);
+        must_pessimistic_rollback(&engine, k, 3, 3);
+        must_locked(&engine, k, 3);
     }
 }

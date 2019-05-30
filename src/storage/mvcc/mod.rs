@@ -437,12 +437,12 @@ pub mod tests {
         engine: &E,
         key: &[u8],
         pk: &[u8],
-        ts: u64,
+        start_ts: u64,
         for_update_ts: u64,
     ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
@@ -457,16 +457,30 @@ pub mod tests {
         engine: &E,
         key: &[u8],
         pk: &[u8],
-        ts: u64,
+        start_ts: u64,
         for_update_ts: u64,
     ) {
         let ctx = Context::new();
         let snapshot = engine.snapshot(&ctx).unwrap();
-        let mut txn = MvccTxn::new(snapshot, ts, true).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
         let mut options = Options::default();
         options.for_update_ts = for_update_ts;
         txn.acquire_pessimistic_lock(Key::from_raw(key), pk, false, &options)
             .unwrap_err();
+    }
+
+    pub fn must_pessimistic_rollback<E: Engine>(
+        engine: &E,
+        key: &[u8],
+        start_ts: u64,
+        for_update_ts: u64,
+    ) {
+        let ctx = Context::new();
+        let snapshot = engine.snapshot(&ctx).unwrap();
+        let mut txn = MvccTxn::new(snapshot, start_ts, true).unwrap();
+        txn.pessimistic_rollback(Key::from_raw(key), for_update_ts)
+            .unwrap();
+        write(engine, &ctx, txn.into_modifies());
     }
 
     pub fn must_commit<E: Engine>(engine: &E, key: &[u8], start_ts: u64, commit_ts: u64) {
