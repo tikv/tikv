@@ -317,6 +317,7 @@ impl<S: Snapshot> MvccTxn<S> {
                     MVCC_DUPLICATE_CMD_COUNTER_VEC.prewrite.inc();
                     return Ok(());
                 }
+                // The lock is pessimistic and owned by this txn, go through to overwrite it.
             }
         } else if is_pessimistic_lock {
             // Pessimistic lock does not exist, the transaction should be aborted.
