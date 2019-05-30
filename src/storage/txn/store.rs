@@ -243,8 +243,7 @@ pub struct FixtureStoreScanner {
     /// `range_data_ref` is valid. When `range_data_ref` is destroyed, this field is no longer
     /// valid. Thus we must *NEVER* leak the reference of this field to the outside.
     range_unsafe: btree_map::Range<'static, Key, Result<Vec<u8>>>,
-    #[allow(dead_code)]
-    range_data_ref: Arc<BTreeMap<Key, Result<Vec<u8>>>>,
+    _range_data_ref: Arc<BTreeMap<Key, Result<Vec<u8>>>>,
 }
 
 impl Scanner for FixtureStoreScanner {
