@@ -7,7 +7,7 @@ use tipb::schema::ColumnInfo;
 
 use super::{Executor, ExecutorMetrics, Row};
 use crate::coprocessor::codec::table;
-use crate::coprocessor::dag::exec_summary::{ExecSummary, ExecSummaryCollector};
+use crate::coprocessor::dag::exec_summary::ExecSummary;
 use crate::coprocessor::{Error, Result};
 use crate::storage::{Key, Store};
 
@@ -31,8 +31,7 @@ pub trait InnerExecutor {
 }
 
 // Executor for table scan and index scan
-pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, T: InnerExecutor> {
-    summary_collector: C,
+pub struct ScanExecutor<S: Store, T: InnerExecutor> {
     store: S,
     desc: bool,
     key_ranges: Peekable<IntoIter<KeyRange>>,
@@ -46,9 +45,8 @@ pub struct ScanExecutor<C: ExecSummaryCollector, S: Store, T: InnerExecutor> {
     first_collect: bool,
 }
 
-impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> ScanExecutor<C, S, T> {
+impl<S: Store, T: InnerExecutor> ScanExecutor<S, T> {
     pub fn new(
-        summary_collector: C,
         inner: T,
         desc: bool,
         columns: Vec<ColumnInfo>,
@@ -63,7 +61,6 @@ impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> ScanExecutor<C, S, T> 
         let counts = if collect { Some(Vec::default()) } else { None };
 
         Ok(Self {
-            summary_collector,
             inner,
             store,
             desc,
@@ -119,8 +116,10 @@ impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> ScanExecutor<C, S, T> 
         )
         .map_err(Error::from)
     }
+}
 
-    fn next_impl(&mut self) -> Result<Option<Row>> {
+impl<S: Store, T: InnerExecutor> Executor for ScanExecutor<S, T> {
+    fn next(&mut self) -> Result<Option<Row>> {
         loop {
             if let Some(row) = self.get_row_from_range_scanner()? {
                 self.inc_last_count();
@@ -150,19 +149,6 @@ impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> ScanExecutor<C, S, T> 
             return Ok(None);
         }
     }
-}
-
-impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> Executor for ScanExecutor<C, S, T> {
-    fn next(&mut self) -> Result<Option<Row>> {
-        let timer = self.summary_collector.on_start_iterate();
-        let ret = self.next_impl();
-        if let Ok(Some(_)) = ret {
-            self.summary_collector.on_finish_iterate(timer, 1);
-        } else {
-            self.summary_collector.on_finish_iterate(timer, 0);
-        }
-        ret
-    }
 
     fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
         if let Some(cur_counts) = self.counts.as_mut() {
@@ -186,9 +172,7 @@ impl<C: ExecSummaryCollector, S: Store, T: InnerExecutor> Executor for ScanExecu
         }
     }
 
-    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
-        self.summary_collector.collect_into(target);
-    }
+    fn collect_execution_summaries(&mut self, _: &mut [ExecSummary]) {}
 
     fn get_len_of_columns(&self) -> usize {
         self.columns.len()

@@ -8,6 +8,7 @@ use super::RpnFnCallPayload;
 use crate::coprocessor::codec::batch::LazyBatchColumnVec;
 use crate::coprocessor::codec::data_type::VectorLikeValueRef;
 use crate::coprocessor::codec::data_type::{ScalarValue, VectorValue};
+use crate::coprocessor::codec::mysql::time::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::Result;
 
@@ -28,12 +29,13 @@ pub enum RpnStackNodeVectorValue<'a> {
     Ref(&'a VectorValue),
 }
 
-impl<'a> AsRef<VectorValue> for RpnStackNodeVectorValue<'a> {
-    #[inline]
-    fn as_ref(&self) -> &VectorValue {
+impl<'a> std::ops::Deref for RpnStackNodeVectorValue<'a> {
+    type Target = VectorValue;
+
+    fn deref(&self) -> &Self::Target {
         match self {
-            RpnStackNodeVectorValue::Owned(ref value) => &value,
-            RpnStackNodeVectorValue::Ref(ref value) => *value,
+            RpnStackNodeVectorValue::Owned(value) => &value,
+            RpnStackNodeVectorValue::Ref(value) => *value,
         }
     }
 }
@@ -79,7 +81,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn vector_value(&self) -> Option<&VectorValue> {
         match self {
             RpnStackNode::Scalar { .. } => None,
-            RpnStackNode::Vector { ref value, .. } => Some(value.as_ref()),
+            RpnStackNode::Vector { ref value, .. } => Some(&value),
         }
     }
 
@@ -88,7 +90,7 @@ impl<'a> RpnStackNode<'a> {
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         match self {
             RpnStackNode::Scalar { ref value, .. } => value.as_vector_like(),
-            RpnStackNode::Vector { ref value, .. } => value.as_ref().as_vector_like(),
+            RpnStackNode::Vector { ref value, .. } => value.as_vector_like(),
         }
     }
 
@@ -128,19 +130,85 @@ impl RpnExpression {
         schema: &'a [FieldType],
         columns: &'a mut LazyBatchColumnVec,
     ) -> Result<RpnStackNode<'a>> {
-        assert!(rows > 0);
-
-        let mut stack = Vec::with_capacity(self.len());
-
         // We iterate two times. The first time we decode all referred columns. The second time
         // we evaluate. This is to make Rust's borrow checker happy because there will be
         // mutable reference during the first iteration and we can't keep these references.
+        self.ensure_columns_decoded(&context.cfg.tz, schema, columns)?;
+        self.eval_unchecked(context, rows, schema, columns)
+    }
 
-        for node in self.as_ref() {
-            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
-                columns.ensure_column_decoded(*offset, &context.cfg.tz, &schema[*offset])?;
+    /// Evaluates the expression into a boolean vector.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if the boolean vector output buffer is not large enough to contain all values.
+    pub fn eval_as_mysql_bools(
+        &self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &[FieldType],
+        columns: &mut LazyBatchColumnVec,
+        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
+    ) -> Result<()> {
+        use crate::coprocessor::codec::data_type::AsMySQLBool;
+
+        assert!(outputs.len() >= rows);
+        let values = self.eval(context, rows, schema, columns)?;
+        match values {
+            RpnStackNode::Scalar { value, .. } => {
+                let b = value.as_mysql_bool(context)?;
+                for i in 0..rows {
+                    outputs[i] = b;
+                }
+            }
+            RpnStackNode::Vector { value, .. } => {
+                assert_eq!(value.len(), rows);
+                value.eval_as_mysql_bools(context, outputs)?;
             }
         }
+        Ok(())
+    }
+
+    /// Decodes all referred columns which are not decoded. Then we ensure
+    /// all referred columns are decoded.
+    pub fn ensure_columns_decoded<'a>(
+        &'a self,
+        tz: &Tz,
+        schema: &'a [FieldType],
+        columns: &'a mut LazyBatchColumnVec,
+    ) -> Result<()> {
+        for node in self.as_ref() {
+            if let RpnExpressionNode::ColumnRef { ref offset, .. } = node {
+                columns[*offset].ensure_decoded(tz, &schema[*offset])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates the expression into a vector.
+    ///
+    /// It differs from `eval` in that `eval_unchecked` needn't receive a mutable reference
+    /// to `LazyBatchColumnVec`. However, since `eval_unchecked` doesn't decode columns,
+    /// it will panic if referred columns are not decoded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the expression is not valid.
+    ///
+    /// Panics if referred columns are not decoded.
+    ///
+    /// Panics when referenced column does not have equal length as specified in `rows`.
+    pub fn eval_unchecked<'a>(
+        &'a self,
+        context: &mut EvalContext,
+        rows: usize,
+        schema: &'a [FieldType],
+        columns: &'a LazyBatchColumnVec,
+    ) -> Result<RpnStackNode<'a>> {
+        assert!(rows > 0);
+        let mut stack = Vec::with_capacity(self.len());
 
         for node in self.as_ref() {
             match node {
@@ -191,41 +259,6 @@ impl RpnExpression {
         assert_eq!(stack.len(), 1);
         Ok(stack.into_iter().next().unwrap())
     }
-
-    /// Evaluates the expression into a boolean vector.
-    ///
-    /// # Panics
-    ///
-    /// Panics if referenced columns are not decoded.
-    ///
-    /// Panics if the boolean vector output buffer is not large enough to contain all values.
-    pub fn eval_as_mysql_bools(
-        &self,
-        context: &mut EvalContext,
-        rows: usize,
-        schema: &[FieldType],
-        columns: &mut LazyBatchColumnVec,
-        outputs: &mut [bool], // modify an existing buffer to avoid repeated allocation
-    ) -> Result<()> {
-        use crate::coprocessor::codec::data_type::AsMySQLBool;
-
-        assert!(outputs.len() >= rows);
-        let values = self.eval(context, rows, schema, columns)?;
-        match values {
-            RpnStackNode::Scalar { value, .. } => {
-                let b = value.as_mysql_bool(context)?;
-                for i in 0..rows {
-                    outputs[i] = b;
-                }
-            }
-            RpnStackNode::Vector { value, .. } => {
-                let vec_ref = value.as_ref();
-                assert_eq!(vec_ref.len(), rows);
-                vec_ref.eval_as_mysql_bools(context, outputs)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -241,6 +274,7 @@ mod tests {
     use super::super::RpnFnCallPayload;
 
     use crate::coprocessor::codec::batch::LazyBatchColumn;
+    use crate::coprocessor::codec::data_type::Real;
     use crate::coprocessor::codec::datum::{Datum, DatumEncoder};
     use crate::coprocessor::dag::expr::EvalContext;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
@@ -255,7 +289,7 @@ mod tests {
         let result = exp.eval(&mut ctx, 10, &[], &mut columns);
         let val = result.unwrap();
         assert!(val.is_scalar());
-        assert_eq!(*val.scalar_value().unwrap().as_real(), Some(1.5));
+        assert_eq!(*val.scalar_value().unwrap().as_real(), Real::new(1.5).ok());
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
 
@@ -265,9 +299,9 @@ mod tests {
             {
                 // this column is not referenced
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(5, EvalType::Real);
-                col.mut_decoded().push_real(Some(1.0));
+                col.mut_decoded().push_real(Real::new(1.0).ok());
                 col.mut_decoded().push_real(None);
-                col.mut_decoded().push_real(Some(7.5));
+                col.mut_decoded().push_real(Real::new(7.5).ok());
                 col.mut_decoded().push_real(None);
                 col.mut_decoded().push_real(None);
                 col
@@ -282,18 +316,7 @@ mod tests {
                 col
             },
         ]);
-        let schema = [
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = [FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
         (columns, schema)
     }
 
@@ -322,7 +345,7 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(1.0), None, Some(7.5), None, None]
+            [Real::new(1.0).ok(), None, Real::new(7.5).ok(), None, None]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -391,8 +414,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.0))
             }
         }
@@ -408,7 +431,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(3.0), Some(3.0), Some(3.0)]
+            [
+                Real::new(3.0).ok(),
+                Real::new(3.0).ok(),
+                Real::new(3.0).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -438,12 +465,7 @@ mod tests {
             col.mut_decoded().push_int(None);
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -483,24 +505,19 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -529,9 +546,9 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() + v2.unwrap() as f64 - 1.0))
             }
         }
@@ -548,7 +565,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(3.5), Some(3.5), Some(3.5)]
+            [
+                Real::new(3.5).ok(),
+                Real::new(3.5).ok(),
+                Real::new(3.5).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -565,26 +586,21 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
-                v2: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v1: &Option<Real>,
+                v2: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() - v2.unwrap()))
             }
         }
 
         let mut columns = LazyBatchColumnVec::from(vec![{
             let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-            col.mut_decoded().push_real(Some(1.0));
-            col.mut_decoded().push_real(Some(5.5));
-            col.mut_decoded().push_real(Some(-4.3));
+            col.mut_decoded().push_real(Real::new(1.0).ok());
+            col.mut_decoded().push_real(Real::new(5.5).ok());
+            col.mut_decoded().push_real(Real::new(-4.3).ok());
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-            ft
-        }];
+        let schema = &[FieldTypeTp::Double.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -597,7 +613,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(-0.5), Some(4.0), Some(-5.8)]
+            [
+                Real::new(-0.5).ok(),
+                Real::new(4.0).ok(),
+                Real::new(-5.8).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -614,9 +634,9 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() - v2.unwrap() as f64))
             }
         }
@@ -628,12 +648,7 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-
-        let schema = &[{
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-            ft
-        }];
+        let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_constant(1.5f64)
@@ -646,7 +661,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(0.5), Some(-3.5), Some(5.5)]
+            [
+                Real::new(0.5).ok(),
+                Real::new(-3.5).ok(),
+                Real::new(5.5).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -663,11 +682,11 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
+                v1: &Option<Real>,
                 v2: &Option<i64>,
             ) -> Result<Option<i64>> {
                 Ok(Some(
-                    (v1.unwrap() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
+                    (v1.unwrap().into_inner() * 2.5 - (v2.unwrap() as f64) * 3.5) as i64,
                 ))
             }
         }
@@ -682,25 +701,13 @@ mod tests {
             },
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         // FnFoo(col1, col0)
         let exp = RpnExpressionBuilder::new()
@@ -744,31 +751,19 @@ mod tests {
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-5)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(-7)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             let mut datum_raw = Vec::new();
             DatumEncoder::encode(&mut datum_raw, &[Datum::I64(3)], false).unwrap();
-            col.push_raw(&datum_raw);
+            col.mut_raw().push(&datum_raw);
 
             col
         }]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
             .push_column_ref(0)
@@ -813,7 +808,6 @@ mod tests {
             col.mut_decoded().push_int(Some(-4));
             col
         }]);
-
         let schema = &[FieldTypeTp::LongLong.into()];
 
         let exp = RpnExpressionBuilder::new()
@@ -855,10 +849,10 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v1: &Option<f64>,
-                v2: &Option<f64>,
-                v3: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v1: &Option<Real>,
+                v2: &Option<Real>,
+                v3: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(Some(v1.unwrap() * v2.unwrap() - v3.unwrap()))
             }
         }
@@ -869,8 +863,11 @@ mod tests {
         struct FnB;
 
         impl FnB {
-            fn call(_ctx: &mut EvalContext, _payload: RpnFnCallPayload<'_>) -> Result<Option<f64>> {
-                Ok(Some(42.0))
+            fn call(
+                _ctx: &mut EvalContext,
+                _payload: RpnFnCallPayload<'_>,
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(42.0).ok())
             }
         }
 
@@ -885,8 +882,8 @@ mod tests {
                 _payload: RpnFnCallPayload<'_>,
                 v1: &Option<i64>,
                 v2: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some((v2.unwrap() - v1.unwrap()) as f64))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new((v2.unwrap() - v1.unwrap()) as f64).ok())
             }
         }
 
@@ -909,9 +906,9 @@ mod tests {
         let mut columns = LazyBatchColumnVec::from(vec![
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
             {
@@ -922,19 +919,7 @@ mod tests {
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::Double.into(), FieldTypeTp::LongLong.into()];
 
         // Col0, FnB, Col1, Const0, FnD, Const1, FnC, FnA
         let exp = RpnExpressionBuilder::new()
@@ -964,7 +949,11 @@ mod tests {
         assert!(val.is_vector());
         assert_eq!(
             val.vector_value().unwrap().as_real_slice(),
-            [Some(25.0), Some(3.8), Some(146.0)]
+            [
+                Real::new(25.0).ok(),
+                Real::new(3.8).ok(),
+                Real::new(146.0).ok()
+            ]
         );
         assert_eq!(val.field_type().tp(), FieldTypeTp::Double);
     }
@@ -1010,8 +999,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.0))
             }
         }
@@ -1045,8 +1034,8 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                v: &Option<f64>,
-            ) -> Result<Option<f64>> {
+                v: &Option<Real>,
+            ) -> Result<Option<Real>> {
                 Ok(v.map(|v| v * 2.5))
             }
         }
@@ -1090,10 +1079,10 @@ mod tests {
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
                 a: &Option<i64>,
-                b: &Option<f64>,
+                b: &Option<Real>,
                 c: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some(a.unwrap() as f64 - b.unwrap() * c.unwrap() as f64))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(a.unwrap() as f64 - b.unwrap().into_inner() * c.unwrap() as f64).ok())
             }
         }
 
@@ -1106,10 +1095,10 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                a: &Option<f64>,
+                a: &Option<Real>,
                 b: &Option<i64>,
-            ) -> Result<Option<f64>> {
-                Ok(Some(a.unwrap() * (b.unwrap() as f64 - 1.5)))
+            ) -> Result<Option<Real>> {
+                Ok(Real::new(a.unwrap().into_inner() * (b.unwrap() as f64 - 1.5)).ok())
             }
         }
 
@@ -1133,13 +1122,13 @@ mod tests {
             fn call(
                 _ctx: &mut EvalContext,
                 _payload: RpnFnCallPayload<'_>,
-                a: &Option<f64>,
+                a: &Option<Real>,
             ) -> Result<Option<i64>> {
-                Ok(Some(a.unwrap() as i64))
+                Ok(Some(a.unwrap().into_inner() as i64))
             }
         }
 
-        fn fn_mapper(value: ScalarFuncSig) -> Result<Box<dyn RpnFunction>> {
+        fn fn_mapper(value: ScalarFuncSig, _children: &[Expr]) -> Result<Box<dyn RpnFunction>> {
             // FnA: CastIntAsInt
             // FnB: CastIntAsReal
             // FnC: CastIntAsString
@@ -1243,25 +1232,13 @@ mod tests {
             },
             {
                 let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(3, EvalType::Real);
-                col.mut_decoded().push_real(Some(0.5));
-                col.mut_decoded().push_real(Some(-0.1));
-                col.mut_decoded().push_real(Some(3.5));
+                col.mut_decoded().push_real(Real::new(0.5).ok());
+                col.mut_decoded().push_real(Real::new(-0.1).ok());
+                col.mut_decoded().push_real(Real::new(3.5).ok());
                 col
             },
         ]);
-
-        let schema = &[
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-        ];
+        let schema = &[FieldTypeTp::LongLong.into(), FieldTypeTp::Double.into()];
 
         let mut ctx = EvalContext::default();
         let result = exp.eval(&mut ctx, 3, schema, &mut columns);

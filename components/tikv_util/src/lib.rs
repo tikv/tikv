@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(fnbox)]
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
@@ -42,7 +41,8 @@ use std::time::Duration;
 use std::{env, slice, thread, u64};
 
 use protobuf::Message;
-use rand::{self, ThreadRng};
+use rand;
+use rand::rngs::ThreadRng;
 
 pub mod codec;
 pub mod collections;

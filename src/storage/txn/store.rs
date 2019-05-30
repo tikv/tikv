@@ -3,8 +3,6 @@
 use std::collections::{btree_map, BTreeMap};
 use std::sync::Arc;
 
-use owning_ref::OwningHandle;
-
 use kvproto::kvrpcpb::IsolationLevel;
 
 use crate::storage::metrics::*;
@@ -222,12 +220,15 @@ impl Store for FixtureStore {
             }
         });
 
+        let range_data_ref = self.data.clone();
+        // Erase the lifetime to be 'static.
+        let range_unsafe = unsafe { std::mem::transmute(range_data_ref.range((lower, upper))) };
+
         Ok(FixtureStoreScanner {
             key_only,
             desc,
-            handle: OwningHandle::new_with_fn(self.data.clone(), |m| unsafe {
-                Box::new((*m).range((lower, upper)))
-            }),
+            range_data_ref,
+            range_unsafe,
         })
     }
 }
@@ -238,19 +239,24 @@ impl Store for FixtureStore {
 pub struct FixtureStoreScanner {
     key_only: bool,
     desc: bool,
-    handle: OwningHandle<
-        Arc<BTreeMap<Key, Result<Vec<u8>>>>,
-        Box<btree_map::Range<'static, Key, Result<Vec<u8>>>>,
-    >,
+    /// Accessing this field is unsafe, since it's lifetime is faked. This field is valid only if
+    /// `range_data_ref` is valid. When `range_data_ref` is destroyed, this field is no longer
+    /// valid. Thus we must *NEVER* leak the reference of this field to the outside.
+    range_unsafe: btree_map::Range<'static, Key, Result<Vec<u8>>>,
+    #[allow(dead_code)]
+    range_data_ref: Arc<BTreeMap<Key, Result<Vec<u8>>>>,
 }
 
 impl Scanner for FixtureStoreScanner {
     #[inline]
     fn next(&mut self) -> Result<Option<(Key, Vec<u8>)>> {
         let value = if !self.desc {
-            self.handle.next()
+            // During the call of this function, `range_data_ref` must be valid and we are only
+            // returning data clones to outside, so this access is safe, which does not violate
+            // the *real* life time restriction.
+            self.range_unsafe.next()
         } else {
-            self.handle.next_back()
+            self.range_unsafe.next_back()
         };
         match value {
             None => Ok(None),
@@ -626,6 +632,7 @@ mod tests {
                 primary: vec![],
                 ts: 1,
                 ttl: 2,
+                txn_size: 0,
             })),
         );
         data.insert(Key::from_raw(b"z"), Ok(b"beta".to_vec()));
@@ -905,7 +912,7 @@ mod tests {
 mod benches {
     use crate::test;
 
-    use rand::{self, Rng};
+    use rand::RngCore;
     use std::collections::BTreeMap;
 
     use super::{FixtureStore, Scanner, Store};
