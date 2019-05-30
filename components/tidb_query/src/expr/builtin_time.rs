@@ -316,6 +316,28 @@ impl ScalarFunc {
     }
 
     #[inline]
+    pub fn to_seconds(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| None);
+        }
+        Ok(Some(t.second_since_zero()))
+    }
+
+    #[inline]
+    pub fn quarter(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
+        let t: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
+        if t.is_zero() {
+            return ctx
+                .handle_invalid_time_error(Error::incorrect_datetime_value(&format!("{}", t)))
+                .map(|_| None);
+        }
+        Ok(Some(i64::from((t.month() + 2) / 3)))
+    }
+
+    #[inline]
     pub fn date_diff(&self, ctx: &mut EvalContext, row: &[Datum]) -> Result<Option<i64>> {
         let lhs: Cow<'_, Time> = try_opt!(self.children[0].eval_time(ctx, row));
         if lhs.invalid_zero() {
@@ -1325,6 +1347,64 @@ mod tests {
             Datum::Time(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
         // test ZERO case
         test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToDays, datetime);
+    }
+
+    #[test]
+    fn test_to_seconds() {
+        let cases = vec![
+            ("950501", 62966505600),
+            ("19950501", 62966505600),
+            ("1995/05/01", 62966505600),
+            ("19950501000000", 62966505600),
+            ("19950501000001", 62966505601), // 00:00:01
+            ("19950501000100", 62966505660), // 00:01:00
+            ("19950501010000", 62966509200), // 01:00:00
+            ("2007-10-07", 63358934400),
+            ("2008-10-07", 63390556800),
+            ("08-10-07", 63390556800),
+            ("0000-01-01", 86400),
+            ("2007-10-07 00:00:59", 63358934459),
+            ("2009-11-29 13:43:32", 63426721412),
+            ("170102039", 63650545740),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Datum::Time(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, time, Datum::I64(exp));
+        }
+
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, Datum::Null);
+
+        // test ZERO case
+        let time =
+            Datum::Time(Time::parse_datetime(&mut ctx, "0000-00-00 00:00:00", 6, true).unwrap());
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::ToSeconds, time);
+    }
+
+    #[test]
+    fn test_quarter() {
+        let cases = vec![
+            ("2008-01-01", 1),
+            ("2008-02-01", 1),
+            ("2008-03-01", 1),
+            ("2008-04-01", 2),
+            ("2008-05-01", 2),
+            ("2008-06-01", 2),
+            ("2008-07-01", 3),
+            ("2008-08-01", 3),
+            ("2008-09-01", 3),
+            ("2008-10-01", 4),
+            ("2008-11-01", 4),
+            ("2008-12-01", 4),
+        ];
+        let mut ctx = EvalContext::default();
+        for (arg, exp) in cases {
+            let time = Datum::Time(Time::parse_datetime(&mut ctx, arg, 6, true).unwrap());
+            test_ok_case_one_arg(&mut ctx, ScalarFuncSig::Quarter, time, Datum::I64(exp));
+        }
+        // test NULL case
+        test_err_case_one_arg(&mut ctx, ScalarFuncSig::Quarter, Datum::Null);
     }
 
     #[test]

@@ -291,6 +291,8 @@ impl ScalarFunc {
             | ScalarFuncSig::Compress
             | ScalarFuncSig::Uncompress
             | ScalarFuncSig::UncompressedLength
+            | ScalarFuncSig::ToSeconds
+            | ScalarFuncSig::Quarter
             | ScalarFuncSig::ToDays
             | ScalarFuncSig::FromDays => (1, 1),
 
@@ -435,7 +437,6 @@ impl ScalarFunc {
             | ScalarFuncSig::OctString
             | ScalarFuncSig::Ord
             | ScalarFuncSig::Password
-            | ScalarFuncSig::Quarter
             | ScalarFuncSig::RandomBytes
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
@@ -476,7 +477,6 @@ impl ScalarFunc {
             | ScalarFuncSig::TimeStringTimeDiff
             | ScalarFuncSig::TimeTimeTimeDiff
             | ScalarFuncSig::TimeToSec
-            | ScalarFuncSig::ToSeconds
             | ScalarFuncSig::UnixTimestampCurrent
             | ScalarFuncSig::UnixTimestampDec
             | ScalarFuncSig::UnixTimestampInt
@@ -763,6 +763,8 @@ dispatch_call! {
         WeekOfYear => week_of_year,
         Year => year,
         ToDays => to_days,
+        ToSeconds => to_seconds,
+        Quarter => quarter,
         DateDiff => date_diff,
         PeriodAdd => period_add,
         PeriodDiff => period_diff,
@@ -1556,7 +1558,6 @@ mod tests {
             ScalarFuncSig::OctString,
             ScalarFuncSig::Ord,
             ScalarFuncSig::Password,
-            ScalarFuncSig::Quarter,
             ScalarFuncSig::RandomBytes,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
@@ -1597,7 +1598,6 @@ mod tests {
             ScalarFuncSig::TimeStringTimeDiff,
             ScalarFuncSig::TimeTimeTimeDiff,
             ScalarFuncSig::TimeToSec,
-            ScalarFuncSig::ToSeconds,
             ScalarFuncSig::UnixTimestampCurrent,
             ScalarFuncSig::UnixTimestampDec,
             ScalarFuncSig::UnixTimestampInt,
