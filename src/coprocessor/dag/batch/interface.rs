@@ -4,7 +4,8 @@
 
 //! Batch executor common structures.
 
-pub use super::statistics::{BatchExecuteStatistics, ExecSummaryCollector};
+pub use super::super::exec_summary::{ExecSummaryCollector, WithSummaryCollector};
+pub use super::statistics::BatchExecuteStatistics;
 
 use tipb::expression::FieldType;
 
@@ -27,7 +28,7 @@ pub trait BatchExecutor: Send {
     ///
     /// This function might return zero rows, which doesn't mean that there is no more result.
     /// See `is_drained` in `BatchExecuteResult`.
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult;
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult;
 
     /// Collects statistics (including but not limited to metrics and execution summaries)
     /// accumulated during execution and prepares for next collection.
@@ -39,6 +40,19 @@ pub trait BatchExecutor: Send {
     /// not contain accumulated meta data in last invocation. Normally the invocation frequency of
     /// this function is less than `next_batch()`.
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics);
+
+    fn with_summary_collector<C: ExecSummaryCollector + Send>(
+        self,
+        summary_collector: C,
+    ) -> WithSummaryCollector<C, Self>
+    where
+        Self: Sized,
+    {
+        WithSummaryCollector {
+            summary_collector,
+            inner: self,
+        }
+    }
 }
 
 impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
@@ -46,12 +60,34 @@ impl<T: BatchExecutor + ?Sized> BatchExecutor for Box<T> {
         (**self).schema()
     }
 
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        (**self).next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        (**self).next_batch(scan_rows)
     }
 
     fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
         (**self).collect_statistics(destination)
+    }
+}
+
+impl<C: ExecSummaryCollector + Send, T: BatchExecutor> BatchExecutor
+    for WithSummaryCollector<C, T>
+{
+    fn schema(&self) -> &[FieldType] {
+        self.inner.schema()
+    }
+
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        let timer = self.summary_collector.on_start_iterate();
+        let result = self.inner.next_batch(scan_rows);
+        self.summary_collector
+            .on_finish_iterate(timer, result.data.rows_len());
+        result
+    }
+
+    fn collect_statistics(&mut self, destination: &mut BatchExecuteStatistics) {
+        self.inner.collect_statistics(destination);
+        self.summary_collector
+            .collect_into(&mut destination.summary_per_executor);
     }
 }
 

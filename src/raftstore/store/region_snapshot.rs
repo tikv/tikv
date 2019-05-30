@@ -1,13 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine::rocks::{DBIterator, DBVector, SeekKey, TablePropertiesCollection, DB};
-use engine::{self, IterOption, Peekable, Result as EngineResult, Snapshot, SyncSnapshot};
+use engine::{
+    self, Error as EngineError, IterOption, Peekable, Result as EngineResult, Snapshot,
+    SyncSnapshot,
+};
 use kvproto::metapb::Region;
-use std::cmp;
 use std::sync::Arc;
 
+use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
 use crate::raftstore::Result;
+use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
@@ -59,8 +63,9 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter(iter_opt), start_key, f)
     }
 
@@ -76,8 +81,9 @@ impl RegionSnapshot {
     where
         F: FnMut(&[u8], &[u8]) -> Result<bool>,
     {
-        let iter_opt =
-            IterOption::new(Some(start_key.to_vec()), Some(end_key.to_vec()), fill_cache);
+        let start = KeyBuilder::from_slice(start_key, DATA_PREFIX_KEY.len(), 0);
+        let end = KeyBuilder::from_slice(end_key, DATA_PREFIX_KEY.len(), 0);
+        let iter_opt = IterOption::new(Some(start), Some(end), fill_cache);
         self.scan_impl(self.iter_cf(cf, iter_opt)?, start_key, f)
     }
 
@@ -159,35 +165,35 @@ pub struct RegionIterator {
     end_key: Vec<u8>,
 }
 
-fn set_lower_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
-    let lower_bound = match iter_opt.lower_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::max(k, region_start_key)
+    if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
+            iter_opt.set_vec_lower_bound(region_start_key);
         }
-        _ => region_start_key,
-    };
-    iter_opt.set_lower_bound(lower_bound);
+    } else {
+        iter_opt.set_vec_lower_bound(region_start_key);
+    }
 }
 
-fn set_upper_bound(iter_opt: &mut IterOption, region: &Region) {
+fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
     let region_end_key = keys::enc_end_key(region);
-    let upper_bound = match iter_opt.upper_bound() {
-        Some(k) if !k.is_empty() => {
-            let k = keys::data_key(k);
-            cmp::min(k, region_end_key)
+    if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
+        iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
+        if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
+            iter_opt.set_vec_upper_bound(region_end_key);
         }
-        _ => region_end_key,
-    };
-    iter_opt.set_upper_bound(upper_bound);
+    } else {
+        iter_opt.set_vec_upper_bound(region_end_key);
+    }
 }
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
     pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
@@ -206,8 +212,8 @@ impl RegionIterator {
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
-        set_lower_bound(&mut iter_opt, &region);
-        set_upper_bound(&mut iter_opt, &region);
+        update_lower_bound(&mut iter_opt, &region);
+        update_upper_bound(&mut iter_opt, &region);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
@@ -309,6 +315,14 @@ impl RegionIterator {
     }
 
     #[inline]
+    pub fn status(&self) -> Result<()> {
+        self.iter
+            .status()
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
+    }
+
+    #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
         if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
             CRITICAL_ERROR
@@ -351,6 +365,7 @@ mod tests {
 
     fn new_temp_engine(path: &TempDir) -> Engines {
         let raft_path = path.path().join(Path::new("raft"));
+        let shared_block_cache = false;
         Engines::new(
             Arc::new(
                 rocks::util::new_engine(path.path().to_str().unwrap(), None, ALL_CFS, None)
@@ -360,6 +375,7 @@ mod tests {
                 rocks::util::new_engine(raft_path.to_str().unwrap(), None, &[CF_DEFAULT], None)
                     .unwrap(),
             ),
+            shared_block_cache,
         )
     }
 
@@ -476,8 +492,8 @@ mod tests {
             Option<(&[u8], &[u8])>,
         )>| {
             let iter_opt = IterOption::new(
-                lower_bound.map(|v| v.to_vec()),
-                upper_bound.map(|v| v.to_vec()),
+                lower_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
+                upper_bound.map(|v| KeyBuilder::from_slice(v, keys::DATA_PREFIX_KEY.len(), 0)),
                 true,
             );
             let mut iter = snap.iter(iter_opt);
@@ -630,7 +646,11 @@ mod tests {
         // test iterator with upper bound
         let store = new_peer_storage(engines, &region);
         let snap = RegionSnapshot::new(&store);
-        let mut iter = snap.iter(IterOption::new(None, Some(b"a5".to_vec()), true));
+        let mut iter = snap.iter(IterOption::new(
+            None,
+            Some(KeyBuilder::from_slice(b"a5", DATA_PREFIX_KEY.len(), 0)),
+            true,
+        ));
         assert!(iter.seek_to_first());
         let mut res = vec![];
         loop {
@@ -752,7 +772,7 @@ mod tests {
 
         let snap = RegionSnapshot::new(&store);
         let mut iter_opt = IterOption::default();
-        iter_opt.set_lower_bound(b"a3".to_vec());
+        iter_opt.set_lower_bound(b"a3", 1);
         let mut iter = snap.iter(iter_opt);
         assert!(iter.seek_to_last());
         let mut res = vec![];

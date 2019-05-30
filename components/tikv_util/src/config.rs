@@ -13,8 +13,6 @@ use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url;
 
-use engine::rocks::DBCompressionType;
-
 quick_error! {
     #[derive(Debug)]
     pub enum ConfigError {
@@ -40,215 +38,6 @@ quick_error! {
         }
     }
 }
-
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CompressionType {
-    No,
-    Snappy,
-    Zlib,
-    Bz2,
-    Lz4,
-    Lz4hc,
-    Zstd,
-    ZstdNotFinal,
-}
-
-impl Into<DBCompressionType> for CompressionType {
-    fn into(self) -> DBCompressionType {
-        match self {
-            CompressionType::No => DBCompressionType::No,
-            CompressionType::Snappy => DBCompressionType::Snappy,
-            CompressionType::Zlib => DBCompressionType::Zlib,
-            CompressionType::Bz2 => DBCompressionType::Bz2,
-            CompressionType::Lz4 => DBCompressionType::Lz4,
-            CompressionType::Lz4hc => DBCompressionType::Lz4hc,
-            CompressionType::Zstd => DBCompressionType::Zstd,
-            CompressionType::ZstdNotFinal => DBCompressionType::ZstdNotFinal,
-        }
-    }
-}
-
-pub mod compression_type_level_serde {
-    use std::fmt;
-
-    use serde::de::{Error, SeqAccess, Unexpected, Visitor};
-    use serde::ser::SerializeSeq;
-    use serde::{Deserializer, Serializer};
-
-    use engine::rocks::DBCompressionType;
-
-    pub fn serialize<S>(ts: &[DBCompressionType; 7], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut s = serializer.serialize_seq(Some(ts.len()))?;
-        for t in ts {
-            let name = match *t {
-                DBCompressionType::No => "no",
-                DBCompressionType::Snappy => "snappy",
-                DBCompressionType::Zlib => "zlib",
-                DBCompressionType::Bz2 => "bzip2",
-                DBCompressionType::Lz4 => "lz4",
-                DBCompressionType::Lz4hc => "lz4hc",
-                DBCompressionType::Zstd => "zstd",
-                DBCompressionType::ZstdNotFinal => "zstd-not-final",
-                DBCompressionType::Disable => "disable",
-            };
-            s.serialize_element(name)?;
-        }
-        s.end()
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[DBCompressionType; 7], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct SeqVisitor;
-        impl<'de> Visitor<'de> for SeqVisitor {
-            type Value = [DBCompressionType; 7];
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "a compression type vector")
-            }
-
-            fn visit_seq<S>(self, mut seq: S) -> Result<[DBCompressionType; 7], S::Error>
-            where
-                S: SeqAccess<'de>,
-            {
-                let mut seqs = [DBCompressionType::No; 7];
-                let mut i = 0;
-                while let Some(value) = seq.next_element::<String>()? {
-                    if i == 7 {
-                        return Err(S::Error::invalid_value(
-                            Unexpected::Str(&value),
-                            &"only 7 compression types",
-                        ));
-                    }
-                    seqs[i] = match &*value.trim().to_lowercase() {
-                        "no" => DBCompressionType::No,
-                        "snappy" => DBCompressionType::Snappy,
-                        "zlib" => DBCompressionType::Zlib,
-                        "bzip2" => DBCompressionType::Bz2,
-                        "lz4" => DBCompressionType::Lz4,
-                        "lz4hc" => DBCompressionType::Lz4hc,
-                        "zstd" => DBCompressionType::Zstd,
-                        "zstd-not-final" => DBCompressionType::ZstdNotFinal,
-                        "disable" => DBCompressionType::Disable,
-                        _ => {
-                            return Err(S::Error::invalid_value(
-                                Unexpected::Str(&value),
-                                &"invalid compression type",
-                            ));
-                        }
-                    };
-                    i += 1;
-                }
-                if i < 7 {
-                    return Err(S::Error::invalid_length(i, &"7 compression types"));
-                }
-                Ok(seqs)
-            }
-        }
-
-        deserializer.deserialize_seq(SeqVisitor)
-    }
-}
-
-macro_rules! numeric_enum_mod {
-    ($name:ident $enum:ident { $($variant:ident = $value:expr, )* }) => {
-        pub mod $name {
-            use std::fmt;
-
-            use serde::{Serializer, Deserializer};
-            use serde::de::{self, Unexpected, Visitor};
-            use engine::rocks::$enum;
-
-            pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
-                where S: Serializer
-            {
-                serializer.serialize_i64(*mode as i64)
-            }
-
-            pub fn deserialize<'de, D>(deserializer: D) -> Result<$enum, D::Error>
-                where D: Deserializer<'de>
-            {
-                struct EnumVisitor;
-
-                impl<'de> Visitor<'de> for EnumVisitor {
-                    type Value = $enum;
-
-                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                        write!(formatter, concat!("valid ", stringify!($enum)))
-                    }
-
-                    fn visit_i64<E>(self, value: i64) -> Result<$enum, E>
-                        where E: de::Error
-                    {
-                        match value {
-                            $( $value => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Signed(value), &self))
-                        }
-                    }
-                }
-
-                deserializer.deserialize_i64(EnumVisitor)
-            }
-
-            #[cfg(test)]
-            mod tests {
-                use toml;
-                use engine::rocks::$enum;
-
-                #[test]
-                fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
-                    struct EnumHolder {
-                        #[serde(with = "super")]
-                        e: $enum,
-                    }
-
-                    let cases = vec![
-                        $(($enum::$variant, $value), )*
-                    ];
-                    for (e, v) in cases {
-                        let holder = EnumHolder { e };
-                        let res = toml::to_string(&holder).unwrap();
-                        let exp = format!("e = {}\n", v);
-                        assert_eq!(res, exp);
-                        let h: EnumHolder = toml::from_str(&exp).unwrap();
-                        assert!(h == holder);
-                    }
-                }
-            }
-        }
-    }
-}
-
-numeric_enum_mod! {compaction_pri_serde CompactionPriority {
-    ByCompensatedSize = 0,
-    OldestLargestSeqFirst = 1,
-    OldestSmallestSeqFirst = 2,
-    MinOverlappingRatio = 3,
-}}
-
-numeric_enum_mod! {rate_limiter_mode_serde DBRateLimiterMode {
-    ReadOnly = 1,
-    WriteOnly = 2,
-    AllIo = 3,
-}}
-
-numeric_enum_mod! {compaction_style_serde DBCompactionStyle {
-    Level = 0,
-    Universal = 1,
-}}
-
-numeric_enum_mod! {recovery_mode_serde DBRecoveryMode {
-    TolerateCorruptedTailRecords = 0,
-    AbsoluteConsistency = 1,
-    PointInTime = 2,
-    SkipAnyCorruptedRecords = 3,
-}}
 
 const UNIT: u64 = 1;
 const DATA_MAGNITUDE: u64 = 1024;
@@ -322,17 +111,17 @@ impl Serialize for ReadableSize {
         let size = self.0;
         let mut buffer = String::new();
         if size == 0 {
-            write!(buffer, "{}KB", size).unwrap();
+            write!(buffer, "{}KiB", size).unwrap();
         } else if size % PB == 0 {
-            write!(buffer, "{}PB", size / PB).unwrap();
+            write!(buffer, "{}PiB", size / PB).unwrap();
         } else if size % TB == 0 {
-            write!(buffer, "{}TB", size / TB).unwrap();
+            write!(buffer, "{}TiB", size / TB).unwrap();
         } else if size % GB as u64 == 0 {
-            write!(buffer, "{}GB", size / GB).unwrap();
+            write!(buffer, "{}GiB", size / GB).unwrap();
         } else if size % MB as u64 == 0 {
-            write!(buffer, "{}MB", size / MB).unwrap();
+            write!(buffer, "{}MiB", size / MB).unwrap();
         } else if size % KB as u64 == 0 {
-            write!(buffer, "{}KB", size / KB).unwrap();
+            write!(buffer, "{}KiB", size / KB).unwrap();
         } else {
             return serializer.serialize_u64(size);
         }
@@ -353,35 +142,32 @@ impl FromStr for ReadableSize {
             return Err(format!("ASCII string is expected, but got {:?}", s));
         }
 
-        let mut chrs = size_str.chars();
-        let mut number_str = size_str;
-        let mut unit_char = chrs.next_back().unwrap();
-        if unit_char < '0' || unit_char > '9' {
-            number_str = chrs.as_str();
-            if unit_char == 'B' {
-                let b = match chrs.next_back() {
-                    Some(b) => b,
-                    None => return Err(format!("numeric value is expected: {:?}", s)),
-                };
-                if b < '0' || b > '9' {
-                    number_str = chrs.as_str();
-                    unit_char = b;
-                }
-            }
-        } else {
-            unit_char = 'B';
-        }
+        // size: digits and '.' as decimal separator
+        let size_len = size_str
+            .to_string()
+            .chars()
+            .take_while(|c| char::is_ascii_digit(c) || *c == '.')
+            .count();
 
-        let unit = match unit_char {
-            'K' => KB,
-            'M' => MB,
-            'G' => GB,
-            'T' => TB,
-            'P' => PB,
-            'B' => UNIT,
-            _ => return Err(format!("only B, KB, MB, GB, TB, PB are supported: {:?}", s)),
+        // unit: alphabetic characters
+        let (size, unit) = size_str.split_at(size_len);
+
+        let unit = match unit.trim() {
+            "K" | "KB" | "KiB" => KB,
+            "M" | "MB" | "MiB" => MB,
+            "G" | "GB" | "GiB" => GB,
+            "T" | "TB" | "TiB" => TB,
+            "P" | "PB" | "PiB" => PB,
+            "B" | "" => UNIT,
+            _ => {
+                return Err(format!(
+                    "only B, KB, KiB, MB, MiB, GB, GiB, TB, TiB, PB, and PiB are supported: {:?}",
+                    s
+                ));
+            }
         };
-        match number_str.trim().parse::<f64>() {
+
+        match size.parse::<f64>() {
             Ok(n) => Ok(ReadableSize((n * unit as f64) as u64)),
             Err(_) => Err(format!("invalid size string: {:?}", s)),
         }
@@ -435,9 +221,9 @@ impl<'de> Deserialize<'de> for ReadableSize {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadableDuration(pub Duration);
 
-impl Into<Duration> for ReadableDuration {
-    fn into(self) -> Duration {
-        self.0
+impl From<ReadableDuration> for Duration {
+    fn from(readable: ReadableDuration) -> Duration {
+        readable.0
     }
 }
 
@@ -610,7 +396,6 @@ pub fn canonicalize_sub_path(path: &str, sub_path: &str) -> Result<String, Box<d
 
 #[cfg(unix)]
 pub fn check_max_open_fds(expect: u64) -> Result<(), ConfigError> {
-    use libc;
     use std::mem;
 
     unsafe {
@@ -689,7 +474,7 @@ mod check_kernel {
     }
 
     /// `check_kernel_params` checks kernel parameters, following are checked so far:
-    ///   - `net.core.somaxconn` should be greater or equak to 32768.
+    ///   - `net.core.somaxconn` should be greater or equal to 32768.
     ///   - `net.ipv4.tcp_syncookies` should be 0
     ///   - `vm.swappiness` shoud be 0
     ///
@@ -1016,8 +801,6 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-
-    use engine::rocks::DBCompressionType;
     use tempdir::TempDir;
     use toml;
 
@@ -1046,12 +829,12 @@ mod tests {
         }
 
         let legal_cases = vec![
-            (0, "0KB"),
-            (2 * KB, "2KB"),
-            (4 * MB, "4MB"),
-            (5 * GB, "5GB"),
-            (7 * TB, "7TB"),
-            (11 * PB, "11PB"),
+            (0, "0KiB"),
+            (2 * KB, "2KiB"),
+            (4 * MB, "4MiB"),
+            (5 * GB, "5GiB"),
+            (7 * TB, "7TiB"),
+            (11 * PB, "11PiB"),
         ];
         for (size, exp) in legal_cases {
             let c = SizeHolder {
@@ -1086,6 +869,17 @@ mod tests {
             ("23", 23),
             ("1", 1),
             ("1024B", KB),
+            // units with binary prefixes
+            (" 0.5 PiB", PB / 2),
+            ("1PiB", PB),
+            ("0.5 TiB", TB / 2),
+            ("2 TiB", TB * 2),
+            ("0.5GiB ", GB / 2),
+            ("787GiB ", GB * 787),
+            ("0.5MiB", MB / 2),
+            ("3MiB", MB * 3),
+            ("0.5KiB", KB / 2),
+            ("1 KiB", KB),
         ];
         for (src, exp) in decode_cases {
             let src = format!("s = {:?}", src);
@@ -1094,7 +888,8 @@ mod tests {
         }
 
         let illegal_cases = vec![
-            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B",
+            "0.5kb", "0.5kB", "0.5Kb", "0.5k", "0.5g", "b", "gb", "1b", "B", "1K24B", " 5_KB",
+            "4B7", "5M_",
         ];
         for src in illegal_cases {
             let src_str = format!("s = {:?}", src);
@@ -1166,57 +961,6 @@ mod tests {
             assert!(toml::from_str::<DurHolder>(&src_str).is_err(), "{}", src);
         }
         assert!(toml::from_str::<DurHolder>("d = 23").is_err());
-    }
-
-    #[test]
-    fn test_parse_compression_type() {
-        #[derive(Serialize, Deserialize)]
-        struct CompressionTypeHolder {
-            #[serde(with = "compression_type_level_serde")]
-            tp: [DBCompressionType; 7],
-        }
-
-        let all_tp = vec![
-            (DBCompressionType::No, "no"),
-            (DBCompressionType::Snappy, "snappy"),
-            (DBCompressionType::Zlib, "zlib"),
-            (DBCompressionType::Bz2, "bzip2"),
-            (DBCompressionType::Lz4, "lz4"),
-            (DBCompressionType::Lz4hc, "lz4hc"),
-            (DBCompressionType::Zstd, "zstd"),
-            (DBCompressionType::ZstdNotFinal, "zstd-not-final"),
-            (DBCompressionType::Disable, "disable"),
-        ];
-        for i in 0..all_tp.len() - 7 {
-            let mut src = [DBCompressionType::No; 7];
-            let mut exp = ["no"; 7];
-            for (i, &t) in all_tp[i..i + 7].iter().enumerate() {
-                src[i] = t.0;
-                exp[i] = t.1;
-            }
-            let holder = CompressionTypeHolder { tp: src };
-            let res_str = toml::to_string(&holder).unwrap();
-            let exp_str = format!("tp = [\"{}\"]\n", exp.join("\", \""));
-            assert_eq!(res_str, exp_str);
-            let h: CompressionTypeHolder = toml::from_str(&exp_str).unwrap();
-            assert_eq!(h.tp, holder.tp);
-        }
-
-        // length is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>("tp = [\"no\"]").is_err());
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
-            "no", "no", "no", "no", "no", "no", "no", "no"
-        ]"#
-        )
-        .is_err());
-        // value is wrong.
-        assert!(toml::from_str::<CompressionTypeHolder>(
-            r#"tp = [
-            "no", "no", "no", "no", "no", "no", "yes"
-        ]"#
-        )
-        .is_err());
     }
 
     #[test]

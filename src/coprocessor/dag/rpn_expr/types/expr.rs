@@ -6,7 +6,7 @@ use super::super::function::RpnFunction;
 use crate::coprocessor::codec::data_type::ScalarValue;
 
 /// A type for each node in the RPN expression list.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RpnExpressionNode {
     /// Represents a function call.
     FnCall {
@@ -66,7 +66,7 @@ impl RpnExpressionNode {
 /// An expression in Reverse Polish notation, which is simply a list of RPN expression nodes.
 ///
 /// You may want to build it using `RpnExpressionBuilder`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RpnExpression(Vec<RpnExpressionNode>);
 
 impl std::ops::Deref for RpnExpression {
@@ -92,6 +92,25 @@ impl From<Vec<RpnExpressionNode>> for RpnExpression {
 impl AsRef<[RpnExpressionNode]> for RpnExpression {
     fn as_ref(&self) -> &[RpnExpressionNode] {
         self.0.as_ref()
+    }
+}
+
+impl AsMut<[RpnExpressionNode]> for RpnExpression {
+    fn as_mut(&mut self) -> &mut [RpnExpressionNode] {
+        self.0.as_mut()
+    }
+}
+
+impl RpnExpression {
+    /// Gets the field type of the return value.
+    pub fn ret_field_type<'a>(&'a self, schema: &'a [FieldType]) -> &'a FieldType {
+        assert!(!self.0.is_empty());
+        let last_node = self.0.last().unwrap();
+        match last_node {
+            RpnExpressionNode::FnCall { field_type, .. } => field_type,
+            RpnExpressionNode::Constant { field_type, .. } => field_type,
+            RpnExpressionNode::ColumnRef { offset } => &schema[*offset],
+        }
     }
 }
 

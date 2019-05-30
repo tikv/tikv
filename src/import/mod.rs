@@ -32,6 +32,7 @@ mod import_mode;
 mod kv_importer;
 mod kv_server;
 mod kv_service;
+mod speed_limiter;
 mod sst_importer;
 mod sst_service;
 

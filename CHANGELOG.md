@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [Unreleased]
+- Leader responds to learner read index message. (https://github.com/pingcap/raft-rs/pull/220)
+- Snapshot may lose some applied results. (https://github.com/tikv/tikv/pull/4716)
+
 ## [3.0.0-beta.1]
 - Optimize the Coprocessor calculation execution framework and implement the TableScan section, with the Single TableScan performance improved by 5% ~ 30%
     - Implement the definition of the `BatchRows` row and the `BatchColumn` column [#3660](https://github.com/tikv/tikv/pull/3660)
@@ -17,6 +21,7 @@ See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.
 - Add support for the `INSERT` operation, make prewrite succeed only when keys do not exist, and eliminate `Batch Get` [#4085](https://github.com/tikv/tikv/pull/4085)
 - Use more fair batch strategy in the Batch System [#4200](https://github.com/tikv/tikv/pull/4200)
 - Support Raw scan in tikv-ctl [#3825](https://github.com/tikv/tikv/pull/3825)
+- Support hibernating regions [#4591](https://github.com/tikv/tikv/pull/4591)
 
 ## [3.0.0-beta]
 - Support distributed GC [#3179](https://github.com/tikv/tikv/pull/3179)

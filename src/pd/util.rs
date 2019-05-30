@@ -7,14 +7,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tikv_util::collections::HashSet;
 
-use crate::grpc::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Result as GrpcResult,
-};
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use grpcio::{
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    Result as GrpcResult,
+};
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
@@ -354,7 +354,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
+                info!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };
@@ -473,6 +473,7 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::NOT_BOOTSTRAPPED => Err(Error::ClusterNotBootstrapped(header.get_cluster_id())),
         ErrorType::INCOMPATIBLE_VERSION => Err(Error::Incompatible),
         ErrorType::STORE_TOMBSTONE => Err(Error::StoreTombstone(err.get_message().to_owned())),
+        ErrorType::REGION_NOT_FOUND => Err(Error::RegionNotFound(vec![])),
         ErrorType::UNKNOWN => Err(box_err!(err.get_message())),
         ErrorType::OK => Ok(()),
     }

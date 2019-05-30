@@ -223,7 +223,7 @@ impl<E: Engine> GCRunner<E> {
             let gc_info = txn.gc(k.clone(), safe_point)?;
 
             if gc_info.found_versions >= GC_LOG_FOUND_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC found plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.found_versions,
@@ -233,7 +233,7 @@ impl<E: Engine> GCRunner<E> {
             // TODO: we may delete only part of the versions in a batch, which may not beyond
             // the logging threshold `GC_LOG_DELETED_VERSION_THRESHOLD`.
             if gc_info.deleted_versions as usize >= GC_LOG_DELETED_VERSION_THRESHOLD {
-                info!(
+                debug!(
                     "GC deleted plenty versions for a key";
                     "region_id" => ctx.get_region_id(),
                     "versions" => gc_info.deleted_versions,
@@ -748,7 +748,7 @@ impl<S: GCSafePointProvider, R: RegionInfoProvider> GCManager<S, R> {
     fn initialize(&mut self) -> GCManagerResult<()> {
         info!("gc-manager is initializing");
         self.safe_point = 0;
-        self.wait_for_next_safe_point()?;
+        self.try_update_safe_point();
         info!("gc-manager started"; "safe_point" => self.safe_point);
         Ok(())
     }
@@ -1330,6 +1330,19 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 234);
 
         test_util.stop();
+    }
+
+    #[test]
+    fn test_gc_manager_initialize() {
+        let mut test_util = GCManagerTestUtil::new(BTreeMap::new());
+        let mut gc_manager = test_util.gc_manager.take().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        test_util.add_next_safe_point(0);
+        test_util.add_next_safe_point(5);
+        gc_manager.initialize().unwrap();
+        assert_eq!(gc_manager.safe_point, 0);
+        assert!(gc_manager.try_update_safe_point());
+        assert_eq!(gc_manager.safe_point, 5);
     }
 
     #[test]

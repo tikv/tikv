@@ -1,14 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(fnbox)]
 #![cfg_attr(test, feature(test))]
 
 #[macro_use]
 extern crate futures;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate prometheus;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
@@ -44,17 +41,18 @@ use std::time::Duration;
 use std::{env, slice, thread, u64};
 
 use protobuf::Message;
-use rand::{self, ThreadRng};
+use rand;
+use rand::rngs::ThreadRng;
 
 pub mod codec;
 pub mod collections;
 pub mod config;
 pub mod file;
 pub mod future;
-pub mod futurepool;
-pub mod io_limiter;
+pub mod future_pool;
 #[macro_use]
 pub mod macros;
+pub mod keybuilder;
 pub mod logger;
 pub mod metrics;
 pub mod mpsc;
@@ -102,6 +100,10 @@ pub fn panic_mark_file_exists<P: AsRef<Path>>(data_dir: P) -> bool {
 }
 
 pub const NO_LIMIT: u64 = u64::MAX;
+
+pub trait AssertClone: Clone {}
+
+pub trait AssertCopy: Copy {}
 
 pub trait AssertSend: Send {}
 

@@ -54,7 +54,7 @@ pre-clippy: unset-override
 
 clippy: pre-clippy
 	@cargo clippy --all --all-targets -- \
-		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cyclomatic_complexity \
+		-A clippy::module_inception -A clippy::needless_pass_by_value -A clippy::cognitive_complexity \
 		-A clippy::unreadable_literal -A clippy::should_implement_trait -A clippy::verbose_bit_mask \
 		-A clippy::implicit_hasher -A clippy::large_enum_variant -A clippy::new_without_default \
 		-A clippy::neg_cmp_op_on_partial_ord -A clippy::too_many_arguments \
@@ -113,9 +113,6 @@ test:
 		cargo test --no-default-features --features "${ENABLE_FEATURES},mem-profiling" ${EXTRA_CARGO_ARGS} --bin tikv-server -- --nocapture --ignored; \
 	fi
 	bash scripts/check-bins-for-jemalloc.sh
-
-bench:
-	LOG_LEVEL=ERROR RUST_BACKTRACE=1 cargo bench --all --no-default-features --features "${ENABLE_FEATURES}" -- --nocapture
 
 unset-override:
 	@# unset first in case of any previous overrides

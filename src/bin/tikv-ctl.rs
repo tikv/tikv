@@ -2,22 +2,8 @@
 
 #[macro_use]
 extern crate clap;
-#[macro_use(
-    slog_kv,
-    slog_crit,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate vlog;
-
-mod util;
 
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
@@ -37,6 +23,10 @@ use grpcio::{CallOption, ChannelBuilder, Environment};
 use protobuf::Message;
 use protobuf::RepeatedField;
 
+use engine::rocks;
+use engine::rocks::util::security::encrypted_env_from_cipher_file;
+use engine::Engines;
+use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::debugpb::{DB as DBType, *};
 use kvproto::debugpb_grpc::DebugClient;
 use kvproto::kvrpcpb::{MvccInfo, SplitRegionRequest};
@@ -45,16 +35,13 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
-
-use engine::rocks;
-use engine::Engines;
-use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
-use tikv_util::security::{self, SecurityConfig, SecurityManager};
+use tikv_util::security::{SecurityConfig, SecurityManager};
 use tikv_util::{escape, unescape};
 
 const METRICS_PROMETHEUS: &str = "prometheus";
@@ -76,12 +63,13 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
+                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 kv_db_opts.set_env(encrypted_env);
             }
             let kv_db = rocks::util::new_engine_opt(kv_path, kv_db_opts, kv_cfs_opts).unwrap();
@@ -90,11 +78,11 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
-                    security::encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
+                    encrypted_env_from_cipher_file(mgr.cipher_file(), None).unwrap();
                 raft_db_opts.set_env(encrypted_env);
             }
             let raft_db =
@@ -103,6 +91,7 @@ fn new_debug_executor(
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
+                cache.is_some(),
             ))) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
@@ -891,7 +880,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();
@@ -2194,7 +2183,7 @@ fn run_ldb_command(cmd: &ArgMatches<'_>, cfg: &TiKvConfig) {
     let mut opts = cfg.rocksdb.build_opt();
     if !cfg.security.cipher_file.is_empty() {
         let encrypted_env =
-            security::encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
+            encrypted_env_from_cipher_file(&cfg.security.cipher_file, None).unwrap();
         opts.set_env(encrypted_env);
     }
     engine::rocks::run_ldb_tool(&args, &opts);

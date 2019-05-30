@@ -26,9 +26,10 @@ The currently defined types are listed below, please pick one of the types for t
 
 Please describe the tests that you ran to verify your changes. Have you finished unit tests, integration tests, or manual tests? What additional tests would give you greater confidence in this change?
 
-## Does this PR affect documentation (docs) update? (mandatory)
+## Does this PR affect documentation (docs) or release note? (mandatory)
 
-If there is document change, please file a PR in ([docs](https://github.com/tikv/tikv/tree/master/docs)) and add the PR number here.
+- If there is a document change, please file a PR in ([docs](https://github.com/tikv/tikv/tree/master/docs)) and add the PR number here.
+- If this PR should be mentioned in the release note, please update the [release note](https://github.com/tikv/tikv/blob/master/CHANGELOG.md).
 
 ## Does this PR affect tidb-ansible update? (mandatory)
 

@@ -1,16 +1,17 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::boxed::FnBox;
-use std::cell::Cell;
+use std::cell::{Cell, UnsafeCell};
 use std::cmp::Ordering;
 use std::time::Duration;
-use std::{error, result};
+use std::{error, ptr, result};
 
 use crate::raftstore::coprocessor::SeekRegionCallback;
 use crate::storage::{Key, Value};
 use engine::rocks::TablePropertiesCollection;
 use engine::IterOption;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use tikv_util::metrics::CRITICAL_ERROR;
+use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 
 use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::{Context, ScanDetail, ScanInfo};
@@ -42,7 +43,7 @@ const STAT_SEEK: &str = "seek";
 const STAT_SEEK_FOR_PREV: &str = "seek_for_prev";
 const STAT_OVER_SEEK_BOUND: &str = "over_seek_bound";
 
-pub type Callback<T> = Box<dyn FnBox((CbContext, Result<T>)) + Send>;
+pub type Callback<T> = Box<dyn FnOnce((CbContext, Result<T>)) + Send>;
 
 #[derive(Debug)]
 pub struct CbContext {
@@ -139,6 +140,7 @@ pub trait Iterator: Send {
     fn seek_to_first(&mut self) -> bool;
     fn seek_to_last(&mut self) -> bool;
     fn valid(&self) -> bool;
+    fn status(&self) -> Result<()>;
 
     fn validate_key(&self, _: &Key) -> Result<()> {
         Ok(())
@@ -361,7 +363,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if self.scan_mode == ScanMode::Forward
-            && self.valid()
+            && self.valid()?
             && self.key(statistics) >= key.as_encoded().as_slice()
         {
             return Ok(true);
@@ -380,7 +382,7 @@ impl<I: Iterator> Cursor<I> {
     /// around `key`, otherwise you should use `seek` instead.
     pub fn near_seek(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Backward);
-        if !self.iter.valid() {
+        if !self.valid()? {
             return self.seek(key, statistics);
         }
         let ord = self.key(statistics).cmp(key.as_encoded());
@@ -403,7 +405,7 @@ impl<I: Iterator> Cursor<I> {
                 self.seek(key, statistics),
                 statistics
             );
-            if self.iter.valid() {
+            if self.valid()? {
                 if self.key(statistics) < key.as_encoded().as_slice() {
                     self.next(statistics);
                 }
@@ -419,7 +421,7 @@ impl<I: Iterator> Cursor<I> {
                 statistics
             );
         }
-        if !self.iter.valid() {
+        if !self.valid()? {
             self.max_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -456,7 +458,7 @@ impl<I: Iterator> Cursor<I> {
         }
 
         if self.scan_mode == ScanMode::Backward
-            && self.valid()
+            && self.valid()?
             && self.key(statistics) <= key.as_encoded().as_slice()
         {
             return Ok(true);
@@ -472,7 +474,7 @@ impl<I: Iterator> Cursor<I> {
     /// Find the largest key that is not greater than the specific key.
     pub fn near_seek_for_prev(&mut self, key: &Key, statistics: &mut CFStatistics) -> Result<bool> {
         assert_ne!(self.scan_mode, ScanMode::Forward);
-        if !self.iter.valid() {
+        if !self.valid()? {
             return self.seek_for_prev(key, statistics);
         }
         let ord = self.key(statistics).cmp(key.as_encoded());
@@ -496,7 +498,7 @@ impl<I: Iterator> Cursor<I> {
                 self.seek_for_prev(key, statistics),
                 statistics
             );
-            if self.iter.valid() {
+            if self.valid()? {
                 if self.key(statistics) > key.as_encoded().as_slice() {
                     self.prev(statistics);
                 }
@@ -512,7 +514,7 @@ impl<I: Iterator> Cursor<I> {
             );
         }
 
-        if !self.iter.valid() {
+        if !self.valid()? {
             self.min_key = Some(key.as_encoded().to_owned());
             return Ok(false);
         }
@@ -615,8 +617,24 @@ impl<I: Iterator> Cursor<I> {
     }
 
     #[inline]
-    pub fn valid(&self) -> bool {
-        self.iter.valid()
+    // As Rocksdb described, if Iterator::Valid() is false, there are two possibilities:
+    // (1) We reached the end of the data. In this case, status() is OK();
+    // (2) there is an error. In this case status() is not OK().
+    // So check status when iterator is invalidated.
+    pub fn valid(&self) -> Result<bool> {
+        if !self.iter.valid() {
+            if let Err(e) = self.iter.status() {
+                CRITICAL_ERROR.with_label_values(&["rocksdb"]).inc();
+                if panic_when_unexpected_key_or_data() {
+                    set_panic_mark();
+                    panic!("Rocksdb error: {}", e);
+                }
+                return Err(e);
+            }
+            Ok(false)
+        } else {
+            Ok(true)
+        }
     }
 }
 
@@ -663,6 +681,36 @@ impl Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
+
+thread_local! {
+    // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
+    static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+}
+
+/// Execute the closure on the thread local engine.
+pub fn with_tls_engine<E: Engine, F, R>(f: F) -> R
+where
+    F: FnOnce(&E) -> R,
+{
+    TLS_ENGINE_ANY.with(|e| {
+        let engine = unsafe { &*(*e.get() as *const E) };
+        f(engine)
+    })
+}
+
+/// Set the thread local engine.
+pub fn set_tls_engine<E: Engine>(engine: E) {
+    let engine = Box::into_raw(Box::new(engine)) as *mut ();
+    TLS_ENGINE_ANY.with(|e| unsafe { *e.get() = engine });
+}
+
+/// Destroy the thread local engine.
+pub fn destroy_tls_engine<E: Engine>() {
+    TLS_ENGINE_ANY.with(|e| unsafe {
+        drop(Box::from_raw(*e.get() as *mut E));
+        *e.get() = ptr::null_mut();
+    });
+}
 
 #[cfg(test)]
 pub mod tests {

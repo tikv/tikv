@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use cop_datatype::EvalType;
 use kvproto::coprocessor::KeyRange;
+use tipb::executor::IndexScan;
 use tipb::expression::FieldType;
 use tipb::schema::ColumnInfo;
 
-use crate::storage::Store;
+use crate::storage::{FixtureStore, Store};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
 use crate::coprocessor::dag::batch::interface::*;
@@ -15,18 +16,24 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
+pub struct BatchIndexScanExecutor<S: Store>(
     super::util::scan_executor::ScanExecutor<
-        C,
         S,
         IndexScanExecutorImpl,
         super::util::ranges_iter::PointRangeConditional,
     >,
 );
 
-impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
+impl BatchIndexScanExecutor<FixtureStore> {
+    /// Checks whether this executor can be used.
+    #[inline]
+    pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
+        super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
+    }
+}
+
+impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -34,27 +41,29 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
         desc: bool,
         unique: bool,
     ) -> Result<Self> {
-        // Note: `unique = true` doesn't completely mean that it is a unique index scan. Instead it
-        // just means that we can use point-get for this index. In the following scenarios `unique`
-        // will be `false`:
+        // Note 1: `unique = true` doesn't completely mean that it is a unique index scan. Instead
+        // it just means that we can use point-get for this index. In the following scenarios
+        // `unique` will be `false`:
         // - scan from a non-unique index
         // - scan from a unique index with like: where unique-index like xxx
-
-        // Note: Unlike table scan executor, the accepted `columns_info` of index scan executor is
+        //
+        // Note 2: Unlike table scan executor, the accepted `columns_info` of index scan executor is
         // strictly stipulated. The order of columns in the schema must be the same as index data
         // stored and if PK handle is needed it must be placed as the last one.
-
-        let mut schema = Vec::with_capacity(columns_info.len());
-        let mut columns_len_without_handle = 0;
-        let mut decode_handle = false;
-        for ci in &columns_info {
-            schema.push(super::util::scan_executor::field_type_from_column_info(&ci));
-            if ci.get_pk_handle() {
-                decode_handle = true;
-            } else {
-                columns_len_without_handle += 1;
-            }
-        }
+        //
+        // Note 3: Currently TiDB may send multiple PK handles to TiKV (but only the last one is
+        // real). We accept this kind of request for compatibility considerations, but will be
+        // forbidden soon.
+        let decode_handle = columns_info.last().map_or(false, |ci| ci.get_pk_handle());
+        let schema: Vec<_> = columns_info
+            .iter()
+            .map(|ci| super::util::scan_executor::field_type_from_column_info(&ci))
+            .collect();
+        let columns_len_without_handle = if decode_handle {
+            schema.len() - 1
+        } else {
+            schema.len()
+        };
 
         let imp = IndexScanExecutorImpl {
             context: EvalContext::new(config),
@@ -63,7 +72,6 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
             decode_handle,
         };
         let wrapper = super::util::scan_executor::ScanExecutor::new(
-            summary_collector,
             imp,
             store,
             desc,
@@ -74,15 +82,15 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor<C, S> {
+impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
     }
 
     #[inline]
-    fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
-        self.0.next_batch(expect_rows)
+    fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
+        self.0.next_batch(scan_rows)
     }
 
     #[inline]
@@ -136,11 +144,11 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
     ///
     /// Note: the structure of the constructed column is the same as table scan executor but due
     /// to different reasons.
-    fn build_column_vec(&self, expect_rows: usize) -> LazyBatchColumnVec {
+    fn build_column_vec(&self, scan_rows: usize) -> LazyBatchColumnVec {
         let columns_len = self.schema.len();
         let mut columns = Vec::with_capacity(columns_len);
         for _ in 0..self.columns_len_without_handle {
-            columns.push(LazyBatchColumn::raw_with_capacity(expect_rows));
+            columns.push(LazyBatchColumn::raw_with_capacity(scan_rows));
         }
         if self.decode_handle {
             // For primary key, we construct a decoded `VectorValue` because it is directly
@@ -148,11 +156,12 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
             // Note that for normal index, primary key is appended at the end of key with a
             // datum flag.
             columns.push(LazyBatchColumn::decoded_with_capacity_and_tp(
-                expect_rows,
+                scan_rows,
                 EvalType::Int,
             ));
         }
 
+        assert_eq!(columns.len(), columns_len);
         LazyBatchColumnVec::from(columns)
     }
 
@@ -171,7 +180,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
 
         for i in 0..self.columns_len_without_handle {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].push_raw(val);
+            columns[i].mut_raw().push(val);
             key_payload = remaining;
         }
 
@@ -229,12 +238,11 @@ mod tests {
 
     use cop_datatype::{FieldTypeAccessor, FieldTypeTp};
     use kvproto::coprocessor::KeyRange;
-    use tipb::expression::FieldType;
     use tipb::schema::ColumnInfo;
 
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::batch::statistics::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -275,21 +283,9 @@ mod tests {
 
         // The schema of these columns. Used to check executor output.
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::Double);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::Double.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         // Case 1. Normal index.
@@ -326,7 +322,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -341,16 +336,24 @@ mod tests {
             assert_eq!(result.data.columns_len(), 2);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(10.5), Some(5.1), Some(0.3)]
+                &[
+                    Real::new(10.5).ok(),
+                    Real::new(5.1).ok(),
+                    Real::new(0.3).ok()
+                ]
             );
         }
 
@@ -369,7 +372,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -388,13 +390,17 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(5.1), Some(10.5)]
+                &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
@@ -436,7 +442,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -455,13 +460,17 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
-                &[Some(5.1), Some(10.5)]
+                &[Real::new(5.1).ok(), Real::new(10.5).ok()]
             );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5), Some(2)]);
@@ -481,7 +490,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -500,11 +508,18 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 1);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
-            assert_eq!(result.data[1].decoded().as_real_slice(), &[Some(5.1)]);
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
+            assert_eq!(
+                result.data[1].decoded().as_real_slice(),
+                &[Real::new(5.1).ok()]
+            );
             assert!(result.data[2].is_decoded());
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(5)]);
         }

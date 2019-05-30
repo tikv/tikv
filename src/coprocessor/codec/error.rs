@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::coprocessor::dag::expr::EvalContext;
+use crate::coprocessor::dag::expr::{EvalContext, Flag};
 use regex::Error as RegexpError;
 use std::error::Error as StdError;
 use std::io;
@@ -60,7 +60,8 @@ impl Error {
             return Err(err);
         }
         if ctx.cfg.sql_mode.is_strict()
-            && (ctx.cfg.in_insert_stmt || ctx.cfg.in_update_or_delete_stmt)
+            && (ctx.cfg.flag.contains(Flag::IN_INSERT_STMT)
+                || ctx.cfg.flag.contains(Flag::IN_UPDATE_OR_DELETE_STMT))
         {
             return Err(err);
         }
@@ -151,11 +152,11 @@ impl Error {
     }
 }
 
-impl Into<select::Error> for Error {
-    fn into(self) -> select::Error {
+impl From<Error> for select::Error {
+    fn from(error: Error) -> select::Error {
         let mut err = select::Error::new();
-        err.set_code(self.code());
-        err.set_msg(format!("{:?}", self));
+        err.set_code(error.code());
+        err.set_msg(format!("{:?}", error));
         err
     }
 }

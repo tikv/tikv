@@ -9,6 +9,7 @@ use engine::rocks;
 use engine::rocks::util::CFOptions;
 use engine::rocks::{ColumnFamilyOptions, DBIterator, SeekKey, Writable, WriteBatch, DB};
 use engine::Engines;
+use engine::Error as EngineError;
 use engine::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use engine::{IterOption, Peekable};
 #[cfg(not(feature = "no-fail"))]
@@ -16,7 +17,7 @@ use kvproto::errorpb::Error as ErrorHeader;
 use kvproto::kvrpcpb::Context;
 use tempdir::TempDir;
 
-use crate::storage::{Key, Value};
+use crate::storage::{BlockCacheConfig, Key, Value};
 use tikv_util::escape;
 use tikv_util::worker::{Runnable, Scheduler, Worker};
 
@@ -83,6 +84,7 @@ impl RocksEngine {
         path: &str,
         cfs: &[CfName],
         cfs_opts: Option<Vec<CFOptions<'_>>>,
+        shared_block_cache: bool,
     ) -> Result<RocksEngine> {
         info!("RocksEngine: creating for path"; "path" => path);
         let (path, temp_dir) = match path {
@@ -96,7 +98,7 @@ impl RocksEngine {
         let db = Arc::new(rocks::util::new_engine(&path, None, cfs, cfs_opts)?);
         // It does not use the raft_engine, so it is ok to fill with the same
         // rocksdb.
-        let engines = Engines::new(db.clone(), db);
+        let engines = Engines::new(db.clone(), db, shared_block_cache);
         box_try!(worker.start(Runner(engines.clone())));
         Ok(RocksEngine {
             sched: worker.scheduler(),
@@ -174,17 +176,18 @@ impl TestEngineBuilder {
         };
         let cfs = self.cfs.unwrap_or_else(|| crate::storage::ALL_CFS.to_vec());
         let cfg_rocksdb = crate::config::DbConfig::default();
+        let cache = BlockCacheConfig::default().build_shared_cache();
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
-                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt()),
-                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt()),
-                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt()),
-                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt()),
+                CF_DEFAULT => CFOptions::new(CF_DEFAULT, cfg_rocksdb.defaultcf.build_opt(&cache)),
+                CF_LOCK => CFOptions::new(CF_LOCK, cfg_rocksdb.lockcf.build_opt(&cache)),
+                CF_WRITE => CFOptions::new(CF_WRITE, cfg_rocksdb.writecf.build_opt(&cache)),
+                CF_RAFT => CFOptions::new(CF_RAFT, cfg_rocksdb.raftcf.build_opt(&cache)),
                 _ => CFOptions::new(*cf, ColumnFamilyOptions::new()),
             })
             .collect();
-        RocksEngine::new(&path, &cfs, Some(cfs_opts))
+        RocksEngine::new(&path, &cfs, Some(cfs_opts), cache.is_some())
     }
 }
 
@@ -320,6 +323,12 @@ impl<D: Deref<Target = DB> + Send> EngineIterator for DBIterator<D> {
 
     fn valid(&self) -> bool {
         DBIterator::valid(self)
+    }
+
+    fn status(&self) -> Result<()> {
+        DBIterator::status(self)
+            .map_err(|e| EngineError::RocksDb(e))
+            .map_err(From::from)
     }
 
     fn key(&self) -> &[u8] {

@@ -3,6 +3,8 @@
 use prometheus::{exponential_buckets, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec};
 use std::i64;
 
+use crate::CF_DEFAULT;
+
 use crate::rocks::{
     self, DBStatisticsHistogramType as HistType, DBStatisticsTickerType as TickerType,
     HistogramData, DB,
@@ -18,6 +20,7 @@ pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-
 pub const ROCKSDB_NUM_SNAPSHOTS: &str = "rocksdb.num-snapshots";
 pub const ROCKSDB_OLDEST_SNAPSHOT_TIME: &str = "rocksdb.oldest-snapshot-time";
 pub const ROCKSDB_NUM_FILES_AT_LEVEL: &str = "rocksdb.num-files-at-level";
+pub const ROCKSDB_NUM_IMMUTABLE_MEM_TABLE: &str = "rocksdb.num-immutable-mem-table";
 
 pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheMiss,
@@ -885,7 +888,7 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
     }
 }
 
-pub fn flush_engine_properties(engine: &DB, name: &str) {
+pub fn flush_engine_properties(engine: &DB, name: &str, shared_block_cache: bool) {
     for cf in engine.cf_names() {
         let handle = rocks::util::get_cf_handle(engine, cf).unwrap();
         // It is important to monitor each cf's size, especially the "raft" and "lock" column
@@ -897,11 +900,12 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
             .with_label_values(&[name, cf])
             .set(cf_used_size as i64);
 
-        // For block cache usage
-        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
-        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
-            .with_label_values(&[name, cf])
-            .set(block_cache_usage as i64);
+        if !shared_block_cache {
+            let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+            STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+                .with_label_values(&[name, cf])
+                .set(block_cache_usage as i64);
+        }
 
         // TODO: find a better place to record these metrics.
         // Refer: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB
@@ -955,6 +959,13 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
                     .set(v as i64);
             }
         }
+
+        // Num immutable mem-table
+        if let Some(v) = rocks::util::get_num_immutable_mem_table(engine, handle) {
+            STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC
+                .with_label_values(&[name, cf])
+                .set(v as i64);
+        }
     }
 
     // For snapshot
@@ -970,6 +981,16 @@ pub fn flush_engine_properties(engine: &DB, name: &str) {
         STORE_ENGINE_OLDEST_SNAPSHOT_DURATION_GAUGE_VEC
             .with_label_values(&[name])
             .set(d as i64);
+    }
+
+    if shared_block_cache {
+        // Since block cache is shared, getting cache size from any CF is fine. Here we get from
+        // default CF.
+        let handle = rocks::util::get_cf_handle(engine, CF_DEFAULT).unwrap();
+        let block_cache_usage = engine.get_block_cache_usage_cf(handle);
+        STORE_ENGINE_BLOCK_CACHE_USAGE_GAUGE_VEC
+            .with_label_values(&[name, "all"])
+            .set(block_cache_usage as i64);
     }
 }
 
@@ -1227,6 +1248,12 @@ lazy_static! {
         &["db", "cf", "level"]
     ).unwrap();
 
+    pub static ref STORE_ENGINE_NUM_IMMUTABLE_MEM_TABLE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_immutable_mem_table",
+        "Number of immutable mem-table",
+        &["db", "cf"]
+    ).unwrap();
+
     pub static ref STORE_ENGINE_STALL_CONDITIONS_CHANGED_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_stall_conditions_changed",
         "Stall conditions changed of each column family",
@@ -1256,6 +1283,7 @@ mod tests {
             flush_engine_histogram_metrics(*tp, HistogramData::default(), "test-name");
         }
 
-        flush_engine_properties(&db, "test-name");
+        let shared_block_cache = false;
+        flush_engine_properties(&db, "test-name", shared_block_cache);
     }
 }
