@@ -68,10 +68,10 @@ quick_error! {
             display("write conflict, start_ts:{}, conflict_start_ts:{}, conflict_commit_ts:{}, key:{:?}, primary:{:?}",
                     start_ts, conflict_start_ts, conflict_commit_ts, escape(key), escape(primary))
         }
-        Deadlock { start_ts: u64, lock_ts: u64, key_hash: u64, deadlock_key_hash: u64 } {
+        Deadlock { start_ts: u64, lock_ts: u64, lock_key: Vec<u8>, deadlock_key_hash: u64 } {
             description("deadlock")
-            display("deadlock occurs between txn:{} and txn:{}, key_hash:{}, deadlock_key_hash:{}",
-                    start_ts, lock_ts, key_hash, deadlock_key_hash)
+            display("deadlock occurs between txn:{} and txn:{}, lock_key:{:?}, deadlock_key_hash:{}",
+                    start_ts, lock_ts, escape(lock_key), deadlock_key_hash)
         }
         AlreadyExist { key: Vec<u8> } {
             description("already exists")
@@ -149,12 +149,12 @@ impl Error {
             Error::Deadlock {
                 start_ts,
                 lock_ts,
-                key_hash,
+                ref lock_key,
                 deadlock_key_hash,
             } => Some(Error::Deadlock {
                 start_ts,
                 lock_ts,
-                key_hash,
+                lock_key: lock_key.to_owned(),
                 deadlock_key_hash,
             }),
             Error::AlreadyExist { ref key } => Some(Error::AlreadyExist { key: key.clone() }),

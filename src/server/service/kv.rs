@@ -1919,6 +1919,19 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             warn!("txn conflicts"; "err" => ?err);
             key_error.set_retryable(format!("{:?}", err));
         }
+        storage::Error::Txn(TxnError::Mvcc(MvccError::Deadlock {
+            lock_ts,
+            ref lock_key,
+            deadlock_key_hash,
+            ..
+        })) => {
+            warn!("txn deadlocks"; "err" => ?err);
+            let mut deadlock = Deadlock::new();
+            deadlock.set_lock_ts(lock_ts);
+            deadlock.set_lock_key(lock_key.to_owned());
+            deadlock.set_deadlock_key_hash(deadlock_key_hash);
+            key_error.set_deadlock(deadlock);
+        }
         _ => {
             error!("txn aborts"; "err" => ?err);
             key_error.set_abort(format!("{:?}", err));

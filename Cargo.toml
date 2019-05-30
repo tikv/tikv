@@ -134,6 +134,7 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-3.
 log_wrappers = { path = "components/log_wrappers" }
 engine = { path = "components/engine" }
 tikv_util = { path = "components/tikv_util" }
+farmhash = "1.1.5"
 
 [dependencies.murmur3]
 git = "https://github.com/pingcap/murmur3.git"

@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::deadlock::Scheduler as DetectorScheduler;
+use super::util::{extract_raw_key_from_process_result, gen_raw_key_hash_from_process_result};
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -235,7 +236,13 @@ impl WaiterManager {
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
-            self.detector_scheduler.detect(start_ts, lock.clone());
+            let lock = Lock {
+                ts: lock.ts,
+                // TiDB uses the `deadlock_key_hash` to support single statement rollback,
+                // so it should be raw key's hash.
+                hash: gen_raw_key_hash_from_process_result(&waiter.pr),
+            };
+            self.detector_scheduler.detect(start_ts, lock);
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
@@ -298,7 +305,7 @@ impl WaiterManager {
                     err: StorageError::from(MvccError::Deadlock {
                         start_ts,
                         lock_ts: waiter.lock.ts,
-                        key_hash: waiter.lock.hash,
+                        lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
                         deadlock_key_hash,
                     }),
                 };
