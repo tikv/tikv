@@ -1032,6 +1032,7 @@ impl Write for Snap {
 
             let left = (cf_file.size - cf_file.written_size) as usize;
             if left == 0 {
+                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 continue;
             }
