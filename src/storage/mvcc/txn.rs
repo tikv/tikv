@@ -143,7 +143,7 @@ impl<S: Snapshot> MvccTxn<S> {
 
     // If the value is short, lock key and put value.
     // If not, lock key.
-    fn put_lock(
+    fn lock_key_and_put_value_if_short(
         &mut self,
         key: Key,
         lock_type: LockType,
@@ -179,24 +179,30 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(())
     }
 
-    fn check_non_pessimistic_lock_conflict(&self, for_update_ts: u64, lock: &Lock) -> Result<()> {
-        // If request's for_update_ts is greater than lock's for_update_ts,
-        // we can overwrite it because isolation is guaranteed by pessimistic
-        // locks and no other transaction can read the old data because the lock
-        // is replaced atomicly.
-        //
+    fn handle_non_pessimistic_lock_conflict(
+        &self,
+        key: Key,
+        for_update_ts: u64,
+        lock: Lock,
+    ) -> Result<()> {
         // Optimistic lock's for_update_ts is its start_ts.
         let lock_for_update_ts = if lock.for_update_ts > 0 {
             lock.for_update_ts
         } else {
             lock.ts
         };
-        if for_update_ts <= lock_for_update_ts {
-            // Only if this request is stale, request's for_update_ts will
-            // be less than or equal to lock's for_update_ts.
-            return Err(Error::Other("stale command".into()));
+        if for_update_ts > lock_for_update_ts {
+            Err(Error::KeyIsLocked {
+                key: key.into_raw()?,
+                primary: lock.primary,
+                ts: lock.ts,
+                // Set ttl to 0 so TiDB will resolve lock immediately.
+                ttl: 0,
+                txn_size: lock.txn_size,
+            })
+        } else {
+            Err(Error::Other("stale request".into()))
         }
-        Ok(())
     }
 
     pub fn acquire_pessimistic_lock(
@@ -309,8 +315,7 @@ impl<S: Snapshot> MvccTxn<S> {
                         key: key.into_raw()?,
                     });
                 }
-
-                self.check_non_pessimistic_lock_conflict(options.for_update_ts, &lock)?;
+                return self.handle_non_pessimistic_lock_conflict(key, options.for_update_ts, lock);
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
@@ -334,7 +339,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
-        self.put_lock(key, lock_type, primary.to_vec(), value, options);
+        self.lock_key_and_put_value_if_short(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
@@ -397,7 +402,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        self.put_lock(key, lock_type, primary.to_vec(), value, options);
+        self.lock_key_and_put_value_if_short(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
@@ -1317,24 +1322,9 @@ mod tests {
         let k = b"k1";
         let v = b"v1";
 
-        must_prewrite_put(&engine, k, v, k, 1);
-        must_locked(&engine, k, 1);
-        // request's for_update_ts < lock's for_update_ts
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 1, false);
-        // pessimistic lock conflict
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 2, true);
-        // request's for_update_ts > lock's for_update_ts
-        must_pessimistic_prewrite_put(&engine, k, v, k, 2, 2, false);
+        must_prewrite_put(&engine, k, v, k, 2);
         must_locked(&engine, k, 2);
-        must_rollback(&engine, k, 2);
-
-        must_pessimistic_prewrite_put(&engine, k, v, k, 1, 2, false);
-        must_locked(&engine, k, 1);
-        // request's for_update_ts = lock's for_update_ts
-        must_pessimistic_prewrite_put_err(&engine, k, v, k, 2, 2, false);
-        // request's for_update_ts > lock's for_update_ts
-        must_pessimistic_prewrite_put(&engine, k, v, k, 2, 3, false);
-        must_locked(&engine, k, 2);
-        must_rollback(&engine, k, 2);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 1, 1, false);
+        must_pessimistic_prewrite_put_err(&engine, k, v, k, 3, 3, false);
     }
 }
