@@ -227,7 +227,7 @@ impl Store for FixtureStore {
         Ok(FixtureStoreScanner {
             key_only,
             desc,
-            range_data_ref,
+            _range_data_ref: range_data_ref,
             range_unsafe,
         })
     }
