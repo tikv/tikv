@@ -1,11 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::marker::PhantomData;
 use std::time::Duration;
 use std::{mem, thread, u64};
 
 use futures::future;
 use kvproto::kvrpcpb::{CommandPri, Context, LockInfo};
 
+use crate::storage::kv::with_tls_engine;
 use crate::storage::kv::{CbContext, Modify, Result as EngineResult};
 use crate::storage::lock_manager::{self, DetectorScheduler, WaiterMgrScheduler};
 use crate::storage::mvcc::{
@@ -106,18 +108,20 @@ pub trait MsgScheduler: Clone + Send + 'static {
 
 pub struct Executor<E: Engine, S: MsgScheduler> {
     // We put time consuming tasks to the thread pool.
-    sched_pool: Option<SchedPool<E>>,
+    sched_pool: Option<SchedPool>,
     // And the tasks completes we post a completion to the `Scheduler`.
     scheduler: Option<S>,
     // If the task releases some locks, we wake up waiters waiting for them.
     waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
     detector_scheduler: Option<DetectorScheduler>,
+
+    _phantom: PhantomData<E>,
 }
 
 impl<E: Engine, S: MsgScheduler> Executor<E, S> {
     pub fn new(
         scheduler: S,
-        pool: SchedPool<E>,
+        pool: SchedPool,
         waiter_mgr_scheduler: Option<WaiterMgrScheduler>,
         detector_scheduler: Option<DetectorScheduler>,
     ) -> Self {
@@ -126,11 +130,16 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             scheduler: Some(scheduler),
             waiter_mgr_scheduler,
             detector_scheduler,
+            _phantom: Default::default(),
         }
     }
 
-    fn take_pool(&mut self) -> SchedPool<E> {
+    fn take_pool(&mut self) -> SchedPool {
         self.sched_pool.take().unwrap()
+    }
+
+    fn clone_pool(&mut self) -> SchedPool {
+        self.sched_pool.clone().unwrap()
     }
 
     fn take_scheduler(&mut self) -> S {
@@ -143,10 +152,6 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     fn take_detector_scheduler(&mut self) -> Option<DetectorScheduler> {
         self.detector_scheduler.take()
-    }
-
-    pub fn clone_pool(&self) -> SchedPool<E> {
-        self.sched_pool.clone().unwrap()
     }
 
     /// Start the execution of the task.
@@ -170,14 +175,17 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     .inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
-                notify_scheduler(
-                    self.take_scheduler(),
-                    Msg::FinishedWithErr {
-                        cid: task.cid,
-                        err: Error::from(err),
-                        tag: task.tag,
-                    },
-                );
+                self.take_pool().pool.spawn(move || {
+                    notify_scheduler(
+                        self.take_scheduler(),
+                        Msg::FinishedWithErr {
+                            cid: task.cid,
+                            err: Error::from(err),
+                            tag: task.tag,
+                        },
+                    );
+                    future::ok::<_, ()>(())
+                });
             }
         }
     }
@@ -195,8 +203,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
         if let Some(term) = cb_ctx.term {
             task.cmd.mut_context().set_term(term);
         }
-        let sched_pool = self.take_pool();
-        let engine = sched_pool.engine;
+        let sched_pool = self.clone_pool();
         let readonly = task.cmd.readonly();
         sched_pool.pool.spawn(move || {
             fail_point!("scheduler_async_snapshot_finish");
@@ -210,7 +217,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             let statistics = if readonly {
                 self.process_read(snapshot, task)
             } else {
-                self.process_write(engine, snapshot, task)
+                with_tls_engine(|engine| self.process_write(engine, snapshot, task))
             };
             tls_add_statistics(tag, &statistics);
             slow_log!(
@@ -244,7 +251,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     /// Processes a write command within a worker thread, then posts either a `WriteFinished`
     /// message if successful or a `FinishedWithErr` message back to the `Scheduler`.
-    fn process_write(mut self, engine: E, snapshot: E::Snap, task: Task) -> Statistics {
+    fn process_write(mut self, engine: &E, snapshot: E::Snap, task: Task) -> Statistics {
         fail_point!("txn_before_process_write");
         let tag = task.tag;
         let cid = task.cid;
@@ -291,20 +298,24 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     }
                 } else {
                     let sched = scheduler.clone();
+                    let sched_pool = self.take_pool();
                     // The callback to receive async results of write prepare from the storage engine.
                     let engine_cb = Box::new(move |(_, result)| {
-                        notify_scheduler(
-                            sched,
-                            Msg::WriteFinished {
-                                cid,
-                                pr,
-                                result,
-                                tag,
-                            },
-                        );
-                        KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                            .with_label_values(&[tag])
-                            .observe(rows as f64);
+                        sched_pool.pool.spawn(move || {
+                            notify_scheduler(
+                                sched,
+                                Msg::WriteFinished {
+                                    cid,
+                                    pr,
+                                    result,
+                                    tag,
+                                },
+                            );
+                            KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
+                                .with_label_values(&[tag])
+                                .observe(rows as f64);
+                            future::ok::<_, ()>(())
+                        })
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
@@ -501,6 +512,7 @@ struct WriteResult {
     to_be_write: Vec<Modify>,
     rows: usize,
     pr: ProcessResult,
+    // (lock, is_first_lock)
     lock_info: Option<(lock_manager::Lock, bool)>,
 }
 
@@ -523,10 +535,10 @@ fn process_write_impl<S: Snapshot>(
             let mut txn = MvccTxn::new(snapshot, start_ts, !ctx.get_not_fill_cache())?;
             let mut locks = vec![];
             let rows = mutations.len();
-            for (i, m) in mutations.into_iter().enumerate() {
-                // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
-                // or else pessimistic.
-                if options.is_pessimistic_lock.is_empty() {
+            // If `options.is_pessimistic_lock` is empty, the transaction is optimistic
+            // or else pessimistic.
+            if options.is_pessimistic_lock.is_empty() {
+                for m in mutations {
                     match txn.prewrite(m, &primary, &options) {
                         Ok(_) => {}
                         e @ Err(MvccError::KeyIsLocked { .. }) => {
@@ -534,7 +546,9 @@ fn process_write_impl<S: Snapshot>(
                         }
                         Err(e) => return Err(Error::from(e)),
                     }
-                } else {
+                }
+            } else {
+                for (i, m) in mutations.into_iter().enumerate() {
                     match txn.pessimistic_prewrite(
                         m,
                         &primary,
@@ -755,6 +769,34 @@ fn process_write_impl<S: Snapshot>(
             };
 
             (pr, modifies, rows, ctx, None)
+        }
+        Command::ResolveLockLite {
+            ctx,
+            start_ts,
+            commit_ts,
+            resolve_keys,
+        } => {
+            let key_hashes = if waiter_mgr_scheduler.is_some() {
+                Some(lock_manager::gen_key_hashes(&resolve_keys))
+            } else {
+                None
+            };
+            let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            let rows = resolve_keys.len();
+            let mut is_pessimistic_txn = false;
+            // ti-client guarantees the size of resolve_keys will not too large, so no necessary
+            // to control the write_size as ResolveLock.
+            for key in resolve_keys {
+                if commit_ts > 0 {
+                    is_pessimistic_txn = txn.commit(key, commit_ts)?;
+                } else {
+                    is_pessimistic_txn = txn.rollback(key)?;
+                }
+            }
+            notify_waiter_mgr(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector(&detector_scheduler, is_pessimistic_txn, start_ts);
+            statistics.add(&txn.take_statistics());
+            (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));
