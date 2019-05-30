@@ -149,6 +149,10 @@ impl RegionSnapshot {
         self.region_info.get_start_key()
     }
 
+    pub fn get_region_id(&self) -> u64 {
+        self.region_info.get_id()
+    }
+
     pub fn get_end_key(&self) -> &[u8] {
         self.region_info.get_end_key()
     }

@@ -710,7 +710,9 @@ mod tests {
             cmd.clone(),
             Callback::Read(Box::new(move |resp: ReadResponse| {
                 let snap = resp.snapshot.unwrap();
-                assert_eq!(snap.get_region(), &region);
+                assert_eq!(snap.get_region_id(), region.get_id());
+                assert_eq!(snap.get_start_key(), region.get_start_key());
+                assert_eq!(snap.get_end_key(), region.get_end_key());
             })),
         );
         must_not_redirect(&mut reader, &rx, task);
