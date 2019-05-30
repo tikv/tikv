@@ -7,14 +7,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tikv_util::collections::HashSet;
 
-use crate::grpc::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
-    Result as GrpcResult,
-};
 use futures::future::{loop_fn, ok, Loop};
 use futures::sync::mpsc::UnboundedSender;
 use futures::task::Task;
 use futures::{task, Async, Future, Poll, Stream};
+use grpcio::{
+    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, Environment,
+    Result as GrpcResult,
+};
 use kvproto::pdpb::{
     ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
     RegionHeartbeatResponse, ResponseHeader,
@@ -354,7 +354,7 @@ pub fn validate_endpoints(
             Ok(resp) => resp,
             // Ignore failed PD node.
             Err(e) => {
-                error!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
+                info!("PD failed to respond"; "endpoints" => ep, "err" => ?e);
                 continue;
             }
         };

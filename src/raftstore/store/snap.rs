@@ -169,7 +169,7 @@ pub struct ApplyOptions {
 pub trait Snapshot: Read + Write + Send {
     fn build(
         &mut self,
-        snap: &DbSnapshot,
+        kv_snap: &DbSnapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
@@ -544,7 +544,7 @@ impl Snap {
         )
     }
 
-    fn validate(&self, db: Arc<DB>) -> RaftStoreResult<()> {
+    fn validate(&self, kv_engine: Arc<DB>) -> RaftStoreResult<()> {
         for cf_file in &self.cf_files {
             if cf_file.size == 0 {
                 // Skip empty file. The checksum of this cf file should be 0 and
@@ -556,7 +556,7 @@ impl Snap {
             } else {
                 prepare_sst_for_ingestion(&cf_file.path, &cf_file.clone_path)?;
                 validate_sst_for_ingestion(
-                    &db,
+                    &kv_engine,
                     cf_file.cf,
                     &cf_file.clone_path,
                     cf_file.size,
@@ -601,14 +601,14 @@ impl Snap {
 
     fn do_build(
         &mut self,
-        snap: &DbSnapshot,
+        kv_snap: &DbSnapshot,
         region: &Region,
         stat: &mut SnapshotStatistics,
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(snap.get_db()) {
+            match self.validate(kv_snap.get_db()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(
@@ -637,10 +637,12 @@ impl Snap {
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
-                snap_io::build_plain_cf_file(path, snap, cf_file.cf, &begin_key, &end_key)?
+                snap_io::build_plain_cf_file(path, kv_snap, cf_file.cf, &begin_key, &end_key)?
             } else {
                 let limiter = self.limiter.as_ref().map(|c| c.as_ref());
-                snap_io::build_sst_cf_file(path, snap, cf_file.cf, &begin_key, &end_key, limiter)?
+                snap_io::build_sst_cf_file(
+                    path, kv_snap, cf_file.cf, &begin_key, &end_key, limiter,
+                )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
@@ -687,14 +689,14 @@ impl fmt::Debug for Snap {
 impl Snapshot for Snap {
     fn build(
         &mut self,
-        snap: &DbSnapshot,
+        kv_snap: &DbSnapshot,
         region: &Region,
         snap_data: &mut RaftSnapshotData,
         stat: &mut SnapshotStatistics,
         deleter: Box<dyn SnapshotDeleter>,
     ) -> RaftStoreResult<()> {
         let t = Instant::now();
-        self.do_build(snap, region, stat, deleter)?;
+        self.do_build(kv_snap, region, stat, deleter)?;
 
         let total_size = self.total_size()?;
         stat.size = total_size;
@@ -1333,13 +1335,14 @@ pub mod tests {
     use std::cmp;
     use std::fs::{self, File, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::path::Path;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use engine::rocks;
     use engine::rocks::util::CFOptions;
     use engine::rocks::{DBOptions, Env, DB};
-    use engine::{Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
+    use engine::{Engines, Iterable, Mutable, Peekable, Snapshot as DbSnapshot};
     use engine::{ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::metapb::{Peer, Region};
     use kvproto::raft_serverpb::{
@@ -1354,8 +1357,8 @@ pub mod tests {
         SnapshotDeleter, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
     };
 
-    use crate::raftstore::store::keys;
     use crate::raftstore::store::peer_storage::JOB_STATUS_RUNNING;
+    use crate::raftstore::store::{keys, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER};
     use crate::raftstore::Result;
 
     const TEST_STORE_ID: u64 = 1;
@@ -1366,11 +1369,6 @@ pub mod tests {
 
     #[derive(Clone)]
     struct DummyDeleter;
-    type DBBuilder = fn(
-        p: &TempDir,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
-    ) -> Result<Arc<DB>>;
 
     impl SnapshotDeleter for DummyDeleter {
         fn delete_snapshot(&self, _: &SnapKey, snap: &dyn Snapshot, _: bool) -> bool {
@@ -1379,26 +1377,32 @@ pub mod tests {
         }
     }
 
+    type DBBuilder = fn(
+        p: &Path,
+        db_opt: Option<DBOptions>,
+        cf_opts: Option<Vec<CFOptions<'_>>>,
+    ) -> Result<Arc<DB>>;
+
     pub fn open_test_empty_db(
-        path: &TempDir,
+        path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
-        let p = path.path().to_str().unwrap();
+        let p = path.to_str().unwrap();
         let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         Ok(Arc::new(db))
     }
 
     pub fn open_test_db(
-        path: &TempDir,
+        path: &Path,
         db_opt: Option<DBOptions>,
         cf_opts: Option<Vec<CFOptions<'_>>>,
     ) -> Result<Arc<DB>> {
-        let p = path.path().to_str().unwrap();
+        let p = path.to_str().unwrap();
         let db = rocks::util::new_engine(p, db_opt, ALL_CFS, cf_opts)?;
         let key = keys::data_key(TEST_KEY);
         // write some data into each cf
-        for (i, cf) in ALL_CFS.iter().enumerate() {
+        for (i, cf) in db.cf_names().into_iter().enumerate() {
             let handle = rocks::util::get_cf_handle(&db, cf)?;
             let mut p = Peer::new();
             p.set_store_id(TEST_STORE_ID);
@@ -1410,11 +1414,19 @@ pub mod tests {
 
     pub fn get_test_db_for_regions(
         path: &TempDir,
-        db_opt: Option<DBOptions>,
-        cf_opts: Option<Vec<CFOptions<'_>>>,
+        raft_db_opt: Option<DBOptions>,
+        raft_cf_opt: Option<CFOptions<'_>>,
+        kv_db_opt: Option<DBOptions>,
+        kv_cf_opts: Option<Vec<CFOptions<'_>>>,
         regions: &[u64],
-    ) -> Result<Arc<DB>> {
-        let kv = open_test_db(path, db_opt, cf_opts)?;
+    ) -> Result<Engines> {
+        let p = path.path();
+        let kv = open_test_db(p.join("kv").as_path(), kv_db_opt, kv_cf_opts)?;
+        let raft = open_test_db(
+            p.join("raft").as_path(),
+            raft_db_opt,
+            raft_cf_opt.map(|opt| vec![opt]),
+        )?;
         for &region_id in regions {
             // Put apply state into kv engine.
             let mut apply_state = RaftApplyState::new();
@@ -1430,7 +1442,12 @@ pub mod tests {
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(kv)
+        let shared_block_cache = false;
+        Ok(Engines {
+            kv,
+            raft,
+            shared_block_cache,
+        })
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {
@@ -1459,8 +1476,8 @@ pub mod tests {
         region.set_id(region_id);
         region.set_start_key(b"a".to_vec());
         region.set_end_key(b"z".to_vec());
-        region.mut_region_epoch().set_version(1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_version(INIT_EPOCH_VER);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
         region.mut_peers().push(peer.clone());
         region
     }
@@ -1471,7 +1488,7 @@ pub mod tests {
             let p1: Option<Peer> = expected_db.get_msg_cf(cf, &key[..]).unwrap();
             if p1.is_some() {
                 let p2: Option<Peer> = db.get_msg_cf(cf, &key[..]).unwrap();
-                if !p2.is_some() {
+                if p2.is_none() {
                     panic!("cf {}: expect key {:?} has value", cf, key);
                 }
                 let p1 = p1.unwrap();
@@ -1559,7 +1576,7 @@ pub mod tests {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let src_db_dir = TempDir::new("test-snap-file-db-src").unwrap();
-        let db = get_db(&src_db_dir, db_opt.clone(), None).unwrap();
+        let db = get_db(&src_db_dir.path(), db_opt.clone(), None).unwrap();
         let snapshot = DbSnapshot::new(Arc::clone(&db));
 
         let src_dir = TempDir::new("test-snap-file-src").unwrap();
@@ -1685,7 +1702,7 @@ pub mod tests {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snap-validation-db").unwrap();
-        let db = get_db(&db_dir, None, None).unwrap();
+        let db = get_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(Arc::clone(&db));
 
         let dir = TempDir::new("test-snap-validation").unwrap();
@@ -1868,7 +1885,7 @@ pub mod tests {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snap-corruption-db").unwrap();
-        let db = open_test_db(&db_dir, None, None).unwrap();
+        let db = open_test_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
         let dir = TempDir::new("test-snap-corruption").unwrap();
@@ -1948,7 +1965,7 @@ pub mod tests {
         assert!(s5.exists());
 
         let dst_db_dir = TempDir::new("test-snap-corruption-dst-db").unwrap();
-        let dst_db = open_test_empty_db(&dst_db_dir, None, None).unwrap();
+        let dst_db = open_test_empty_db(&dst_db_dir.path(), None, None).unwrap();
         let options = ApplyOptions {
             db: Arc::clone(&dst_db),
             region: region.clone(),
@@ -1981,7 +1998,7 @@ pub mod tests {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = TempDir::new("test-snapshot-corruption-meta-db").unwrap();
-        let db = open_test_db(&db_dir, None, None).unwrap();
+        let db = open_test_db(&db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
         let dir = TempDir::new("test-snap-corruption-meta").unwrap();
@@ -2095,7 +2112,7 @@ pub mod tests {
         assert_eq!(mgr.get_total_snap_size(), 0);
 
         let db_dir = TempDir::new("test-snap-mgr-delete-temp-files-v2-db").unwrap();
-        let snapshot = DbSnapshot::new(open_test_db(&db_dir, None, None).unwrap());
+        let snapshot = DbSnapshot::new(open_test_db(&db_dir.path(), None, None).unwrap());
         let key1 = SnapKey::new(1, 1, 1);
         let size_track = Arc::new(AtomicU64::new(0));
         let deleter = Box::new(mgr.clone());
@@ -2186,7 +2203,7 @@ pub mod tests {
         src_mgr.init().unwrap();
 
         let src_db_dir = TempDir::new("test-snap-deletion-on-registry-src-db").unwrap();
-        let db = open_test_db(&src_db_dir, None, None).unwrap();
+        let db = open_test_db(&src_db_dir.path(), None, None).unwrap();
         let snapshot = DbSnapshot::new(db);
 
         let key = SnapKey::new(1, 1, 1);
@@ -2248,14 +2265,14 @@ pub mod tests {
     fn test_snapshot_max_total_size() {
         let regions: Vec<u64> = (0..20).collect();
         let kv_path = TempDir::new("test-snapshot-max-total-size-db").unwrap();
-        let kv = get_test_db_for_regions(&kv_path, None, None, &regions).unwrap();
+        let engine = get_test_db_for_regions(&kv_path, None, None, None, None, &regions).unwrap();
 
         let snapfiles_path = TempDir::new("test-snapshot-max-total-size-snapshots").unwrap();
         let max_total_size = 10240;
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build(snapfiles_path.path().to_str().unwrap(), None);
-        let snapshot = DbSnapshot::new(kv);
+        let snapshot = DbSnapshot::new(engine.kv);
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);

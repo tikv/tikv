@@ -172,7 +172,7 @@ mod tests {
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = TempDir::new("test-snap-cf-db").unwrap();
-                let db = db_creater(&dir, db_opt.clone(), None).unwrap();
+                let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
 
                 let snap_cf_dir = TempDir::new("test-snap-cf").unwrap();
                 let plain_file_path = snap_cf_dir.path().join("plain");
@@ -194,7 +194,7 @@ mod tests {
                 }
 
                 let dir1 = TempDir::new("test-snap-cf-db-apply").unwrap();
-                let db1 = open_test_empty_db(&dir1, db_opt, None).unwrap();
+                let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
                 let detector = TestStaleDetector {};
                 apply_plain_cf_file(
                     &plain_file_path.to_str().unwrap(),
@@ -215,7 +215,7 @@ mod tests {
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = TempDir::new("test-snap-cf-db").unwrap();
-                let db = db_creater(&dir, db_opt.clone(), None).unwrap();
+                let db = db_creater(&dir.path(), db_opt.clone(), None).unwrap();
 
                 let snap_cf_dir = TempDir::new("test-snap-cf").unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
@@ -237,7 +237,7 @@ mod tests {
                 }
 
                 let dir1 = TempDir::new("test-snap-cf-db-apply").unwrap();
-                let db1 = open_test_empty_db(&dir1, db_opt, None).unwrap();
+                let db1 = open_test_empty_db(&dir1.path(), db_opt, None).unwrap();
                 apply_sst_cf_file(&sst_file_path.to_str().unwrap(), &db1, CF_DEFAULT).unwrap();
                 assert_eq_db(&db, &db1);
             }

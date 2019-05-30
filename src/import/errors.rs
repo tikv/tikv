@@ -5,8 +5,8 @@ use std::num::ParseIntError;
 use std::path::PathBuf;
 use std::result;
 
-use crate::grpc::Error as GrpcError;
 use futures::sync::oneshot::Canceled;
+use grpcio::Error as GrpcError;
 use kvproto::errorpb;
 use kvproto::metapb::*;
 use uuid::{ParseError, Uuid};

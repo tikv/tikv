@@ -17,32 +17,24 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::Result;
 
-pub struct BatchTableScanExecutor<C: ExecSummaryCollector, S: Store>(
+pub struct BatchTableScanExecutor<S: Store>(
     super::util::scan_executor::ScanExecutor<
-        C,
         S,
         TableScanExecutorImpl,
         super::util::ranges_iter::PointRangeEnable,
     >,
 );
 
-impl
-    BatchTableScanExecutor<
-        crate::coprocessor::dag::batch::statistics::ExecSummaryCollectorDisabled,
-        FixtureStore,
-    >
-{
+impl BatchTableScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &TableScan) -> Result<()> {
         super::util::scan_executor::check_columns_info_supported(descriptor.get_columns())
-            .map_err(|e| box_err!("Unable to use BatchTableScanExecutor: {}", e))
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
+impl<S: Store> BatchTableScanExecutor<S> {
     pub fn new(
-        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -87,7 +79,6 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
             is_column_filled,
         };
         let wrapper = super::util::scan_executor::ScanExecutor::new(
-            summary_collector,
             imp,
             store,
             desc,
@@ -98,7 +89,7 @@ impl<C: ExecSummaryCollector, S: Store> BatchTableScanExecutor<C, S> {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchTableScanExecutor<C, S> {
+impl<S: Store> BatchExecutor for BatchTableScanExecutor<S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -252,7 +243,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                 if let Some(index) = some_index {
                     let index = *index;
                     if !self.is_column_filled[index] {
-                        columns[index].push_raw(val);
+                        columns[index].mut_raw().push(val);
                         decoded_columns += 1;
                         self.is_column_filled[index] = true;
                     } else {
@@ -294,7 +285,7 @@ impl super::util::scan_executor::ScanExecutorImpl for TableScanExecutorImpl {
                     ));
                 };
 
-                columns[i].push_raw(default_value);
+                columns[i].mut_raw().push(default_value);
             } else {
                 // Reset to not-filled, prepare for next function call.
                 self.is_column_filled[i] = false;
@@ -317,33 +308,27 @@ mod tests {
     use tipb::schema::ColumnInfo;
 
     use crate::coprocessor::codec::batch::LazyBatchColumnVec;
-    use crate::coprocessor::codec::data_type::VectorValue;
+    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
     use crate::coprocessor::dag::batch::interface::BatchExecutor;
-    use crate::coprocessor::dag::batch::statistics::*;
+    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
 
-    fn field_type(ft: FieldTypeTp) -> FieldType {
-        let mut f = FieldType::new();
-        f.as_mut_accessor().set_tp(ft);
-        f
-    }
-
     /// Test Helper for normal test with fixed schema and data.
-    /// Table Schema: ID (INT, PK), Foo (INT), Bar (FLOAT, Default 4.5)
-    /// Column id:    1,            2,         4
-    /// Column offset:   0,            1          2
-    /// Table Data:  (1,            Some(10),  Some(5.2)),
-    ///              (3,            Some(-5),   None),
-    ///              (4,             None,      default(4.5)),
-    ///              (5,             None,      Some(0.1)),
-    ///              (6,             None,      default(4.5)),
+    /// Table Schema:  ID (INT, PK),   Foo (INT),     Bar (FLOAT, Default 4.5)
+    /// Column id:     1,              2,             4
+    /// Column offset: 0,              1,             2
+    /// Table Data:    1,              10,            5.2
+    ///                3,              -5,            NULL
+    ///                4,              NULL,          4.5 (DEFAULT)
+    ///                5,              NULL,          0.1
+    ///                6,              NULL,          4.5 (DEFAULT)
     struct TableScanTestHelper {
         // ID(INT,PK), Foo(INT), Bar(Float,Default 4.5)
-        pub data: Vec<(i64, Option<i64>, Option<f64>)>,
+        pub data: Vec<(i64, Option<i64>, Option<Real>)>,
         pub table_id: i64,
         pub columns_info: Vec<ColumnInfo>,
         pub field_types: Vec<FieldType>,
@@ -397,11 +382,11 @@ mod tests {
             ];
 
             let expect_rows = vec![
-                (1, Some(10), Some(5.2)),
+                (1, Some(10), Real::new(5.2).ok()),
                 (3, Some(-5), None),
-                (4, None, Some(4.5)),
-                (5, None, Some(0.1)),
-                (6, None, Some(4.5)),
+                (4, None, Real::new(4.5).ok()),
+                (5, None, Real::new(0.1).ok()),
+                (6, None, Real::new(4.5).ok()),
             ];
 
             // The column info for each column in `data`.
@@ -429,9 +414,9 @@ mod tests {
             ];
 
             let field_types = vec![
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::LongLong),
-                field_type(FieldTypeTp::Double),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::LongLong.into(),
+                FieldTypeTp::Double.into(),
             ];
 
             let store = {
@@ -556,7 +541,7 @@ mod tests {
                 } else {
                     assert!(columns[id].is_raw());
                     columns[id]
-                        .decode(&Tz::utc(), self.get_field_type(col_idx))
+                        .ensure_decoded(&Tz::utc(), self.get_field_type(col_idx))
                         .unwrap();
                 }
                 assert_eq!(columns[id].decoded(), &values[col_idx]);
@@ -575,7 +560,6 @@ mod tests {
     ) {
         let columns_info = helper.columns_info_by_idx(col_idxs);
         let mut executor = BatchTableScanExecutor::new(
-            ExecSummaryCollectorDisabled,
             helper.store(),
             Arc::new(EvalConfig::default()),
             columns_info.clone(),
@@ -657,14 +641,14 @@ mod tests {
         let helper = TableScanTestHelper::new();
 
         let mut executor = BatchTableScanExecutor::new(
-            ExecSummaryCollectorEnabled::new(1),
             helper.store(),
             Arc::new(EvalConfig::default()),
             helper.columns_info_by_idx(&[0]),
             vec![helper.whole_table_range()],
             false,
         )
-        .unwrap();
+        .unwrap()
+        .with_summary_collector(ExecSummaryCollectorEnabled::new(1));
 
         executor.next_batch(1);
         executor.next_batch(2);
@@ -673,9 +657,9 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        // 0 is none because our output index is 1
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        // 0 remains Default because our output index is 1
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -683,8 +667,8 @@ mod tests {
 
         // Collected statistics remain unchanged because of no newly generated delta statistics.
         assert_eq!(s.scanned_rows_per_range[0], 3);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(3, exec_summary.num_produced_rows);
         assert_eq!(2, exec_summary.num_iterations);
 
@@ -694,8 +678,8 @@ mod tests {
         executor.collect_statistics(&mut s);
 
         assert_eq!(s.scanned_rows_per_range[0], 2);
-        assert!(s.summary_per_executor[0].is_none());
-        let exec_summary = s.summary_per_executor[1].as_ref().unwrap();
+        assert_eq!(s.summary_per_executor[0], ExecSummary::default());
+        let exec_summary = s.summary_per_executor[1];
         assert_eq!(2, exec_summary.num_produced_rows);
         assert_eq!(1, exec_summary.num_iterations);
     }
@@ -725,23 +709,10 @@ mod tests {
                 ci
             },
         ];
-
         let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
+            FieldTypeTp::LongLong.into(),
         ];
 
         let mut kv = vec![];
@@ -796,7 +767,6 @@ mod tests {
         // For row 0 + row 1 + (row 2 ~ row 4), we should only get row 0, row 1 and an error.
         for corrupted_row_index in 2..=4 {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -816,10 +786,14 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0), Some(1)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), None]);
             assert!(result.data[2].is_raw());
-            result.data[2].decode(&Tz::utc(), &schema[2]).unwrap();
+            result.data[2]
+                .ensure_decoded(&Tz::utc(), &schema[2])
+                .unwrap();
             assert_eq!(result.data[2].decoded().as_int_slice(), &[Some(7), None]);
         }
     }
@@ -843,19 +817,7 @@ mod tests {
                 ci
             },
         ];
-
-        let schema = vec![
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-            {
-                let mut ft = FieldType::new();
-                ft.as_mut_accessor().set_tp(FieldTypeTp::LongLong);
-                ft
-            },
-        ];
+        let schema = vec![FieldTypeTp::LongLong.into(), FieldTypeTp::LongLong.into()];
 
         let mut kv = vec![];
         {
@@ -874,6 +836,7 @@ mod tests {
                     primary: vec![],
                     ts: 1,
                     ttl: 2,
+                    txn_size: 0,
                 });
             kv.push((key, Err(value)));
         }
@@ -903,7 +866,6 @@ mod tests {
         // an error.
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -923,14 +885,15 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
         }
 
         // Let's also repeat case 1 for smaller batch size
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -950,7 +913,9 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(7)]);
 
             let result = executor.next_batch(1);
@@ -963,7 +928,6 @@ mod tests {
         // We should get error and no row, for the same reason as above.
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -982,7 +946,6 @@ mod tests {
         // We should get row 2 and row 0. There is no error.
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),
@@ -998,7 +961,9 @@ mod tests {
             assert!(result.data[0].is_decoded());
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(2), Some(0)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(result.data[1].decoded().as_int_slice(), &[Some(5), Some(7)]);
         }
 
@@ -1006,7 +971,6 @@ mod tests {
         // We should get error.
         {
             let mut executor = BatchTableScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 columns_info.clone(),

@@ -25,7 +25,8 @@
 pub mod aggr_fn;
 pub mod batch;
 pub mod batch_handler;
-mod builder;
+pub mod builder;
+pub mod exec_summary;
 pub mod executor;
 pub mod expr;
 pub mod handler;

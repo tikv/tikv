@@ -2,22 +2,8 @@
 
 #[macro_use]
 extern crate clap;
-#[macro_use(
-    slog_kv,
-    slog_crit,
-    slog_info,
-    slog_log,
-    slog_record,
-    slog_b,
-    slog_record_static
-)]
-extern crate slog;
-#[macro_use]
-extern crate slog_global;
 #[macro_use]
 extern crate vlog;
-
-mod util;
 
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
@@ -49,9 +35,10 @@ use kvproto::raft_cmdpb::RaftCmdRequest;
 use kvproto::raft_serverpb::{PeerState, SnapshotMeta};
 use kvproto::tikvpb_grpc::TikvClient;
 use raft::eraftpb::{ConfChange, Entry, EntryType};
+use tikv::binutil as util;
 use tikv::config::TiKvConfig;
 use tikv::pd::{Config as PdConfig, PdClient, RpcClient};
-use tikv::raftstore::store::keys;
+use tikv::raftstore::store::{keys, INIT_EPOCH_CONF_VER};
 use tikv::server::debug::{BottommostLevelCompaction, Debugger, RegionInfo};
 use tikv::storage::Key;
 use tikv_util::security::{SecurityConfig, SecurityManager};
@@ -76,8 +63,9 @@ fn new_debug_executor(
 ) -> Box<dyn DebugExecutor> {
     match (host, db) {
         (None, Some(kv_path)) => {
+            let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
-            let kv_cfs_opts = cfg.rocksdb.build_cf_opts();
+            let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -90,7 +78,7 @@ fn new_debug_executor(
                 .map(ToString::to_string)
                 .unwrap_or_else(|| format!("{}/../raft", kv_path));
             let mut raft_db_opts = cfg.raftdb.build_opt();
-            let raft_db_cf_opts = cfg.raftdb.build_cf_opts();
+            let raft_db_cf_opts = cfg.raftdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
                 let encrypted_env =
@@ -103,6 +91,7 @@ fn new_debug_executor(
             Box::new(Debugger::new(Engines::new(
                 Arc::new(kv_db),
                 Arc::new(raft_db),
+                cache.is_some(),
             ))) as Box<dyn DebugExecutor>
         }
         (Some(remote), None) => Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>,
@@ -891,7 +880,7 @@ impl DebugExecutor for Debugger {
         region.set_id(new_region_id);
         let old_version = region.get_region_epoch().get_version();
         region.mut_region_epoch().set_version(old_version + 1);
-        region.mut_region_epoch().set_conf_ver(1);
+        region.mut_region_epoch().set_conf_ver(INIT_EPOCH_CONF_VER);
 
         region.peers.clear();
         let mut peer = Peer::new();

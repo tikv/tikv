@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::grpc::{
+use futures::{Future, Sink, Stream};
+use grpcio::{
     DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus, RpcStatusCode,
     Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
-use futures::{Future, Sink, Stream};
 use tikv::pd::Error as PdError;
 use tikv_util::security::*;
 
@@ -382,6 +382,15 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _ctx: RpcContext<'_>,
         _stream: GetOperatorRequest,
         _sink: UnarySink<GetOperatorResponse>,
+    ) {
+        unimplemented!()
+    }
+
+    fn scan_regions(
+        &mut self,
+        _ctx: RpcContext<'_>,
+        _req: ScanRegionsRequest,
+        _sink: UnarySink<ScanRegionsResponse>,
     ) {
         unimplemented!()
     }
