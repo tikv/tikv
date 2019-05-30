@@ -24,7 +24,7 @@ pub fn gen_key_hash(key: &Key) -> u64 {
     s.finish()
 }
 
-pub fn gen_keys_hashes(keys: &[Key]) -> Vec<u64> {
+pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
     keys.iter().map(|key| gen_key_hash(key)).collect()
 }
 
