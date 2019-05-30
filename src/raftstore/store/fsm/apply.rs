@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::mpsc::Sender;
 use std::sync::mpsc::SyncSender;
@@ -374,10 +374,12 @@ impl ApplyContext {
     }
 
     /// Writes all the changes into RocksDB.
-    pub fn write_to_db(&mut self) {
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn write_to_db(&mut self) -> bool {
+        let need_sync = self.enable_sync_log && self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.enable_sync_log && self.sync_log_hint);
+            write_opts.set_sync(need_sync);
             self.engines
                 .kv
                 .write_opt(self.kv_wb(), &write_opts)
@@ -399,6 +401,7 @@ impl ApplyContext {
         for cbs in self.cbs.drain(..) {
             cbs.invoke_all(&self.host);
         }
+        need_sync
     }
 
     /// Finishes `Apply`s for the delegate.
@@ -435,11 +438,13 @@ impl ApplyContext {
         self.kv_wb.as_mut().unwrap()
     }
 
-    pub fn flush(&mut self) {
+    /// Flush all pending writes to engines.
+    /// If it returns true, all pending writes are persisted in engines.
+    pub fn flush(&mut self) -> bool {
         // TODO: this check is too hacky, need to be more verbose and less buggy.
         let t = match self.timer.take() {
             Some(t) => t,
-            None => return,
+            None => return false,
         };
 
         // Write to engine
@@ -447,7 +452,7 @@ impl ApplyContext {
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        self.write_to_db();
+        let is_synced = self.write_to_db();
 
         if !self.apply_res.is_empty() {
             for res in self.apply_res.drain(..) {
@@ -469,6 +474,7 @@ impl ApplyContext {
             self.committed_count
         );
         self.committed_count = 0;
+        is_synced
     }
 }
 
@@ -614,6 +620,8 @@ pub struct ApplyDelegate {
 
     /// The commands waiting to be committed and applied
     pending_cmds: PendingCmdQueue,
+    /// The counter of pending request snapshots. See more in `Peer`.
+    pending_request_snapshot_count: Arc<AtomicUsize>,
 
     /// Marks the delegate as merged by CommitMerge.
     merged: bool,
@@ -635,6 +643,8 @@ pub struct ApplyDelegate {
     apply_state: RaftApplyState,
     /// The term of the raft log at applied index.
     applied_index_term: u64,
+    /// The latest synced apply index.
+    last_sync_apply_index: u64,
 
     /// The local metrics, and it will be flushed periodically.
     metrics: ApplyMetrics,
@@ -647,6 +657,7 @@ impl ApplyDelegate {
             tag: format!("[region {}] {}", reg.region.get_id(), reg.id),
             region: reg.region,
             pending_remove: false,
+            last_sync_apply_index: reg.apply_state.get_applied_index(),
             apply_state: reg.apply_state,
             applied_index_term: reg.applied_index_term,
             term: reg.term,
@@ -658,6 +669,7 @@ impl ApplyDelegate {
             pending_cmds: Default::default(),
             metrics: Default::default(),
             last_merge_version: 0,
+            pending_request_snapshot_count: reg.pending_request_snapshot_count,
         }
     }
 
@@ -2152,6 +2164,7 @@ pub struct Registration {
     pub apply_state: RaftApplyState,
     pub applied_index_term: u64,
     pub region: Region,
+    pub pending_request_snapshot_count: Arc<AtomicUsize>,
 }
 
 impl Registration {
@@ -2162,6 +2175,7 @@ impl Registration {
             apply_state: peer.get_store().apply_state().clone(),
             applied_index_term: peer.get_store().applied_index_term(),
             region: peer.region().clone(),
+            pending_request_snapshot_count: peer.pending_request_snapshot_count.clone(),
         }
     }
 }
@@ -2575,30 +2589,58 @@ impl ApplyFsm {
             .force_send(Msg::LogsUpToDate(region_id));
     }
 
+    #[allow(unused_mut)]
     fn handle_snapshot(&mut self, apply_ctx: &mut ApplyContext, snap_task: GenSnapTask) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
-
-        // Persists any pending changes of this region.
-        let region_id = self.delegate.region_id();
-        if apply_ctx
+        let mut need_sync = apply_ctx
             .apply_res
             .iter()
-            .any(|res| res.region_id == region_id)
-        {
+            .any(|res| res.region_id == self.delegate.region_id())
+            && self.delegate.last_sync_apply_index != self.delegate.apply_state.get_applied_index();
+        (|| {
+            fail_point!("apply_on_handle_snapshot_sync", |_| { need_sync = true });
+        })();
+        if need_sync {
+            if apply_ctx.timer.is_none() {
+                apply_ctx.timer = Some(SlowTimer::new());
+            }
+            if apply_ctx.kv_wb.is_none() {
+                apply_ctx.kv_wb = Some(WriteBatch::with_capacity(DEFAULT_APPLY_WB_SIZE));
+            }
+            self.delegate
+                .write_apply_state(&apply_ctx.engines, apply_ctx.kv_wb());
+            fail_point!(
+                "apply_on_handle_snapshot_1_1",
+                self.delegate.id == 1 && self.delegate.region_id() == 1,
+                |_| unimplemented!()
+            );
+
             apply_ctx.flush();
+            // For now, it's more like last_flush_apply_index.
+            // TODO: Update it only when `flush()` returns true.
+            self.delegate.last_sync_apply_index = self.delegate.apply_state.get_applied_index();
         }
+
         if let Err(e) = snap_task
             .generate_and_schedule_snapshot(&apply_ctx.engines, &apply_ctx.region_scheduler)
         {
             error!(
                 "schedule snapshot failed";
                 "error" => ?e,
-                "region_id" => region_id,
+                "region_id" => self.delegate.region_id(),
                 "peer_id" => self.delegate.id()
             );
         }
+        self.delegate
+            .pending_request_snapshot_count
+            .fetch_sub(1, Ordering::SeqCst);
+        fail_point!(
+            "apply_on_handle_snapshot_finish_1_1",
+            self.delegate.id == 1 && self.delegate.region_id() == 1,
+            |_| unimplemented!()
+        );
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext, msgs: &mut Vec<Msg>) {
@@ -2730,8 +2772,13 @@ impl PollHandler<ApplyFsm, ControlFsm> for ApplyPoller {
         expected_msg_count
     }
 
-    fn end(&mut self, _: &mut [Box<ApplyFsm>]) {
-        self.apply_ctx.flush();
+    fn end(&mut self, fsms: &mut [Box<ApplyFsm>]) {
+        let is_synced = self.apply_ctx.flush();
+        if is_synced {
+            for fsm in fsms {
+                fsm.delegate.last_sync_apply_index = fsm.delegate.apply_state.get_applied_index();
+            }
+        }
     }
 }
 
@@ -2977,6 +3024,29 @@ mod tests {
         validate_rx.recv_timeout(Duration::from_secs(3)).unwrap();
     }
 
+    // Make sure msgs are handled in the same batch.
+    fn batch_messages(router: &ApplyRouter, region_id: u64, msgs: Vec<Msg>) {
+        let (notify1, wait1) = mpsc::channel();
+        let (notify2, wait2) = mpsc::channel();
+        router.schedule_task(
+            region_id,
+            Msg::Validate(
+                region_id,
+                Box::new(move |_| {
+                    notify1.send(()).unwrap();
+                    wait2.recv().unwrap();
+                }),
+            ),
+        );
+        wait1.recv().unwrap();
+
+        for msg in msgs {
+            router.schedule_task(region_id, msg);
+        }
+
+        notify2.send(()).unwrap();
+    }
+
     fn fetch_apply_res(receiver: &::std::sync::mpsc::Receiver<PeerMsg>) -> ApplyRes {
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
@@ -3101,12 +3171,16 @@ mod tests {
             .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
             .unwrap()
             .is_none());
-        router.schedule_task(
-            2,
-            Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
-        );
+        // Make sure Apply and Snapshot are in the same batch.
         let (tx, _) = mpsc::sync_channel(0);
-        router.schedule_task(2, Msg::Snapshot(GenSnapTask::new(2, tx)));
+        batch_messages(
+            &router,
+            2,
+            vec![
+                Msg::apply(Apply::new(2, 11, vec![new_entry(5, 4, None)])),
+                Msg::Snapshot(GenSnapTask::new(2, tx)),
+            ],
+        );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes { res, .. }) => match res {
                 TaskRes::Apply(res) => res,
@@ -3132,6 +3206,10 @@ mod tests {
             assert_eq!(delegate.term, 11);
             assert_eq!(delegate.applied_index_term, 5);
             assert_eq!(delegate.apply_state.get_applied_index(), 4);
+            assert_eq!(
+                delegate.apply_state.get_applied_index(),
+                delegate.last_sync_apply_index
+            );
         });
 
         router.schedule_task(2, Msg::destroy(2));
