@@ -2,6 +2,10 @@
 All notable changes to this project are documented in this file.
 See also [TiDB Changelog](https://github.com/pingcap/tidb/blob/master/CHANGELOG.md) and [PD Changelog](https://github.com/pingcap/pd/blob/master/CHANGELOG.md).
 
+## [2.1.11]
+- Fix the issue that the learner reads an empty index when there is only one leader and learner [#4751](https://github.com/tikv/tikv/pull/4751)
+- Handle `ScanLock` and `ResolveLock` commands in the high priority pool to reduce the impact for normal commands [#4791](https://github.com/tikv/tikv/pull/4791)
+
 ## [2.1.10]
 - Reject transfer leader when the region recently changed config [#4684](https://github.com/tikv/tikv/pull/4684)
 - Add priority label to coprocessor metrics [#4643](https://github.com/tikv/tikv/pull/4643)
