@@ -10,10 +10,39 @@ use std::sync::Arc;
 
 use crate::raftstore::store::keys::DATA_PREFIX_KEY;
 use crate::raftstore::store::{keys, util, PeerStorage};
-use crate::raftstore::Result;
+use crate::raftstore::{Error, Result};
 use tikv_util::keybuilder::KeyBuilder;
 use tikv_util::metrics::CRITICAL_ERROR;
 use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
+
+#[derive(Debug)]
+pub struct RegionInfo {
+    region_id: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+}
+
+impl RegionInfo {
+    pub fn new(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
+        Self {
+            region_id,
+            start_key,
+            end_key,
+        }
+    }
+
+    pub fn get_id(&self) -> u64 {
+        self.region_id
+    }
+
+    pub fn get_start_key(&self) -> &[u8] {
+        self.start_key.as_slice()
+    }
+
+    pub fn get_end_key(&self) -> &[u8] {
+        self.end_key.as_slice()
+    }
+}
 
 /// Snapshot of a region.
 ///
@@ -21,37 +50,41 @@ use tikv_util::{panic_when_unexpected_key_or_data, set_panic_mark};
 #[derive(Debug)]
 pub struct RegionSnapshot {
     snap: SyncSnapshot,
-    region: Arc<Region>,
+    region_info: Arc<RegionInfo>,
 }
 
 impl RegionSnapshot {
     pub fn new(ps: &PeerStorage) -> RegionSnapshot {
-        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region().clone())
+        RegionSnapshot::from_snapshot(ps.raw_snapshot().into_sync(), ps.region())
     }
 
-    pub fn from_raw(db: Arc<DB>, region: Region) -> RegionSnapshot {
+    pub fn from_raw(db: Arc<DB>, region: &Region) -> RegionSnapshot {
         RegionSnapshot::from_snapshot(Snapshot::new(db).into_sync(), region)
     }
 
-    pub fn from_snapshot(snap: SyncSnapshot, region: Region) -> RegionSnapshot {
+    pub fn from_snapshot(snap: SyncSnapshot, region: &Region) -> RegionSnapshot {
         RegionSnapshot {
             snap,
-            region: Arc::new(region),
+            region_info: Arc::new(RegionInfo::new(
+                region.get_id(),
+                region.get_start_key().to_vec(),
+                region.get_end_key().to_vec(),
+            )),
         }
     }
 
-    pub fn get_region(&self) -> &Region {
-        &self.region
-    }
+    //    pub fn get_region(&self) -> &Region {
+    //        &self.region
+    //    }
 
     pub fn iter(&self, iter_opt: IterOption) -> RegionIterator {
-        RegionIterator::new(&self.snap, Arc::clone(&self.region), iter_opt)
+        RegionIterator::new(&self.snap, Arc::clone(&self.region_info), iter_opt)
     }
 
     pub fn iter_cf(&self, cf: &str, iter_opt: IterOption) -> Result<RegionIterator> {
         Ok(RegionIterator::new_cf(
             &self.snap,
-            Arc::clone(&self.region),
+            Arc::clone(&self.region_info),
             iter_opt,
             cf,
         ))
@@ -106,18 +139,18 @@ impl RegionSnapshot {
     }
 
     pub fn get_properties_cf(&self, cf: &str) -> Result<TablePropertiesCollection> {
-        let start = keys::enc_start_key(&self.region);
-        let end = keys::enc_end_key(&self.region);
+        let start = keys::data_key(self.get_start_key());
+        let end = keys::data_end_key(self.get_end_key());
         let prop = engine::util::get_range_properties_cf(&self.snap.get_db(), cf, &start, &end)?;
         Ok(prop)
     }
 
     pub fn get_start_key(&self) -> &[u8] {
-        self.region.get_start_key()
+        self.region_info.get_start_key()
     }
 
     pub fn get_end_key(&self) -> &[u8] {
-        self.region.get_end_key()
+        self.region_info.get_end_key()
     }
 }
 
@@ -125,7 +158,7 @@ impl Clone for RegionSnapshot {
     fn clone(&self) -> Self {
         RegionSnapshot {
             snap: self.snap.clone(),
-            region: Arc::clone(&self.region),
+            region_info: Arc::clone(&self.region_info),
         }
     }
 }
@@ -134,9 +167,9 @@ impl Peekable for RegionSnapshot {
     fn get_value(&self, key: &[u8]) -> EngineResult<Option<DBVector>> {
         engine::util::check_key_in_range(
             key,
-            self.region.get_id(),
-            self.region.get_start_key(),
-            self.region.get_end_key(),
+            self.region_info.get_id(),
+            self.get_start_key(),
+            self.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
         self.snap.get_value(&data_key)
@@ -145,9 +178,9 @@ impl Peekable for RegionSnapshot {
     fn get_value_cf(&self, cf: &str, key: &[u8]) -> EngineResult<Option<DBVector>> {
         engine::util::check_key_in_range(
             key,
-            self.region.get_id(),
-            self.region.get_start_key(),
-            self.region.get_end_key(),
+            self.region_info.get_id(),
+            self.get_start_key(),
+            self.get_end_key(),
         )?;
         let data_key = keys::data_key(key);
         self.snap.get_value_cf(cf, &data_key)
@@ -160,13 +193,13 @@ impl Peekable for RegionSnapshot {
 pub struct RegionIterator {
     iter: DBIterator<Arc<DB>>,
     valid: bool,
-    region: Arc<Region>,
+    region_info: Arc<RegionInfo>,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 }
 
-fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
-    let region_start_key = keys::enc_start_key(region);
+fn update_lower_bound(iter_opt: &mut IterOption, region_info: &RegionInfo) {
+    let region_start_key = keys::data_key(region_info.get_start_key());
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_lower_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_start_key.as_slice() > *iter_opt.lower_bound().as_ref().unwrap() {
@@ -177,8 +210,8 @@ fn update_lower_bound(iter_opt: &mut IterOption, region: &Region) {
     }
 }
 
-fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
-    let region_end_key = keys::enc_end_key(region);
+fn update_upper_bound(iter_opt: &mut IterOption, region_info: &RegionInfo) {
+    let region_end_key = keys::data_end_key(region_info.get_end_key());
     if iter_opt.upper_bound().is_some() && !iter_opt.upper_bound().as_ref().unwrap().is_empty() {
         iter_opt.set_upper_bound_prefix(keys::DATA_PREFIX_KEY);
         if region_end_key.as_slice() < *iter_opt.upper_bound().as_ref().unwrap() {
@@ -191,9 +224,13 @@ fn update_upper_bound(iter_opt: &mut IterOption, region: &Region) {
 
 // we use engine::rocks's style iterator, doesn't need to impl std iterator.
 impl RegionIterator {
-    pub fn new(snap: &Snapshot, region: Arc<Region>, mut iter_opt: IterOption) -> RegionIterator {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
+    pub fn new(
+        snap: &Snapshot,
+        region_info: Arc<RegionInfo>,
+        mut iter_opt: IterOption,
+    ) -> RegionIterator {
+        update_lower_bound(&mut iter_opt, &region_info);
+        update_upper_bound(&mut iter_opt, &region_info);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator(iter_opt);
@@ -202,18 +239,18 @@ impl RegionIterator {
             valid: false,
             start_key,
             end_key,
-            region,
+            region_info,
         }
     }
 
     pub fn new_cf(
         snap: &Snapshot,
-        region: Arc<Region>,
+        region_info: Arc<RegionInfo>,
         mut iter_opt: IterOption,
         cf: &str,
     ) -> RegionIterator {
-        update_lower_bound(&mut iter_opt, &region);
-        update_upper_bound(&mut iter_opt, &region);
+        update_lower_bound(&mut iter_opt, &region_info);
+        update_upper_bound(&mut iter_opt, &region_info);
         let start_key = iter_opt.lower_bound().unwrap().to_vec();
         let end_key = iter_opt.upper_bound().unwrap().to_vec();
         let iter = snap.db_iterator_cf(cf, iter_opt).unwrap();
@@ -222,7 +259,7 @@ impl RegionIterator {
             valid: false,
             start_key,
             end_key,
-            region,
+            region_info,
         }
     }
 
@@ -324,15 +361,25 @@ impl RegionIterator {
 
     #[inline]
     pub fn should_seekable(&self, key: &[u8]) -> Result<()> {
-        if let Err(e) = util::check_key_in_region_inclusive(key, &self.region) {
+        // Unlikely
+        if !util::key_in_range_inclusive(
+            key,
+            self.region_info.get_start_key(),
+            self.region_info.get_end_key(),
+        ) {
             CRITICAL_ERROR
                 .with_label_values(&["key not in region"])
                 .inc();
+            let mut region = Region::new();
+            region.set_id(self.region_info.get_id());
+            region.set_start_key(self.region_info.get_start_key().to_vec());
+            region.set_end_key(self.region_info.get_end_key().to_vec());
+            let err = Error::KeyNotInRegion(key.to_vec(), region);
             if panic_when_unexpected_key_or_data() {
                 set_panic_mark();
-                panic!("key exceed bound: {:?}", e);
+                panic!("key exceed bound: {:?}", err);
             } else {
-                return Err(e);
+                return Err(err);
             }
         }
         Ok(())

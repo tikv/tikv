@@ -44,10 +44,12 @@ impl SyncBenchRouter {
         match cmd.callback {
             Callback::Read(cb) => {
                 let snapshot = engine::Snapshot::new(Arc::clone(&self.db));
-                let region = self.region.to_owned();
                 cb(ReadResponse {
                     response,
-                    snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), region)),
+                    snapshot: Some(RegionSnapshot::from_snapshot(
+                        snapshot.into_sync(),
+                        &self.region,
+                    )),
                 })
             }
             Callback::Write(cb) => {
@@ -95,12 +97,10 @@ fn new_engine() -> (TempDir, Arc<DB>) {
 fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
     let snapshot = engine::Snapshot::new(Arc::clone(&db));
+    let region = Region::new();
     let resp = ReadResponse {
         response: RaftCmdResponse::new(),
-        snapshot: Some(RegionSnapshot::from_snapshot(
-            snapshot.into_sync(),
-            Region::new(),
-        )),
+        snapshot: Some(RegionSnapshot::from_snapshot(snapshot.into_sync(), &region)),
     };
 
     b.iter(|| {

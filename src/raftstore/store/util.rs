@@ -67,24 +67,30 @@ pub fn check_key_in_region_exclusive(key: &[u8], region: &metapb::Region) -> Res
 
 /// Check if key in region range [`start_key`, `end_key`].
 pub fn check_key_in_region_inclusive(key: &[u8], region: &metapb::Region) -> Result<()> {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    if key >= start_key && (end_key.is_empty() || key <= end_key) {
+    if key_in_range_inclusive(key, region.get_start_key(), region.get_end_key()) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
     }
 }
 
+/// Check if key in range [`start_key`, `end_key`].
+pub fn key_in_range_inclusive(key: &[u8], start_key: &[u8], end_key: &[u8]) -> bool {
+    key >= start_key && (end_key.is_empty() || key <= end_key)
+}
+
 /// Check if key in region range [`start_key`, `end_key`).
 pub fn check_key_in_region(key: &[u8], region: &metapb::Region) -> Result<()> {
-    let end_key = region.get_end_key();
-    let start_key = region.get_start_key();
-    if key >= start_key && (end_key.is_empty() || key < end_key) {
+    if key_in_range(key, region.get_start_key(), region.get_end_key()) {
         Ok(())
     } else {
         Err(Error::KeyNotInRegion(key.to_vec(), region.clone()))
     }
+}
+
+/// Check if key in range [`start_key`, `end_key`).
+pub fn key_in_range(key: &[u8], start_key: &[u8], end_key: &[u8]) -> bool {
+    key >= start_key && (end_key.is_empty() || key < end_key)
 }
 
 /// `is_first_vote_msg` checks `msg` is the first vote (or prevote) message or not. It's used for

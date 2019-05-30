@@ -2480,7 +2480,7 @@ impl ReadExecutor {
         let snapshot = if need_snapshot {
             Some(RegionSnapshot::from_snapshot(
                 self.snapshot.clone().unwrap(),
-                region.to_owned(),
+                region,
             ))
         } else {
             None

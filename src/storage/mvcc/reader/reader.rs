@@ -540,14 +540,14 @@ mod tests {
         }
 
         fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.prewrite(m, pk, &Options::default()).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn prewrite_pessimistic_lock(&mut self, m: Mutation, pk: &[u8], start_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             let options = Options::default();
             txn.pessimistic_prewrite(m, pk, true, &options).unwrap();
@@ -561,7 +561,7 @@ mod tests {
             start_ts: u64,
             for_update_ts: u64,
         ) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.acquire_pessimistic_lock(k, pk, for_update_ts, false, &Options::default())
                 .unwrap();
@@ -569,14 +569,14 @@ mod tests {
         }
 
         fn commit(&mut self, pk: &[u8], start_ts: u64, commit_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.commit(Key::from_raw(pk), commit_ts).unwrap();
             self.write(txn.into_modifies());
         }
 
         fn rollback(&mut self, pk: &[u8], start_ts: u64) {
-            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+            let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
             let mut txn = MvccTxn::new(snap, start_ts, true).unwrap();
             txn.collapse_rollback(false);
             txn.rollback(Key::from_raw(pk)).unwrap();
@@ -585,7 +585,7 @@ mod tests {
 
         fn gc(&mut self, pk: &[u8], safe_point: u64) {
             loop {
-                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), self.region.clone());
+                let snap = RegionSnapshot::from_raw(Arc::clone(&self.db), &self.region);
                 let mut txn = MvccTxn::new(snap, safe_point, true).unwrap();
                 txn.gc(Key::from_raw(pk), safe_point).unwrap();
                 let modifies = txn.into_modifies();
@@ -672,7 +672,7 @@ mod tests {
         safe_point: u64,
         need_gc: bool,
     ) -> Option<MvccProperties> {
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), &region);
         let reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
         assert_eq!(reader.need_gc(safe_point, 1.0), need_gc);
         reader.get_mvcc_properties(safe_point)
@@ -804,7 +804,7 @@ mod tests {
         engine.prewrite_pessimistic_lock(m, k, 45);
         engine.commit(k, 45, 50);
 
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), &region);
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `45_40 PUT` means a commit version with start ts is 35 and commit ts
@@ -874,7 +874,7 @@ mod tests {
         let m = Mutation::Put((Key::from_raw(k), v.to_vec()));
         engine.prewrite(m, k, 14);
 
-        let snap = RegionSnapshot::from_raw(Arc::clone(&db), region.clone());
+        let snap = RegionSnapshot::from_raw(Arc::clone(&db), &region);
         let mut reader = MvccReader::new(snap, None, false, None, None, IsolationLevel::SI);
 
         // Let's assume `2_1 PUT` means a commit version with start ts is 1 and commit ts
