@@ -435,8 +435,6 @@ impl ScalarFunc {
             | ScalarFuncSig::Password
             | ScalarFuncSig::Quarter
             | ScalarFuncSig::Quote
-            | ScalarFuncSig::RandomBytes
-            | ScalarFuncSig::RealAnyValue
             | ScalarFuncSig::ReleaseLock
             | ScalarFuncSig::Repeat
             | ScalarFuncSig::RowCount
@@ -1382,6 +1380,11 @@ mod tests {
                 3,
             ),
             (
+                vec![ScalarFuncSig::AesEncrypt, ScalarFuncSig::AesDecrypt],
+                4,
+                4,
+            ),
+            (
                 vec![
                     ScalarFuncSig::JsonArraySig,
                     ScalarFuncSig::JsonObjectSig,
@@ -1393,12 +1396,6 @@ mod tests {
                     ScalarFuncSig::TimeAnyValue,
                     ScalarFuncSig::DecimalAnyValue,
                 ],
-                vec![ScalarFuncSig::AesEncrypt, ScalarFuncSig::AesDecrypt],
-                4,
-                4,
-            ),
-            (
-                vec![ScalarFuncSig::JsonArraySig, ScalarFuncSig::JsonObjectSig],
                 0,
                 usize::MAX,
             ),
@@ -1552,8 +1549,6 @@ mod tests {
             ScalarFuncSig::Password,
             ScalarFuncSig::Quarter,
             ScalarFuncSig::Quote,
-            ScalarFuncSig::RandomBytes,
-            ScalarFuncSig::RealAnyValue,
             ScalarFuncSig::ReleaseLock,
             ScalarFuncSig::Repeat,
             ScalarFuncSig::RowCount,

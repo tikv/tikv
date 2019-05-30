@@ -16,7 +16,7 @@ use hex;
 use openssl::nid::Nid;
 use openssl::symm::{decrypt, encrypt, Cipher};
 use phf::phf_set;
-use rand::Rng;
+use rand::distributions::{Distribution, Uniform};
 use std::io::prelude::*;
 
 const SHA0: i64 = 0;
@@ -49,10 +49,10 @@ const NID: phf::Set<i32> = phf_set! {
 
 /// Generate a sequence of random bytes in length of `len`
 fn random_bytes(len: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    let mut bytes = vec![0; len];
-    rng.fill_bytes(&mut bytes);
-    bytes
+    Uniform::from(0..=255)
+        .sample_iter(&mut rand::thread_rng())
+        .take(len)
+        .collect::<Vec<_>>()
 }
 
 /// Create AES key from arbitrary length array `key`, padding to `key_size` (in bytes)

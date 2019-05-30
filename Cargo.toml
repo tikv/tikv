@@ -103,7 +103,7 @@ zipf = "5.0.1"
 bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
-grpcio = { version = "0.4", features = [ "secure" ] }
+grpcio = { version = "0.4", features = [ "openssl" ] }
 raft = "0.4.3"
 crossbeam = "0.5"
 derive_more = "0.11.0"
@@ -122,6 +122,8 @@ vlog = "0.1.4"
 twoway = "0.2.0"
 ordered-float = "1.0"
 nom = "5.0.0-beta1"
+openssl = { version = "0.10.23", features = ["vendored"] }
+phf = { version = "0.7.24", features = ["macros"] }
 profiler = { path = "components/profiler" }
 match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
@@ -151,6 +153,7 @@ default-features = false
 [replace]
 "log:0.3.9" = { git = "https://github.com/busyjay/log", branch = "use-static-module" }
 "log:0.4.6" = { git = "https://github.com/busyjay/log", branch = "revert-to-static" }
+"openssl-src:111.2.1+1.1.1b" = { git = "https://github.com/BusyJay/libressl-src.git" }
 
 [dev-dependencies]
 panic_hook = { path = "components/panic_hook" }
