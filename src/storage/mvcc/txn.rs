@@ -91,19 +91,17 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock_type: LockType,
         primary: Vec<u8>,
-        ttl: u64,
         short_value: Option<Value>,
-        for_update_ts: u64,
-        txn_size: u64,
+        options: &Options,
     ) {
         let lock = Lock::new(
             lock_type,
             primary,
             self.start_ts,
-            ttl,
+            options.lock_ttl,
             short_value,
-            for_update_ts,
-            txn_size,
+            options.for_update_ts,
+            options.txn_size,
         )
         .to_bytes();
         self.write_size += CF_LOCK.len() + key.as_encoded().len() + lock.len();
@@ -150,19 +148,17 @@ impl<S: Snapshot> MvccTxn<S> {
         key: Key,
         lock_type: LockType,
         primary: Vec<u8>,
-        ttl: u64,
         value: Option<Value>,
-        for_update_ts: u64,
-        txn_size: u64,
+        options: &Options,
     ) {
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
-            self.lock_key(key, lock_type, primary, ttl, value, for_update_ts, txn_size);
+            self.lock_key(key, lock_type, primary, value, options);
         } else {
             // value is long
             let ts = self.start_ts;
             self.put_value(key.clone(), ts, value.unwrap());
 
-            self.lock_key(key, lock_type, primary, ttl, None, for_update_ts, txn_size);
+            self.lock_key(key, lock_type, primary, None, options);
         }
     }
 
@@ -179,6 +175,26 @@ impl<S: Snapshot> MvccTxn<S> {
             {
                 return Err(Error::AlreadyExist { key: key.to_raw()? });
             }
+        }
+        Ok(())
+    }
+
+    fn check_non_pessimistic_lock_conflict(&self, for_update_ts: u64, lock: &Lock) -> Result<()> {
+        // If request's for_update_ts is greater than lock's for_update_ts,
+        // we can overwrite it because isolation is guaranteed by pessimistic
+        // locks and no other transaction can read the old data because the lock
+        // is replaced atomicly.
+        //
+        // Optimistic lock's for_update_ts is its start_ts.
+        let lock_for_update_ts = if lock.for_update_ts > 0 {
+            lock.for_update_ts
+        } else {
+            lock.ts
+        };
+        if for_update_ts <= lock_for_update_ts {
+            // Only if this request is stale, request's for_update_ts will
+            // be less than or equal to lock's for_update_ts.
+            return Err(Error::Other("stale command".into()));
         }
         Ok(())
     }
@@ -257,15 +273,7 @@ impl<S: Snapshot> MvccTxn<S> {
             self.check_data_constraint(should_not_exist, &write, &key)?;
         }
 
-        self.lock_key(
-            key,
-            LockType::Pessimistic,
-            primary.to_vec(),
-            options.lock_ttl,
-            None,
-            for_update_ts,
-            options.txn_size,
-        );
+        self.lock_key(key, LockType::Pessimistic, primary.to_vec(), None, options);
 
         Ok(())
     }
@@ -301,21 +309,8 @@ impl<S: Snapshot> MvccTxn<S> {
                         key: key.into_raw()?,
                     });
                 }
-                // It's a non-pessimistic lock conflict. If request's for_update_ts
-                // is greater than lock's for_update_ts, we can overwrite it because
-                // isolation is guaranteed by pessimistic locks and no other transaction
-                // can read the old data because the lock is replaced atomicly.
-                // Optimistic lock's for_update_ts is its start_ts.
-                let lock_for_update_ts = if lock.for_update_ts > 0 {
-                    lock.for_update_ts
-                } else {
-                    lock.ts
-                };
-                if options.for_update_ts <= lock_for_update_ts {
-                    // Only if this request is stale, request's for_update_ts will
-                    // be less than lock's for_update_ts.
-                    return Err(Error::Other("stale command".into()));
-                }
+
+                self.check_non_pessimistic_lock_conflict(options.for_update_ts, &lock)?;
             } else {
                 if lock.lock_type != LockType::Pessimistic {
                     // Duplicated command. No need to overwrite the lock and data.
@@ -338,15 +333,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
-        self.put_lock(
-            key,
-            lock_type,
-            primary.to_vec(),
-            options.lock_ttl,
-            value,
-            options.for_update_ts,
-            options.txn_size,
-        );
+        self.put_lock(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
@@ -409,15 +396,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        self.put_lock(
-            key,
-            lock_type,
-            primary.to_vec(),
-            options.lock_ttl,
-            value,
-            0,
-            options.txn_size,
-        );
+        self.put_lock(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
@@ -1341,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lock_conflict_in_pessimistic_prewrite() {
+    fn test_non_pessimistic_lock_conflict() {
         let engine = TestEngineBuilder::new().build().unwrap();
 
         let k = b"k1";
