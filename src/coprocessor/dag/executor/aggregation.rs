@@ -99,7 +99,7 @@ impl AggExecutor {
 
     fn next(&mut self) -> Result<Option<Vec<Datum>>> {
         if let Some(row) = self.src.next()? {
-            let row = row.take_origin();
+            let row = row.take_origin()?;
             row.inflate_cols_with_offsets(&self.ctx, &self.related_cols_offset)
                 .map(Some)
         } else {
