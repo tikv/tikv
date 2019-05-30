@@ -244,8 +244,7 @@ mod tests {
         ];
         for (arg, expect_output) in test_cases {
             let output = RpnFnScalarEvaluator::new()
-                .push_param(arg0)
-                .push_param(arg1)
+                .push_param(arg)
                 .evaluate(ScalarFuncSig::UnaryNot)
                 .unwrap();
             assert_eq!(output, expect_output);
