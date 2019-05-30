@@ -10,9 +10,9 @@ pub use self::config::Config;
 pub use self::deadlock::{
     DetectType, Detector, Scheduler as DetectorScheduler, Service, Task as DetectTask,
 };
-pub use self::util::{extract_lock_from_result, gen_key_hash, gen_key_hashes};
+pub use self::util::{extract_lock_from_result, gen_key_hash, gen_keys_hashes};
 pub use self::waiter_manager::{
-    Scheduler as WaiterMgrScheduler, Task as WaiterTask, WaiterManager,
+    Scheduler as WaiterMgrScheduler, Task as WaiterTask, WaiterManager, WAIT_TABLE_IS_EMPTY,
 };
 use crate::pd::Error as PdError;
 use futures::future::Future;
