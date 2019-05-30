@@ -334,7 +334,7 @@ fn test_lease_read_callback_destroy() {
 }
 
 #[test]
-fn test_read_index_when_transfer_leader() {
+fn test_read_index_when_transfer_leader_1() {
     let mut cluster = new_node_cluster(0, 3);
 
     // Increase the election tick to make this test case running reliably.
@@ -412,15 +412,109 @@ fn test_read_index_when_transfer_leader() {
     }
 
     let resp1 = resp1.recv().unwrap();
-    assert_eq!(resp1.get_responses()[0].get_get().get_value(), b"v1");
+    assert!(
+        resp1.get_header().get_error().has_stale_command()
+            || resp1.get_responses()[0].get_get().get_value() == b"v1"
+    );
 
     // Response 2 should contains an error.
     let resp2 = resp2.recv().unwrap();
-    assert!(
-        resp2.get_header().get_error().has_stale_command(),
-        "{:?}",
-        resp2
+    assert!(resp2.get_header().get_error().has_stale_command());
+    drop(cluster);
+}
+
+#[test]
+fn test_read_index_when_transfer_leader_2() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    // Increase the election tick to make this test case running reliably.
+    configure_for_lease_read(&mut cluster, Some(50), Some(10_000));
+    let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k0", b"v0");
+    cluster.pd_client.must_add_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // Put and test again to ensure that peer 3 get the latest writes by message append
+    // instead of snapshot, so that transfer leader to peer 3 can 100% success.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    let r1 = cluster.get_region(b"k1");
+    let old_leader = cluster.leader_of_region(r1.get_id()).unwrap();
+
+    // Use a macro instead of a closure to avoid any capture of local variables.
+    macro_rules! read_on_old_leader {
+        () => {{
+            let (tx, rx) = mpsc::sync_channel(1);
+            let mut read_request = new_request(
+                r1.get_id(),
+                r1.get_region_epoch().clone(),
+                vec![new_get_cmd(b"k1")],
+                true, // read quorum
+            );
+            read_request.mut_header().set_peer(new_peer(1, 1));
+            let sim = cluster.sim.wl();
+            sim.async_command_on_node(
+                old_leader.get_id(),
+                read_request,
+                Callback::Read(Box::new(move |resp| tx.send(resp.response).unwrap())),
+            )
+            .unwrap();
+            rx
+        }};
+    }
+
+    // Delay all raft messages to peer 1.
+    let dropped_msgs = Arc::new(Mutex::new(Vec::new()));
+    let filter = Box::new(
+        RegionPacketFilter::new(r1.get_id(), old_leader.get_store_id())
+            .direction(Direction::Recv)
+            .when(Arc::new(AtomicBool::new(true)))
+            .reserve_dropped(Arc::clone(&dropped_msgs)),
     );
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(old_leader.get_id(), filter);
+
+    let resp1 = read_on_old_leader!();
+
+    cluster.must_transfer_leader(r1.get_id(), new_peer(3, 3));
+
+    let resp2 = read_on_old_leader!();
+
+    // Unpark all pending messages and clear all filters.
+    let router = cluster.sim.wl().get_router(old_leader.get_id()).unwrap();
+    let mut reserved_msgs = Vec::new();
+    'LOOP: loop {
+        for raft_msg in mem::replace(dropped_msgs.lock().unwrap().as_mut(), vec![]) {
+            let msg_type = raft_msg.get_message().get_msg_type();
+            if msg_type == MessageType::MsgHeartbeatResponse || msg_type == MessageType::MsgAppend {
+                reserved_msgs.push(raft_msg);
+                if msg_type == MessageType::MsgAppend {
+                    break 'LOOP;
+                }
+            }
+        }
+    }
+
+    // Resume reserved messages in one batch to make sure the old leader can get read and role
+    // change in one `Ready`.
+    for raft_msg in reserved_msgs {
+        router.send_raft_message(raft_msg).unwrap();
+    }
+    cluster.sim.wl().clear_recv_filters(old_leader.get_id());
+
+    let resp1 = resp1.recv().unwrap();
+    assert!(resp1.get_header().get_error().has_stale_command());
+
+    // Response 2 should contains an error.
+    let resp2 = resp2.recv().unwrap();
+    assert!(resp2.get_header().get_error().has_stale_command());
     drop(cluster);
 }
 
