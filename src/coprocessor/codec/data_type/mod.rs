@@ -9,12 +9,12 @@ mod vector_like;
 
 // Concrete eval types without a nullable wrapper.
 pub type Int = i64;
-pub type Real = f64;
+pub type Real = ordered_float::NotNan<f64>;
 pub type Bytes = Vec<u8>;
 pub use crate::coprocessor::codec::mysql::{Decimal, Duration, Json, Time as DateTime};
 
 // Dynamic eval types.
-pub use self::scalar::ScalarValue;
+pub use self::scalar::{ScalarValue, ScalarValueRef};
 pub use self::vector::{VectorValue, VectorValueExt};
 pub use self::vector_like::{VectorLikeValueRef, VectorLikeValueRefSpecialized};
 
@@ -65,7 +65,7 @@ where
 }
 
 /// A trait of all types that can be used during evaluation (eval type).
-pub trait Evaluable: Clone + std::fmt::Debug + Send + 'static {
+pub trait Evaluable: Clone + std::fmt::Debug + Send + Sync + 'static {
     const EVAL_TYPE: EvalType;
 
     /// Borrows this concrete type from a `ScalarValue` in the same type.

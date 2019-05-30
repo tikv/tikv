@@ -2,11 +2,13 @@
 
 use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::{Message, RepeatedField};
+use tipb::executor::ExecutorExecutionSummary;
 use tipb::select::{Chunk, SelectResponse, StreamResponse};
 
-use crate::coprocessor::*;
-
 use super::executor::{Executor, ExecutorMetrics};
+
+use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::*;
 
 /// Handles Coprocessor DAG requests.
 pub struct DAGRequestHandler {
@@ -14,6 +16,9 @@ pub struct DAGRequestHandler {
     executor: Box<dyn Executor + Send>,
     output_offsets: Vec<u32>,
     batch_row_limit: usize,
+    /// To construct ExecutionSummary target.
+    number_of_executors: usize,
+    collect_exec_summary: bool,
 }
 
 impl DAGRequestHandler {
@@ -22,12 +27,16 @@ impl DAGRequestHandler {
         executor: Box<dyn Executor + Send>,
         output_offsets: Vec<u32>,
         batch_row_limit: usize,
+        number_of_executors: usize,
+        collect_exec_summary: bool,
     ) -> Self {
         Self {
             deadline,
             executor,
             output_offsets,
             batch_row_limit,
+            number_of_executors,
+            collect_exec_summary,
         }
     }
 
@@ -79,6 +88,25 @@ impl RequestHandler for DAGRequestHandler {
                     }
                     self.executor
                         .collect_output_counts(sel_resp.mut_output_counts());
+
+                    if self.collect_exec_summary {
+                        let mut summary_per_executor =
+                            vec![ExecSummary::default(); self.number_of_executors];
+                        self.executor
+                            .collect_execution_summaries(&mut summary_per_executor);
+                        let summaries = summary_per_executor
+                            .iter()
+                            .map(|summary| {
+                                let mut ret = ExecutorExecutionSummary::new();
+                                ret.set_num_iterations(summary.num_iterations as u64);
+                                ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                                ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                                ret
+                            })
+                            .collect();
+                        sel_resp.set_execution_summaries(RepeatedField::from_vec(summaries));
+                    }
+
                     let data = box_try!(sel_resp.write_to_bytes());
                     resp.set_data(data);
                     return Ok(resp);

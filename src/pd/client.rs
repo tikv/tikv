@@ -23,9 +23,6 @@ use tikv_util::{Either, HandyRwLock};
 const CQ_COUNT: usize = 1;
 const CLIENT_PREFIX: &str = "pd";
 
-const MAX_RETRY_TIMES: u64 = 10;
-const RETRY_INTERVAL_MS: u64 = 300;
-
 pub struct RpcClient {
     cluster_id: u64,
     leader_client: LeaderClient,
@@ -39,7 +36,13 @@ impl RpcClient {
                 .name_prefix(thd_name!(CLIENT_PREFIX))
                 .build(),
         );
-        for _ in 0..MAX_RETRY_TIMES {
+
+        // -1 means the max.
+        let retries = match cfg.retry_max_count {
+            -1 => std::isize::MAX,
+            v => v.checked_add(1).unwrap_or(std::isize::MAX),
+        };
+        for i in 0..retries {
             match validate_endpoints(Arc::clone(&env), cfg, &security_mgr) {
                 Ok((client, members)) => {
                     return Ok(RpcClient {
@@ -48,8 +51,10 @@ impl RpcClient {
                     });
                 }
                 Err(e) => {
-                    warn!("validate PD endpoints failed"; "err" => ?e);
-                    thread::sleep(Duration::from_millis(RETRY_INTERVAL_MS));
+                    if i as usize % cfg.retry_log_every == 0 {
+                        warn!("validate PD endpoints failed"; "err" => ?e);
+                    }
+                    thread::sleep(cfg.retry_interval.0);
                 }
             }
         }
@@ -75,7 +80,10 @@ impl RpcClient {
     }
 
     /// Gets given key's Region and Region's leader from PD.
-    fn get_region_and_leader(&self, key: &[u8]) -> Result<(metapb::Region, Option<metapb::Peer>)> {
+    pub fn get_region_and_leader(
+        &self,
+        key: &[u8],
+    ) -> Result<(metapb::Region, Option<metapb::Peer>)> {
         let _timer = PD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["get_region"])
             .start_coarse_timer();

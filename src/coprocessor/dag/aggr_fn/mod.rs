@@ -1,16 +1,15 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-// TODO: Remove this line
-#![allow(unused)]
-
 //! This module provides aggregate functions for batch executors.
 
 mod impl_avg;
 mod impl_count;
+mod impl_first;
 mod parser;
 mod summable;
+mod util;
 
-pub use self::parser::AggrDefinitionParser;
+pub use self::parser::{AggrDefinitionParser, AllAggrDefinitionParser};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::expr::EvalContext;
@@ -28,6 +27,8 @@ use crate::coprocessor::Result;
 ///
 /// 3. The caller finally calls `push_result()` to aggregate a summary value and push it into the
 ///    given data container.
+///
+/// This trait can be auto derived by using `cop_codegen::AggrFunction`.
 pub trait AggrFunction: std::fmt::Debug + Send + 'static {
     /// The display name of the function.
     fn name(&self) -> &'static str;
@@ -56,15 +57,10 @@ pub trait AggrFunctionState:
     + AggrFunctionStateUpdatePartial<DateTime>
     + AggrFunctionStateUpdatePartial<Duration>
     + AggrFunctionStateUpdatePartial<Json>
-    + AggrFunctionStateResultPartial<Vec<Option<Int>>>
-    + AggrFunctionStateResultPartial<Vec<Option<Real>>>
-    + AggrFunctionStateResultPartial<Vec<Option<Decimal>>>
-    + AggrFunctionStateResultPartial<Vec<Option<Bytes>>>
-    + AggrFunctionStateResultPartial<Vec<Option<DateTime>>>
-    + AggrFunctionStateResultPartial<Vec<Option<Duration>>>
-    + AggrFunctionStateResultPartial<Vec<Option<Json>>>
-    + AggrFunctionStateResultPartial<[VectorValue]>
 {
+    // TODO: A better implementation is to specialize different push result targets. However
+    // current aggregation executor cannot utilize it.
+    fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()>;
 }
 
 /// A helper trait for single parameter aggregate function states that only work over concrete eval
@@ -76,7 +72,6 @@ pub trait AggrFunctionState:
 /// implementations over this trait.
 pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
     type ParameterType: Evaluable;
-    type ResultTargetType: AggrResultAppendable + ?Sized;
 
     fn update_concrete(
         &mut self,
@@ -84,11 +79,7 @@ pub trait ConcreteAggrFunctionState: std::fmt::Debug + Send + 'static {
         value: &Option<Self::ParameterType>,
     ) -> Result<()>;
 
-    fn push_result_concrete(
-        &self,
-        ctx: &mut EvalContext,
-        target: &mut Self::ResultTargetType,
-    ) -> Result<()>;
+    fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()>;
 }
 
 /// A helper trait that provides `update()` and `update_vector()` over a concrete type, which will
@@ -122,31 +113,6 @@ pub trait AggrFunctionStateUpdatePartial<T: Evaluable> {
     /// Panics if the aggregate function does not support the supplied concrete data type as its
     /// parameter.
     fn update_vector(&mut self, ctx: &mut EvalContext, values: &[Option<T>]) -> Result<()>;
-}
-
-/// A trait for types that can be used as an append target container for the aggregation result.
-pub trait AggrResultAppendable {}
-
-impl<T: Evaluable> AggrResultAppendable for Vec<Option<T>> {
-    // The aggregate result can be appended to a simple strongly typed data vector.
-}
-
-impl AggrResultAppendable for [VectorValue] {
-    // The aggregate result can also be appended into a multi valued and dynamic typed container.
-}
-
-/// A helper trait that provides `push_result()` over a concrete type, which will be relied in
-/// `AggrFunctionState`.
-pub trait AggrFunctionStateResultPartial<T: AggrResultAppendable + ?Sized> {
-    /// Finalizes and calculates the aggregated summary value.
-    ///
-    /// This function is idempotent, i.e. safe to be called multiple times.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the aggregate function does not support the supplied concrete data type as its
-    /// return value.
-    fn push_result(&self, ctx: &mut EvalContext, target: &mut T) -> Result<()>;
 }
 
 impl<T: Evaluable, State> AggrFunctionStateUpdatePartial<T> for State
@@ -212,40 +178,20 @@ where
     }
 }
 
-impl<T: AggrResultAppendable + ?Sized, State> AggrFunctionStateResultPartial<T> for State
-where
-    State: ConcreteAggrFunctionState,
-{
-    // All `ConcreteAggrFunctionState` implement `AggrFunctionStateResultPartial<T>`, which is
-    // one of the trait bound that `AggrFunctionState` requires.
-
-    #[inline]
-    default fn push_result(&self, _ctx: &mut EvalContext, _target: &mut T) -> Result<()> {
-        panic!("Unmatched result append target type")
-    }
-}
-
-impl<T: AggrResultAppendable + ?Sized, State> AggrFunctionStateResultPartial<T> for State
-where
-    State: ConcreteAggrFunctionState<ResultTargetType = T>,
-{
-    #[inline]
-    fn push_result(&self, ctx: &mut EvalContext, target: &mut T) -> Result<()> {
-        self.push_result_concrete(ctx, target)
-    }
-}
-
 impl<F> AggrFunctionState for F
 where
     F: ConcreteAggrFunctionState,
 {
-    // All `ConcreteAggrFunctionState` can implement `AggrFunctionState` now, since they meet
-    // all trait bound of `AggrFunctionState`.
+    fn push_result(&self, ctx: &mut EvalContext, target: &mut [VectorValue]) -> Result<()> {
+        <Self as ConcreteAggrFunctionState>::push_result(self, ctx, target)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use cop_datatype::EvalType;
 
     #[test]
     fn test_type_match() {
@@ -263,7 +209,6 @@ mod tests {
 
         impl ConcreteAggrFunctionState for AggrFnStateFoo {
             type ParameterType = Int;
-            type ResultTargetType = Vec<Option<Real>>;
 
             fn update_concrete(
                 &mut self,
@@ -276,12 +221,12 @@ mod tests {
                 Ok(())
             }
 
-            fn push_result_concrete(
+            fn push_result(
                 &self,
                 _ctx: &mut EvalContext,
-                target: &mut Vec<Option<Real>>,
+                target: &mut [VectorValue],
             ) -> Result<()> {
-                target.push(Some(self.sum as f64));
+                target[0].push_real(Real::new(self.sum as f64).ok());
                 Ok(())
             }
         }
@@ -301,7 +246,7 @@ mod tests {
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let _ = (&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
-                .update(&mut ctx, &Some(1.0f64));
+                .update(&mut ctx, &Real::new(1.0).ok());
         });
         assert!(result.is_err());
 
@@ -312,45 +257,38 @@ mod tests {
         });
         assert!(result.is_err());
 
-        // Push result into `Vec<Option<Real>>` should success.
-        let mut target: Vec<Option<Real>> = Vec::new();
+        // Push result to Real VectorValue should success.
+        let mut target = vec![VectorValue::with_capacity(0, EvalType::Real)];
 
-        assert!((&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
+        assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target, vec![Some(4.0f64)]);
+        assert_eq!(target[0].as_real_slice(), &[Real::new(4.0).ok()]);
 
         // Calling push result multiple times should also success.
         assert!((&mut s as &mut dyn AggrFunctionStateUpdatePartial<_>)
             .update(&mut ctx, &Some(1))
             .is_ok());
-        assert!((&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
+        assert!((&mut s as &mut dyn AggrFunctionState)
             .push_result(&mut ctx, &mut target)
             .is_ok());
-        assert_eq!(target, vec![Some(4.0f64), Some(5.0f64)]);
+        assert_eq!(
+            target[0].as_real_slice(),
+            &[Real::new(4.0).ok(), Real::new(5.0).ok()]
+        );
 
-        // Push result into other data type should panic.
-        let result = panic_hook::recover_safe(|| {
-            let mut s = s.clone();
-            let mut target: Vec<Option<Int>> = Vec::new();
-            let _ = (&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
-                .push_result(&mut ctx, &mut target);
-        });
-        assert!(result.is_err());
-
-        let result = panic_hook::recover_safe(|| {
-            let mut s = s.clone();
-            let mut target: Vec<Option<Decimal>> = Vec::new();
-            let _ = (&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
-                .push_result(&mut ctx, &mut target);
-        });
-        assert!(result.is_err());
-
+        // Push result into other VectorValue should panic.
         let result = panic_hook::recover_safe(|| {
             let mut s = s.clone();
             let mut target: Vec<VectorValue> = Vec::new();
-            let _ = (&mut s as &mut dyn AggrFunctionStateResultPartial<_>)
-                .push_result(&mut ctx, &mut target[..]);
+            let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
+        });
+        assert!(result.is_err());
+
+        let result = panic_hook::recover_safe(|| {
+            let mut s = s.clone();
+            let mut target: Vec<VectorValue> = vec![VectorValue::with_capacity(0, EvalType::Int)];
+            let _ = (&mut s as &mut dyn AggrFunctionState).push_result(&mut ctx, &mut target[..]);
         });
         assert!(result.is_err());
     }

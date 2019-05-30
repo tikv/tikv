@@ -200,7 +200,7 @@ pub fn fuzz_coprocessor_codec_time_from_u64(data: &[u8]) -> Result<(), Error> {
 
 #[inline(always)]
 pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
-    use codec::MemComparableByteCodec;
+    use codec::byte::MemComparableByteCodec;
     let mut buf = vec![0; MemComparableByteCodec::encoded_len(data.len())];
     let _ = MemComparableByteCodec::encode_all(data, buf.as_mut_slice());
     let _ = MemComparableByteCodec::encode_all_desc(data, buf.as_mut_slice());
@@ -214,7 +214,7 @@ pub fn fuzz_codec_bytes(data: &[u8]) -> Result<(), Error> {
 
 #[inline(always)]
 pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
-    use codec::NumberCodec;
+    use codec::number::NumberCodec;
     {
         let mut cursor = Cursor::new(data);
         let n = cursor.read_as_u64()?;
@@ -278,4 +278,47 @@ pub fn fuzz_codec_number(data: &[u8]) -> Result<(), Error> {
         let _ = NumberCodec::decode_u16_le(data);
     }
     Ok(())
+}
+
+// Duration
+fn fuzz_duration(
+    t: tikv::coprocessor::codec::mysql::Duration,
+    mut cursor: Cursor<&[u8]>,
+) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::DurationEncoder;
+    let _ = t.fsp();
+    let mut u = t;
+    u.set_fsp(cursor.read_as_u8()?);
+    let _ = t.hours();
+    let _ = t.minutes();
+    let _ = t.secs();
+    let _ = t.micro_secs();
+    let _ = t.nano_secs();
+    let _ = t.to_secs();
+    let _ = t.is_zero();
+    let _ = t.to_decimal();
+    let u = t;
+    u.round_frac(cursor.read_as_i8()?)?;
+    let mut v = Vec::new();
+    let _ = v.encode_duration(&t);
+    Ok(())
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_nanos(data: &[u8]) -> Result<(), Error> {
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let nanos = cursor.read_as_i64()?;
+    let fsp = cursor.read_as_i8()?;
+    fuzz_duration(Duration::from_nanos(nanos, fsp)?, cursor)
+}
+
+pub fn fuzz_coprocessor_codec_duration_from_parse(data: &[u8]) -> Result<(), Error> {
+    use std::io::Read;
+    use tikv::coprocessor::codec::mysql::Duration;
+    let mut cursor = Cursor::new(data);
+    let fsp = cursor.read_as_i8()?;
+    let mut buf: [u8; 32] = [b' '; 32];
+    cursor.read_exact(&mut buf)?;
+    let d = Duration::parse(&buf, fsp)?;
+    fuzz_duration(d, cursor)
 }
