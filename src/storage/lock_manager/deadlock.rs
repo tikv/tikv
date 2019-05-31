@@ -8,7 +8,6 @@ use crate::pd::{PdClient, RpcClient, INVALID_ID};
 use crate::tikv_util::collections::{HashMap, HashSet};
 use crate::tikv_util::future::paired_future_callback;
 use crate::tikv_util::security::SecurityManager;
-use crate::tikv_util::time::duration_to_ms;
 use crate::tikv_util::worker::{FutureRunnable, FutureScheduler, Stopped};
 use futures::{Future, Sink, Stream};
 use grpcio::{
@@ -22,7 +21,7 @@ use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tokio_core::reactor::Handle;
 use tokio_timer::Interval;
 
@@ -182,6 +181,7 @@ struct Inner {
     leader_client: Option<Client>,
     recving: Rc<RefCell<HashMap<u64, Client>>>,
     failed: Rc<RefCell<HashSet<u64>>>,
+    max_ts: u64,
 }
 
 impl Inner {
@@ -200,6 +200,7 @@ impl Inner {
             leader_client: None,
             recving: Rc::new(RefCell::new(HashMap::new())),
             failed: Rc::new(RefCell::new(HashSet::new())),
+            max_ts: 0,
         }
     }
 
@@ -412,17 +413,13 @@ impl Detector {
 
     fn schedule_detect_table_expiration(&self, handle: &Handle) {
         info!("schedule detect table expiration");
-        let detect_table = Rc::clone(&self.inner.borrow().detect_table);
+        let inner = Rc::clone(&self.inner);
         let timer = Interval::new_interval(Duration::from_millis(TXN_DETECT_INFO_TTL))
             .for_each(move |_| {
-                let now = duration_to_ms(
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap(),
-                );
-                detect_table.borrow_mut().expire(|ts| {
+                let max_ts = extract_physical_timestamp(inner.borrow().max_ts);
+                inner.borrow().detect_table.borrow_mut().expire(|ts| {
                     let ts = extract_physical_timestamp(ts);
-                    ts + TXN_DETECT_INFO_TTL <= now
+                    ts + TXN_DETECT_INFO_TTL <= max_ts
                 });
                 Ok(())
             })
@@ -439,6 +436,9 @@ impl Detector {
     fn handle_detect(&self, handle: &Handle, tp: DetectType, txn_ts: u64, lock: Lock) {
         let mut inner = self.inner.borrow_mut();
         if inner.is_leader() {
+            if txn_ts > inner.max_ts {
+                inner.max_ts = txn_ts;
+            }
             match tp {
                 DetectType::Detect => {
                     if let Some(deadlock_key_hash) = inner
@@ -491,8 +491,7 @@ impl Detector {
         stream: RequestStream<DeadlockRequest>,
         sink: DuplexSink<DeadlockResponse>,
     ) {
-        let inner = self.inner.borrow();
-        if !inner.is_leader() {
+        if !self.inner.borrow().is_leader() {
             let status = RpcStatus::new(
                 RpcStatusCode::FailedPrecondition,
                 Some("i'm not the leader of deadlock detector".to_string()),
@@ -501,7 +500,7 @@ impl Detector {
             return;
         }
 
-        let detect_table = Rc::clone(&inner.detect_table);
+        let inner = Rc::clone(&self.inner);
         let s = stream
             .map_err(Error::Grpc)
             .and_then(move |mut req| {
@@ -511,12 +510,17 @@ impl Detector {
                     key_hash,
                     ..
                 } = req.get_entry();
+
+                let mut inner = inner.borrow_mut();
+                if *txn > inner.max_ts {
+                    inner.max_ts = *txn;
+                }
+
+                let mut detect_table = inner.detect_table.borrow_mut();
                 let res = match req.get_tp() {
                     DeadlockRequestType::Detect => {
                         if let Some(deadlock_key_hash) =
-                            detect_table
-                                .borrow_mut()
-                                .detect(*txn, *wait_for_txn, *key_hash)
+                            detect_table.detect(*txn, *wait_for_txn, *key_hash)
                         {
                             let mut resp = DeadlockResponse::new();
                             resp.set_entry(req.take_entry());
@@ -528,14 +532,12 @@ impl Detector {
                     }
 
                     DeadlockRequestType::CleanUpWaitFor => {
-                        detect_table
-                            .borrow_mut()
-                            .clean_up_wait_for(*txn, *wait_for_txn, *key_hash);
+                        detect_table.clean_up_wait_for(*txn, *wait_for_txn, *key_hash);
                         None
                     }
 
                     DeadlockRequestType::CleanUp => {
-                        detect_table.borrow_mut().clean_up(*txn);
+                        detect_table.clean_up(*txn);
                         None
                     }
                 };
@@ -630,6 +632,8 @@ impl deadlock_grpc::Deadlock for Service {
 mod tests {
     use super::super::util::PHYSICAL_SHIFT_BITS;
     use super::*;
+    use crate::tikv_util::time::duration_to_ms;
+    use std::time::SystemTime;
 
     #[test]
     fn test_detect_table() {
