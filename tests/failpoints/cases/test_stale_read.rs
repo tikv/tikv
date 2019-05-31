@@ -1,19 +1,19 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::*;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use std::{mem, thread};
-use std::sync::atomic::*;
 
 use fail;
 use kvproto::metapb::{Peer, Region};
-use raft::eraftpb::{MessageType};
+use raft::eraftpb::MessageType;
 
 use test_raftstore::*;
-use tikv_util::HandyRwLock;
-use tikv_util::config::*;
 use tikv::pd::PdClient;
 use tikv::raftstore::store::Callback;
+use tikv_util::config::*;
+use tikv_util::HandyRwLock;
 
 fn stale_read_during_splitting(right_derive: bool) {
     let _guard = crate::setup();
