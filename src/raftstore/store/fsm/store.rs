@@ -612,6 +612,12 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm, StoreFsm> for RaftPoller<T,
             expected_msg_count = None;
         }
 
+        fail_point!(
+            "pause_on_peer_collect_message",
+            peer.peer_id() == 1,
+            |_| unreachable!()
+        );
+
         while self.peer_msg_buf.len() < self.messages_per_tick {
             match peer.receiver.try_recv() {
                 // TODO: we may need a way to optimize the message copy.
