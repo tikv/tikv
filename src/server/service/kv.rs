@@ -1252,7 +1252,17 @@ fn handle_batch_commands_request<E: Engine>(
                 .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_lock.inc());
             response_batch_commands_request(id, resp, tx, timer);
         }
-        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(_)) => unimplemented!(),
+        Some(BatchCommandsRequest_Request_oneof_cmd::PessimisticRollback(req)) => {
+            let timer = GRPC_MSG_HISTOGRAM_VEC
+                .kv_pessimistic_rollback
+                .start_coarse_timer();
+            let resp = future_pessimistic_rollback(&storage, req)
+                .map(oneof!(
+                    BatchCommandsResponse_Response_oneof_cmd::PessimisticRollback
+                ))
+                .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_pessimistic_rollback.inc());
+            response_batch_commands_request(id, resp, tx, timer);
+        }
     }
 }
 
