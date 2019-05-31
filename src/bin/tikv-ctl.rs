@@ -57,6 +57,7 @@ fn perror_and_exit<E: Error>(prefix: &str, e: E) -> ! {
 fn new_debug_executor(
     db: Option<&str>,
     raft_db: Option<&str>,
+    skip_paranoid_checks: bool,
     host: Option<&str>,
     cfg: &TiKvConfig,
     mgr: Arc<SecurityManager>,
@@ -65,6 +66,7 @@ fn new_debug_executor(
         (None, Some(kv_path)) => {
             let cache = cfg.storage.block_cache.build_shared_cache();
             let mut kv_db_opts = cfg.rocksdb.build_opt();
+            kv_db_opts.set_paranoid_checks(!skip_paranoid_checks);
             let kv_cfs_opts = cfg.rocksdb.build_cf_opts(&cache);
 
             if !mgr.cipher_file().is_empty() {
@@ -291,7 +293,7 @@ trait DebugExecutor {
         cfg: &TiKvConfig,
         mgr: Arc<SecurityManager>,
     ) {
-        let rhs_debug_executor = new_debug_executor(db, raft_db, host, cfg, mgr);
+        let rhs_debug_executor = new_debug_executor(db, raft_db, false, host, cfg, mgr);
 
         let r1 = self.get_region_info(region);
         let r2 = rhs_debug_executor.get_region_info(region);
@@ -945,6 +947,13 @@ fn main() {
                 .long("raftdb")
                 .takes_value(true)
                 .help("Set the raft rocksdb path"),
+        )
+        .arg(
+            Arg::with_name("skip-paranoid-checks")
+                .required(false)
+                .long("skip-paranoid-checks")
+                .takes_value(false)
+                .help("skip paranoid checks when open rocksdb"),
         )
         .arg(
             Arg::with_name("config")
@@ -1740,10 +1749,11 @@ fn main() {
 
     // Deal with all subcommands about db or host.
     let db = matches.value_of("db");
+    let skip_paranoid_checks = matches.is_present("skip-paranoid-checks");
     let raft_db = matches.value_of("raftdb");
     let host = matches.value_of("host");
 
-    let debug_executor = new_debug_executor(db, raft_db, host, &cfg, Arc::clone(&mgr));
+    let debug_executor = new_debug_executor(db, raft_db, skip_paranoid_checks, host, &cfg, Arc::clone(&mgr));
 
     if let Some(matches) = matches.subcommand_matches("print") {
         let cf = matches.value_of("cf").unwrap();
@@ -2137,7 +2147,7 @@ fn compact_whole_cluster(
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string().clone()).collect();
         let h = thread::spawn(move || {
-            let debug_executor = new_debug_executor(None, None, Some(&addr), &cfg, mgr);
+            let debug_executor = new_debug_executor(None, None, false, Some(&addr), &cfg, mgr);
             for cf in cfs {
                 debug_executor.compact(
                     Some(&addr),

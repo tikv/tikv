@@ -32,7 +32,9 @@ default-features = false
 features = ["nightly"]
 
 [dependencies.engine_rocksdb]
-git = "https://github.com/pingcap/rust-rocksdb.git"
+# git = "https://github.com/pingcap/rust-rocksdb.git"
+git = "https://github.com/hicqu/rust-rocksdb.git"
+branch = "set-paranoid-checks"
 package = "rocksdb"
 
 [dev-dependencies]
