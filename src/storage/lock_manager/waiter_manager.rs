@@ -94,10 +94,14 @@ impl WaitTable {
         self.wait_table.iter().map(|(_, v)| v.len()).sum()
     }
 
-    fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
+    fn flip_wait_table_is_empty(&self, is_empty: bool) {
         if self.wait_table.is_empty() {
-            WAIT_TABLE_IS_EMPTY.store(false, Ordering::Relaxed);
+            WAIT_TABLE_IS_EMPTY.store(is_empty, Ordering::Relaxed);
         }
+    }
+
+    fn add_waiter(&mut self, ts: u64, waiter: Waiter) -> bool {
+        self.flip_wait_table_is_empty(false);
         self.wait_table.entry(ts).or_insert(vec![]).push(waiter);
         true
     }
@@ -119,9 +123,7 @@ impl WaitTable {
             if waiters.is_empty() {
                 self.wait_table.remove(&ts);
             }
-            if self.wait_table.is_empty() {
-                WAIT_TABLE_IS_EMPTY.store(true, Ordering::Relaxed);
-            }
+            self.flip_wait_table_is_empty(true);
         }
         ready_waiters
     }
@@ -136,9 +138,7 @@ impl WaitTable {
                 if waiters.is_empty() {
                     self.wait_table.remove(&lock.ts);
                 }
-                if self.wait_table.is_empty() {
-                    WAIT_TABLE_IS_EMPTY.store(true, Ordering::Relaxed);
-                }
+                self.flip_wait_table_is_empty(true);
                 return Some(waiter);
             }
         }
