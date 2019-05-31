@@ -28,6 +28,40 @@ pub enum ScalarValue {
     Json(Option<super::Json>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScalarValueRef<'a> {
+    Int(&'a Option<super::Int>),
+    Real(&'a Option<super::Real>),
+    Decimal(&'a Option<super::Decimal>),
+    Bytes(&'a Option<super::Bytes>),
+    DateTime(&'a Option<super::DateTime>),
+    Duration(&'a Option<super::Duration>),
+    Json(&'a Option<super::Json>),
+}
+
+impl<'a> ScalarValueRef<'a> {
+    #[inline]
+    #[allow(clippy::clone_on_copy)]
+    pub fn to_owned(self) -> ScalarValue {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
+            }
+        }
+    }
+}
+
+impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
+    fn eq(&self, other: &ScalarValue) -> bool {
+        match_template_evaluable! {
+            TT, match (self, other) {
+                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == &v2,
+                _ => false
+            }
+        }
+    }
+}
+
 impl ScalarValue {
     #[inline]
     pub fn eval_type(&self) -> EvalType {
