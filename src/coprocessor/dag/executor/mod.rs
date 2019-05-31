@@ -316,6 +316,48 @@ impl<C: ExecSummaryCollector, T: Executor> Executor for WithSummaryCollector<C, 
     }
 }
 
+impl<T: Executor + ?Sized> Executor for Box<T> {
+    #[inline]
+    fn next(&mut self) -> Result<Option<Row>> {
+        (**self).next()
+    }
+
+    #[inline]
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        (**self).collect_output_counts(counts)
+    }
+
+    #[inline]
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        (**self).collect_metrics_into(metrics)
+    }
+
+    #[inline]
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        (**self).collect_execution_summaries(target)
+    }
+
+    #[inline]
+    fn get_len_of_columns(&self) -> usize {
+        (**self).get_len_of_columns()
+    }
+
+    #[inline]
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        (**self).take_eval_warnings()
+    }
+
+    #[inline]
+    fn start_scan(&mut self) {
+        (**self).start_scan()
+    }
+
+    #[inline]
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        (**self).stop_scan()
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};

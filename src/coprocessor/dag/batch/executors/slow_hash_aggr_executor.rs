@@ -310,7 +310,7 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::dag::batch::executors::util::aggr_executor::tests::*;
-    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn, RealPlus};
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(0)
                 .push_constant(1.0)
-                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn::<RealPlus>(), FieldTypeTp::Double)
                 .build(),
         ];
 

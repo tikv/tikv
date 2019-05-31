@@ -66,9 +66,7 @@ impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
         assert!(!group_by_definitions.is_empty());
         for def in group_by_definitions {
             RpnExpressionBuilder::check_expr_tree_supported(def)?;
-            if RpnExpressionBuilder::is_expr_eval_to_scalar(def)? {
-                return Err(box_err!("Group by expression cannot be a scalar"));
-            }
+            // Works for both vector and scalar. No need to check as other aggregation executor.
         }
 
         let aggr_definitions = descriptor.get_agg_func();
@@ -191,9 +189,7 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         let mut group_start_row = 0;
         for row_index in 0..rows_len {
             for group_by_result in &group_by_results {
-                // Unwrap is fine because we have verified the group by expression before.
-                let group_column = group_by_result.vector_value().unwrap();
-                group_key_ref.push(group_column.get_scalar_ref(row_index));
+                group_key_ref.push(group_by_result.get_scalar_ref(row_index));
             }
             match self.keys.rchunks_exact(group_by_len).next() {
                 Some(current_key) if &group_key_ref[..] == current_key => {
@@ -374,7 +370,7 @@ mod tests {
 
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
-    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{RealPlus, RpnFnArithmetic};
+    use crate::coprocessor::dag::rpn_expr::impl_arithmetic::{arithmetic_fn, RealPlus};
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
 
     #[test]
@@ -394,7 +390,7 @@ mod tests {
             RpnExpressionBuilder::new()
                 .push_column_ref(1)
                 .push_constant(2.0)
-                .push_fn_call(RpnFnArithmetic::<RealPlus>::new(), FieldTypeTp::Double)
+                .push_fn_call(arithmetic_fn::<RealPlus>(), FieldTypeTp::Double)
                 .build(),
         ];
 

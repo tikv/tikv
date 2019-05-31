@@ -23,6 +23,7 @@
 #![feature(proc_macro_hygiene)]
 #![feature(duration_float)]
 #![feature(specialization)]
+#![feature(const_fn)]
 
 #[macro_use]
 extern crate bitflags;

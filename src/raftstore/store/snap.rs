@@ -38,7 +38,7 @@ use crate::raftstore::Result as RaftStoreResult;
 use engine::rocks::util::io_limiter::{IOLimiter, LimitWriter};
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::collections::{HashMap, HashMapEntry as Entry};
-use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size};
+use tikv_util::file::{calc_crc32, delete_file_if_exist, file_exists, get_file_size, sync_dir};
 use tikv_util::time::duration_to_sec;
 use tikv_util::HandyRwLock;
 
@@ -305,7 +305,9 @@ struct MetaFile {
 
 pub struct Snap {
     key: SnapKey,
+    is_sending: bool,
     display_path: String,
+    dir_path: PathBuf,
     cf_files: Vec<CfFile>,
     cf_index: usize,
     meta_file: MetaFile,
@@ -363,7 +365,9 @@ impl Snap {
 
         let mut s = Snap {
             key: key.clone(),
+            is_sending,
             display_path,
+            dir_path,
             cf_files,
             cf_index: 0,
             meta_file,
@@ -924,6 +928,9 @@ impl Snapshot for Snap {
             {
                 let mut file = cf_file.file.take().unwrap();
                 file.flush()?;
+                if !self.is_sending {
+                    file.sync_all()?;
+                }
             }
             if cf_file.written_size != cf_file.size {
                 return Err(io::Error::new(
@@ -957,6 +964,7 @@ impl Snapshot for Snap {
             fs::rename(&cf_file.tmp_path, &cf_file.path)?;
             self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
         }
+        sync_dir(&self.dir_path)?;
         // write meta file
         let mut v = vec![];
         self.meta_file.meta.write_to_vec(&mut v)?;
@@ -966,6 +974,7 @@ impl Snapshot for Snap {
             meta_file.sync_all()?;
         }
         fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+        sync_dir(&self.dir_path)?;
         self.hold_tmp_files = false;
         Ok(())
     }
