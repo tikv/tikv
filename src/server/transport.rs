@@ -310,6 +310,7 @@ impl<T: RaftStoreRouter + 'static, S: StoreAddrResolver + 'static> ServerTranspo
         }
     }
 
+    #[inline]
     fn write_data(&self, store_id: u64, addr: &str, msg: RaftMessage) {
         if msg.get_message().has_snapshot() {
             return self.send_snapshot_sock(addr, msg);
