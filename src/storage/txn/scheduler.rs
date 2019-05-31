@@ -369,9 +369,9 @@ impl<E: Engine> Scheduler<E> {
         let ctx = task.context().clone();
         let executor = self.fetch_executor(task.priority(), task.cmd().is_sys_cmd());
 
-        let cb = Box::new(move |(cb_ctx, snapshot)| {
+        let cb = box move |(cb_ctx, snapshot)| {
             executor.execute(cb_ctx, snapshot, task);
-        });
+        };
 
         let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
