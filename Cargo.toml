@@ -104,7 +104,7 @@ bitflags = "1.0.1"
 fail = "0.2"
 uuid = { version = "0.6", features = [ "serde", "v4" ] }
 grpcio = { version = "0.4", features = [ "secure" ] }
-raft = "0.4"
+raft = "0.4.3"
 crossbeam = "0.5"
 derive_more = "0.11.0"
 num = { version = "0.2", default-features = false }
@@ -121,10 +121,12 @@ tokio-threadpool = "0.1.13"
 vlog = "0.1.4"
 twoway = "0.2.0"
 ordered-float = "1.0"
+nom = "5.0.0-beta1"
 profiler = { path = "components/profiler" }
 match_template = { path = "components/match_template" }
 cop_datatype = { path = "components/cop_datatype" }
 cop_codegen = { path = "components/cop_codegen" }
+codec = { path = "components/codec" }
 tipb_helper = { path = "components/tipb_helper" }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 # TODO: use master branch after the next version is released.
