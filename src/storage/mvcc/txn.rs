@@ -141,9 +141,7 @@ impl<S: Snapshot> MvccTxn<S> {
         Ok(self.reader.get_write(&key, ts)?.is_some())
     }
 
-    // If the value is short, lock key and put value.
-    // If not, lock key.
-    fn lock_key_and_put_value_if_short(
+    fn prewrite_key_value(
         &mut self,
         key: Key,
         lock_type: LockType,
@@ -152,6 +150,7 @@ impl<S: Snapshot> MvccTxn<S> {
         options: &Options,
     ) {
         if value.is_none() || is_short_value(value.as_ref().unwrap()) {
+            // If the value is short, embed it in Lock.
             self.lock_key(key, lock_type, primary, value, options);
         } else {
             // value is long
@@ -339,7 +338,7 @@ impl<S: Snapshot> MvccTxn<S> {
         }
 
         // No need to check data constraint, it's resolved by pessimistic locks.
-        self.lock_key_and_put_value_if_short(key, lock_type, primary.to_vec(), value, options);
+        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
@@ -402,7 +401,7 @@ impl<S: Snapshot> MvccTxn<S> {
             }
         }
 
-        self.lock_key_and_put_value_if_short(key, lock_type, primary.to_vec(), value, options);
+        self.prewrite_key_value(key, lock_type, primary.to_vec(), value, options);
         Ok(())
     }
 
