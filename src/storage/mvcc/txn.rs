@@ -530,8 +530,10 @@ impl<S: Snapshot> MvccTxn<S> {
 
     pub fn pessimistic_rollback(&mut self, key: Key, for_update_ts: u64) -> Result<()> {
         if let Some(lock) = self.reader.load_lock(&key)? {
-            if lock.ts == self.start_ts && lock.for_update_ts == for_update_ts {
-                assert!(lock.lock_type == LockType::Pessimistic);
+            if lock.lock_type == LockType::Pessimistic
+                && lock.ts == self.start_ts
+                && lock.for_update_ts == for_update_ts
+            {
                 self.unlock_key(key);
             }
         }
