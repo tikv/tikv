@@ -1282,15 +1282,14 @@ impl Peer {
         // update the `read_index` of read request that before this successful
         // `ready`.
         if !self.is_leader() && !ready.read_states.is_empty() {
+            // NOTE: there could still be some read requests following, which will be cleared in
+            // `clear_uncommitted` later.
             for state in &ready.read_states {
                 self.pending_reads
                     .advance(state.request_ctx.as_slice(), state.index);
                 self.post_pending_read_index_on_replica(ctx);
             }
-            return;
-        }
-
-        if self.ready_to_handle_read() {
+        } else if self.ready_to_handle_read() {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
