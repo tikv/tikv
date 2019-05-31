@@ -5,6 +5,7 @@ pub mod function;
 pub mod types;
 
 pub mod impl_arithmetic;
+pub mod impl_cast;
 pub mod impl_compare;
 pub mod impl_op;
 

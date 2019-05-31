@@ -36,13 +36,14 @@ quick_error! {
             cause(err)
             description(err.description())
         }
-        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64 } {
+        KeyIsLocked { key: Vec<u8>, primary: Vec<u8>, ts: u64, ttl: u64, txn_size: u64 } {
             description("key is locked (backoff or cleanup)")
-            display("key is locked (backoff or cleanup) {:?}-{:?}@{} ttl {}",
+            display("key is locked (backoff or cleanup) {:?}-{:?}@{} ttl {} txn_size {}",
                         escape(key),
                         escape(primary),
                         ts,
-                        ttl)
+                        ttl,
+                        txn_size)
         }
         BadFormatLock { description("bad format lock data") }
         BadFormatWrite { description("bad format write data") }
@@ -104,11 +105,13 @@ impl Error {
                 ref primary,
                 ts,
                 ttl,
+                txn_size,
             } => Some(Error::KeyIsLocked {
                 key: key.clone(),
                 primary: primary.clone(),
                 ts,
                 ttl,
+                txn_size,
             }),
             Error::BadFormatLock => Some(Error::BadFormatLock),
             Error::BadFormatWrite => Some(Error::BadFormatWrite),

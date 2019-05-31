@@ -14,7 +14,6 @@ use crate::coprocessor::dag::aggr_fn::*;
 use crate::coprocessor::dag::batch::executors::util::aggr_executor::*;
 use crate::coprocessor::dag::batch::executors::util::hash_aggr_helper::HashAggregationHelper;
 use crate::coprocessor::dag::batch::interface::*;
-use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
 use crate::coprocessor::dag::expr::EvalConfig;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
 use crate::coprocessor::Result;
@@ -24,13 +23,11 @@ use crate::coprocessor::Result;
 ///
 /// FIXME: It is not correct to just store the serialized data as the group key.
 /// See pingcap/tidb#10467.
-pub struct BatchSlowHashAggregationExecutor<C: ExecSummaryCollector, Src: BatchExecutor>(
-    AggregationExecutor<C, Src, SlowHashAggregationImpl>,
+pub struct BatchSlowHashAggregationExecutor<Src: BatchExecutor>(
+    AggregationExecutor<Src, SlowHashAggregationImpl>,
 );
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
-    for BatchSlowHashAggregationExecutor<C, Src>
-{
+impl<Src: BatchExecutor> BatchExecutor for BatchSlowHashAggregationExecutor<Src> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -47,7 +44,7 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchExecutor
     }
 }
 
-impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(
         src: Src,
@@ -56,7 +53,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
         aggr_def_parser: impl AggrDefinitionParser,
     ) -> Self {
         Self::new_impl(
-            ExecSummaryCollectorDisabled,
             Arc::new(EvalConfig::default()),
             src,
             group_by_exps,
@@ -67,7 +63,7 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<ExecSummaryCollectorDi
     }
 }
 
-impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn BatchExecutor>> {
+impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
@@ -88,9 +84,8 @@ impl BatchSlowHashAggregationExecutor<ExecSummaryCollectorDisabled, Box<dyn Batc
     }
 }
 
-impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecutor<C, Src> {
+impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
     pub fn new(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exp_defs: Vec<Expr>,
@@ -105,7 +100,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
         }
 
         Self::new_impl(
-            summary_collector,
             config,
             src,
             group_by_exps,
@@ -116,7 +110,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
 
     #[inline]
     fn new_impl(
-        summary_collector: C,
         config: Arc<EvalConfig>,
         src: Src,
         group_by_exps: Vec<RpnExpression>,
@@ -133,7 +126,6 @@ impl<C: ExecSummaryCollector, Src: BatchExecutor> BatchSlowHashAggregationExecut
         };
 
         Ok(Self(AggregationExecutor::new(
-            summary_collector,
             aggr_impl,
             src,
             config,
@@ -263,11 +255,14 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
     }
 
     #[inline]
-    fn iterate_each_group_for_aggregation(
+    fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,
+        src_is_drained: bool,
         mut iteratee: impl FnMut(&mut Entities<Src>, &[Box<dyn AggrFunctionState>]) -> Result<()>,
     ) -> Result<Vec<LazyBatchColumn>> {
+        assert!(src_is_drained);
+
         let number_of_groups = self.groups.len();
         let group_by_exps_len = self.group_by_exps.len();
         let mut group_by_columns: Vec<_> = self
@@ -289,11 +284,19 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
             for group_index in 0..group_by_exps_len {
                 let offset_begin = group_info.group_key_offsets[group_index] as usize;
                 let offset_end = group_info.group_key_offsets[group_index + 1] as usize;
-                group_by_columns[group_index].push_raw(&group_key[offset_begin..offset_end]);
+                group_by_columns[group_index]
+                    .mut_raw()
+                    .push(&group_key[offset_begin..offset_end]);
             }
         }
 
         Ok(group_by_columns)
+    }
+
+    /// Slow hash aggregation can output aggregate results only if the source is drained.
+    #[inline]
+    fn is_partial_results_ready(&self) -> bool {
+        false
     }
 }
 
@@ -371,12 +374,16 @@ mod tests {
         assert_eq!(r.data.columns_len(), 5); // 3 result column, 2 group by column
 
         // Let's check the two group by column first.
-        r.data[3].decode(&Tz::utc(), &exec.schema()[3]).unwrap();
+        r.data[3]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[3])
+            .unwrap();
         assert_eq!(
             r.data[3].decoded().as_int_slice(),
             &[Some(5), None, None, Some(1)]
         );
-        r.data[4].decode(&Tz::utc(), &exec.schema()[4]).unwrap();
+        r.data[4]
+            .ensure_decoded(&Tz::utc(), &exec.schema()[4])
+            .unwrap();
         assert_eq!(
             r.data[4].decoded().as_real_slice(),
             &[Real::new(2.5).ok(), Real::new(8.0).ok(), None, None]

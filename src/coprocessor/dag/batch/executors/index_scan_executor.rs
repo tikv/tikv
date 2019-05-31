@@ -16,21 +16,15 @@ use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
 use crate::coprocessor::dag::Scanner;
 use crate::coprocessor::{Error, Result};
 
-pub struct BatchIndexScanExecutor<C: ExecSummaryCollector, S: Store>(
+pub struct BatchIndexScanExecutor<S: Store>(
     super::util::scan_executor::ScanExecutor<
-        C,
         S,
         IndexScanExecutorImpl,
         super::util::ranges_iter::PointRangeConditional,
     >,
 );
 
-impl
-    BatchIndexScanExecutor<
-        crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled,
-        FixtureStore,
-    >
-{
+impl BatchIndexScanExecutor<FixtureStore> {
     /// Checks whether this executor can be used.
     #[inline]
     pub fn check_supported(descriptor: &IndexScan) -> Result<()> {
@@ -38,9 +32,8 @@ impl
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
+impl<S: Store> BatchIndexScanExecutor<S> {
     pub fn new(
-        summary_collector: C,
         store: S,
         config: Arc<EvalConfig>,
         columns_info: Vec<ColumnInfo>,
@@ -79,7 +72,6 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
             decode_handle,
         };
         let wrapper = super::util::scan_executor::ScanExecutor::new(
-            summary_collector,
             imp,
             store,
             desc,
@@ -90,7 +82,7 @@ impl<C: ExecSummaryCollector, S: Store> BatchIndexScanExecutor<C, S> {
     }
 }
 
-impl<C: ExecSummaryCollector, S: Store> BatchExecutor for BatchIndexScanExecutor<C, S> {
+impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
     #[inline]
     fn schema(&self) -> &[FieldType] {
         self.0.schema()
@@ -188,7 +180,7 @@ impl super::util::scan_executor::ScanExecutorImpl for IndexScanExecutorImpl {
 
         for i in 0..self.columns_len_without_handle {
             let (val, remaining) = datum::split_datum(key_payload, false)?;
-            columns[i].push_raw(val);
+            columns[i].mut_raw().push(val);
             key_payload = remaining;
         }
 
@@ -251,7 +243,6 @@ mod tests {
     use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::codec::mysql::Tz;
     use crate::coprocessor::codec::{datum, table, Datum};
-    use crate::coprocessor::dag::exec_summary::*;
     use crate::coprocessor::dag::expr::EvalConfig;
     use crate::coprocessor::util::convert_to_prefix_next;
     use crate::storage::{FixtureStore, Key};
@@ -331,7 +322,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![columns_info[0].clone(), columns_info[1].clone()],
@@ -346,13 +336,17 @@ mod tests {
             assert_eq!(result.data.columns_len(), 2);
             assert_eq!(result.data.rows_len(), 3);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(
                 result.data[0].decoded().as_int_slice(),
                 &[Some(5), Some(5), Some(-5)]
             );
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[
@@ -378,7 +372,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -397,10 +390,14 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
@@ -445,7 +442,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -464,10 +460,14 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 2);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5), Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok(), Real::new(10.5).ok()]
@@ -490,7 +490,6 @@ mod tests {
             }];
 
             let mut executor = BatchIndexScanExecutor::new(
-                ExecSummaryCollectorDisabled,
                 store.clone(),
                 Arc::new(EvalConfig::default()),
                 vec![
@@ -509,10 +508,14 @@ mod tests {
             assert_eq!(result.data.columns_len(), 3);
             assert_eq!(result.data.rows_len(), 1);
             assert!(result.data[0].is_raw());
-            result.data[0].decode(&Tz::utc(), &schema[0]).unwrap();
+            result.data[0]
+                .ensure_decoded(&Tz::utc(), &schema[0])
+                .unwrap();
             assert_eq!(result.data[0].decoded().as_int_slice(), &[Some(5)]);
             assert!(result.data[1].is_raw());
-            result.data[1].decode(&Tz::utc(), &schema[1]).unwrap();
+            result.data[1]
+                .ensure_decoded(&Tz::utc(), &schema[1])
+                .unwrap();
             assert_eq!(
                 result.data[1].decoded().as_real_slice(),
                 &[Real::new(5.1).ok()]

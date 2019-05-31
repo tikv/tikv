@@ -15,9 +15,9 @@ pub enum CompressionType {
     ZstdNotFinal,
 }
 
-impl Into<DBCompressionType> for CompressionType {
-    fn into(self) -> DBCompressionType {
-        match self {
+impl From<CompressionType> for DBCompressionType {
+    fn from(compression_type: CompressionType) -> DBCompressionType {
+        match compression_type {
             CompressionType::No => DBCompressionType::No,
             CompressionType::Snappy => DBCompressionType::Snappy,
             CompressionType::Zlib => DBCompressionType::Zlib,
