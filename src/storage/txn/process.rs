@@ -799,11 +799,8 @@ fn process_write_impl<S: Snapshot>(
             commit_ts,
             resolve_keys,
         } => {
-            let key_hashes = if waiter_mgr_scheduler.is_some() {
-                Some(lock_manager::gen_key_hashes(&resolve_keys))
-            } else {
-                None
-            };
+            let key_hashes = gen_key_hashes_if_needed(&waiter_mgr_scheduler, &resolve_keys);
+
             let mut txn = MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
             let rows = resolve_keys.len();
             let mut is_pessimistic_txn = false;
@@ -816,8 +813,9 @@ fn process_write_impl<S: Snapshot>(
                     is_pessimistic_txn = txn.rollback(key)?;
                 }
             }
-            notify_waiter_mgr(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
-            notify_deadlock_detector(&detector_scheduler, is_pessimistic_txn, start_ts);
+
+            notify_waiter_mgr_if_needed(&waiter_mgr_scheduler, start_ts, key_hashes, 0);
+            notify_deadlock_detector_if_needed(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
         }
