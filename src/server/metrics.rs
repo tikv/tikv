@@ -16,6 +16,7 @@ make_static_metric! {
         kv_batch_rollback,
         kv_scan_lock,
         kv_resolve_lock,
+        kv_refresh_lock,
         kv_gc,
         kv_delete_range,
         raw_get,

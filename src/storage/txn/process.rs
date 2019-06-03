@@ -767,7 +767,6 @@ fn process_write_impl<S: Snapshot>(
                     },
                 }
             };
-
             (pr, modifies, rows, ctx, None)
         }
         Command::ResolveLockLite {
@@ -797,6 +796,34 @@ fn process_write_impl<S: Snapshot>(
             notify_deadlock_detector(&detector_scheduler, is_pessimistic_txn, start_ts);
             statistics.add(&txn.take_statistics());
             (ProcessResult::Res, txn.into_modifies(), rows, ctx, None)
+        }
+        Command::RefreshLock {
+            ctx,
+            key,
+            start_ts,
+            options,
+        } => {
+
+            let mut txn =
+                MvccTxn::new(snapshot.clone(), start_ts, !ctx.get_not_fill_cache())?;
+            // may be possible to refresh multiple locks later?
+            let mut locks = vec![];
+            match txn.refresh_lock(key, &options) {
+                Ok(lock) => {
+                    locks.push(lock)
+                }
+                Err(e) => return Err(Error::from(e)),
+            }
+
+            statistics.add(&txn.take_statistics());
+            if locks.is_empty() {
+                // Skip write stage if no lock is found.
+                let pr = ProcessResult::Res;
+                (pr, vec![], 0, ctx, None)
+            } else {
+                let pr = ProcessResult::Res;
+                (pr, txn.into_modifies(), 1, ctx, None)
+            }
         }
         Command::Pause { ctx, duration, .. } => {
             thread::sleep(Duration::from_millis(duration));

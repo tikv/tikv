@@ -307,6 +307,43 @@ impl<T: RaftStoreRouter + 'static, E: Engine> tikvpb_grpc::Tikv for Service<T, E
         ctx.spawn(future);
     }
 
+    fn kv_refresh_lock(
+        &mut self,
+        ctx: RpcContext,
+        mut req: RefreshLockRequest,
+        sink: UnarySink<RefreshLockResponse>,
+    ) {
+        let timer = GRPC_MSG_HISTOGRAM_VEC.kv_refresh_lock.start_coarse_timer();
+
+        let (cb, f) = paired_future_callback();
+        let mut options = Options::default();
+        options.lock_ttl = req.get_ttl();
+        options.txn_size = req.get_txn_size();
+        let res = self
+            .storage
+            .async_refresh_lock(req.take_context(), req.take_key(), req.get_start_version(), options, cb);
+        let future = AndThenWith::new(res, f.map_err(Error::from))
+            .and_then(move |v| {
+                let mut resp = RefreshLockResponse::new();
+                if let Some(err) = extract_region_error(&v) {
+                    resp.set_region_error(err);
+                } else {
+                    match v {
+                        Ok(()) => resp.set_ttl(req.get_ttl()),
+                        Err(e) => resp.set_error(extract_key_error(&e)),
+                    }
+                }
+                sink.success(resp).map_err(Error::from)
+            })
+            .map(|_| timer.observe_duration())
+            .map_err(move |e| {
+                debug!("{} failed: {:?}", "kv_refresh_lock", e);
+                GRPC_MSG_FAIL_COUNTER.kv_refresh_lock.inc();
+            });
+
+        ctx.spawn(future);
+    }
+
     fn kv_gc(&mut self, ctx: RpcContext<'_>, req: GCRequest, sink: UnarySink<GCResponse>) {
         let timer = GRPC_MSG_HISTOGRAM_VEC.kv_gc.start_coarse_timer();
         let future = future_gc(&self.storage, req)

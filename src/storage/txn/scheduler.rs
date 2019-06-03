@@ -532,6 +532,7 @@ fn gen_command_lock(latches: &Latches, cmd: &Command) -> Lock {
         }
         Command::Cleanup { ref key, .. } => latches.gen_lock(&[key]),
         Command::Pause { ref keys, .. } => latches.gen_lock(keys),
+        Command::RefreshLock { ref key, .. } => latches.gen_lock(&[key]),
         _ => Lock::new(vec![]),
     }
 }
@@ -592,6 +593,12 @@ mod tests {
                 keys: vec![Key::from_raw(b"k")],
                 lock_ts: 10,
                 commit_ts: 20,
+            },
+            Command::RefreshLock {
+                ctx: Context::new(),
+                key: Key::from_raw(b"k"),
+                start_ts: 10,
+                options: Options::default(),
             },
             Command::Cleanup {
                 ctx: Context::new(),
