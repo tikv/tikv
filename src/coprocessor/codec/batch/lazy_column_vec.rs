@@ -46,6 +46,18 @@ impl LazyBatchColumnVec {
         }
     }
 
+    /// Creates a new empty `LazyBatchColumnVec` with the same number of columns and schema.
+    #[inline]
+    pub fn clone_empty(&self, capacity: usize) -> Self {
+        Self {
+            columns: self
+                .columns
+                .iter()
+                .map(|c| c.clone_empty(capacity))
+                .collect(),
+        }
+    }
+
     /// Creates a new `LazyBatchColumnVec`, which contains `columns_count` number of raw columns.
     #[cfg(test)]
     pub fn with_raw_columns(columns_count: usize) -> Self {
