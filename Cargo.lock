@@ -1061,7 +1061,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#395820081e51614b10530d3023cf9622235adb11"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#80da6b7d24fcd9e15b0be927617e46903f14524f"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1077,7 +1077,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#395820081e51614b10530d3023cf9622235adb11"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#80da6b7d24fcd9e15b0be927617e46903f14524f"
 dependencies = [
  "bzip2-sys 0.1.7 (git+https://github.com/alexcrichton/bzip2-rs.git)",
  "cc 1.0.28 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1837,7 +1837,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#395820081e51614b10530d3023cf9622235adb11"
+source = "git+https://github.com/zhangjinpeng1987/rust-rocksdb.git?branch=fast-get-cf-handle#80da6b7d24fcd9e15b0be927617e46903f14524f"
 dependencies = [
  "crc 1.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.45 (registry+https://github.com/rust-lang/crates.io-index)",
