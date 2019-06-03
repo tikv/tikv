@@ -732,9 +732,9 @@ impl DbConfig {
 
     pub fn build_cf_opts(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             // TODO: rmeove CF_RAFT.
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
@@ -742,9 +742,9 @@ impl DbConfig {
 
     pub fn build_cf_opts_v2(&self, cache: &Option<Cache>) -> Vec<CFOptions<'_>> {
         vec![
-            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_LOCK, self.lockcf.build_opt(cache)),
             CFOptions::new(CF_WRITE, self.writecf.build_opt(cache)),
+            CFOptions::new(CF_DEFAULT, self.defaultcf.build_opt(cache)),
             CFOptions::new(CF_RAFT, self.raftcf.build_opt(cache)),
         ]
     }
