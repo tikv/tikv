@@ -163,16 +163,14 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
         match snapshot {
             Ok(snapshot) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[task.tag, "snapshot_ok"])
-                    .inc();
+                let cmd_kind = get_command_kind_from_str(task.tag);
+                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).snapshot_ok.inc();
 
                 self.process_by_worker(cb_ctx, snapshot, task);
             }
             Err(err) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[task.tag, "snapshot_err"])
-                    .inc();
+                let cmd_kind = get_command_kind_from_str(task.tag);
+                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).snapshot_err.inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
@@ -192,9 +190,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[task.tag, "process"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(task.tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).process.inc();
         debug!(
             "process cmd with snapshot";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -276,9 +273,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 pr,
                 lock_info,
             }) => {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "write"])
-                    .inc();
+                let cmd_kind = get_command_kind_from_str(tag);
+                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).write.inc();
 
                 if lock_info.is_some() {
                     let (lock, is_first_lock) = lock_info.unwrap();
@@ -319,9 +315,8 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
-                        SCHED_STAGE_COUNTER_VEC
-                            .with_label_values(&[tag, "async_write_err"])
-                            .inc();
+                        let cmd_kind = get_command_kind_from_str(tag);
+                        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).async_write_err.inc();
 
                         error!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
@@ -334,8 +329,10 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             // Write prepare failure typically means conflicting transactions are detected. Delivers the
             // error to the callback, and releases the latches.
             Err(err) => {
+                let cmd_kind = get_command_kind_from_str(tag);
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "prepare_write_err"])
+                    .get(cmd_kind)
+                    .prepare_write_err
                     .inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);

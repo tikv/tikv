@@ -30,12 +30,63 @@ make_static_metric! {
         raw_batch_delete,
     }
 
+    pub label_enum CommandStageKind {
+        new,
+        snapshot,
+        async_snapshot_err
+        snapshot_ok,
+        snapshot_err,
+        read_finish,
+        next_cmd,
+        lock_wait,
+        process,
+        prepare_write_err,
+        write,
+        write_finish,
+        async_write_err,
+        error,
+    }
+
     pub struct SchedDurationVec: Histogram {
         "type" => CommandKind,
     }
 
     pub struct KvCommandCounterVec: IntCounter {
         "type" => CommandKind,
+    }
+
+    pub struct SchedStageCounterVec: IntCounter {
+        "type" => CommandKind,
+        "stage" => CommandStageKind,
+    }
+}
+
+pub fn get_command_kind_from_str(tag: &str) -> CommandKind {
+    match tag {
+        "prewrite" => CommandKind::prewrite,
+        "pessimistic_lock" => CommandKind::pessimistic_lock,
+        "commit" => CommandKind::commit,
+        "cleanup" => CommandKind::cleanup,
+        "rollback" => CommandKind::rollback,
+        "scan_lock" => CommandKind::scan_lock,
+        "resolve_lock" => CommandKind::resolve_lock,
+        "resolve_lock_lite" => CommandKind::resolve_lock_lite,
+        "gc" => CommandKind::gc,
+        "unsafe_destroy_range" => CommandKind::unsafe_destroy_range,
+        "delete_range" => CommandKind::delete_range,
+        "pause" => CommandKind::pause,
+        "key_mvcc" => CommandKind::key_mvcc,
+        "start_ts_mvcc" => CommandKind::start_ts_mvcc,
+        "raw_get" => CommandKind::raw_get,
+        "raw_batch_get" => CommandKind::raw_batch_get,
+        "raw_scan" => CommandKind::raw_scan,
+        "raw_batch_scan" => CommandKind::raw_batch_scan,
+        "raw_put" => CommandKind::raw_put,
+        "raw_batch_put" => CommandKind::raw_batch_put,
+        "raw_delete" => CommandKind::raw_delete,
+        "raw_delete_range" => CommandKind::raw_delete_range,
+        "raw_batch_delete" => CommandKind::raw_batch_delete,
+        _ => unimplemented!("unknown command kind {}", tag),
     }
 }
 
@@ -48,12 +99,15 @@ lazy_static! {
     .unwrap();
     pub static ref KV_COMMAND_COUNTER_VEC_STATIC: KvCommandCounterVec =
         KvCommandCounterVec::from(&KV_COMMAND_COUNTER_VEC);
-    pub static ref SCHED_STAGE_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
-        "tikv_scheduler_stage_total",
-        "Total number of commands on each stage.",
-        &["type", "stage"]
-    )
-    .unwrap();
+    pub static ref SCHED_STAGE_COUNTER_VEC: SchedStageCounterVec = {
+        register_static_int_counter_vec!(
+            SchedStageCounterVec,
+            "tikv_scheduler_stage_total",
+            "Total number of commands on each stage.",
+            &["type", "stage"]
+        )
+        .unwrap()
+    };
     pub static ref SCHED_WRITING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_scheduler_writing_bytes",
         "Total number of writing kv."

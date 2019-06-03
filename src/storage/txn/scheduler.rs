@@ -327,10 +327,8 @@ impl<E: Engine> Scheduler<E> {
         // TODO: enqueue_task should return an reference of the tctx.
         self.inner.enqueue_task(task, callback);
         self.try_to_wake_up(cid);
-
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "new"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC
             .with_label_values(&[priority_tag])
             .inc();
@@ -375,16 +373,17 @@ impl<E: Engine> Scheduler<E> {
 
         let f = |engine: &E| {
             if let Err(e) = engine.async_snapshot(&ctx, cb) {
+                let cmd_kind = get_command_kind_from_str(tag);
                 SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "async_snapshot_err"])
+                    .get(cmd_kind)
+                    .async_snapshot_err
                     .inc();
 
                 error!("engine async_snapshot failed"; "err" => ?e);
                 self.finish_with_err(cid, e.into());
             } else {
-                SCHED_STAGE_COUNTER_VEC
-                    .with_label_values(&[tag, "snapshot"])
-                    .inc();
+                let cmd_kind = get_command_kind_from_str(tag);
+                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).snapshot.inc();
             }
         };
 
@@ -401,9 +400,8 @@ impl<E: Engine> Scheduler<E> {
         debug!("write command finished with error"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
 
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tctx.tag, "error"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(tctx.tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).error.inc();
 
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
@@ -418,16 +416,14 @@ impl<E: Engine> Scheduler<E> {
     /// If a next command is present, continues to execute; otherwise, delivers the result to the
     /// callback.
     fn on_read_finished(&self, cid: u64, pr: ProcessResult, tag: &str) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "read_finish"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).read_finish.inc();
 
         debug!("read command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "next_cmd"])
-                .inc();
+            let cmd_kind = get_command_kind_from_str(tag);
+            SCHED_STAGE_COUNTER_VEC.get(cmd_kind).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
             execute_callback(tctx.cb, pr);
@@ -438,9 +434,8 @@ impl<E: Engine> Scheduler<E> {
 
     /// Event handler for the success of write.
     fn on_write_finished(&self, cid: u64, pr: ProcessResult, result: EngineResult<()>, tag: &str) {
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tag, "write_finish"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).write_finish.inc();
 
         debug!("write command finished"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
@@ -451,9 +446,8 @@ impl<E: Engine> Scheduler<E> {
             },
         };
         if let ProcessResult::NextCommand { cmd } = pr {
-            SCHED_STAGE_COUNTER_VEC
-                .with_label_values(&[tag, "next_cmd"])
-                .inc();
+            let cmd_kind = get_command_kind_from_str(tag);
+            SCHED_STAGE_COUNTER_VEC.get(cmd_kind).next_cmd.inc();
             self.schedule_command(cmd, tctx.cb);
         } else {
             execute_callback(tctx.cb, pr);
@@ -473,9 +467,8 @@ impl<E: Engine> Scheduler<E> {
     ) {
         debug!("command waits for lock released"; "cid" => cid);
         let tctx = self.inner.dequeue_task_context(cid);
-        SCHED_STAGE_COUNTER_VEC
-            .with_label_values(&[tctx.tag, "lock_wait"])
-            .inc();
+        let cmd_kind = get_command_kind_from_str(tctx.tag);
+        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).lock_wait.inc();
         self.inner.waiter_mgr_scheduler.as_ref().unwrap().wait_for(
             start_ts,
             tctx.cb,
