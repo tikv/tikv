@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::executor::Selection;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSelectionExecutor;
@@ -12,6 +11,7 @@ use tikv::coprocessor::dag::executor::SelectionExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
+use crate::util::executor_descriptor::selection;
 use crate::util::FixtureBuilder;
 
 pub trait SelectionBencher {
@@ -39,8 +39,7 @@ impl SelectionBencher for NormalBencher {
 
     fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            let mut meta = Selection::new();
-            meta.set_conditions(exprs.to_vec().into());
+            let meta = selection(exprs).take_selection();
             let src = fb.clone().build_normal_fixture_executor();
             SelectionExecutor::new(
                 black_box(meta),

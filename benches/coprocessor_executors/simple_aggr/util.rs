@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use criterion::black_box;
 
-use tipb::executor::Aggregation;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSimpleAggregationExecutor;
@@ -12,12 +11,13 @@ use tikv::coprocessor::dag::executor::StreamAggExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
+use crate::util::executor_descriptor::simple_aggregate;
 use crate::util::FixtureBuilder;
 
 pub trait SimpleAggrBencher {
     fn name(&self) -> &'static str;
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr);
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]);
 
     fn box_clone(&self) -> Box<dyn SimpleAggrBencher>;
 }
@@ -38,10 +38,9 @@ impl SimpleAggrBencher for NormalBencher {
         "normal"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            let mut meta = Aggregation::new();
-            meta.mut_agg_func().push(aggr_expr.clone());
+            let meta = simple_aggregate(aggr_expr).take_aggregation();
             let src = fb.clone().build_normal_fixture_executor();
             StreamAggExecutor::new(
                 black_box(Arc::new(EvalConfig::default())),
@@ -67,13 +66,13 @@ impl SimpleAggrBencher for BatchBencher {
         "batch"
     }
 
-    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &Expr) {
+    fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, aggr_expr: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
             BatchSimpleAggregationExecutor::new(
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
-                black_box(vec![aggr_expr.clone()]),
+                black_box(aggr_expr.to_vec()),
             )
             .unwrap()
         })

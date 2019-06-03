@@ -6,40 +6,41 @@ use criterion::black_box;
 
 use tipb::expression::Expr;
 
-use tikv::coprocessor::dag::batch::executors::BatchStreamAggregationExecutor;
-use tikv::coprocessor::dag::executor::StreamAggExecutor;
+use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
+use tikv::coprocessor::dag::executor::TopNExecutor;
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
-use crate::util::executor_descriptor::stream_aggregate;
+use crate::util::executor_descriptor::top_n;
 use crate::util::FixtureBuilder;
 
-pub trait StreamAggrBencher {
+pub trait TopNBencher {
     fn name(&self) -> &'static str;
 
     fn bench(
         &self,
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
-        group_by_expr: &[Expr],
-        aggr_expr: &[Expr],
+        order_by_expr: &[Expr],
+        order_is_desc: &[bool],
+        n: usize,
     );
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher>;
+    fn box_clone(&self) -> Box<dyn TopNBencher>;
 }
 
-impl Clone for Box<dyn StreamAggrBencher> {
+impl Clone for Box<dyn TopNBencher> {
     #[inline]
     fn clone(&self) -> Self {
         self.box_clone()
     }
 }
 
-/// A bencher that will use normal stream aggregation executor to bench the giving aggregate
+/// A bencher that will use normal top N executor to bench the giving aggregate
 /// expression.
 pub struct NormalBencher;
 
-impl StreamAggrBencher for NormalBencher {
+impl TopNBencher for NormalBencher {
     fn name(&self) -> &'static str {
         "normal"
     }
@@ -48,32 +49,34 @@ impl StreamAggrBencher for NormalBencher {
         &self,
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
-        group_by_expr: &[Expr],
-        aggr_expr: &[Expr],
+        order_by_expr: &[Expr],
+        order_is_desc: &[bool],
+        n: usize,
     ) {
         crate::util::bencher::NormalNextAllBencher::new(|| {
-            let meta = stream_aggregate(aggr_expr, group_by_expr).take_aggregation();
+            assert_eq!(order_by_expr.len(), order_is_desc.len());
+            let meta = top_n(order_by_expr, order_is_desc, n).take_topN();
             let src = fb.clone().build_normal_fixture_executor();
-            StreamAggExecutor::new(
+            TopNExecutor::new(
+                black_box(meta),
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
-                black_box(meta),
             )
             .unwrap()
         })
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher> {
+    fn box_clone(&self) -> Box<dyn TopNBencher> {
         Box::new(Self)
     }
 }
 
-/// A bencher that will use batch stream aggregation executor to bench the giving aggregate
+/// A bencher that will use batch top N executor to bench the giving aggregate
 /// expression.
 pub struct BatchBencher;
 
-impl StreamAggrBencher for BatchBencher {
+impl TopNBencher for BatchBencher {
     fn name(&self) -> &'static str {
         "batch"
     }
@@ -82,23 +85,25 @@ impl StreamAggrBencher for BatchBencher {
         &self,
         b: &mut criterion::Bencher,
         fb: &FixtureBuilder,
-        group_by_expr: &[Expr],
-        aggr_expr: &[Expr],
+        order_by_expr: &[Expr],
+        order_is_desc: &[bool],
+        n: usize,
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            BatchStreamAggregationExecutor::new(
+            BatchTopNExecutor::new(
                 black_box(Arc::new(EvalConfig::default())),
                 black_box(Box::new(src)),
-                black_box(group_by_expr.to_vec()),
-                black_box(aggr_expr.to_vec()),
+                black_box(order_by_expr.to_vec()),
+                black_box(order_is_desc.to_vec()),
+                black_box(n),
             )
             .unwrap()
         })
         .bench(b);
     }
 
-    fn box_clone(&self) -> Box<dyn StreamAggrBencher> {
+    fn box_clone(&self) -> Box<dyn TopNBencher> {
         Box::new(Self)
     }
 }
