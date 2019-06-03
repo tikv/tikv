@@ -156,8 +156,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
     #[allow(clippy::transmute_ptr_to_ptr)]
     fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let src_schema_unbounded =
-            unsafe { std::mem::transmute::<&[FieldType], &[FieldType]>(self.src.schema()) };
+        let src_schema_unbounded = unsafe { &*(self.src.schema() as *const _) };
         for expr in self.order_exprs.iter() {
             expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
         }
@@ -165,10 +164,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         let data = Rc::pin(data);
 
         let eval_offset = self.eval_columns_buffer_unsafe.len();
-        let order_exprs_unbounded =
-            unsafe { std::mem::transmute::<&[RpnExpression], &[RpnExpression]>(&self.order_exprs) };
-        let data_unbounded =
-            unsafe { std::mem::transmute::<&LazyBatchColumnVec, &LazyBatchColumnVec>(&data) };
+        let order_exprs_unbounded = unsafe { &*(&*self.order_exprs as *const [RpnExpression]) };
+        let data_unbounded = unsafe { &*(&*data as *const _) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
                 .push(expr_unbounded.eval_unchecked(
