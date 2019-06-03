@@ -1042,6 +1042,7 @@ impl Write for Snap {
 
             let left = (cf_file.size - cf_file.written_size) as usize;
             if left == 0 {
+                cf_file.file.as_mut().unwrap().sync_all()?;
                 self.cf_index += 1;
                 continue;
             }
@@ -1597,7 +1598,12 @@ pub mod tests {
             let handle = rocks::util::get_cf_handle(&kv, CF_RAFT)?;
             kv.put_msg_cf(handle, &keys::region_state_key(region_id), &region_state)?;
         }
-        Ok(Engines { kv, raft })
+        let shared_block_cache = false;
+        Ok(Engines {
+            kv,
+            raft,
+            shared_block_cache,
+        })
     }
 
     pub fn get_kv_count(snap: &DbSnapshot) -> usize {

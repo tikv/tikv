@@ -71,6 +71,13 @@ impl Callback {
             other => panic!("expect Callback::Read(..), got {:?}", other),
         }
     }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            Callback::None => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Callback {
@@ -200,6 +207,8 @@ pub enum CasualMessage {
     },
     /// Clear region size cache.
     ClearRegionSize,
+    /// Indicate a target region is overlapped.
+    RegionOverlapped,
 }
 
 impl fmt::Debug for CasualMessage {
@@ -238,6 +247,7 @@ impl fmt::Debug for CasualMessage {
                 fmt,
                 "clear region size"
             },
+            CasualMessage::RegionOverlapped => write!(fmt, "RegionOverlapped"),
         }
     }
 }
@@ -286,6 +296,8 @@ pub enum PeerMsg {
     Noop,
     /// Message that is not important and can be dropped occasionally.
     CasualMessage(CasualMessage),
+    /// Ask region to report a heartbeat to PD.
+    HeartbeatPd,
 }
 
 impl fmt::Debug for PeerMsg {
@@ -303,6 +315,7 @@ impl fmt::Debug for PeerMsg {
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
+            PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
         }
     }
 }

@@ -1,4 +1,4 @@
-![tikv_logo](images/tikv-logo.png)
+<img src="images/tikv-logo.png" alt="tikv_logo" width="300"/>
 
 [![Build Status](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/badge/icon)](https://internal.pingcap.net/idc-jenkins/job/build_tikv_master/)
 [![Coverage Status](https://coveralls.io/repos/github/tikv/tikv/badge.svg?branch=master)](https://coveralls.io/github/tikv/tikv?branch=master)
@@ -191,7 +191,7 @@ size, disability, ethnicity, sex characteristics, gender identity and expression
 level of experience, education, socio-economic status, nationality, personal
 appearance, race, religion, or sexual identity and orientation.
 
-### Socia Media
+### Social Media
 
 - [Twitter](https://twitter.com/tikvproject)
 - [Blog](https://tikv.org/blog/)

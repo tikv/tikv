@@ -116,9 +116,9 @@ impl From<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
     }
 }
 
-impl Into<debugpb::BottommostLevelCompaction> for BottommostLevelCompaction {
-    fn into(self) -> debugpb::BottommostLevelCompaction {
-        match self.0 {
+impl From<BottommostLevelCompaction> for debugpb::BottommostLevelCompaction {
+    fn from(bottommost: BottommostLevelCompaction) -> debugpb::BottommostLevelCompaction {
+        match bottommost.0 {
             DBBottommostLevelCompaction::Skip => debugpb::BottommostLevelCompaction::Skip,
             DBBottommostLevelCompaction::Force => debugpb::BottommostLevelCompaction::Force,
             DBBottommostLevelCompaction::IfHaveCompactionFilter => {
@@ -665,6 +665,26 @@ impl Debugger {
             })
     }
 
+    fn modify_block_cache_size(&self, db: DBType, cf_name: &str, config_value: &str) -> Result<()> {
+        use super::CONFIG_ROCKSDB_GAUGE;
+        let rocksdb = self.get_db_from_type(db)?;
+        let handle = box_try!(get_cf_handle(rocksdb, cf_name));
+        let opt = rocksdb.get_options_cf(handle);
+        let capacity = ReadableSize::from_str(config_value);
+        if capacity.is_err() {
+            return Err(Error::InvalidArgument(format!(
+                "bad block cache size: {:?}",
+                capacity.unwrap_err()
+            )));
+        }
+        let cache_size = capacity.unwrap().0;
+        box_try!(opt.set_block_cache_capacity(cache_size));
+        CONFIG_ROCKSDB_GAUGE
+            .with_label_values(&[cf_name, "block_cache_size"])
+            .set(cache_size as f64);
+        Ok(())
+    }
+
     pub fn modify_tikv_config(
         &self,
         module: MODULE,
@@ -672,53 +692,71 @@ impl Debugger {
         config_value: &str,
     ) -> Result<()> {
         use super::CONFIG_ROCKSDB_GAUGE;
-        let db = match module {
-            MODULE::KVDB => DBType::KV,
-            MODULE::RAFTDB => DBType::RAFT,
-            _ => return Err(Error::NotFound(format!("unsupported module: {:?}", module))),
-        };
-        let rocksdb = self.get_db_from_type(db)?;
-        let vec: Vec<&str> = config_name.split('.').collect();
-        if vec.len() == 1 {
-            box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
-        } else if vec.len() == 2 {
-            let cf = vec[0];
-            let config_name = vec[1];
-            validate_db_and_cf(db, cf)?;
-
-            let handle = box_try!(get_cf_handle(rocksdb, cf));
-            // currently we can't modify block_cache_size via set_options_cf
-            if config_name == "block_cache_size" {
-                let opt = rocksdb.get_options_cf(handle);
-                let capacity = ReadableSize::from_str(config_value);
-                if capacity.is_err() {
+        match module {
+            MODULE::STORAGE => {
+                if config_name != "block_cache.capacity" {
                     return Err(Error::InvalidArgument(format!(
-                        "bad block cache size: {:?}",
-                        capacity.unwrap_err()
+                        "bad argument: {}",
+                        config_name
                     )));
                 }
-                let cache_size = capacity.unwrap().0;
-                box_try!(opt.set_block_cache_capacity(cache_size));
-                CONFIG_ROCKSDB_GAUGE
-                    .with_label_values(&[cf, config_name])
-                    .set(cache_size as f64);
-            } else {
-                let mut opt = Vec::new();
-                opt.push((config_name, config_value));
-                box_try!(rocksdb.set_options_cf(handle, &opt));
-                if let Ok(v) = config_value.parse::<f64>() {
-                    CONFIG_ROCKSDB_GAUGE
-                        .with_label_values(&[cf, config_name])
-                        .set(v);
+                if !self.engines.shared_block_cache {
+                    return Err(Error::InvalidArgument(
+                        "shared block cache is disabled".to_string(),
+                    ));
                 }
+                // Hack: since all CFs in both kvdb and raftdb share a block cache, we can change
+                // the size through any of them. Here we change it through default CF in kvdb.
+                // A better way to do it is to hold the cache reference somewhere, and use it to
+                // change cache size.
+                self.modify_block_cache_size(DBType::KV, CF_DEFAULT, config_value)
             }
-        } else {
-            return Err(Error::InvalidArgument(format!(
-                "bad argument: {}",
-                config_name
-            )));
+            MODULE::KVDB | MODULE::RAFTDB => {
+                let db = if module == MODULE::KVDB {
+                    DBType::KV
+                } else {
+                    DBType::RAFT
+                };
+                let rocksdb = self.get_db_from_type(db)?;
+                let vec: Vec<&str> = config_name.split('.').collect();
+                if vec.len() == 1 {
+                    box_try!(rocksdb.set_db_options(&[(config_name, config_value)]));
+                } else if vec.len() == 2 {
+                    let cf = vec[0];
+                    let config_name = vec[1];
+                    validate_db_and_cf(db, cf)?;
+
+                    // currently we can't modify block_cache_size via set_options_cf
+                    if config_name == "block_cache_size" {
+                        if self.engines.shared_block_cache {
+                            return Err(Error::InvalidArgument(
+                                "shared block cache is enabled, change cache size through \
+                                 block_cache.capacity in storage module instead"
+                                    .to_string(),
+                            ));
+                        }
+                        self.modify_block_cache_size(db, cf, config_value)?
+                    } else {
+                        let handle = box_try!(get_cf_handle(rocksdb, cf));
+                        let mut opt = Vec::new();
+                        opt.push((config_name, config_value));
+                        box_try!(rocksdb.set_options_cf(handle, &opt));
+                        if let Ok(v) = config_value.parse::<f64>() {
+                            CONFIG_ROCKSDB_GAUGE
+                                .with_label_values(&[cf, config_name])
+                                .set(v);
+                        }
+                    }
+                } else {
+                    return Err(Error::InvalidArgument(format!(
+                        "bad argument: {}",
+                        config_name
+                    )));
+                }
+                Ok(())
+            }
+            _ => Err(Error::NotFound(format!("unsupported module: {:?}", module))),
         }
-        Ok(())
     }
 
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -1133,6 +1171,7 @@ impl MvccInfoIterator {
                 LockType::Put => lock_info.set_field_type(Op::Put),
                 LockType::Delete => lock_info.set_field_type(Op::Del),
                 LockType::Lock => lock_info.set_field_type(Op::Lock),
+                LockType::Pessimistic => lock_info.set_field_type(Op::PessimisticLock),
             }
             lock_info.set_start_ts(lock.ts);
             lock_info.set_primary(lock.primary);
@@ -1522,7 +1561,8 @@ mod tests {
             .unwrap(),
         );
 
-        let engines = Engines::new(Arc::clone(&engine), engine);
+        let shared_block_cache = false;
+        let engines = Engines::new(Arc::clone(&engine), engine, shared_block_cache);
         Debugger::new(engines)
     }
 
@@ -1685,7 +1725,7 @@ mod tests {
         for &(prefix, tp, value, version) in &cf_lock_data {
             let encoded_key = Key::from_raw(prefix);
             let key = keys::data_key(encoded_key.as_encoded().as_slice());
-            let lock = Lock::new(tp, value.to_vec(), version, 0, None);
+            let lock = Lock::new(tp, value.to_vec(), version, 0, None, false, 0);
             let value = lock.to_bytes();
             engine
                 .put_cf(lock_cf, key.as_slice(), value.as_slice())
@@ -2043,7 +2083,7 @@ mod tests {
             } else {
                 None
             };
-            let lock = Lock::new(tp, vec![], ts, 0, v);
+            let lock = Lock::new(tp, vec![], ts, 0, v, false, 0);
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }
         for (key, start_ts, commit_ts, tp, short_value, expect) in write {

@@ -13,7 +13,9 @@ use tikv_util::collections::HashSet;
 
 use crate::coprocessor::codec::datum::{self, Datum, DatumEncoder};
 use crate::coprocessor::codec::table::{self, RowColsDict};
-use crate::coprocessor::dag::exec_summary::ExecSummary;
+use crate::coprocessor::dag::exec_summary::{
+    ExecSummary, ExecSummaryCollector, WithSummaryCollector,
+};
 use crate::coprocessor::dag::expr::{EvalContext, EvalWarnings};
 use crate::coprocessor::util;
 use crate::coprocessor::*;
@@ -65,9 +67,7 @@ impl ExprColumnRefVisitor {
             }
             self.cols_offset.insert(offset);
         } else {
-            for sub_expr in expr.get_children() {
-                self.visit(sub_expr)?;
-            }
+            self.batch_visit(expr.get_children())?;
         }
         Ok(())
     }
@@ -126,10 +126,12 @@ impl Row {
         Row::Agg(AggCols { suffix, value })
     }
 
-    pub fn take_origin(self) -> OriginCols {
+    pub fn take_origin(self) -> Result<OriginCols> {
         match self {
-            Row::Origin(row) => row,
-            _ => unreachable!(),
+            Row::Origin(row) => Ok(row),
+            _ => Err(box_err!(
+                "unexpected: aggregation columns cannot take origin"
+            )),
         }
     }
 
@@ -257,13 +259,109 @@ pub trait Executor {
     fn stop_scan(&mut self) -> Option<KeyRange> {
         None
     }
+
+    fn with_summary_collector<C: ExecSummaryCollector>(
+        self,
+        summary_collector: C,
+    ) -> WithSummaryCollector<C, Self>
+    where
+        Self: Sized,
+    {
+        WithSummaryCollector {
+            summary_collector,
+            inner: self,
+        }
+    }
+}
+
+impl<C: ExecSummaryCollector, T: Executor> Executor for WithSummaryCollector<C, T> {
+    fn next(&mut self) -> Result<Option<Row>> {
+        let timer = self.summary_collector.on_start_iterate();
+        let ret = self.inner.next();
+        if let Ok(Some(_)) = ret {
+            self.summary_collector.on_finish_iterate(timer, 1);
+        } else {
+            self.summary_collector.on_finish_iterate(timer, 0);
+        }
+        ret
+    }
+
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        self.inner.collect_output_counts(counts);
+    }
+
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        self.inner.collect_metrics_into(metrics);
+    }
+
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        self.inner.collect_execution_summaries(target);
+        self.summary_collector.collect_into(target);
+    }
+
+    fn get_len_of_columns(&self) -> usize {
+        self.inner.get_len_of_columns()
+    }
+
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        self.inner.take_eval_warnings()
+    }
+
+    fn start_scan(&mut self) {
+        self.inner.start_scan();
+    }
+
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        self.inner.stop_scan()
+    }
+}
+
+impl<T: Executor + ?Sized> Executor for Box<T> {
+    #[inline]
+    fn next(&mut self) -> Result<Option<Row>> {
+        (**self).next()
+    }
+
+    #[inline]
+    fn collect_output_counts(&mut self, counts: &mut Vec<i64>) {
+        (**self).collect_output_counts(counts)
+    }
+
+    #[inline]
+    fn collect_metrics_into(&mut self, metrics: &mut ExecutorMetrics) {
+        (**self).collect_metrics_into(metrics)
+    }
+
+    #[inline]
+    fn collect_execution_summaries(&mut self, target: &mut [ExecSummary]) {
+        (**self).collect_execution_summaries(target)
+    }
+
+    #[inline]
+    fn get_len_of_columns(&self) -> usize {
+        (**self).get_len_of_columns()
+    }
+
+    #[inline]
+    fn take_eval_warnings(&mut self) -> Option<EvalWarnings> {
+        (**self).take_eval_warnings()
+    }
+
+    #[inline]
+    fn start_scan(&mut self) {
+        (**self).start_scan()
+    }
+
+    #[inline]
+    fn stop_scan(&mut self) -> Option<KeyRange> {
+        (**self).stop_scan()
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use super::{Executor, TableScanExecutor};
     use crate::coprocessor::codec::{table, Datum};
-    use crate::coprocessor::dag::exec_summary::ExecSummaryCollectorDisabled;
     use crate::storage::kv::{Engine, Modify, RocksEngine, RocksSnapshot, TestEngineBuilder};
     use crate::storage::mvcc::MvccTxn;
     use crate::storage::SnapshotStore;
@@ -410,15 +508,6 @@ pub mod tests {
 
         let (snapshot, start_ts) = test_store.get_snapshot();
         let store = SnapshotStore::new(snapshot, start_ts, IsolationLevel::SI, true);
-        Box::new(
-            TableScanExecutor::table_scan(
-                ExecSummaryCollectorDisabled,
-                table_scan,
-                key_ranges,
-                store,
-                true,
-            )
-            .unwrap(),
-        )
+        Box::new(TableScanExecutor::table_scan(table_scan, key_ranges, store, true).unwrap())
     }
 }
