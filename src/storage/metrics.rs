@@ -33,7 +33,7 @@ make_static_metric! {
     pub label_enum CommandStageKind {
         new,
         snapshot,
-        async_snapshot_err
+        async_snapshot_err,
         snapshot_ok,
         snapshot_err,
         read_finish,
@@ -58,35 +58,6 @@ make_static_metric! {
     pub struct SchedStageCounterVec: IntCounter {
         "type" => CommandKind,
         "stage" => CommandStageKind,
-    }
-}
-
-pub fn get_command_kind_from_str(tag: &str) -> CommandKind {
-    match tag {
-        "prewrite" => CommandKind::prewrite,
-        "pessimistic_lock" => CommandKind::pessimistic_lock,
-        "commit" => CommandKind::commit,
-        "cleanup" => CommandKind::cleanup,
-        "rollback" => CommandKind::rollback,
-        "scan_lock" => CommandKind::scan_lock,
-        "resolve_lock" => CommandKind::resolve_lock,
-        "resolve_lock_lite" => CommandKind::resolve_lock_lite,
-        "gc" => CommandKind::gc,
-        "unsafe_destroy_range" => CommandKind::unsafe_destroy_range,
-        "delete_range" => CommandKind::delete_range,
-        "pause" => CommandKind::pause,
-        "key_mvcc" => CommandKind::key_mvcc,
-        "start_ts_mvcc" => CommandKind::start_ts_mvcc,
-        "raw_get" => CommandKind::raw_get,
-        "raw_batch_get" => CommandKind::raw_batch_get,
-        "raw_scan" => CommandKind::raw_scan,
-        "raw_batch_scan" => CommandKind::raw_batch_scan,
-        "raw_put" => CommandKind::raw_put,
-        "raw_batch_put" => CommandKind::raw_batch_put,
-        "raw_delete" => CommandKind::raw_delete,
-        "raw_delete_range" => CommandKind::raw_delete_range,
-        "raw_batch_delete" => CommandKind::raw_batch_delete,
-        _ => unimplemented!("unknown command kind {}", tag),
     }
 }
 

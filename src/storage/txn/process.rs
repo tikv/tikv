@@ -70,7 +70,7 @@ pub fn execute_callback(callback: StorageCb, pr: ProcessResult) {
 /// Task is a running command.
 pub struct Task {
     pub cid: u64,
-    pub tag: &'static str,
+    pub tag: CommandKind,
 
     cmd: Command,
     ts: u64,
@@ -163,14 +163,12 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
         match snapshot {
             Ok(snapshot) => {
-                let cmd_kind = get_command_kind_from_str(task.tag);
-                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).snapshot_ok.inc();
+                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_ok.inc();
 
                 self.process_by_worker(cb_ctx, snapshot, task);
             }
             Err(err) => {
-                let cmd_kind = get_command_kind_from_str(task.tag);
-                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).snapshot_err.inc();
+                SCHED_STAGE_COUNTER_VEC.get(task.tag).snapshot_err.inc();
 
                 error!("get snapshot failed"; "cid" => task.cid, "err" => ?err);
                 self.take_pool().pool.spawn(move || {
@@ -190,8 +188,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
 
     /// Delivers a command to a worker thread for processing.
     fn process_by_worker(mut self, cb_ctx: CbContext, snapshot: E::Snap, mut task: Task) {
-        let cmd_kind = get_command_kind_from_str(task.tag);
-        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).process.inc();
+        SCHED_STAGE_COUNTER_VEC.get(task.tag).process.inc();
         debug!(
             "process cmd with snapshot";
             "cid" => task.cid, "cb_ctx" => ?cb_ctx
@@ -216,7 +213,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             } else {
                 with_tls_engine(|engine| self.process_write(engine, snapshot, task))
             };
-            tls_add_statistics(tag, &statistics);
+            tls_add_statistics(tag.get_str(), &statistics);
             slow_log!(
                 timer,
                 "[region {}] scheduler handle command: {}, ts: {}",
@@ -225,7 +222,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 ts
             );
 
-            tls_collect_read_duration(tag, read_duration.elapsed());
+            tls_collect_read_duration(tag.get_str(), read_duration.elapsed());
             future::ok::<_, ()>(())
         });
     }
@@ -273,8 +270,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                 pr,
                 lock_info,
             }) => {
-                let cmd_kind = get_command_kind_from_str(tag);
-                SCHED_STAGE_COUNTER_VEC.get(cmd_kind).write.inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
 
                 if lock_info.is_some() {
                     let (lock, is_first_lock) = lock_info.unwrap();
@@ -308,15 +304,14 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                                 },
                             );
                             KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .with_label_values(&[tag])
+                                .with_label_values(&[tag.get_str()])
                                 .observe(rows as f64);
                             future::ok::<_, ()>(())
                         })
                     });
 
                     if let Err(e) = engine.async_write(&ctx, to_be_write, engine_cb) {
-                        let cmd_kind = get_command_kind_from_str(tag);
-                        SCHED_STAGE_COUNTER_VEC.get(cmd_kind).async_write_err.inc();
+                        SCHED_STAGE_COUNTER_VEC.get(tag).async_write_err.inc();
 
                         error!("engine async_write failed"; "cid" => cid, "err" => ?e);
                         let err = e.into();
@@ -329,11 +324,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
             // Write prepare failure typically means conflicting transactions are detected. Delivers the
             // error to the callback, and releases the latches.
             Err(err) => {
-                let cmd_kind = get_command_kind_from_str(tag);
-                SCHED_STAGE_COUNTER_VEC
-                    .get(cmd_kind)
-                    .prepare_write_err
-                    .inc();
+                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
 
                 debug!("write command failed at prewrite"; "cid" => cid);
                 Msg::FinishedWithErr { cid, err, tag }
@@ -427,7 +418,7 @@ fn process_read_impl<E: Engine>(
                 locks.push(lock_info);
             }
 
-            tls_collect_keyread_histogram_vec(tag, locks.len() as f64);
+            tls_collect_keyread_histogram_vec(tag.get_str(), locks.len() as f64);
 
             Ok(ProcessResult::Locks { locks })
         }
@@ -452,7 +443,7 @@ fn process_read_impl<E: Engine>(
             );
             statistics.add(reader.get_statistics());
             let (kv_pairs, has_remain) = result?;
-            tls_collect_keyread_histogram_vec(tag, kv_pairs.len() as f64);
+            tls_collect_keyread_histogram_vec(tag.get_str(), kv_pairs.len() as f64);
 
             if kv_pairs.is_empty() {
                 Ok(ProcessResult::Res)
