@@ -20,6 +20,7 @@
 //! is ensured by the transaction protocol implemented in the client library, which is transparent
 //! to the scheduler.
 
+use spinlock::Spinlock;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -139,7 +140,7 @@ impl TaskContext {
 
 struct SchedulerInner {
     // slot_id -> { cid -> `TaskContext` } in the slot.
-    task_contexts: Vec<Mutex<HashMap<u64, TaskContext>>>,
+    task_contexts: Vec<Spinlock<HashMap<u64, TaskContext>>>,
 
     // cmd id generator
     id_alloc: AtomicU64,
@@ -177,7 +178,7 @@ impl SchedulerInner {
     }
 
     fn dequeue_task(&self, cid: u64) -> Task {
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut tasks = self.task_contexts[id_index(cid)].lock();
         let task = tasks.get_mut(&cid).unwrap().task.take().unwrap();
         assert_eq!(task.cid, cid);
         task
@@ -193,7 +194,7 @@ impl SchedulerInner {
         SCHED_WRITING_BYTES_GAUGE.set(running_write_bytes + tctx.write_bytes as i64);
         SCHED_CONTEX_GAUGE.inc();
 
-        let mut tasks = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut tasks = self.task_contexts[id_index(cid)].lock();
         if tasks.insert(cid, tctx).is_some() {
             panic!("TaskContext cid={} shouldn't exist", cid);
         }
@@ -202,7 +203,6 @@ impl SchedulerInner {
     fn dequeue_task_context(&self, cid: u64) -> TaskContext {
         let tctx = self.task_contexts[id_index(cid)]
             .lock()
-            .unwrap()
             .remove(&cid)
             .unwrap();
 
@@ -224,7 +224,7 @@ impl SchedulerInner {
     ///
     /// Returns `true` if successful; returns `false` otherwise.
     fn acquire_lock(&self, cid: u64) -> bool {
-        let mut task_contexts = self.task_contexts[id_index(cid)].lock().unwrap();
+        let mut task_contexts = self.task_contexts[id_index(cid)].lock();
         let tctx = task_contexts.get_mut(&cid).unwrap();
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
@@ -259,7 +259,7 @@ impl<E: Engine> Scheduler<E> {
         info!("Scheduler::new is called to initialize the transaction scheduler");
         let mut task_contexts = Vec::with_capacity(TASKS_SLOTS_NUM);
         for _ in 0..TASKS_SLOTS_NUM {
-            task_contexts.push(Mutex::new(Default::default()));
+            task_contexts.push(Spinlock::new(Default::default()));
         }
 
         let inner = Arc::new(SchedulerInner {
