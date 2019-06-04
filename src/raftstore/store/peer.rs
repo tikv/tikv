@@ -69,6 +69,15 @@ impl ReadIndexRequest {
     }
 }
 
+impl Drop for ReadIndexRequest {
+    fn drop(&mut self) {
+        let dur = (monotonic_raw_now() - self.renew_lease_time)
+            .to_std()
+            .unwrap();
+        RAFT_READ_INDEX_PENDING_DURATION.observe(duration_to_sec(dur));
+    }
+}
+
 #[derive(Default)]
 struct ReadIndexQueue {
     id_allocator: u64,
@@ -84,6 +93,7 @@ impl ReadIndexQueue {
 
     fn clear_uncommitted(&mut self, term: u64) {
         for mut read in self.reads.drain(self.ready_cnt..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_stale_req(term, cb);
             }
@@ -495,6 +505,7 @@ impl Peer {
         }
 
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             for (_, cb) in read.cmds.drain(..) {
                 apply::notify_req_region_removed(region.get_id(), cb);
             }
@@ -1267,6 +1278,8 @@ impl Peer {
         if self.pending_reads.ready_cnt > 0 {
             for _ in 0..self.pending_reads.ready_cnt {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
+
                 let is_read_index_request = read.cmds.len() == 1
                     && read.cmds[0].0.get_requests().len() == 1
                     && read.cmds[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
@@ -1305,6 +1318,7 @@ impl Peer {
             for state in &ready.read_states {
                 let mut read = self.pending_reads.reads.pop_front().unwrap();
                 assert_eq!(state.request_ctx.as_slice(), read.binary_id());
+                RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                 for (req, cb) in read.cmds.drain(..) {
                     cb.invoke_read(self.handle_read(ctx, req, true, Some(state.index)));
                 }
@@ -1376,6 +1390,7 @@ impl Peer {
             if self.pending_reads.ready_cnt > 0 && self.ready_to_handle_read() {
                 for _ in 0..self.pending_reads.ready_cnt {
                     let mut read = self.pending_reads.reads.pop_front().unwrap();
+                    RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
                     for (req, cb) in read.cmds.drain(..) {
                         cb.invoke_read(self.handle_read(ctx, req, true, read.read_index));
                     }
@@ -1804,6 +1819,7 @@ impl Peer {
                         let max_lease = poll_ctx.cfg.raft_store_max_leader_lease();
                         if read.renew_lease_time + max_lease > renew_lease_time {
                             read.cmds.push((req, cb));
+                            RAFT_READ_INDEX_PENDING_COUNT.inc();
                             return false;
                         }
                     }
@@ -1835,6 +1851,7 @@ impl Peer {
             return false;
         }
 
+        RAFT_READ_INDEX_PENDING_COUNT.inc();
         let mut cmds = MustConsumeVec::with_capacity("callback of index read", 1);
         cmds.push((req, cb));
         self.pending_reads.reads.push_back(ReadIndexRequest {
@@ -2118,6 +2135,7 @@ impl Peer {
     pub fn stop(&mut self) {
         self.mut_store().cancel_applying_snap();
         for mut read in self.pending_reads.reads.drain(..) {
+            RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds.len() as i64);
             read.cmds.clear();
         }
     }
