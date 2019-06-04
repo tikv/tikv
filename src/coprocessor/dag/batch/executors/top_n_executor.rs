@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -43,12 +42,12 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// This field is placed before `order_exprs` and `src` because it relies on data in
     /// those fields and we want this field to be dropped first.
     #[allow(clippy::box_vec)]
-    eval_columns_buffer_unsafe: Pin<Box<Vec<RpnStackNode<'static>>>>,
+    eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
 
-    order_exprs: Pin<Vec<RpnExpression>>,
+    order_exprs: Box<[RpnExpression]>,
 
     /// Whether or not it is descending order for each order by column.
-    order_is_desc: Pin<Vec<bool>>,
+    order_is_desc: Box<[bool]>,
 
     n: usize,
 
@@ -85,9 +84,9 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         Self {
             heap: BinaryHeap::new(),
-            eval_columns_buffer_unsafe: Box::pin(Vec::new()),
-            order_exprs: Pin::new(order_exprs),
-            order_is_desc: Pin::new(order_is_desc),
+            eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
             context: EvalContext::default(),
@@ -120,9 +119,9 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             // Avoid large N causing OOM
             heap: BinaryHeap::with_capacity(n.min(1024)),
             // Simply large enough to avoid repeated allocations
-            eval_columns_buffer_unsafe: Box::pin(Vec::with_capacity(512)),
-            order_exprs: Pin::new(order_exprs),
-            order_is_desc: Pin::new(order_is_desc),
+            eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
+            order_exprs: order_exprs.into_boxed_slice(),
+            order_is_desc: order_is_desc.into_boxed_slice(),
             n,
 
             context: EvalContext::new(config),
@@ -156,19 +155,16 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
     #[allow(clippy::transmute_ptr_to_ptr)]
     fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let src_schema_unbounded =
-            unsafe { std::mem::transmute::<&[FieldType], &[FieldType]>(self.src.schema()) };
+        let src_schema_unbounded = unsafe { &*(self.src.schema() as *const _) };
         for expr in self.order_exprs.iter() {
             expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
         }
 
-        let data = Rc::pin(data);
+        let data = Rc::new(data);
 
         let eval_offset = self.eval_columns_buffer_unsafe.len();
-        let order_exprs_unbounded =
-            unsafe { std::mem::transmute::<&[RpnExpression], &[RpnExpression]>(&self.order_exprs) };
-        let data_unbounded =
-            unsafe { std::mem::transmute::<&LazyBatchColumnVec, &LazyBatchColumnVec>(&data) };
+        let order_exprs_unbounded = unsafe { &*(&*self.order_exprs as *const [RpnExpression]) };
+        let data_unbounded = unsafe { &*(&*data as *const _) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
                 .push(expr_unbounded.eval_unchecked(
@@ -181,9 +177,9 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
         for row_index in 0..data.rows_len() {
             let row = HeapItemUnsafe {
-                order_is_desc_ptr: (&self.order_is_desc).into(),
+                order_is_desc_ptr: (&*self.order_is_desc).into(),
                 source_column_data: data.clone(),
-                eval_columns_buffer_ptr: (&self.eval_columns_buffer_unsafe).into(),
+                eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
                 eval_columns_offset: eval_offset,
                 row_index,
             };
@@ -310,20 +306,18 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
 /// not dropped). Thus it is called unsafe.
 pub struct HeapItemUnsafe {
     /// A pointer to the `order_is_desc` field in `BatchTopNExecutor`.
-    order_is_desc_ptr: NonNull<Pin<Vec<bool>>>,
+    order_is_desc_ptr: NonNull<[bool]>,
     /// The source columns that evaluated column in this structure is referring to.
     ///
     /// Multiple `HeapItemUnsafe` may share the same source column. Thus source columns
     /// are placed behind a reference counter. However, there won't be a place other than
     /// `HeapItemUnsafe` holding this reference counter, so Rc won't break
     /// `BatchTopNExecutor: Send`.
-    source_column_data: Pin<Rc<LazyBatchColumnVec>>,
+    source_column_data: Rc<LazyBatchColumnVec>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
-    ///
-    /// Note: After updating to use latest `Pin`, the Box can be removed.
     #[allow(clippy::box_vec)]
-    eval_columns_buffer_ptr: NonNull<Pin<Box<Vec<RpnStackNode<'static>>>>>,
+    eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
     /// The begin offset of the evaluated columns stored in the buffer.
     ///
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
@@ -335,15 +329,14 @@ pub struct HeapItemUnsafe {
 
 impl HeapItemUnsafe {
     fn get_order_is_desc(&self) -> &[bool] {
-        let pinned = unsafe { self.order_is_desc_ptr.as_ref() };
-        Pin::get_ref(pinned.as_ref())
+        unsafe { self.order_is_desc_ptr.as_ref() }
     }
 
     fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
         let offset_begin = self.eval_columns_offset;
         let offset_end = offset_begin + len;
-        let pinned = unsafe { self.eval_columns_buffer_ptr.as_ref() };
-        &Pin::get_ref(pinned.as_ref())[offset_begin..offset_end]
+        let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
+        &vec_buf[offset_begin..offset_end]
     }
 }
 
