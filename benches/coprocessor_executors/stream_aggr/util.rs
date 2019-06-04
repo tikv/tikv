@@ -7,7 +7,8 @@ use criterion::black_box;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchStreamAggregationExecutor;
-use tikv::coprocessor::dag::executor::StreamAggExecutor;
+use tikv::coprocessor::dag::batch::interface::BatchExecutor;
+use tikv::coprocessor::dag::executor::{Executor, StreamAggExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
@@ -54,12 +55,14 @@ impl StreamAggrBencher for NormalBencher {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let meta = stream_aggregate(aggr_expr, group_by_expr).take_aggregation();
             let src = fb.clone().build_normal_fixture_executor();
-            StreamAggExecutor::new(
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-                black_box(meta),
-            )
-            .unwrap()
+            Box::new(
+                StreamAggExecutor::new(
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                    black_box(meta),
+                )
+                .unwrap(),
+            ) as Box<dyn Executor>
         })
         .bench(b);
     }
@@ -87,13 +90,15 @@ impl StreamAggrBencher for BatchBencher {
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            BatchStreamAggregationExecutor::new(
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-                black_box(group_by_expr.to_vec()),
-                black_box(aggr_expr.to_vec()),
-            )
-            .unwrap()
+            Box::new(
+                BatchStreamAggregationExecutor::new(
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                    black_box(group_by_expr.to_vec()),
+                    black_box(aggr_expr.to_vec()),
+                )
+                .unwrap(),
+            ) as Box<dyn BatchExecutor>
         })
         .bench(b);
     }

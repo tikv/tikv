@@ -7,7 +7,8 @@ use criterion::black_box;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchSelectionExecutor;
-use tikv::coprocessor::dag::executor::SelectionExecutor;
+use tikv::coprocessor::dag::batch::interface::BatchExecutor;
+use tikv::coprocessor::dag::executor::{Executor, SelectionExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
@@ -41,12 +42,14 @@ impl SelectionBencher for NormalBencher {
         crate::util::bencher::NormalNextAllBencher::new(|| {
             let meta = selection(exprs).take_selection();
             let src = fb.clone().build_normal_fixture_executor();
-            SelectionExecutor::new(
-                black_box(meta),
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-            )
-            .unwrap()
+            Box::new(
+                SelectionExecutor::new(
+                    black_box(meta),
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                )
+                .unwrap(),
+            ) as Box<dyn Executor>
         })
         .bench(b);
     }
@@ -67,12 +70,14 @@ impl SelectionBencher for BatchBencher {
     fn bench(&self, b: &mut criterion::Bencher, fb: &FixtureBuilder, exprs: &[Expr]) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            BatchSelectionExecutor::new(
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-                black_box(exprs.to_vec()),
-            )
-            .unwrap()
+            Box::new(
+                BatchSelectionExecutor::new(
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                    black_box(exprs.to_vec()),
+                )
+                .unwrap(),
+            ) as Box<dyn BatchExecutor>
         })
         .bench(b);
     }

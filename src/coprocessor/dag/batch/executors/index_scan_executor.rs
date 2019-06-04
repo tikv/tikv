@@ -88,7 +88,6 @@ impl<S: Store> BatchExecutor for BatchIndexScanExecutor<S> {
         self.0.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         self.0.next_batch(scan_rows)
     }

@@ -33,7 +33,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
     for NormalTableScanExecutorBuilder<T>
 {
     type T = T;
-    type E = TableScanExecutor<T>;
+    type E = Box<dyn Executor>;
     type P = TableScanParam;
 
     fn build(
@@ -55,7 +55,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next().unwrap().unwrap();
-        executor
+        Box::new(executor) as Box<dyn Executor>
     }
 }
 
@@ -65,7 +65,7 @@ pub struct BatchTableScanExecutorBuilder<T: TxnStore + 'static> {
 
 impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScanExecutorBuilder<T> {
     type T = T;
-    type E = BatchTableScanExecutor<T>;
+    type E = Box<dyn BatchExecutor>;
     type P = TableScanParam;
 
     fn build(
@@ -85,7 +85,7 @@ impl<T: TxnStore + 'static> scan_bencher::ScanExecutorBuilder for BatchTableScan
         // There is a step of building scanner in the first `next()` which cost time,
         // so we next() before hand.
         executor.next_batch(1);
-        executor
+        Box::new(executor) as Box<dyn BatchExecutor>
     }
 }
 

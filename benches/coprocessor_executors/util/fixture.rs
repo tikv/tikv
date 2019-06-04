@@ -324,7 +324,6 @@ impl BatchExecutor for BatchFixtureExecutor {
         &self.schema
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut columns = Vec::with_capacity(self.columns.len());
         for col in &mut self.columns {

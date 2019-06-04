@@ -29,7 +29,6 @@ pub enum VectorValue {
 }
 
 impl Clone for VectorValue {
-    #[inline]
     fn clone(&self) -> Self {
         // Implement `Clone` manually so that capacity can be preserved after clone.
         match_template_evaluable! {
@@ -43,7 +42,6 @@ impl Clone for VectorValue {
 impl VectorValue {
     /// Creates an empty `VectorValue` according to `eval_tp` and reserves capacity according
     /// to `capacity`.
-    #[inline]
     pub fn with_capacity(capacity: usize, eval_tp: EvalType) -> Self {
         match_template_evaluable! {
             TT, match eval_tp {
@@ -53,7 +51,6 @@ impl VectorValue {
     }
 
     /// Creates a new empty `VectorValue` with the same eval type.
-    #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         match_template_evaluable! {
             TT, match self {
@@ -63,7 +60,6 @@ impl VectorValue {
     }
 
     /// Returns the `EvalType` used to construct current column.
-    #[inline]
     pub fn eval_type(&self) -> EvalType {
         match_template_evaluable! {
             TT, match self {
@@ -73,7 +69,6 @@ impl VectorValue {
     }
 
     /// Returns the number of datums contained in this column.
-    #[inline]
     pub fn len(&self) -> usize {
         match_template_evaluable! {
             TT, match self {
@@ -93,7 +88,6 @@ impl VectorValue {
     /// Shortens the column, keeping the first `len` datums and dropping the rest.
     ///
     /// If `len` is greater than the column's current length, this has no effect.
-    #[inline]
     pub fn truncate(&mut self, len: usize) {
         match_template_evaluable! {
             TT, match self {
@@ -109,7 +103,6 @@ impl VectorValue {
     }
 
     /// Returns the number of elements this column can hold without reallocating.
-    #[inline]
     pub fn capacity(&self) -> usize {
         match_template_evaluable! {
             TT, match self {
@@ -144,7 +137,6 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if `other` does not have the same `EvalType` as `Self`.
-    #[inline]
     pub fn append(&mut self, other: &mut VectorValue) {
         match_template_evaluable! {
             TT, match self {
@@ -190,7 +182,6 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if index is out of range.
-    #[inline]
     pub fn get_scalar_ref(&self, index: usize) -> ScalarValueRef<'_> {
         match_template_evaluable! {
             TT, match self {
@@ -209,7 +200,6 @@ impl VectorValue {
     /// # Panics
     ///
     /// Panics if `field_type` doesn't match current column's type.
-    #[inline]
     #[allow(clippy::cast_lossless)]
     pub fn push_datum(
         &mut self,
@@ -217,68 +207,57 @@ impl VectorValue {
         time_zone: &Tz,
         field_type: &FieldType,
     ) -> Result<()> {
-        #[inline]
         fn decode_int(v: &mut &[u8]) -> Result<i64> {
             number::decode_i64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as i64".to_owned()))
         }
 
-        #[inline]
         fn decode_uint(v: &mut &[u8]) -> Result<u64> {
             number::decode_u64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as u64".to_owned()))
         }
 
-        #[inline]
         fn decode_var_int(v: &mut &[u8]) -> Result<i64> {
             number::decode_var_i64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_i64".to_owned()))
         }
 
-        #[inline]
         fn decode_var_uint(v: &mut &[u8]) -> Result<u64> {
             number::decode_var_u64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as var_u64".to_owned()))
         }
 
-        #[inline]
         fn decode_float(v: &mut &[u8]) -> Result<f64> {
             number::decode_f64(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as f64".to_owned()))
         }
 
-        #[inline]
         fn decode_decimal(v: &mut &[u8]) -> Result<Decimal> {
             Decimal::decode(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as decimal".to_owned()))
         }
 
-        #[inline]
         fn decode_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
             bytes::decode_bytes(v, false)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as bytes".to_owned()))
         }
 
-        #[inline]
         fn decode_compact_bytes(v: &mut &[u8]) -> Result<Vec<u8>> {
             bytes::decode_compact_bytes(v).map_err(|_| {
                 Error::InvalidDataType("Failed to decode data as compact bytes".to_owned())
             })
         }
 
-        #[inline]
         fn decode_json(v: &mut &[u8]) -> Result<Json> {
             Json::decode(v)
                 .map_err(|_| Error::InvalidDataType("Failed to decode data as json".to_owned()))
         }
 
-        #[inline]
         fn decode_duration_from_i64(v: i64) -> Result<Duration> {
             Duration::from_nanos(v, 0)
                 .map_err(|_| Error::InvalidDataType("Failed to decode i64 as duration".to_owned()))
         }
 
-        #[inline]
         fn decode_date_time_from_uint(
             v: u64,
             time_zone: &Tz,
@@ -596,7 +575,6 @@ macro_rules! impl_as_slice {
             /// # Panics
             ///
             /// Panics if the current column does not match the type.
-            #[inline]
             pub fn $name(&self) -> &[Option<$ty>] {
                 match self {
                     VectorValue::$ty(vec) => vec.as_slice(),
@@ -618,7 +596,6 @@ macro_rules! impl_as_slice {
 
         // TODO: We should only expose interface for push value, not the entire Vec.
         impl AsMut<Vec<Option<$ty>>> for VectorValue {
-            #[inline]
             fn as_mut(&mut self) -> &mut Vec<Option<$ty>> {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec,
@@ -658,7 +635,6 @@ macro_rules! impl_ext {
             /// # Panics
             ///
             /// Panics if the current column does not match the type.
-            #[inline]
             pub fn $push_name(&mut self, v: Option<$ty>) {
                 match self {
                     VectorValue::$ty(ref mut vec) => vec.push(v),

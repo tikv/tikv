@@ -24,7 +24,6 @@ impl From<Vec<LazyBatchColumn>> for LazyBatchColumnVec {
 }
 
 impl From<Vec<VectorValue>> for LazyBatchColumnVec {
-    #[inline]
     fn from(columns: Vec<VectorValue>) -> Self {
         LazyBatchColumnVec {
             columns: columns
@@ -47,7 +46,6 @@ impl LazyBatchColumnVec {
     }
 
     /// Creates a new empty `LazyBatchColumnVec` with the same number of columns and schema.
-    #[inline]
     pub fn clone_empty(&self, capacity: usize) -> Self {
         Self {
             columns: self

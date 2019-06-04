@@ -7,7 +7,7 @@ use criterion::black_box;
 use tipb::expression::Expr;
 
 use tikv::coprocessor::dag::batch::executors::BatchTopNExecutor;
-use tikv::coprocessor::dag::executor::TopNExecutor;
+use tikv::coprocessor::dag::executor::{Executor, TopNExecutor};
 use tikv::coprocessor::dag::expr::EvalConfig;
 
 use crate::util::bencher::Bencher;
@@ -57,12 +57,14 @@ impl TopNBencher for NormalBencher {
             assert_eq!(order_by_expr.len(), order_is_desc.len());
             let meta = top_n(order_by_expr, order_is_desc, n).take_topN();
             let src = fb.clone().build_normal_fixture_executor();
-            TopNExecutor::new(
-                black_box(meta),
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-            )
-            .unwrap()
+            Box::new(
+                TopNExecutor::new(
+                    black_box(meta),
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                )
+                .unwrap(),
+            ) as Box<dyn Executor>
         })
         .bench(b);
     }
@@ -91,14 +93,16 @@ impl TopNBencher for BatchBencher {
     ) {
         crate::util::bencher::BatchNextAllBencher::new(|| {
             let src = fb.clone().build_batch_fixture_executor();
-            BatchTopNExecutor::new(
-                black_box(Arc::new(EvalConfig::default())),
-                black_box(Box::new(src)),
-                black_box(order_by_expr.to_vec()),
-                black_box(order_is_desc.to_vec()),
-                black_box(n),
+            Box::new(
+                BatchTopNExecutor::new(
+                    black_box(Arc::new(EvalConfig::default())),
+                    black_box(Box::new(src)),
+                    black_box(order_by_expr.to_vec()),
+                    black_box(order_is_desc.to_vec()),
+                    black_box(n),
+                )
+                .unwrap(),
             )
-            .unwrap()
         })
         .bench(b);
     }

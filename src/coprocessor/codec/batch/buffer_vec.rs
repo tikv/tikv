@@ -255,7 +255,6 @@ impl<A: AsRef<[u8]>> Extend<A> for BufferVec {
 impl std::ops::Index<usize> for BufferVec {
     type Output = [u8];
 
-    #[inline]
     fn index(&self, index: usize) -> &[u8] {
         assert!(index < self.offsets.len());
         let start = self.offsets[index];
