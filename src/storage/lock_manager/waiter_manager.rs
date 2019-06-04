@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use super::deadlock::Scheduler as DetectorScheduler;
-use super::util::{extract_raw_key_from_process_result, gen_raw_key_hash_from_process_result};
+use super::util::extract_raw_key_from_process_result;
 use super::Lock;
 use crate::storage::mvcc::Error as MvccError;
 use crate::storage::txn::Error as TxnError;
@@ -236,13 +236,7 @@ impl WaiterManager {
 
         // If it is the first lock, deadlock never occur
         if !is_first_lock {
-            let lock = Lock {
-                ts: lock.ts,
-                // TiDB uses the `deadlock_key_hash` to support single statement rollback,
-                // so it should be raw key's hash.
-                hash: gen_raw_key_hash_from_process_result(&waiter.pr),
-            };
-            self.detector_scheduler.detect(start_ts, lock);
+            self.detector_scheduler.detect(start_ts, lock.clone());
         }
         if self.wait_table.borrow_mut().add_waiter(lock.ts, waiter) {
             let wait_table = Rc::clone(&self.wait_table);
@@ -272,6 +266,7 @@ impl WaiterManager {
             .borrow_mut()
             .get_ready_waiters(lock_ts, hashes);
         ready_waiters.sort_unstable_by_key(|waiter| waiter.start_ts);
+
         for (i, waiter) in ready_waiters.into_iter().enumerate() {
             self.detector_scheduler
                 .clean_up_wait_for(waiter.start_ts, waiter.lock.clone());
@@ -302,12 +297,12 @@ impl WaiterManager {
             .remove_waiter(start_ts, lock)
             .and_then(|waiter| {
                 let pr = ProcessResult::Failed {
-                    err: StorageError::from(MvccError::Deadlock {
+                    err: StorageError::from(TxnError::from(MvccError::Deadlock {
                         start_ts,
                         lock_ts: waiter.lock.ts,
                         lock_key: extract_raw_key_from_process_result(&waiter.pr).to_vec(),
                         deadlock_key_hash,
-                    }),
+                    })),
                 };
                 execute_callback(waiter.cb, pr);
                 Some(())

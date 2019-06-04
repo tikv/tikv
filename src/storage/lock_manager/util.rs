@@ -19,7 +19,7 @@ pub fn extract_lock_from_result(res: &Result<(), StorageError>) -> Lock {
 
 // TiDB uses the same hash algorithm.
 pub fn gen_key_hash(key: &Key) -> u64 {
-    farmhash::fingerprint64(key.as_encoded())
+    farmhash::fingerprint64(&key.to_raw().unwrap())
 }
 
 pub fn gen_key_hashes(keys: &[Key]) -> Vec<u64> {
@@ -39,10 +39,6 @@ pub fn extract_raw_key_from_process_result(pr: &ProcessResult) -> &[u8] {
         }
         _ => panic!("unexpected progress result"),
     }
-}
-
-pub fn gen_raw_key_hash_from_process_result(pr: &ProcessResult) -> u64 {
-    farmhash::fingerprint64(extract_raw_key_from_process_result(pr))
 }
 
 #[cfg(test)]
@@ -81,25 +77,5 @@ mod tests {
             )))],
         };
         assert_eq!(raw_key, extract_raw_key_from_process_result(&pr));
-    }
-
-    #[test]
-    fn test_gen_raw_key_hash_from_process_result() {
-        let raw_key = b"foo".to_vec();
-        let pr = ProcessResult::MultiRes {
-            results: vec![Err(StorageError::from(TxnError::from(
-                MvccError::KeyIsLocked {
-                    key: raw_key.clone(),
-                    primary: vec![],
-                    ts: 0,
-                    ttl: 0,
-                    txn_size: 0,
-                },
-            )))],
-        };
-        assert_eq!(
-            farmhash::fingerprint64(&raw_key),
-            gen_raw_key_hash_from_process_result(&pr)
-        );
     }
 }

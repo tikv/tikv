@@ -700,6 +700,7 @@ fn process_write_impl<S: Snapshot>(
             }
 
             notify_waiter_mgr(&waiter_mgr_scheduler, start_ts, Some(key_hashes), 0);
+            notify_deadlock_detector(&detector_scheduler, true, start_ts);
             statistics.add(&txn.take_statistics());
             (
                 ProcessResult::MultiRes { results: vec![] },

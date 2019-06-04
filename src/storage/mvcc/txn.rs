@@ -531,7 +531,7 @@ impl<S: Snapshot> MvccTxn<S> {
         if let Some(lock) = self.reader.load_lock(&key)? {
             if lock.lock_type == LockType::Pessimistic
                 && lock.ts == self.start_ts
-                && lock.for_update_ts == for_update_ts
+                && lock.for_update_ts <= for_update_ts
             {
                 self.unlock_key(key);
             }
