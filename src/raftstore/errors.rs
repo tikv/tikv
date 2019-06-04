@@ -142,12 +142,12 @@ quick_error! {
 
 pub type Result<T> = result::Result<T, Error>;
 
-impl Into<errorpb::Error> for Error {
-    fn into(self) -> errorpb::Error {
+impl From<Error> for errorpb::Error {
+    fn from(err: Error) -> errorpb::Error {
         let mut errorpb = errorpb::Error::new();
-        errorpb.set_message(error::Error::description(&self).to_owned());
+        errorpb.set_message(error::Error::description(&err).to_owned());
 
-        match self {
+        match err {
             Error::RegionNotFound(region_id) => {
                 errorpb.mut_region_not_found().set_region_id(region_id);
             }

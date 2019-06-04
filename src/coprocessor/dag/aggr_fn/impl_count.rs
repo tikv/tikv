@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cop_codegen::AggrFunction;
+use cop_datatype::builder::FieldTypeBuilder;
 use cop_datatype::{FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
@@ -16,47 +17,34 @@ pub struct AggrFnDefinitionParserCount;
 impl super::AggrDefinitionParser for AggrFnDefinitionParserCount {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), ExprType::Count);
-        if aggr_def.get_children().len() != 1 {
-            return Err(box_err!(
-                "Expect 1 parameter, but got {}",
-                aggr_def.get_children().len()
-            ));
-        }
-
-        // Only check whether or not the children expr is supported.
-        let child = &aggr_def.get_children()[0];
-        RpnExpressionBuilder::check_expr_tree_supported(child)?;
-
-        Ok(())
+        super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
     fn parse(
         &self,
         mut aggr_def: Expr,
         time_zone: &Tz,
-        max_columns: usize,
+        // We use the same structure for all data types, so this parameter is not needed.
+        src_schema: &[FieldType],
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn super::AggrFunction>> {
-        use cop_datatype::FieldTypeAccessor;
-
         assert_eq!(aggr_def.get_tp(), ExprType::Count);
         let child = aggr_def.take_children().into_iter().next().unwrap();
 
         // COUNT outputs one column.
-        out_schema.push({
-            let mut ft = FieldType::new();
-            ft.as_mut_accessor()
-                .set_tp(FieldTypeTp::LongLong)
-                .set_flag(FieldTypeFlag::UNSIGNED);
-            ft
-        });
+        out_schema.push(
+            FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .flag(FieldTypeFlag::UNSIGNED)
+                .build(),
+        );
 
         // COUNT doesn't need to cast, so using the expression directly.
         out_exp.push(RpnExpressionBuilder::build_from_expr_tree(
             child,
             time_zone,
-            max_columns,
+            src_schema.len(),
         )?);
 
         Ok(Box::new(AggrFnCount))
