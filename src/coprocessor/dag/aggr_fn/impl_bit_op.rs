@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::convert::TryFrom;
+
 use cop_codegen::AggrFunction;
 use cop_datatype::builder::FieldTypeBuilder;
-use cop_datatype::{FieldTypeFlag, FieldTypeTp};
+use cop_datatype::{EvalType, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
 use tipb::expression::{Expr, ExprType, FieldType};
 
 use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::codec::mysql::Tz;
 use crate::coprocessor::dag::expr::EvalContext;
 use crate::coprocessor::dag::rpn_expr::{RpnExpression, RpnExpressionBuilder};
-use crate::coprocessor::Result;
+use crate::coprocessor::{Error, Result};
 
 /// A trait for all bit operations
 pub trait BitOp: Clone + std::fmt::Debug + Send + Sync + 'static {
@@ -63,6 +65,18 @@ impl<T: BitOp> AggrFnDefinitionParserBitOp<T> {
 impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), T::tp());
+
+        // Check whether or not the children's field type is supported. Currently we only support
+        // Int and does not support other types (which need casting).
+        // TODO: remove this check after implementing `CAST as Int`
+        let child = &aggr_def.get_children()[0];
+        let eval_type = EvalType::try_from(child.get_field_type().tp())
+            .map_err(|e| Error::Other(box_err!(e)))?;
+        match eval_type {
+            EvalType::Int => {}
+            _ => return Err(box_err!("Cast from {:?} is not supported", eval_type)),
+        }
+
         super::util::check_aggr_exp_supported_one_child(aggr_def)
     }
 
