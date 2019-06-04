@@ -649,7 +649,7 @@ mod check_data_dir {
 
         // TODO check ext4 nodelalloc
         let fs_info = get_fs_info(&real_path, mnt_file)?;
-        debug!("data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
+        info!("data dir"; "data_path" => data_path, "mount_fs" => ?fs_info);
 
         if get_rotational_info(&fs_info.fsname)? != "0" {
             warn!("not on SSD device"; "data_path" => data_path);

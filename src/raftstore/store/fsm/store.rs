@@ -793,7 +793,7 @@ impl<T, C> RaftPollerBuilder<T, C> {
             region_peers.push((tx, peer));
         }
 
-        debug!(
+        info!(
             "start store";
             "store_id" => store_id,
             "region_count" => total_count,

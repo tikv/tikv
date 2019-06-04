@@ -56,7 +56,7 @@ pub fn run_tikv(mut config: TiKvConfig) {
     if let Err(e) = config.validate() {
         fatal!("invalid configuration: {}", e.description());
     }
-    debug!(
+    info!(
         "using config";
         "config" => serde_json::to_string(&config).unwrap(),
     );
