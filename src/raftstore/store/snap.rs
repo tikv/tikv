@@ -651,8 +651,8 @@ impl Snap {
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
-                // Use `kv_count` instead of file size to check empty files because empty sst files
-                // will contain some metadata so their sizes are not 0.
+                // Use `kv_count` instead of file size to check empty files because encrypted sst files
+                // contain some metadata so their sizes will never be 0.
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.checksum = calc_crc32(&cf_file.path)?;
                 cf_file.size = get_file_size(&cf_file.path)?;
