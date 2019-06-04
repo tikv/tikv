@@ -293,7 +293,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
                                         //      in two places.
                                         std::ptr::copy_nonoverlapping(
                                             &src[row_index],
-                                            &mut dest[target_index],
+                                            dest.as_mut_ptr().add(target_index),
                                             1,
                                         );
 
