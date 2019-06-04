@@ -1,11 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use tikv_util::erase_lifetime;
 use tipb::executor::TopN;
 use tipb::expression::{Expr, FieldType};
 
@@ -26,8 +28,10 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// first.
     heap: BinaryHeap<HeapItemUnsafe>,
 
-    /// A collection of all evaluated columns. This is to avoid repeated allocations in
+    /// A buffer for all evaluated columns. This is to avoid repeated allocations in
     /// each `next_batch()`.
+    ///
+    /// See `eval_columns_buffer_ptr` in `HeapItemUnsafe` for where this buffer is used.
     ///
     /// DO NOT EVER try to read the content of the elements directly, since it is highly unsafe.
     /// The lifetime of elements is not really 'static. Certain elements are valid only if both
@@ -43,6 +47,13 @@ pub struct BatchTopNExecutor<Src: BatchExecutor> {
     /// those fields and we want this field to be dropped first.
     #[allow(clippy::box_vec)]
     eval_columns_buffer_unsafe: Box<Vec<RpnStackNode<'static>>>,
+
+    /// A buffer for all row index pairs. This is to avoid repeated allocations in
+    /// each `next_batch()`.
+    ///
+    /// See `row_index_buffer_ptr` in `SourceColumnsUnsafe` for where this buffer is used.
+    #[allow(clippy::box_vec)]
+    row_index_buffer_unsafe: Box<Vec<(u32, u32)>>,
 
     order_exprs: Box<[RpnExpression]>,
 
@@ -84,6 +95,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         Self {
             heap: BinaryHeap::new(),
             eval_columns_buffer_unsafe: Box::new(Vec::new()),
+            row_index_buffer_unsafe: Box::new(Vec::new()),
             order_exprs: order_exprs.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
@@ -119,6 +131,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
             heap: BinaryHeap::with_capacity(n.min(1024)),
             // Simply large enough to avoid repeated allocations
             eval_columns_buffer_unsafe: Box::new(Vec::with_capacity(512)),
+            // Roughly it should be the number of all possible read rows
+            row_index_buffer_unsafe: Box::new(Vec::with_capacity(10240)),
             order_exprs: order_exprs.into_boxed_slice(),
             order_is_desc: order_is_desc.into_boxed_slice(),
             n,
@@ -151,36 +165,53 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         }
     }
 
-    #[allow(clippy::transmute_ptr_to_ptr)]
     fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let src_schema_unbounded = unsafe { &*(self.src.schema() as *const _) };
+        let rows_len = data.rows_len();
+
+        let src_schema_unbounded = unsafe { erase_lifetime(self.src.schema()) };
         for expr in self.order_exprs.iter() {
             expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
         }
 
-        let data = Rc::new(data);
+        // Prepare the shared source columns, which will be shared for each row in this batch.
+        // These rows may be put in heap, or may be not. If all rows are not in the heap, then
+        // this shared source columns will be released thanks to Rc.
+        let row_index_buffer_offset = self.row_index_buffer_unsafe.len();
+        self.row_index_buffer_unsafe
+            .resize(row_index_buffer_offset + rows_len, (0, 0));
+        let source_columns = Rc::new(RefCell::new(SourceColumnsUnsafe {
+            data,
+            row_index_buffer_ptr: (&*self.row_index_buffer_unsafe).into(),
+            row_index_buffer_offset,
+            row_index_buffer_len: 0,
+            consumed: false,
+        }));
 
-        let eval_offset = self.eval_columns_buffer_unsafe.len();
-        let order_exprs_unbounded = unsafe { &*(&*self.order_exprs as *const [RpnExpression]) };
-        let data_unbounded = unsafe { &*(&*data as *const _) };
+        // `source_columns` is reference counted. Evaluate columns based on the data in
+        // `source_columns` so that we can safely extend the lifetime of these evaluated columns
+        // as long as `source_columns` is valid.
+        let eval_columns_buffer_offset = self.eval_columns_buffer_unsafe.len();
+        let order_exprs_unbounded = unsafe { erase_lifetime(&*self.order_exprs) };
+        let data_unbounded = unsafe { erase_lifetime(&source_columns.borrow().data) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
                 .push(expr_unbounded.eval_unchecked(
                     &mut self.context,
-                    data.rows_len(),
+                    rows_len,
                     src_schema_unbounded,
                     data_unbounded,
                 )?);
         }
 
-        for row_index in 0..data.rows_len() {
+        for row_index in 0..rows_len {
             let row = HeapItemUnsafe {
                 order_is_desc_ptr: (&*self.order_is_desc).into(),
-                source_column_data: data.clone(),
+                source_column_data: source_columns.clone(),
                 eval_columns_buffer_ptr: (&*self.eval_columns_buffer_unsafe).into(),
-                eval_columns_offset: eval_offset,
+                eval_columns_buffer_offset,
                 row_index,
             };
+            // Row may be added to heap, or may be not. Existing rows may be also swapped out.
             self.heap_add_row(row);
         }
 
@@ -203,45 +234,125 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
     #[allow(clippy::clone_on_copy)]
     fn heap_take_all(&mut self) -> LazyBatchColumnVec {
         let heap = std::mem::replace(&mut self.heap, BinaryHeap::default());
-        let sorted_items = heap.into_sorted_vec();
+        let mut sorted_items = heap.into_sorted_vec();
         if sorted_items.is_empty() {
             return LazyBatchColumnVec::empty();
         }
 
-        let mut result = sorted_items[0]
+        let sorted_len = sorted_items.len();
+        let mut target = sorted_items[0]
             .source_column_data
-            .clone_empty(sorted_items.len());
-        for item in sorted_items {
-            // TODO: Actually clone can be eliminated, because we don't need to keep the same datum
-            // in two places. However it will be pretty tricky.
-            // Solution 1. Replace source and destination datum with a zero or empty value.
-            //             Zero unsafe code, but needs an extra construction (and maybe dynamic
-            //             memory allocations inside during construction).
-            // Solution 2. Copy source to destination, records whether each datum is copied.
-            //             After that, manually drop these unneeded datum but keep the one
-            //             that has been copied to the destination.
-            assert_eq!(result.len(), item.source_column_data.len());
-            for (column_idx, column) in item.source_column_data.iter().enumerate() {
-                match column {
-                    LazyBatchColumn::Raw(src_value) => {
-                        result[column_idx]
-                            .mut_raw()
-                            .push(&src_value[item.row_index]);
-                    }
-                    LazyBatchColumn::Decoded(src_value) => {
-                        match_template_evaluable! {
-                            TT, match (src_value, result[column_idx].mut_decoded()) {
-                                (VectorValue::TT(src), VectorValue::TT(dest)) => {
-                                    dest.push(src[item.row_index].clone());
-                                },
-                                _ => unreachable!(),
-                            }
+            .borrow()
+            .data
+            .clone_empty(sorted_len);
+
+        // Now we have sorted heap items. We will do the following:
+        // 1. Mark the sorted index of each row in its shared source columns meta data.
+        //    This will be random read and random write.
+        for (sorted_index, item) in sorted_items.as_mut_slice().iter_mut().enumerate() {
+            let mut data = (*item.source_column_data).borrow_mut();
+            data.push_row_index_pair(item.row_index, sorted_index);
+        }
+
+        // 2. For each heap item, we access its shared source columns meta data, move data
+        //    to the target (according to sorted index) column by column. This will be
+        //    sequential read and random write. After that, we mark this shared source columns
+        //    as "used" through the `consumed` field and next time we will simply skip it.
+        for item in &mut sorted_items {
+            let mut source = (*item.source_column_data).borrow_mut();
+            if source.consumed {
+                // This source columns is already processed, skip.
+                continue;
+            }
+
+            source.consumed = true;
+
+            // Before moving, let's sort these pairs, so that later access can be sequential.
+            // Note: we sort pairs in descending order, so that our access to `data` starts
+            // from the end, which is critical for step 2.x.
+            assert!(source.row_index_buffer_len > 0);
+            source.sort_row_index_pairs();
+
+            // To workaround the borrow checker. This is safe since `source.get_row_index_pairs()`
+            // does not keep any references of `source.data`.
+            let row_index_pairs = unsafe { erase_lifetime(source.get_row_index_pairs()) };
+
+            assert_eq!(target.len(), source.data.len());
+            for (column_idx, column) in source.data.iter_mut().enumerate() {
+                // Skip `LazyBatchColumn::Raw` since we cannot sequentially write into this
+                // kind of target.
+                if let LazyBatchColumn::Decoded(src_value) = column {
+                    match_template_evaluable! {
+                        TT, match (src_value, target[column_idx].mut_decoded()) {
+                            (VectorValue::TT(src), VectorValue::TT(dest)) => {
+                                for (row_index, target_index) in row_index_pairs {
+                                    let row_index = *row_index as usize;
+                                    let target_index = *target_index as usize;
+                                    unsafe {
+                                        // 2.1. Memory copy src[i] to target[j]. Now src[i] lives
+                                        //      in two places.
+                                        std::ptr::copy_nonoverlapping(
+                                            &src[row_index],
+                                            &mut dest[target_index],
+                                            1,
+                                        );
+
+                                        // 2.2. Memory copy src[last] to src[i]. Now src[i] lives
+                                        //      in one place, but src[last] lives in two places.
+                                        //      We will never access index `i` again, and we will
+                                        //      never access index `last` (since we access in
+                                        //      descending order), so this move is fine.
+                                        if row_index < src.len() - 1 {
+                                            let src_len = src.len();
+                                            // Copy only if src[i] is not the last item.
+                                            std::ptr::copy_nonoverlapping(
+                                                &src[src_len - 1],
+                                                &mut src[row_index],
+                                                1,
+                                            );
+                                        }
+
+                                        // 2.3. Shrink src to exclude src[last]. Now src[last]
+                                        //      lives in one place.
+                                        src.set_len(src.len() - 1);
+                                    }
+                                }
+                            },
+                            _ => unreachable!(),
                         }
                     }
                 }
             }
         }
-        result
+
+        // Updates target columns' length (since we use copy instead of push).
+        for target_column in &mut *target {
+            if let LazyBatchColumn::Decoded(v) = target_column {
+                match_template_evaluable! {
+                    TT, match v {
+                        VectorValue::TT(dest) => unsafe { dest.set_len(sorted_len) },
+                    }
+                }
+            }
+        }
+
+        // 3. For those target columns that requires a sequential write, we use a random read
+        //    but sequential write pattern, which simply iterates each sorted item.
+        for (column_idx, column) in target.iter_mut().enumerate() {
+            if let LazyBatchColumn::Raw(target_column) = column {
+                for item in &sorted_items {
+                    let source = (*item.source_column_data).borrow();
+                    target_column.push(&source.data[column_idx].raw()[item.row_index]);
+                }
+            }
+        }
+
+        // 4. Now all columns in target should have equal length. Note that source columns
+        //    does not have equal length since we didn't remove items for sequential columns.
+        target.assert_columns_equal_length();
+        assert_eq!(target.rows_len(), sorted_len);
+
+        target
     }
 }
 
@@ -297,6 +408,58 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
     }
 }
 
+/// Source columns and some meta data about the sorted order of the rows in the source columns.
+///
+/// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
+/// not dropped). Thus it is called unsafe.
+pub struct SourceColumnsUnsafe {
+    /// The data of source columns.
+    data: LazyBatchColumnVec,
+
+    /// Each item is `(a, b)`, which means the row `a` in `data` should be placed at index `b`
+    /// after sorting.
+    ///
+    /// Sorted index are known and assigned only after the heap is fully built.
+    ///
+    /// This field is a pointer to the `row_index_buffer` field in `BatchTopNExecutor`.
+    row_index_buffer_ptr: NonNull<Vec<(u32, u32)>>,
+    /// The begin offset of the target index array stored in the buffer.
+    row_index_buffer_offset: usize,
+    /// The length of valid row index pairs. We always reserves `data.rows_len()` space.
+    row_index_buffer_len: usize,
+
+    /// Whether or not all valid rows in the source column has been consumed.
+    consumed: bool,
+}
+
+impl SourceColumnsUnsafe {
+    /// Returns all valid pairs in `row_index_buffer` for this instance.
+    fn get_row_index_pairs(&self) -> &[(u32, u32)] {
+        let offset_begin = self.row_index_buffer_offset;
+        let offset_end = offset_begin + self.row_index_buffer_len;
+        let vec_buf = unsafe { self.row_index_buffer_ptr.as_ref() };
+        &vec_buf[offset_begin..offset_end]
+    }
+
+    /// Sorts valid pairs belongs to this instance in `row_index_buffer` in DESCENDING order.
+    fn sort_row_index_pairs(&mut self) {
+        let offset_begin = self.row_index_buffer_offset;
+        let offset_end = offset_begin + self.row_index_buffer_len;
+        let vec_buf = unsafe { self.row_index_buffer_ptr.as_mut() };
+        let slice = &mut vec_buf[offset_begin..offset_end];
+        slice.sort_unstable_by(|&a, &b| a.cmp(&b).reverse());
+    }
+
+    /// Pushes a pair into `row_index_buffer` for this instance and updates the valid length.
+    fn push_row_index_pair(&mut self, row_index: usize, sorted_index: usize) {
+        let offset = self.row_index_buffer_offset + self.row_index_buffer_len;
+        let vec_buf = unsafe { self.row_index_buffer_ptr.as_mut() };
+        vec_buf[offset] = (row_index as u32, sorted_index as u32);
+        self.row_index_buffer_len += 1;
+        debug_assert!(self.row_index_buffer_len <= self.data.rows_len());
+    }
+}
+
 /// The item in the heap of `BatchTopNExecutor`.
 ///
 /// WARN: The content of this structure is valid only if `BatchTopNExecutor` is valid (i.e.
@@ -310,15 +473,14 @@ pub struct HeapItemUnsafe {
     /// are placed behind a reference counter. However, there won't be a place other than
     /// `HeapItemUnsafe` holding this reference counter, so Rc won't break
     /// `BatchTopNExecutor: Send`.
-    source_column_data: Rc<LazyBatchColumnVec>,
+    source_column_data: Rc<RefCell<SourceColumnsUnsafe>>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
-    #[allow(clippy::box_vec)]
     eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
     /// The begin offset of the evaluated columns stored in the buffer.
     ///
     /// The length of evaluated columns in the buffer is `order_is_desc.len()`.
-    eval_columns_offset: usize,
+    eval_columns_buffer_offset: usize,
 
     /// Which row in the evaluated columns this heap item is representing.
     row_index: usize,
@@ -330,7 +492,7 @@ impl HeapItemUnsafe {
     }
 
     fn get_eval_columns(&self, len: usize) -> &[RpnStackNode<'_>] {
-        let offset_begin = self.eval_columns_offset;
+        let offset_begin = self.eval_columns_buffer_offset;
         let offset_end = offset_begin + len;
         let vec_buf = unsafe { self.eval_columns_buffer_ptr.as_ref() };
         &vec_buf[offset_begin..offset_end]
