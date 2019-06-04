@@ -23,7 +23,7 @@
 use spinlock::Spinlock;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::u64;
 
 use kvproto::kvrpcpb::CommandPri;
