@@ -299,11 +299,11 @@ impl Command {
         }
     }
 
-    pub fn priority_tag(&self) -> &'static str {
+    pub fn priority_tag(&self) -> CommandPriority {
         match self.get_context().get_priority() {
-            CommandPri::Low => "low",
-            CommandPri::Normal => "normal",
-            CommandPri::High => "high",
+            CommandPri::Low => CommandPriority::low,
+            CommandPri::Normal => CommandPriority::normal,
+            CommandPri::High => CommandPriority::high,
         }
     }
 

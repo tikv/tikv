@@ -322,8 +322,8 @@ impl<E: Engine> Scheduler<E> {
         self.inner.enqueue_task(task, callback);
         self.try_to_wake_up(cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
-        SCHED_COMMANDS_PRI_COUNTER_VEC
-            .with_label_values(&[priority_tag])
+        SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
+            .get(priority_tag)
             .inc();
     }
 
@@ -338,9 +338,7 @@ impl<E: Engine> Scheduler<E> {
     fn on_receive_new_cmd(&self, cmd: Command, callback: StorageCb) {
         // write flow control
         if cmd.need_flow_control() && self.inner.too_busy() {
-            SCHED_TOO_BUSY_COUNTER_VEC
-                .with_label_values(&[cmd.tag().get_str()])
-                .inc();
+            SCHED_TOO_BUSY_COUNTER_VEC.get(cmd.tag()).inc();
             execute_callback(
                 callback,
                 ProcessResult::Failed {

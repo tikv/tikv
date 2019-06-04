@@ -73,6 +73,14 @@ make_static_metric! {
     pub struct KvCommandKeysWrittenVec: Histogram {
         "type" => CommandKind,
     }
+
+    pub struct SchedTooBusyVec: IntCounter {
+        "type" => CommandKind,
+    }
+
+    pub struct SchedCommandPriCounterVec: IntCounter {
+        "priority" => CommandPriority,
+    }
 }
 
 lazy_static! {
@@ -135,12 +143,15 @@ lazy_static! {
         exponential_buckets(0.0005, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
+    pub static ref SCHED_TOO_BUSY_COUNTER_VEC: SchedTooBusyVec = register_static_int_counter_vec!(
+        SchedTooBusyVec,
         "tikv_scheduler_too_busy_total",
         "Total count of scheduler too busy",
         &["type"]
     )
     .unwrap();
+    pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC: SchedCommandPriCounterVec =
+        SchedCommandPriCounterVec::from(&SCHED_COMMANDS_PRI_COUNTER_VEC);
     pub static ref SCHED_COMMANDS_PRI_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_scheduler_commands_pri_total",
         "Total count of different priority commands",
