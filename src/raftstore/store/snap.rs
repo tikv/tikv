@@ -593,10 +593,15 @@ impl Snap {
             f.write_all(&v[..])?;
             f.flush()?;
             f.sync_all()?;
+            fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
+            self.hold_tmp_files = false;
+            Ok(())
+        } else {
+            Err(box_err!(
+                "save meta file without metadata for {:?}",
+                self.key
+            ))
         }
-        fs::rename(&self.meta_file.tmp_path, &self.meta_file.path)?;
-        self.hold_tmp_files = false;
-        Ok(())
     }
 
     fn do_build(
@@ -646,10 +651,14 @@ impl Snap {
             };
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
+                // Use `kv_count` instead of file size to check empty files because empty sst files
+                // will contain some metadata so their sizes are not 0.
                 fs::rename(&cf_file.tmp_path, &cf_file.path)?;
                 cf_file.checksum = calc_crc32(&cf_file.path)?;
                 cf_file.size = get_file_size(&cf_file.path)?;
                 self.size_track.fetch_add(cf_file.size, Ordering::SeqCst);
+            } else {
+                delete_file_if_exist(&cf_file.tmp_path).unwrap();
             }
 
             SNAPSHOT_CF_KV_COUNT
