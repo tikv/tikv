@@ -68,17 +68,22 @@ pub fn build_sst_cf_file(
 ) -> Result<BuildStatistics, Error> {
     let mut sst_writer = create_sst_file_writer(snap, cf, path)?;
     let mut stats = BuildStatistics::default();
-    let mut base = if io_limiter.is_some() { 0 } else { usize::MAX };
+    let base = io_limiter
+        .as_ref()
+        .map_or(0 as i64, |l| l.get_max_bytes_per_time());
+    let mut bytes: i64 = 0;
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
+        let entry_len = key.len() + value.len();
         if let Some(ref io_limiter) = io_limiter {
-            if stats.total_size >= base {
-                let next_request = io_limiter.get_max_bytes_per_time();
-                io_limiter.request(next_request);
-                base += next_request as usize;
+            // seems the usage of io_limiter here do not match its design
+            if bytes >= base {
+                bytes = 0;
+                io_limiter.request(base);
             }
+            bytes += entry_len as i64
         }
         stats.key_count += 1;
-        stats.total_size += key.len() + value.len();
+        stats.total_size += entry_len;
         if let Err(e) = sst_writer.put(key, value) {
             let io_error = io::Error::new(io::ErrorKind::Other, e);
             return Err(io_error.into());
@@ -87,10 +92,8 @@ pub fn build_sst_cf_file(
     }));
     if stats.key_count > 0 {
         box_try!(sst_writer.finish());
-        drop(sst_writer);
         box_try!(File::open(path).and_then(|f| f.sync_all()));
     } else {
-        drop(sst_writer);
         box_try!(fs::remove_file(path));
     }
     Ok(stats)
@@ -113,7 +116,9 @@ pub fn apply_plain_cf_file(
         }
         let key = box_try!(decoder.decode_compact_bytes());
         if key.is_empty() {
-            box_try!(db.write(&wb));
+            if !wb.is_empty() {
+                box_try!(db.write(&wb));
+            }
             return Ok(());
         }
         let value = box_try!(decoder.decode_compact_bytes());
