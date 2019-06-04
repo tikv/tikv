@@ -47,6 +47,12 @@ make_static_metric! {
         error,
     }
 
+    pub label_enum CommandPriority {
+        low,
+        normal,
+        high,
+    }
+
     pub struct SchedDurationVec: Histogram {
         "type" => CommandKind,
     }
@@ -58,6 +64,10 @@ make_static_metric! {
     pub struct SchedStageCounterVec: IntCounter {
         "type" => CommandKind,
         "stage" => CommandStageKind,
+    }
+
+    pub struct SchedLatchDurationVec: Histogram {
+        "type" => CommandKind,
     }
 }
 
@@ -98,13 +108,15 @@ lazy_static! {
     .unwrap();
     pub static ref SCHED_HISTOGRAM_VEC_STATIC: SchedDurationVec =
         SchedDurationVec::from(&SCHED_HISTOGRAM_VEC);
-    pub static ref SCHED_LATCH_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_latch_wait_duration_seconds",
-        "Bucketed histogram of latch wait",
-        &["type"],
-        exponential_buckets(0.0005, 2.0, 20).unwrap()
-    )
-    .unwrap();
+    pub static ref SCHED_LATCH_HISTOGRAM_VEC: SchedLatchDurationVec =
+        register_static_histogram_vec!(
+            SchedLatchDurationVec,
+            "tikv_scheduler_latch_wait_duration_seconds",
+            "Bucketed histogram of latch wait",
+            &["type"],
+            exponential_buckets(0.0005, 2.0, 20).unwrap()
+        )
+        .unwrap();
     pub static ref SCHED_PROCESSING_READ_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_scheduler_processing_read_duration_seconds",
         "Bucketed histogram of processing read duration",
