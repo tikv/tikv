@@ -122,9 +122,7 @@ impl TaskContext {
             write_bytes,
             tag,
             latch_timer: Some(SCHED_LATCH_HISTOGRAM_VEC.get(tag).start_coarse_timer()),
-            _cmd_timer: SCHED_HISTOGRAM_VEC
-                .with_label_values(&[tag.get_str()])
-                .start_coarse_timer(),
+            _cmd_timer: SCHED_HISTOGRAM_VEC_STATIC.get(tag).start_coarse_timer(),
         }
     }
 
