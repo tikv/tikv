@@ -71,7 +71,6 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
 
 impl BatchFastHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         let group_by_definitions = descriptor.get_group_by();
         assert!(!group_by_definitions.is_empty());
@@ -123,7 +122,6 @@ impl<Src: BatchExecutor> BatchFastHashAggregationExecutor<Src> {
         )
     }
 
-    #[inline]
     fn new_impl(
         config: Arc<EvalConfig>,
         src: Src,
@@ -202,14 +200,12 @@ pub struct FastHashAggregationImpl {
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImpl {
-    #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
         entities
             .schema
             .push(self.group_by_field_type.take().unwrap());
     }
 
-    #[inline]
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
@@ -261,7 +257,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for FastHashAggregationImp
         self.groups.len()
     }
 
-    #[inline]
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,

@@ -60,7 +60,6 @@ unsafe impl<Src: BatchExecutor + Send> Send for BatchTopNExecutor<Src> {}
 
 impl BatchTopNExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &TopN) -> Result<()> {
         if descriptor.get_order_by().is_empty() {
             return Err(box_err!("Missing Top N column"));
@@ -130,7 +129,6 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         })
     }
 
-    #[inline]
     fn handle_next_batch(&mut self) -> Result<Option<LazyBatchColumnVec>> {
         // Use max batch size from the beginning because top N
         // always needs to calculate over all data.
@@ -253,7 +251,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchTopNExecutor<Src> {
         self.src.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 

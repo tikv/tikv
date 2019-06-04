@@ -54,20 +54,17 @@ impl ExecSummaryCollector for ExecSummaryCollectorEnabled {
         }
     }
 
-    #[inline]
     fn on_start_iterate(&mut self) -> Self::DurationRecorder {
         self.counts.num_iterations += 1;
         tikv_util::time::Instant::now_coarse()
     }
 
-    #[inline]
     fn on_finish_iterate(&mut self, dr: Self::DurationRecorder, rows: usize) {
         self.counts.num_produced_rows += rows;
         let elapsed_time = tikv_util::time::duration_to_nanos(dr.elapsed()) as usize;
         self.counts.time_processed_ns += elapsed_time;
     }
 
-    #[inline]
     fn collect_into(&mut self, target: &mut [ExecSummary]) {
         let current_summary = std::mem::replace(&mut self.counts, ExecSummary::default());
         target[self.output_index] += current_summary;

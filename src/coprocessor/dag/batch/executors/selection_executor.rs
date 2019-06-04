@@ -20,7 +20,6 @@ pub struct BatchSelectionExecutor<Src: BatchExecutor> {
 
 impl BatchSelectionExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Selection) -> Result<()> {
         let conditions = descriptor.get_conditions();
         for c in conditions {
@@ -67,7 +66,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchSelectionExecutor<Src> {
         self.src.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut src_result = self.src.next_batch(scan_rows);
 

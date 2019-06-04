@@ -60,7 +60,6 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
 
 impl BatchStreamAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         let group_by_definitions = descriptor.get_group_by();
         assert!(!group_by_definitions.is_empty());
@@ -113,7 +112,6 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
         )
     }
 
-    #[inline]
     fn new_impl(
         config: Arc<EvalConfig>,
         src: Src,
@@ -149,7 +147,6 @@ impl<Src: BatchExecutor> BatchStreamAggregationExecutor<Src> {
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregationImpl {
-    #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
         let src_schema = entities.src.schema();
         for group_by_exp in &self.group_by_exps {
@@ -159,7 +156,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
         }
     }
 
-    #[inline]
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
@@ -240,7 +236,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for BatchStreamAggregation
             .unwrap_or(0)
     }
 
-    #[inline]
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,

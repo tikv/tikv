@@ -30,7 +30,6 @@ impl<Src: BatchExecutor> BatchExecutor for BatchLimitExecutor<Src> {
         self.src.schema()
     }
 
-    #[inline]
     fn next_batch(&mut self, scan_rows: usize) -> BatchExecuteResult {
         let mut result = self.src.next_batch(scan_rows);
         if result.data.rows_len() < self.remaining_rows {
@@ -99,7 +98,6 @@ mod tests {
             self.field_types.as_ref()
         }
 
-        #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
             let upper = if expect_rows + self.offset > self.data.len() {
                 self.data.len()
@@ -207,7 +205,6 @@ mod tests {
         }
     }
     impl BatchExecutor for MockErrExecutor {
-        #[inline]
         fn next_batch(&mut self, expect_rows: usize) -> BatchExecuteResult {
             let mut result = self.0.next_batch(expect_rows);
             result.is_drained = Err(box_err!("next batch mock error"));

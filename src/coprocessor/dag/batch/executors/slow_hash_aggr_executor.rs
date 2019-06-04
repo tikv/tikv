@@ -65,7 +65,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
 
 impl BatchSlowHashAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         let group_by_definitions = descriptor.get_group_by();
         assert!(!group_by_definitions.is_empty());
@@ -108,7 +107,6 @@ impl<Src: BatchExecutor> BatchSlowHashAggregationExecutor<Src> {
         )
     }
 
-    #[inline]
     fn new_impl(
         config: Arc<EvalConfig>,
         src: Src,
@@ -172,7 +170,6 @@ struct GroupInfo {
 }
 
 impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImpl {
-    #[inline]
     fn prepare_entities(&mut self, entities: &mut Entities<Src>) {
         let src_schema = entities.src.schema();
         for group_by_exp in &self.group_by_exps {
@@ -182,7 +179,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         }
     }
 
-    #[inline]
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
@@ -254,7 +250,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SlowHashAggregationImp
         self.groups.len()
     }
 
-    #[inline]
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,

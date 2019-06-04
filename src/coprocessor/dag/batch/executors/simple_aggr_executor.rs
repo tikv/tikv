@@ -57,7 +57,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
 
 impl BatchSimpleAggregationExecutor<Box<dyn BatchExecutor>> {
     /// Checks whether this executor can be used.
-    #[inline]
     pub fn check_supported(descriptor: &Aggregation) -> Result<()> {
         assert_eq!(descriptor.get_group_by().len(), 0);
         let aggr_definitions = descriptor.get_agg_func();
@@ -77,7 +76,6 @@ impl<Src: BatchExecutor> BatchSimpleAggregationExecutor<Src> {
         Self::new_impl(config, src, aggr_defs, AllAggrDefinitionParser)
     }
 
-    #[inline]
     fn new_impl(
         config: Arc<EvalConfig>,
         src: Src,
@@ -112,7 +110,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         self.states = states;
     }
 
-    #[inline]
     fn process_batch_input(
         &mut self,
         entities: &mut Entities<Src>,
@@ -162,7 +159,6 @@ impl<Src: BatchExecutor> AggregationExecutorImpl<Src> for SimpleAggregationImpl 
         1
     }
 
-    #[inline]
     fn iterate_available_groups(
         &mut self,
         entities: &mut Entities<Src>,

@@ -184,7 +184,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> AggregationExecutor<Sr
     }
 
     /// Returns partial results of aggregation if available and whether the source is drained
-    #[inline]
     fn handle_next_batch(&mut self) -> Result<(Option<LazyBatchColumnVec>, bool)> {
         // Use max batch size from the beginning because aggregation
         // always needs to calculate over all data.
@@ -270,7 +269,6 @@ impl<Src: BatchExecutor, I: AggregationExecutorImpl<Src>> BatchExecutor
         self.entities.schema.as_slice()
     }
 
-    #[inline]
     fn next_batch(&mut self, _scan_rows: usize) -> BatchExecuteResult {
         assert!(!self.is_ended);
 

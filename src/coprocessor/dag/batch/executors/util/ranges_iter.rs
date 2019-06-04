@@ -81,7 +81,6 @@ pub struct RangesIterator<T: PointRangePolicy> {
 }
 
 impl<T: PointRangePolicy> RangesIterator<T> {
-    #[inline]
     pub fn new(user_key_ranges: Vec<KeyRange>, policy: T) -> Self {
         Self {
             in_range: false,
@@ -91,7 +90,6 @@ impl<T: PointRangePolicy> RangesIterator<T> {
     }
 
     /// Continues iterating.
-    #[inline]
     pub fn next(&mut self) -> IterStatus {
         if self.in_range {
             return IterStatus::Continue;
