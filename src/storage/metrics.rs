@@ -69,6 +69,10 @@ make_static_metric! {
     pub struct SchedLatchDurationVec: Histogram {
         "type" => CommandKind,
     }
+
+    pub struct KvCommandKeysWrittenVec: Histogram {
+        "type" => CommandKind,
+    }
 }
 
 lazy_static! {
@@ -156,13 +160,15 @@ lazy_static! {
         &["req", "cf", "tag"]
     )
     .unwrap();
-    pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
-        "tikv_scheduler_kv_command_key_write",
-        "Bucketed histogram of keys write of a kv command",
-        &["type"],
-        exponential_buckets(1.0, 2.0, 21).unwrap()
-    )
-    .unwrap();
+    pub static ref KV_COMMAND_KEYWRITE_HISTOGRAM_VEC: KvCommandKeysWrittenVec =
+        register_static_histogram_vec!(
+            KvCommandKeysWrittenVec,
+            "tikv_scheduler_kv_command_key_write",
+            "Bucketed histogram of keys write of a kv command",
+            &["type"],
+            exponential_buckets(1.0, 2.0, 21).unwrap()
+        )
+        .unwrap();
     pub static ref KV_GC_EMPTY_RANGE_COUNTER: IntCounter = register_int_counter!(
         "tikv_storage_gc_empty_range_total",
         "Total number of empty range found by gc"

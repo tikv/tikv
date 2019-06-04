@@ -304,7 +304,7 @@ impl<E: Engine, S: MsgScheduler> Executor<E, S> {
                                 },
                             );
                             KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
-                                .with_label_values(&[tag.get_str()])
+                                .get(tag)
                                 .observe(rows as f64);
                             future::ok::<_, ()>(())
                         })
