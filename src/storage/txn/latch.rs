@@ -3,8 +3,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
 use std::usize;
+
+use spinlock::Spinlock;
 
 /// Latch which is used to serialize accesses to resources hashed to the same slot.
 ///
@@ -62,7 +63,7 @@ impl Lock {
 /// Each latch is indexed by a slot ID, hence the term latch and slot are used interchangeably, but
 /// conceptually a latch is a queue, and a slot is an index to the queue.
 pub struct Latches {
-    slots: Vec<Mutex<Latch>>,
+    slots: Vec<Spinlock<Latch>>,
     size: usize,
 }
 
@@ -73,7 +74,7 @@ impl Latches {
     pub fn new(size: usize) -> Latches {
         let size = usize::next_power_of_two(size);
         let mut slots = Vec::with_capacity(size);
-        (0..size).for_each(|_| slots.push(Mutex::new(Latch::new())));
+        (0..size).for_each(|_| slots.push(Spinlock::new(Latch::new())));
         Latches { slots, size }
     }
 
@@ -97,7 +98,7 @@ impl Latches {
     pub fn acquire(&self, lock: &mut Lock, who: u64) -> bool {
         let mut acquired_count: usize = 0;
         for i in &lock.required_slots[lock.owned_count..] {
-            let mut latch = self.slots[*i].lock().unwrap();
+            let mut latch = self.slots[*i].lock();
             let front = latch.waiting.front().cloned();
             match front {
                 Some(cid) => {
@@ -124,7 +125,7 @@ impl Latches {
     pub fn release(&self, lock: &Lock, who: u64) -> Vec<u64> {
         let mut wakeup_list: Vec<u64> = vec![];
         for i in &lock.required_slots[..lock.owned_count] {
-            let mut latch = self.slots[*i].lock().unwrap();
+            let mut latch = self.slots[*i].lock();
             let front = latch.waiting.pop_front().unwrap();
             assert_eq!(front, who);
             if let Some(wakeup) = latch.waiting.front() {
