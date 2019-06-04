@@ -440,6 +440,8 @@ fn bench_select_order_by_3_col_limit_small(b: &mut criterion::Bencher, input: &I
 /// SELECT id, col1, col2 FROM Table ORDER BY isnull(col1), col1, col2 DESC LIMIT 4000
 fn bench_select_order_by_3_col_limit_large(b: &mut criterion::Bencher, input: &Input) {
     if input.rows < 4000 {
+        // Skipped
+        b.iter(|| {});
         return;
     }
     bench_select_order_by_3_col_impl(4000, b, input);
@@ -526,6 +528,8 @@ fn bench_select_50_col_order_by_1_col_limit_small(b: &mut criterion::Bencher, in
 /// SELECT * FROM Table ORDER BY col0 LIMIT 4000, there are 50 columns.
 fn bench_select_50_col_order_by_1_col_limit_large(b: &mut criterion::Bencher, input: &Input) {
     if input.rows < 4000 {
+        // Skipped
+        b.iter(|| {});
         return;
     }
     bench_select_50_col_order_by_1_col_impl(4000, b, input);
