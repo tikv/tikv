@@ -75,7 +75,6 @@ pub fn build_sst_cf_file(
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if let Some(ref io_limiter) = io_limiter {
-            // seems the usage of io_limiter here do not match its design
             if bytes >= base {
                 bytes = 0;
                 io_limiter.request(base);
