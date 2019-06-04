@@ -142,7 +142,7 @@ impl From<f64> for ScalarValue {
 }
 
 /// A scalar value reference container. Can be created from `ScalarValue` or `VectorValue`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScalarValueRef<'a> {
     Int(&'a Option<super::Int>),
     Real(&'a Option<super::Real>),
@@ -193,8 +193,6 @@ impl<'a> PartialOrd for ScalarValueRef<'a> {
         }
     }
 }
-
-impl<'a> Eq for ScalarValueRef<'a> {}
 
 impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
     fn eq(&self, other: &ScalarValue) -> bool {
