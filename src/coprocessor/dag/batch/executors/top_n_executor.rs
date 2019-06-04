@@ -6,11 +6,12 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use tikv_util::erase_lifetime;
 use tipb::executor::TopN;
 use tipb::expression::{Expr, FieldType};
 
 use crate::coprocessor::codec::batch::{LazyBatchColumn, LazyBatchColumnVec};
-use crate::coprocessor::codec::data_type::VectorValue;
+use crate::coprocessor::codec::data_type::*;
 use crate::coprocessor::dag::batch::interface::*;
 use crate::coprocessor::dag::expr::EvalWarnings;
 use crate::coprocessor::dag::expr::{EvalConfig, EvalContext};
@@ -155,7 +156,7 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
 
     #[allow(clippy::transmute_ptr_to_ptr)]
     fn process_batch_input(&mut self, mut data: LazyBatchColumnVec) -> Result<()> {
-        let src_schema_unbounded = unsafe { &*(self.src.schema() as *const _) };
+        let src_schema_unbounded = unsafe { erase_lifetime(self.src.schema()) };
         for expr in self.order_exprs.iter() {
             expr.ensure_columns_decoded(&self.context.cfg.tz, src_schema_unbounded, &mut data)?;
         }
@@ -163,8 +164,8 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         let data = Rc::new(data);
 
         let eval_offset = self.eval_columns_buffer_unsafe.len();
-        let order_exprs_unbounded = unsafe { &*(&*self.order_exprs as *const [RpnExpression]) };
-        let data_unbounded = unsafe { &*(&*data as *const _) };
+        let order_exprs_unbounded = unsafe { erase_lifetime(&*self.order_exprs) };
+        let data_unbounded = unsafe { erase_lifetime(&*data) };
         for expr_unbounded in order_exprs_unbounded.iter() {
             self.eval_columns_buffer_unsafe
                 .push(expr_unbounded.eval_unchecked(
@@ -213,36 +214,33 @@ impl<Src: BatchExecutor> BatchTopNExecutor<Src> {
         let mut result = sorted_items[0]
             .source_column_data
             .clone_empty(sorted_items.len());
-        for item in sorted_items {
-            // TODO: Actually clone can be eliminated, because we don't need to keep the same datum
-            // in two places. However it will be pretty tricky.
-            // Solution 1. Replace source and destination datum with a zero or empty value.
-            //             Zero unsafe code, but needs an extra construction (and maybe dynamic
-            //             memory allocations inside during construction).
-            // Solution 2. Copy source to destination, records whether each datum is copied.
-            //             After that, manually drop these unneeded datum but keep the one
-            //             that has been copied to the destination.
-            assert_eq!(result.len(), item.source_column_data.len());
-            for (column_idx, column) in item.source_column_data.iter().enumerate() {
-                match column {
-                    LazyBatchColumn::Raw(src_value) => {
-                        result[column_idx]
-                            .mut_raw()
-                            .push(&src_value[item.row_index]);
+
+        for (column_index, result_column) in result.iter_mut().enumerate() {
+            match result_column {
+                LazyBatchColumn::Raw(dest_column) => {
+                    for item in &sorted_items {
+                        let src = item.source_column_data[column_index].raw();
+                        dest_column.push(&src[item.row_index]);
                     }
-                    LazyBatchColumn::Decoded(src_value) => {
-                        match_template_evaluable! {
-                            TT, match (src_value, result[column_idx].mut_decoded()) {
-                                (VectorValue::TT(src), VectorValue::TT(dest)) => {
-                                    dest.push(src[item.row_index].clone());
-                                },
-                                _ => unreachable!(),
-                            }
+                }
+                LazyBatchColumn::Decoded(dest_vector_value) => {
+                    match_template_evaluable! {
+                        TT, match dest_vector_value {
+                            VectorValue::TT(dest_column) => {
+                                for item in &sorted_items {
+                                    let src = item.source_column_data[column_index].decoded();
+                                    let src: &[Option<TT>] = src.as_ref();
+                                    // TODO: This clone is not necessary.
+                                    dest_column.push(src[item.row_index].clone());
+                                }
+                            },
                         }
                     }
                 }
             }
         }
+
+        result.assert_columns_equal_length();
         result
     }
 }
@@ -316,7 +314,6 @@ pub struct HeapItemUnsafe {
     source_column_data: Rc<LazyBatchColumnVec>,
 
     /// A pointer to the `eval_columns_buffer` field in `BatchTopNExecutor`.
-    #[allow(clippy::box_vec)]
     eval_columns_buffer_ptr: NonNull<Vec<RpnStackNode<'static>>>,
     /// The begin offset of the evaluated columns stored in the buffer.
     ///
@@ -394,7 +391,6 @@ mod tests {
 
     use cop_datatype::FieldTypeTp;
 
-    use crate::coprocessor::codec::data_type::*;
     use crate::coprocessor::dag::batch::executors::util::mock_executor::MockExecutor;
     use crate::coprocessor::dag::expr::EvalWarnings;
     use crate::coprocessor::dag::rpn_expr::RpnExpressionBuilder;
