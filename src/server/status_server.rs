@@ -156,13 +156,7 @@ impl StatusServer {
                     return Box::new(ok(response));
                 }
             },
-            None => {
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .unwrap();
-                return Box::new(ok(response));
-            }
+            None => 10,
         };
 
         Box::new(
