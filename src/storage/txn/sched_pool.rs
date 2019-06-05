@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use prometheus::local::*;
@@ -8,6 +9,7 @@ use tikv_util::collections::HashMap;
 use tikv_util::future_pool::Builder as FuturePoolBuilder;
 use tikv_util::future_pool::FuturePool;
 
+use crate::storage::kv::{destroy_tls_engine, set_tls_engine};
 use crate::storage::metrics::*;
 use crate::storage::{Engine, Statistics, StatisticsSummary};
 
@@ -30,20 +32,24 @@ thread_local! {
 }
 
 #[derive(Clone)]
-pub struct SchedPool<E: Engine> {
-    pub engine: E,
+pub struct SchedPool {
     pub pool: FuturePool,
 }
 
-impl<E: Engine> SchedPool<E> {
-    pub fn new(engine: E, pool_size: usize, name_prefix: &str) -> Self {
+impl SchedPool {
+    pub fn new<E: Engine>(engine: E, pool_size: usize, name_prefix: &str) -> Self {
+        let engine = Arc::new(Mutex::new(engine));
         let pool = FuturePoolBuilder::new()
             .pool_size(pool_size)
             .name_prefix(name_prefix)
             .on_tick(move || tls_flush())
-            .before_stop(move || tls_flush())
+            .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+            .before_stop(move || {
+                destroy_tls_engine::<E>();
+                tls_flush();
+            })
             .build();
-        SchedPool { engine, pool }
+        SchedPool { pool }
     }
 }
 

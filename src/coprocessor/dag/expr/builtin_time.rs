@@ -1490,7 +1490,7 @@ mod tests {
             (Datum::Null, Datum::Null, Datum::Null),
             (
                 Datum::Time(Time::parse_utc_datetime("2019-01-01 01:00:00", 6).unwrap()),
-                Datum::Bytes(Vec::new()),
+                Datum::Bytes(b"00:00:00".to_vec()),
                 Datum::Time(Time::parse_utc_datetime("2019-01-01 01:00:00", 6).unwrap()),
             ),
             (
@@ -1640,7 +1640,7 @@ mod tests {
         }
 
         let zero_duration = Datum::Dur(Duration::zero());
-        let zero_duration_string = Datum::Bytes(Vec::new());
+        let zero_duration_string = Datum::Bytes(b"00:00:00".to_vec());
         let cases = vec![
             (
                 Datum::Null,

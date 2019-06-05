@@ -554,6 +554,9 @@ pub fn configure_for_merge<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_size_limit = ReadableSize::mb(20);
     // Make merge check resume quickly.
     cluster.cfg.raft_store.merge_check_tick_interval = ReadableDuration::millis(100);
+    // When isolated, follower relies on stale check tick to detect failure leader,
+    // choose a smaller number to make it recover faster.
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(500);
 }
 
 pub fn configure_for_transfer_leader<T: Simulator>(cluster: &mut Cluster<T>) {

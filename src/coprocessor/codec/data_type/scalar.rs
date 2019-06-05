@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
+
 use cop_datatype::EvalType;
 
 use super::*;
@@ -41,6 +43,15 @@ impl ScalarValue {
     #[inline]
     pub fn as_vector_like(&self) -> VectorLikeValueRef<'_> {
         VectorLikeValueRef::Scalar(self)
+    }
+
+    #[inline]
+    pub fn as_scalar_value_ref(&self) -> ScalarValueRef<'_> {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValue::TT(v) => ScalarValueRef::TT(v),
+            }
+        }
     }
 }
 
@@ -127,5 +138,75 @@ impl From<f64> for ScalarValue {
     #[inline]
     fn from(s: f64) -> ScalarValue {
         ScalarValue::Real(Real::new(s).ok())
+    }
+}
+
+/// A scalar value reference container. Can be created from `ScalarValue` or `VectorValue`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalarValueRef<'a> {
+    Int(&'a Option<super::Int>),
+    Real(&'a Option<super::Real>),
+    Decimal(&'a Option<super::Decimal>),
+    Bytes(&'a Option<super::Bytes>),
+    DateTime(&'a Option<super::DateTime>),
+    Duration(&'a Option<super::Duration>),
+    Json(&'a Option<super::Json>),
+}
+
+impl<'a> ScalarValueRef<'a> {
+    #[inline]
+    #[allow(clippy::clone_on_copy)]
+    pub fn to_owned(self) -> ScalarValue {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValueRef::TT(v) => ScalarValue::TT(v.clone()),
+            }
+        }
+    }
+
+    #[inline]
+    pub fn eval_type(&self) -> EvalType {
+        match_template_evaluable! {
+            TT, match self {
+                ScalarValueRef::TT(_) => EvalType::TT,
+            }
+        }
+    }
+}
+
+impl<'a> Ord for ScalarValueRef<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other)
+            .expect("Cannot compare two ScalarValueRef in different type")
+    }
+}
+
+impl<'a> PartialOrd for ScalarValueRef<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match_template_evaluable! {
+            TT, match (self, other) {
+                // v1 and v2 are `Option<T>`. However, in MySQL NULL values are considered lower
+                // than any non-NULL value, so using `Option::PartialOrd` directly is fine.
+                (ScalarValueRef::TT(v1), ScalarValueRef::TT(v2)) => Some(v1.cmp(v2)),
+                _ => None,
+            }
+        }
+    }
+}
+
+impl<'a> PartialEq<ScalarValue> for ScalarValueRef<'a> {
+    fn eq(&self, other: &ScalarValue) -> bool {
+        match_template_evaluable! {
+            TT, match (self, other) {
+                (ScalarValueRef::TT(v1), ScalarValue::TT(v2)) => v1 == &v2,
+                _ => false
+            }
+        }
+    }
+}
+
+impl<'a> PartialEq<ScalarValueRef<'a>> for ScalarValue {
+    fn eq(&self, other: &ScalarValueRef<'_>) -> bool {
+        other == self
     }
 }

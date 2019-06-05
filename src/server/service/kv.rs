@@ -1323,6 +1323,7 @@ fn future_prewrite<E: Engine>(
     options.lock_ttl = req.get_lock_ttl();
     options.skip_constraint_check = req.get_skip_constraint_check();
     options.is_pessimistic_lock = req.take_is_pessimistic_lock();
+    options.txn_size = req.get_txn_size();
 
     let (cb, f) = paired_future_callback();
     let res = storage.async_prewrite(
@@ -1507,6 +1508,11 @@ fn future_resolve_lock<E: Engine>(
     storage: &Storage<E>,
     mut req: ResolveLockRequest,
 ) -> impl Future<Item = ResolveLockResponse, Error = Error> {
+    let resolve_keys: Vec<Key> = req
+        .get_keys()
+        .iter()
+        .map(|key| Key::from_raw(key))
+        .collect();
     let txn_status = if req.get_start_version() > 0 {
         HashMap::from_iter(iter::once((
             req.get_start_version(),
@@ -1521,7 +1527,14 @@ fn future_resolve_lock<E: Engine>(
     };
 
     let (cb, f) = paired_future_callback();
-    let res = storage.async_resolve_lock(req.take_context(), txn_status, cb);
+    let res = if !resolve_keys.is_empty() {
+        let start_ts = req.get_start_version();
+        assert!(start_ts > 0);
+        let commit_ts = req.get_commit_version();
+        storage.async_resolve_lock_lite(req.take_context(), start_ts, commit_ts, resolve_keys, cb)
+    } else {
+        storage.async_resolve_lock(req.take_context(), txn_status, cb)
+    };
 
     AndThenWith::new(res, f.map_err(Error::from)).map(|v| {
         let mut resp = ResolveLockResponse::new();
@@ -1830,12 +1843,14 @@ fn extract_key_error(err: &storage::Error) -> KeyError {
             ref primary,
             ts,
             ttl,
+            txn_size,
         })) => {
             let mut lock_info = LockInfo::new();
             lock_info.set_key(key.to_owned());
             lock_info.set_primary_lock(primary.to_owned());
             lock_info.set_lock_version(ts);
             lock_info.set_lock_ttl(ttl);
+            lock_info.set_txn_size(txn_size);
             key_error.set_locked(lock_info);
         }
         // failed in prewrite or pessimistic lock
