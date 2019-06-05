@@ -50,17 +50,7 @@ bit_op!(BitOr, ExprType::Agg_BitOr, 0, |=);
 bit_op!(BitXor, ExprType::Agg_BitXor, 0, ^=);
 
 /// The parser for bit operation aggregate functions.
-pub struct AggrFnDefinitionParserBitOp<T: BitOp> {
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T: BitOp> AggrFnDefinitionParserBitOp<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
+pub struct AggrFnDefinitionParserBitOp<T: BitOp>(pub std::marker::PhantomData<T>);
 
 impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
@@ -106,24 +96,14 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
         super::util::rewrite_exp_for_bit_op(src_schema, &mut exp).unwrap();
         out_exp.push(exp);
 
-        Ok(Box::new(AggrFnBitOp::<T>::new()))
+        Ok(Box::new(AggrFnBitOp::<T>(std::marker::PhantomData)))
     }
 }
 
 /// The bit operation aggregate functions.
 #[derive(Debug, AggrFunction)]
 #[aggr_function(state = AggrFnStateBitOp::<T>::new())]
-pub struct AggrFnBitOp<T: BitOp> {
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<T: BitOp> AggrFnBitOp<T> {
-    fn new() -> Self {
-        Self {
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
+pub struct AggrFnBitOp<T: BitOp>(std::marker::PhantomData<T>);
 
 /// The state of the BitAnd aggregate function.
 #[derive(Debug)]
@@ -180,7 +160,7 @@ mod tests {
     #[test]
     fn test_bit_and() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnBitOp::<BitAnd>::new();
+        let function = AggrFnBitOp::<BitAnd>(std::marker::PhantomData);
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -240,7 +220,7 @@ mod tests {
     #[test]
     fn test_bit_or() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnBitOp::<BitOr>::new();
+        let function = AggrFnBitOp::<BitOr>(std::marker::PhantomData);
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -301,7 +281,7 @@ mod tests {
     #[test]
     fn test_bit_xor() {
         let mut ctx = EvalContext::default();
-        let function = AggrFnBitOp::<BitXor>::new();
+        let function = AggrFnBitOp::<BitXor>(std::marker::PhantomData);
         let mut state = function.create_state();
 
         let mut result = [VectorValue::with_capacity(0, EvalType::Int)];
@@ -369,9 +349,9 @@ mod tests {
 
     #[test]
     fn test_integration() {
-        let bit_and_parser = AggrFnDefinitionParserBitOp::<BitAnd>::new();
-        let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>::new();
-        let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>::new();
+        let bit_and_parser = AggrFnDefinitionParserBitOp::<BitAnd>(std::marker::PhantomData);
+        let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>(std::marker::PhantomData);
+        let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>(std::marker::PhantomData);
 
         let bit_and = ExprDefBuilder::aggr_func(ExprType::Agg_BitAnd, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))

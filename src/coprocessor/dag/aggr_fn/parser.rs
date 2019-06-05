@@ -42,14 +42,15 @@ pub trait AggrDefinitionParser {
 
 #[inline]
 fn map_pb_sig_to_aggr_func_parser(value: ExprType) -> Result<Box<dyn AggrDefinitionParser>> {
+    use std::marker::PhantomData;
     match value {
         ExprType::Count => Ok(Box::new(super::impl_count::AggrFnDefinitionParserCount)),
         ExprType::Sum => Ok(Box::new(super::impl_sum::AggrFnDefinitionParserSum)),
         ExprType::Avg => Ok(Box::new(super::impl_avg::AggrFnDefinitionParserAvg)),
         ExprType::First => Ok(Box::new(super::impl_first::AggrFnDefinitionParserFirst)),
-        ExprType::Agg_BitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>::new())),
-        ExprType::Agg_BitOr => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitOr>::new())),
-        ExprType::Agg_BitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>::new())),
+        ExprType::Agg_BitAnd => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitAnd>(PhantomData))),
+        ExprType::Agg_BitOr => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitOr>(PhantomData))),
+        ExprType::Agg_BitXor => Ok(Box::new(AggrFnDefinitionParserBitOp::<BitXor>(PhantomData))),
         v => Err(box_err!(
             "Aggregation function expr type {:?} is not supported in batch mode",
             v
