@@ -19,10 +19,10 @@ pub trait BitOp: Clone + std::fmt::Debug + Send + Sync + 'static {
     fn tp() -> ExprType;
 
     /// Returns the bit operation initial state
-    fn init_state() -> usize;
+    fn init_state() -> u64;
 
     /// Executes the special bit operation
-    fn op(lhs: &mut usize, rhs: usize);
+    fn op(lhs: &mut u64, rhs: u64);
 }
 
 macro_rules! bit_op {
@@ -34,11 +34,11 @@ macro_rules! bit_op {
                 $tp
             }
 
-            fn init_state() -> usize {
+            fn init_state() -> u64 {
                 $init
             }
 
-            fn op(lhs: &mut usize, rhs: usize) {
+            fn op(lhs: &mut u64, rhs: u64) {
                 *lhs $op rhs
             }
         }
@@ -115,7 +115,7 @@ pub struct AggrFnBitOp<T: BitOp>(std::marker::PhantomData<T>);
 /// The state of the BitAnd aggregate function.
 #[derive(Debug)]
 pub struct AggrFnStateBitOp<T: BitOp> {
-    c: usize,
+    c: u64,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -140,7 +140,7 @@ impl<T: BitOp> super::ConcreteAggrFunctionState for AggrFnStateBitOp<T> {
         match value {
             None => Ok(()),
             Some(value) => {
-                T::op(&mut self.c, *value as usize);
+                T::op(&mut self.c, *value as u64);
                 Ok(())
             }
         }
