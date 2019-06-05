@@ -50,11 +50,19 @@ bit_op!(BitOr, ExprType::Agg_BitOr, 0, |=);
 bit_op!(BitXor, ExprType::Agg_BitXor, 0, ^=);
 
 /// The parser for bit operation aggregate functions.
-pub struct AggrFnDefinitionParserBitOp<T: BitOp>(pub std::marker::PhantomData<T>);
+pub struct AggrFnDefinitionParserBitOp<T: BitOp>(std::marker::PhantomData<T>);
+
+impl<T: BitOp> AggrFnDefinitionParserBitOp<T> {
+    pub fn new() -> Self {
+        AggrFnDefinitionParserBitOp(std::marker::PhantomData)
+    }
+}
 
 impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
     fn check_supported(&self, aggr_def: &Expr) -> Result<()> {
         assert_eq!(aggr_def.get_tp(), T::tp());
+
+        super::util::check_aggr_exp_supported_one_child(aggr_def)?;
 
         // Check whether or not the children's field type is supported. Currently we only support
         // Int and does not support other types (which need casting).
@@ -66,8 +74,7 @@ impl<T: BitOp> super::AggrDefinitionParser for AggrFnDefinitionParserBitOp<T> {
             EvalType::Int => {}
             _ => return Err(box_err!("Cast from {:?} is not supported", eval_type)),
         }
-
-        super::util::check_aggr_exp_supported_one_child(aggr_def)
+        Ok(())
     }
 
     fn parse(
@@ -349,9 +356,9 @@ mod tests {
 
     #[test]
     fn test_integration() {
-        let bit_and_parser = AggrFnDefinitionParserBitOp::<BitAnd>(std::marker::PhantomData);
-        let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>(std::marker::PhantomData);
-        let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>(std::marker::PhantomData);
+        let bit_and_parser = AggrFnDefinitionParserBitOp::<BitAnd>::new();
+        let bit_or_parser = AggrFnDefinitionParserBitOp::<BitOr>::new();
+        let bit_xor_parser = AggrFnDefinitionParserBitOp::<BitXor>::new();
 
         let bit_and = ExprDefBuilder::aggr_func(ExprType::Agg_BitAnd, FieldTypeTp::LongLong)
             .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::LongLong))
